@@ -1,26 +1,65 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-primary: #1e4a6d;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #dceef7;
+  --color-secondary-foreground: #1e4a6d;
+  --color-muted: #f0f6fa;
+  --color-muted-foreground: #5b7a8e;
+  --color-accent: #4a90c2;
+  --color-accent-foreground: #ffffff;
+  --color-border: #cfe1ec;
+  --color-background: #f7fbfd;
+  --color-card: #ffffff;
+  --color-card-foreground: #16324d;
+
+  --color-success: #059669;
+  --color-success-foreground: #ffffff;
+  --color-success-muted: #d1fae5;
+  --color-danger: #dc2626;
+  --color-danger-foreground: #ffffff;
+  --color-danger-muted: #fee2e2;
+  --color-warning: #d97706;
+  --color-warning-foreground: #ffffff;
+  --color-warning-muted: #fef3c7;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-heebo);
+
+  --color-primary: var(--color-primary);
+  --color-primary-foreground: var(--color-primary-foreground);
+  --color-secondary: var(--color-secondary);
+  --color-secondary-foreground: var(--color-secondary-foreground);
+  --color-muted: var(--color-muted);
+  --color-muted-foreground: var(--color-muted-foreground);
+  --color-accent: var(--color-accent);
+  --color-accent-foreground: var(--color-accent-foreground);
+  --color-border: var(--color-border);
+  --color-background: var(--color-background);
+  --color-card: var(--color-card);
+  --color-card-foreground: var(--color-card-foreground);
+
+  --color-success: var(--color-success);
+  --color-success-foreground: var(--color-success-foreground);
+  --color-success-muted: var(--color-success-muted);
+  --color-danger: var(--color-danger);
+  --color-danger-foreground: var(--color-danger-foreground);
+  --color-danger-muted: var(--color-danger-muted);
+  --color-warning: var(--color-warning);
+  --color-warning-foreground: var(--color-warning-foreground);
+  --color-warning-muted: var(--color-warning-muted);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  direction: rtl;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-heebo), Arial, Helvetica, sans-serif;
+  direction: rtl;
+  text-align: right;
+  background: var(--color-background);
+  color: var(--color-card-foreground);
 }

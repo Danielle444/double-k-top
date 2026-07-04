@@ -1,36 +1,138 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ניהול תורנויות - קורס מדריכי רכיבה (Double K Ranch)
 
-## Getting Started
+מערכת לניהול שיבוצי תורנויות יומיים לתלמידי קורס מדריכי רכיבה (~41 תלמידים, קורס בן כחודש וחצי).
 
-First, run the development server:
+נבנה עם Next.js 16 (App Router, TypeScript), Tailwind CSS 4, Prisma ORM 7, PostgreSQL (Supabase) ו-NextAuth (Auth.js) v5.
+
+## תכולת המערכת
+
+### ניהול (מוגן בכניסת Google, ראו הרשאות למטה)
+
+- `/admin` - לוח בקרה: מספר תלמידים/סוגי תורנות פעילים, טווח תאריכי הקורס, ביצוע היום, וכפתור ייצור שיבוץ אוטומטי לכל טווח הקורס.
+- `/admin/students` - ניהול תלמידים: הוספה/עריכה/הפעלה/השבתה, ייבוא מקובץ Excel, מספר תעודת זהות (מוצג חלקית בלבד בטבלה), קבוצה.
+- `/admin/duties` - ניהול סוגי תורנות (כולל ייבוא מקובץ Word) ואילוצי שיבוץ (חסימת תורנות לקבוצה לפי מקטע יום).
+- `/admin/availability` - תאריכי הקורס, פריסטים לזמינות והחלתם על מספר תלמידים, וטבלת זמינות יומית.
+- `/admin/day-plan` - תכנון איזו קבוצה רוכבת בכל אחד מ-4 המקטעים היומיים (לצורך אילוצי השיבוץ).
+- `/admin/weekly-schedule` - העלאת לו"ז שבועי (Excel) שבוע-שבוע, תצוגה וסינון לפי קבוצה, ייצור ופרסום שיבוץ התורנויות לאותו שבוע.
+- `/admin/schedule` - צפייה בשיבוצים עם סינון, שינוי ידני, וייצור שיבוצים לפי טווח/מצב לבחירה.
+- `/admin/completion` - מעקב ביצוע תורנויות לפי תאריך נבחר.
+- `/admin/admins` - ניהול רשימת כתובות Google מורשות לכניסה למערכת הניהול.
+
+### ציבורי (ללא כניסת Google)
+
+- `/student` - כניסת תלמיד/ה עם חיפוש שם ומספר תעודת זהות (עם אפשרות "זכור אותי"), תורנות היום, וסעיף "הלו"ז שלי".
+- `/instructor` - בחירת שם מדריך/ה (ללא סיסמה) וצפייה בשיעורים המשובצים לו/ה השבוע.
+
+## אלגוריתם השיבוץ (`lib/scheduler.ts`)
+
+עבור כל תאריך בטווח המבוקש:
+
+1. מסננים תלמידים זמינים (ברירת מחדל: זמין/ה, אלא אם סומן אחרת), שאינם משובצים כבר היום, ושאינם חסומים על ידי אילוץ שיבוץ (קבוצה שרוכבת במקטע יום מסוים, לפי `/admin/day-plan` ואילוצי `/admin/duties`).
+2. מחשבים את מספר המשבצות הכולל = מינימום בין (סכום הכמויות המוגדרות לכל סוגי התורנות הפעילים) לבין (מספר התלמידים הזמינים).
+3. מחלקים את המשבצות בין סוגי התורנות באופן יחסי, בשיטת השארית הגדולה ביותר.
+4. עבור כל סוג תורנות, בוחרים את התלמידים המתאימים ביותר לפי ניקוד משוקלל: חזרה באותו שבוע ≫ חזרה לאורך כל הקורס ≫ סך שיבוצים כולל (הוגנות) ≫ טאי-ברייקר אקראי.
+5. שלושה מצבי ייצור לבחירה: **השלמת חוסרים בלבד**, **ייצור מחדש תוך שמירה על שיבוצים ידניים** (ברירת המחדל), או **מחיקה וייצור מחדש מלא**.
+6. שיבוצים חדשים נוצרים כ**טיוטה** (`isPublished = false`) ואינם מוצגים ב-`/student` עד לפרסום מפורש דרך `/admin/schedule` או `/admin/weekly-schedule`.
+7. אם לא ניתן למלא את כל המשבצות (בגלל זמינות או אילוצים), מוצגת אזהרה מפורטת לצד השיבוץ שכן נוצר.
+
+## הרשאות ניהול - כניסה עם Google
+
+- כל עמודי `/admin/*` דורשים כניסה עם חשבון Google **שמופיע ומסומן כפעיל** בטבלת המנהלים המורשים.
+- מנהל/ת קיים/ת יכול/ה לנהל את הרשימה בעמוד `/admin/admins`.
+- כניסה עם חשבון Google לא מאושר מציגה הודעה ברורה: "אין לך הרשאה להיכנס למערכת הניהול", עם אפשרות לנסות עם חשבון אחר.
+- `/student` ו-`/instructor` **אינם** מוגנים בכניסת Google - נשארים בגישה חופשית כפי שהיו.
+
+### הגדרת Google OAuth
+
+1. היכנסו ל-[Google Cloud Console](https://console.cloud.google.com/apis/credentials).
+2. צרו פרויקט (או השתמשו בקיים), ואז **OAuth consent screen** בסיסי (External, מצב Testing מספיק לשימוש פנימי).
+3. צרו **OAuth 2.0 Client ID** מסוג "Web application".
+4. הוסיפו כתובות Redirect URI מורשות:
+   - לפיתוח מקומי: `http://localhost:3000/api/auth/callback/google`
+   - לפרודקשן: `https://<הדומיין שלכם>/api/auth/callback/google`
+5. העתיקו את ה-Client ID וה-Client Secret לתוך `.env`:
+   ```
+   AUTH_GOOGLE_ID="..."
+   AUTH_GOOGLE_SECRET="..."
+   ```
+6. `AUTH_SECRET` כבר קיים ב-`.env` (נוצר אוטומטית בסשן הפיתוח); לסביבת production מומלץ ליצור ערך חדש: `openssl rand -base64 32`.
+
+## ייבוא נתונים
+
+- **סוגי תורנות מקובץ Word** (`/admin/duties`): כל תבליט ראשי במסמך הופך לשם תורנות, ותת-התבליטים מתחתיו הופכים לתיאור. מוצגת תצוגה מקדימה לעריכה, והתאמה לתורנויות קיימות (יצירה/עדכון/דילוג) לפי שם מנורמל.
+- **תלמידים מקובץ Excel** (`/admin/students`): עמודות נדרשות - קבוצה, שם משפחה, שם פרטי, ת.ז. התאמה לתלמידים קיימים לפי מספר תעודת זהות. בסיום הייבוא נבחרת זמינות התלמידים המיובאים: לכל הקורס, לטווח תאריכים ספציפי, או לפי פריסט שמור.
+- **לו"ז שבועי מקובץ Excel** (`/admin/weekly-schedule`): פענוח סובלני מיטבי (עמודות: תאריך, שעת התחלה/סיום, נושא, קבוצה, מדריך/ה, מיקום, הערות) עם תצוגה מקדימה הניתנת לעריכה לפני שמירה. שורות עם תאריך שלא זוהה מסומנות לתיקון ידני. לאחר השמירה ניתן לקבל הצעה (הנדרשת אישור) לערכי תכנון קבוצות יומי, ולייצר ולפרסם את שיבוץ התורנויות לאותו שבוע ישירות מאותו עמוד.
+
+## הרצה מקומית
+
+### 1. התקנת תלויות
+
+```bash
+npm install
+```
+
+### 2. הגדרת מסד נתונים (Supabase Postgres)
+
+1. צרו פרויקט חינמי ב-[Supabase](https://supabase.com).
+2. בעמוד Project Settings -> Database -> Connection string, העתיקו:
+   - את מחרוזת ה-**Transaction pooler** (פורט 6543) לתוך `DATABASE_URL`.
+   - את מחרוזת ה-**Session/Direct** (פורט 5432) לתוך `DIRECT_URL`.
+3. עדכנו את הערכים בקובץ `.env` (הקובץ כבר קיים עם placeholders, מוחרג מ-git).
+
+### 3. הגדרת Google OAuth
+
+ראו "הגדרת Google OAuth" למעלה, ועדכנו את `AUTH_GOOGLE_ID`/`AUTH_GOOGLE_SECRET` ב-`.env`.
+
+### 4. יצירת הטבלאות
+
+```bash
+npm run db:migrate
+```
+
+פקודה זו תיצור את כל הטבלאות לפי `prisma/schema.prisma` ותייצר את ה-Prisma Client.
+
+### 5. זריעת נתוני דוגמה (אופציונלי אך מומלץ)
+
+```bash
+npm run db:seed
+```
+
+יוצר 41 תלמידי דוגמה (עם מספרי ת.ז. ושיוך לקבוצות א/ב), 6 סוגי תורנות (כולל "חיסול א. צהריים"), טווח תאריכי קורס, פריסט זמינות לדוגמה, תכנון קבוצות יומי ואילוץ שיבוץ לדוגמה, לו"ז שבועי לדוגמה לשבוע הראשון, ואת שני כתובות המנהלים המורשות (`dkhorses@gmail.com`, `showdoublek@gmail.com`).
+
+### 6. הרצת השרת
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+פתחו את [http://localhost:3000](http://localhost:3000). כניסת מנהל/ת: `/admin` (דורש כניסת Google מאושרת). כניסת תלמיד/ה: `/student`. כניסת מדריך/ה: `/instructor`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### פקודות שימושיות נוספות
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run db:studio   # ממשק גרפי לצפייה/עריכת הנתונים
+npm run db:push     # דחיפת שינויי סכמה בלי ליצור מיגרציה (לפיתוח מהיר)
+npm run lint        # בדיקת ESLint
+npx tsc --noEmit    # בדיקת טיפוסים
+```
 
-## Learn More
+## פריסה ל-Vercel
 
-To learn more about Next.js, take a look at the following resources:
+1. דחפו את הריפו ל-GitHub.
+2. ייבאו את הפרויקט ב-[Vercel](https://vercel.com/new).
+3. הגדירו משתני סביבה בפרויקט ב-Vercel: `DATABASE_URL`, `DIRECT_URL`, `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`.
+4. הוסיפו את כתובת ה-production ל-Redirect URIs המורשות ב-Google Cloud Console (`https://<domain>/api/auth/callback/google`).
+5. פקודת ה-build (`npm run build`) כבר כוללת `prisma generate` לפני `next build`, כך שאין צורך בהגדרה נוספת.
+6. לפני עלייה לאוויר בפעם הראשונה, הריצו את המיגרציות מול מסד הנתונים של Production:
+   ```bash
+   npx prisma migrate deploy
+   ```
+7. אופציונלי: הריצו `npm run db:seed` מול מסד ה-Production כדי לאכלס נתוני דוגמה ראשוניים (או הריצו רק את חלק זריעת המנהלים המורשים באופן ידני אם יש כבר נתוני אמת).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## הערות אבטחה וטכניות
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- מספר תעודת הזהות של תלמיד/ה משמש כפרטי הכניסה שלו/ה ל-`/student`; בטבלאות הניהול מוצגות רק 4 הספרות האחרונות. אין לראות בכך הצפנה - מתאים לשימוש פנימי בקורס.
+- כניסת המנהלים מבוססת על NextAuth v5 עם ספק Google בלבד (ללא סיסמה משותפת), עם רשימת דוא"ל מורשה משלנו (`AdminEmail`) הנבדקת גם בזמן הכניסה וגם מחדש בכל טעינת עמוד ניהול - כך שהשבתת מנהל/ת נכנסת לתוקף מיידית גם אם יש לו/ה session פעיל.
+- `/student` ו-`/instructor` נשארים ללא הגנת Google בכוונה, בהתאם לדרישה.
+- תאריכי הקורס נשמרים ומטופלים כתאריכים "נטו" (UTC, ללא שעה) כדי למנוע הזזה של יום בשל אזור זמן השרת.
+- ייבוא ה-Excel/Word אינו שומר דבר ישירות - תמיד מוצגת תצוגה מקדימה הניתנת לעריכה, ורק אישור מפורש כותב לבסיס הנתונים.

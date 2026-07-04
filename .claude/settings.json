@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -Command \"[console]::beep(1000,700); (New-Object -ComObject Wscript.Shell).Popup('Claude Code needs your attention', 8, 'Duty Manager', 64)\""
+          }
+        ]
+      }
+    ]
+  }
+}

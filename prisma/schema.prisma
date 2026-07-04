@@ -1,0 +1,204 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Student {
+  id             String   @id @default(cuid())
+  firstName      String
+  lastName       String
+  fullName       String
+  groupName      String?
+  subgroupNumber Int?
+  identityNumber String   @unique
+  phone          String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  availability StudentAvailability[]
+  assignments  DutyAssignment[]
+
+  @@map("students")
+}
+
+model StudentAvailability {
+  id          String   @id @default(cuid())
+  studentId   String
+  date        DateTime @db.Date
+  isAvailable Boolean
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, date])
+  @@index([date])
+  @@map("student_availability")
+}
+
+enum AllocationMode {
+  FIXED_COUNT
+  ONE_PER_SUBGROUP
+}
+
+model DutyType {
+  id                   String         @id @default(cuid())
+  name                 String
+  description          String?
+  defaultRequiredCount Int            @default(1)
+  allocationMode       AllocationMode @default(FIXED_COUNT)
+  isActive             Boolean        @default(true)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  assignments DutyAssignment[]
+  constraints DutyConstraint[]
+
+  @@map("duty_types")
+}
+
+model DutyAssignment {
+  id          String    @id @default(cuid())
+  date        DateTime  @db.Date
+  studentId   String
+  dutyTypeId  String
+  isManual    Boolean   @default(false)
+  isPublished Boolean   @default(false)
+  isCompleted Boolean   @default(false)
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  student  Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  dutyType DutyType @relation(fields: [dutyTypeId], references: [id], onDelete: Cascade)
+
+  // A student can only have one duty per day
+  @@unique([date, studentId])
+  @@index([date])
+  @@index([dutyTypeId])
+  @@map("duty_assignments")
+}
+
+// Singleton row (id is always 1) holding the course date range
+model CourseSettings {
+  id        Int      @id @default(1)
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  updatedAt DateTime @updatedAt
+
+  @@map("course_settings")
+}
+
+model AvailabilityRangePreset {
+  id        String   @id @default(cuid())
+  name      String
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("availability_range_presets")
+}
+
+// One row per course date, recording which group rides in each of the 4 daily slots
+model CourseDayPlan {
+  id                    String   @id @default(cuid())
+  date                  DateTime @db.Date @unique
+  firstMorningGroup     String?
+  secondMorningGroup    String?
+  firstAfterLunchGroup  String?
+  secondAfterLunchGroup String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("course_day_plans")
+}
+
+enum CourseSlot {
+  FIRST_MORNING
+  SECOND_MORNING
+  FIRST_AFTER_LUNCH
+  SECOND_AFTER_LUNCH
+}
+
+// A generic "this duty type blocks whichever group is in this CourseDayPlan slot" rule
+model DutyConstraint {
+  id         String     @id @default(cuid())
+  dutyTypeId String
+  slot       CourseSlot
+  note       String?
+  isActive   Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  dutyType DutyType @relation(fields: [dutyTypeId], references: [id], onDelete: Cascade)
+
+  @@index([dutyTypeId])
+  @@map("duty_constraints")
+}
+
+model Instructor {
+  id             String   @id @default(cuid())
+  firstName      String
+  lastName       String
+  fullName       String
+  identityNumber String   @unique
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("instructors")
+}
+
+model AdminEmail {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("admin_emails")
+}
+
+model WeeklySchedule {
+  id               String   @id @default(cuid())
+  name             String
+  startDate        DateTime @db.Date
+  endDate          DateTime @db.Date
+  uploadedFileName String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  items ScheduleItem[]
+
+  @@index([startDate, endDate])
+  @@map("weekly_schedules")
+}
+
+model ScheduleItem {
+  id               String   @id @default(cuid())
+  weeklyScheduleId String
+  date             DateTime @db.Date
+  startTime        String
+  endTime          String
+  title            String
+  description      String?
+  groupName        String?
+  instructorName   String?
+  location         String?
+  rawText          String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  weeklySchedule WeeklySchedule @relation(fields: [weeklyScheduleId], references: [id], onDelete: Cascade)
+
+  @@index([date])
+  @@map("schedule_items")
+}
