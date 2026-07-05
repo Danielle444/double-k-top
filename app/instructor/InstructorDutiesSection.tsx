@@ -34,7 +34,9 @@ export function InstructorDutiesSection({
   const [rows, setRows] = useState<InstructorDutyRow[] | null>(null);
 
   useEffect(() => {
-    if (!weeklyScheduleId) return;
+    // A specific day is self-sufficient (start/end date is all the query
+    // needs); only "the whole week" requires a resolved weeklyScheduleId.
+    if (!weeklyScheduleId && dayFilter === "all") return;
     let cancelled = false;
     // Reset to the loading state on every filter change so a slow or failed
     // request never leaves the previous (unfiltered) rows frozen on screen.
@@ -42,7 +44,7 @@ export function InstructorDutiesSection({
     setRows(null);
     const filters =
       dayFilter === "all"
-        ? { weeklyScheduleId }
+        ? { weeklyScheduleId: weeklyScheduleId! }
         : { startDateKey: dayFilter, endDateKey: dayFilter };
     getDutyAssignmentsForInstructor({
       ...filters,
@@ -107,7 +109,7 @@ export function InstructorDutiesSection({
         </label>
       </div>
 
-      {!weeklyScheduleId ? (
+      {!weeklyScheduleId && dayFilter === "all" ? (
         <p className="text-base text-muted-foreground">בחרו שבוע כדי לצפות בתורנויות</p>
       ) : !rows ? (
         <p className="text-base text-muted-foreground">טוען...</p>

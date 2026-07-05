@@ -81,6 +81,10 @@ export interface StudentDutyDayInfo {
   dutyTypeDescription: string | null;
   isCompleted: boolean;
   completedAt: string | null;
+  // Other students published to the same duty type on the same date -
+  // never includes the current student. Only populated when status is
+  // "has-duty" (there's nothing to pair up on a day with no duty of ours).
+  teammateNames: string[];
   // "not-published": no published assignment exists for anyone on this date.
   // "no-duty": the day is published, this student just has no duty that day.
   // "has-duty": a published assignment exists for this student that day.
@@ -98,19 +102,34 @@ export async function getStudentDutiesForRange(
   const start = parseDateKey(startDateKey);
   const end = parseDateKey(endDateKey);
 
-  const [mine, publishedAny] = await Promise.all([
+  const [mine, publishedAll] = await Promise.all([
     prisma.dutyAssignment.findMany({
       where: { studentId, date: { gte: start, lte: end }, isPublished: true },
       include: { dutyType: true },
     }),
+    // Only published assignments, and only the fields needed to group
+    // teammates by date + duty type - no instructor/admin-only data.
     prisma.dutyAssignment.findMany({
       where: { date: { gte: start, lte: end }, isPublished: true },
-      select: { date: true },
+      select: {
+        date: true,
+        studentId: true,
+        dutyTypeId: true,
+        student: { select: { fullName: true } },
+      },
     }),
   ]);
 
   const mineByDate = new Map(mine.map((a) => [dateKey(a.date), a]));
-  const publishedDates = new Set(publishedAny.map((a) => dateKey(a.date)));
+  const publishedDates = new Set(publishedAll.map((a) => dateKey(a.date)));
+
+  const teammatesByDateAndDuty = new Map<string, string[]>();
+  for (const a of publishedAll) {
+    if (a.studentId === studentId) continue;
+    const key = `${dateKey(a.date)}|${a.dutyTypeId}`;
+    if (!teammatesByDateAndDuty.has(key)) teammatesByDateAndDuty.set(key, []);
+    teammatesByDateAndDuty.get(key)!.push(a.student.fullName);
+  }
 
   return enumerateDateKeys(start, end).map((dk) => {
     const date = parseDateKey(dk);
@@ -120,7 +139,11 @@ export async function getStudentDutiesForRange(
       : publishedDates.has(dk)
         ? "no-duty"
         : "not-published";
+    const teammateNames = assignment
+      ? teammatesByDateAndDuty.get(`${dk}|${assignment.dutyTypeId}`) ?? []
+      : [];
     return {
+      teammateNames,
       dateKey: dk,
       dateLabel: formatHebrewDate(date),
       dayLabel: formatHebrewWeekday(date),

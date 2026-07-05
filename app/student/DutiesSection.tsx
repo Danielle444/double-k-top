@@ -20,6 +20,18 @@ export function DutiesSection({
 }) {
   const [days, setDays] = useState<StudentDutyDayInfo[] | null>(null);
   const [isPending, startTransition] = useTransition();
+  // Collapsed by default - keyed by dateKey (a student has at most one duty
+  // per day, so that's a stable, unique key per card).
+  const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set());
+
+  function toggleExpanded(dateKey: string) {
+    setExpandedDates((prev) => {
+      const next = new Set(prev);
+      if (next.has(dateKey)) next.delete(dateKey);
+      else next.add(dateKey);
+      return next;
+    });
+  }
 
   function reload() {
     if (!startDateKey || !endDateKey) return;
@@ -69,8 +81,26 @@ export function DutiesSection({
                 <div className="flex flex-col gap-2">
                   <p className="text-lg font-bold text-card-foreground">{day.dutyTypeName}</p>
                   {day.dutyTypeDescription && (
-                    <p className="text-sm text-muted-foreground">{day.dutyTypeDescription}</p>
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => toggleExpanded(day.dateKey)}
+                        className="text-sm font-medium text-primary underline"
+                      >
+                        {expandedDates.has(day.dateKey) ? "הסתר הסבר" : "הצג הסבר"}
+                      </button>
+                      {expandedDates.has(day.dateKey) && (
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {day.dutyTypeDescription}
+                        </p>
+                      )}
+                    </div>
                   )}
+                  <p className="text-sm text-muted-foreground">
+                    {day.teammateNames.length > 0
+                      ? `איתך בתורנות: ${day.teammateNames.join(", ")}`
+                      : "אין חניכים נוספים בתורנות זו"}
+                  </p>
                   {day.isCompleted ? (
                     <div className="rounded-lg bg-success-muted p-3 text-sm text-success">
                       בוצע{" "}

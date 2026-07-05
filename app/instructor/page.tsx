@@ -18,7 +18,7 @@ export default async function InstructorPage() {
   ]);
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-lg flex-col justify-center bg-background px-4 py-10">
+    <div className="mx-auto flex min-h-screen w-full max-w-lg flex-col bg-background">
       <InstructorClient students={students} dutyTypes={dutyTypes} />
     </div>
   );

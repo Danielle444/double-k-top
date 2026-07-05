@@ -4,6 +4,8 @@ import { FormEvent, useEffect, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
 import { Logo } from "@/lib/components/Logo";
 import { WeekDayPicker, type WeekOption } from "@/lib/components/WeekDayPicker";
+import { BottomTabs, MAIN_TABS, type MainTabId } from "@/lib/components/BottomTabs";
+import { CourseBookletPlaceholder } from "@/lib/components/CourseBookletPlaceholder";
 import {
   searchInstructors,
   verifyInstructorLogin,
@@ -12,6 +14,7 @@ import {
 import { getWeeklyScheduleSelection } from "@/lib/actions/weekly-schedule";
 import { InstructorScheduleSection } from "@/app/instructor/InstructorScheduleSection";
 import { InstructorDutiesSection } from "@/app/instructor/InstructorDutiesSection";
+import { formatHebrewDate, formatHebrewWeekday, parseDateKey, todayDateKey } from "@/lib/dates";
 
 const STORAGE_KEY = "duty-manager-instructor-v2";
 
@@ -48,6 +51,7 @@ export function InstructorClient({
   const [selected, setSelected] = useState<InstructorSearchResult | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
 
+  const [activeTab, setActiveTab] = useState<MainTabId>("today");
   const [weeks, setWeeks] = useState<WeekOption[] | null>(null);
   const [selectedWeekId, setSelectedWeekId] = useState<string | null>(null);
   const [dayFilter, setDayFilter] = useState<string | "all">("all");
@@ -113,13 +117,14 @@ export function InstructorClient({
     setSession(null);
     setSelected(null);
     setQuery("");
+    setActiveTab("today");
   }
 
   if (!hydrated) return null;
 
   if (!session) {
     return (
-      <div className="flex flex-col items-center gap-6">
+      <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 py-10">
         <Logo width={220} />
         <p className="-mt-4 text-sm font-semibold text-muted-foreground">אזור מדריכים</p>
         <div className="w-full rounded-2xl border border-border bg-card p-6">
@@ -189,48 +194,119 @@ export function InstructorClient({
     );
   }
 
+  const todayKey = todayDateKey();
+  const todayWeek = weeks?.find((w) => w.startDate <= todayKey && todayKey <= w.endDate) ?? null;
+
+  const activeTabLabel = MAIN_TABS.find((t) => t.id === activeTab)?.label ?? "";
+
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
+    <div className="flex flex-1 flex-col">
+      <header className="sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-card px-4 py-3">
+        <Logo variant="mark" width={28} />
         <div>
           <p className="text-xs font-semibold text-muted-foreground">אזור מדריכים</p>
-          <h1 className="text-2xl font-bold text-card-foreground">שלום, {session.fullName}</h1>
+          <p className="text-base font-bold text-card-foreground">{activeTabLabel}</p>
         </div>
-        <button
-          onClick={handleSwitch}
-          className="text-sm text-muted-foreground underline hover:text-card-foreground"
-        >
-          החלפת מדריך/ה
-        </button>
-      </div>
+      </header>
 
-      {weeks === null ? (
-        <p className="text-base text-muted-foreground">טוען...</p>
-      ) : (
-        <WeekDayPicker
-          weeks={weeks}
-          selectedWeekId={selectedWeekId}
-          onSelectWeek={(id) => {
-            setSelectedWeekId(id);
-            setDayFilter("all");
-          }}
-          dayFilter={dayFilter}
-          onSelectDay={setDayFilter}
-        />
-      )}
+      <main className="flex-1 px-4 py-4 pb-28">
+        {activeTab === "today" && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-2xl border border-border bg-card p-5">
+              <p className="text-sm font-semibold text-muted-foreground">שלום, {session.fullName}</p>
+              <p className="text-xl font-bold text-card-foreground">
+                {formatHebrewWeekday(parseDateKey(todayKey))} · {formatHebrewDate(parseDateKey(todayKey))}
+              </p>
+            </div>
 
-      <InstructorScheduleSection
-        instructorId={session.id}
-        weeklyScheduleId={selectedWeekId}
-        dayFilter={dayFilter}
-      />
+            <InstructorDutiesSection
+              weeklyScheduleId={todayWeek?.id ?? null}
+              dayFilter={todayKey}
+              students={students}
+              dutyTypes={dutyTypes}
+            />
 
-      <InstructorDutiesSection
-        weeklyScheduleId={selectedWeekId}
-        dayFilter={dayFilter}
-        students={students}
-        dutyTypes={dutyTypes}
-      />
+            {weeks === null ? (
+              <p className="text-base text-muted-foreground">טוען...</p>
+            ) : todayWeek ? (
+              <InstructorScheduleSection
+                instructorId={session.id}
+                weeklyScheduleId={todayWeek.id}
+                dayFilter={todayKey}
+              />
+            ) : (
+              <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
+                עדיין לא הועלה לו&quot;ז להיום
+              </p>
+            )}
+          </div>
+        )}
+
+        {activeTab === "schedule" && (
+          <div className="flex flex-col gap-4">
+            {weeks === null ? (
+              <p className="text-base text-muted-foreground">טוען...</p>
+            ) : (
+              <WeekDayPicker
+                weeks={weeks}
+                selectedWeekId={selectedWeekId}
+                onSelectWeek={(id) => {
+                  setSelectedWeekId(id);
+                  setDayFilter("all");
+                }}
+                dayFilter={dayFilter}
+                onSelectDay={setDayFilter}
+              />
+            )}
+            <InstructorScheduleSection
+              instructorId={session.id}
+              weeklyScheduleId={selectedWeekId}
+              dayFilter={dayFilter}
+            />
+          </div>
+        )}
+
+        {activeTab === "duties" && (
+          <div className="flex flex-col gap-4">
+            {weeks === null ? (
+              <p className="text-base text-muted-foreground">טוען...</p>
+            ) : (
+              <WeekDayPicker
+                weeks={weeks}
+                selectedWeekId={selectedWeekId}
+                onSelectWeek={(id) => {
+                  setSelectedWeekId(id);
+                  setDayFilter("all");
+                }}
+                dayFilter={dayFilter}
+                onSelectDay={setDayFilter}
+              />
+            )}
+            <InstructorDutiesSection
+              weeklyScheduleId={selectedWeekId}
+              dayFilter={dayFilter}
+              students={students}
+              dutyTypes={dutyTypes}
+            />
+          </div>
+        )}
+
+        {activeTab === "booklet" && <CourseBookletPlaceholder />}
+
+        {activeTab === "profile" && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-2xl border border-border bg-card p-6">
+              <p className="text-sm font-semibold text-muted-foreground">שם מלא</p>
+              <p className="text-xl font-bold text-card-foreground">{session.fullName}</p>
+            </div>
+            <Button variant="secondary" onClick={handleSwitch} className="!py-3 !text-base">
+              החלפת מדריך/ה
+            </Button>
+          </div>
+        )}
+      </main>
+
+      <BottomTabs active={activeTab} onChange={setActiveTab} />
     </div>
   );
 }

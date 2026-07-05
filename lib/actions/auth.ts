@@ -20,10 +20,17 @@ export async function searchStudents(query: string): Promise<StudentSearchResult
   return students;
 }
 
+export interface StudentProfile {
+  id: string;
+  fullName: string;
+  groupName: string | null;
+  subgroupNumber: number | null;
+}
+
 export interface LoginResult {
   success: boolean;
   error?: string;
-  student?: { id: string; fullName: string; groupName: string | null };
+  student?: StudentProfile;
 }
 
 export async function verifyStudentLogin(
@@ -38,6 +45,25 @@ export async function verifyStudentLogin(
 
   return {
     success: true,
-    student: { id: student.id, fullName: student.fullName, groupName: student.groupName },
+    student: {
+      id: student.id,
+      fullName: student.fullName,
+      groupName: student.groupName,
+      subgroupNumber: student.subgroupNumber,
+    },
+  };
+}
+
+// Refreshes the remembered session's profile fields from the DB. A
+// long-lived "remember me" session (or one saved before a profile field
+// existed) can otherwise show stale or missing data indefinitely.
+export async function getStudentProfile(studentId: string): Promise<StudentProfile | null> {
+  const student = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!student || !student.isActive) return null;
+  return {
+    id: student.id,
+    fullName: student.fullName,
+    groupName: student.groupName,
+    subgroupNumber: student.subgroupNumber,
   };
 }
