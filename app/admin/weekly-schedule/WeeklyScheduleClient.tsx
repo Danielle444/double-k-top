@@ -1,6 +1,7 @@
 "use client";
 
-import { FormEvent, useMemo, useState, useTransition } from "react";
+import Link from "next/link";
+import { FormEvent, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
 import {
@@ -13,9 +14,8 @@ import {
   type ScheduleImportItem,
 } from "@/lib/actions/weekly-schedule";
 import { runGenerateSchedule, setPublishStatus } from "@/lib/actions/schedule";
-import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates";
+import { formatHebrewDate, parseDateKey } from "@/lib/dates";
 import type { GenerateMode } from "@/lib/scheduler";
-import { cleanScheduleTitle } from "@/lib/schedule-title";
 
 interface ScheduleItemView {
   id: string;
@@ -60,9 +60,6 @@ export function WeeklyScheduleClient({
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [parseWarning, setParseWarning] = useState<string | null>(null);
-
-  const [detailWeekId, setDetailWeekId] = useState<string | null>(null);
-  const [detailGroupFilter, setDetailGroupFilter] = useState<"all" | string>("all");
 
   const [suggestWeekId, setSuggestWeekId] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<DayPlanSuggestion[] | null>(null);
@@ -170,32 +167,6 @@ export function WeeklyScheduleClient({
     });
   }
 
-  const detailWeek = weeklySchedules.find((w) => w.id === detailWeekId) ?? null;
-  const detailGroups = useMemo(() => {
-    if (!detailWeek) return [];
-    return Array.from(
-      new Set(detailWeek.items.map((i) => i.groupName).filter((g): g is string => Boolean(g)))
-    ).sort();
-  }, [detailWeek]);
-  const detailItems = useMemo(() => {
-    if (!detailWeek) return [];
-    return detailWeek.items
-      .filter(
-        (i) =>
-          detailGroupFilter === "all" || !i.groupName || i.groupName === detailGroupFilter
-      )
-      .sort((a, b) => (a.dateKey + a.startTime).localeCompare(b.dateKey + b.startTime));
-  }, [detailWeek, detailGroupFilter]);
-
-  const detailItemsByDay = useMemo(() => {
-    const map = new Map<string, ScheduleItemView[]>();
-    for (const item of detailItems) {
-      if (!map.has(item.dateKey)) map.set(item.dateKey, []);
-      map.get(item.dateKey)!.push(item);
-    }
-    return Array.from(map.entries());
-  }, [detailItems]);
-
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -207,10 +178,6 @@ export function WeeklyScheduleClient({
           <WeekCard
             key={week.id}
             week={week}
-            onView={() => {
-              setDetailWeekId(week.id);
-              setDetailGroupFilter("all");
-            }}
             onReplace={() => openUpload(week)}
             onDelete={() => handleDelete(week.id)}
             onSuggest={() => openSuggestions(week.id)}
@@ -368,74 +335,6 @@ export function WeeklyScheduleClient({
       </Modal>
 
       <Modal
-        open={detailWeek !== null}
-        title={detailWeek ? `לו"ז - ${detailWeek.name}` : ""}
-        onClose={() => setDetailWeekId(null)}
-      >
-        {detailWeek && (
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setDetailGroupFilter("all")}
-                className={`rounded-full px-3 py-1 text-xs ${
-                  detailGroupFilter === "all" ? "bg-primary text-primary-foreground" : "bg-muted"
-                }`}
-              >
-                שתי הקבוצות
-              </button>
-              {detailGroups.map((g) => (
-                <button
-                  key={g}
-                  type="button"
-                  onClick={() => setDetailGroupFilter(g)}
-                  className={`rounded-full px-3 py-1 text-xs ${
-                    detailGroupFilter === g ? "bg-primary text-primary-foreground" : "bg-muted"
-                  }`}
-                >
-                  {g}
-                </button>
-              ))}
-            </div>
-            <div className="max-h-96 overflow-y-auto">
-              {detailItemsByDay.map(([dk, items]) => (
-                <div key={dk} className="mb-4">
-                  <div className="mb-2 rounded-lg bg-secondary px-3 py-2 text-sm font-bold text-secondary-foreground">
-                    {formatHebrewWeekday(parseDateKey(dk))} · {formatHebrewDate(parseDateKey(dk))}
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    {items.map((item) => (
-                      <div key={item.id} className="rounded-lg border border-border p-3">
-                        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-sm font-semibold text-card-foreground">
-                            {item.startTime}-{item.endTime}
-                          </span>
-                          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                            {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
-                          </span>
-                        </div>
-                        <p className="text-base font-medium text-card-foreground">
-                          {cleanScheduleTitle(item.title)}
-                        </p>
-                        {item.instructorName && (
-                          <p className="text-xs text-muted-foreground">
-                            מדריך/ה: {item.instructorName}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-              {detailItems.length === 0 && (
-                <p className="py-4 text-center text-sm text-muted-foreground">אין פריטים</p>
-              )}
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      <Modal
         open={suggestWeekId !== null}
         title='הצעת ערכי תכנון קבוצות יומי'
         onClose={() => {
@@ -526,13 +425,11 @@ export function WeeklyScheduleClient({
 
 function WeekCard({
   week,
-  onView,
   onReplace,
   onDelete,
   onSuggest,
 }: {
   week: WeeklyScheduleView;
-  onView: () => void;
   onReplace: () => void;
   onDelete: () => void;
   onSuggest: () => void;
@@ -577,9 +474,12 @@ function WeekCard({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="ghost" className="!px-2 !py-1" onClick={onView}>
+          <Link
+            href={`/admin/weekly-schedule/${week.id}`}
+            className="rounded-lg bg-transparent px-2 py-1 text-sm font-medium text-card-foreground transition-colors hover:bg-muted"
+          >
             צפייה בלו&quot;ז
-          </Button>
+          </Link>
           <Button variant="ghost" className="!px-2 !py-1" onClick={onSuggest}>
             הצעת תכנון קבוצות
           </Button>
