@@ -8,6 +8,7 @@ import {
   buildScheduleGridWorkbook,
 } from "@/lib/exports/build-schedule-workbook";
 import { buildScheduleDiagnostics } from "@/lib/schedule-diagnostics";
+import { buildFairnessReport } from "@/lib/schedule-fairness";
 
 const XLSX_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -93,11 +94,12 @@ export async function GET(request: Request) {
       customTitle ?? `${formatDateForFilename(startDate)}-${formatDateForFilename(endDate)}`;
   }
 
-  const [data, diagnostics] = await Promise.all([
+  const [data, diagnostics, fairness] = await Promise.all([
     buildScheduleGridExport(startDate, endDate, title),
     buildScheduleDiagnostics(startDate, endDate),
+    buildFairnessReport(startDate, endDate),
   ]);
-  const buffer = await buildScheduleGridWorkbook(data, diagnostics);
+  const buffer = await buildScheduleGridWorkbook(data, diagnostics, fairness);
   const filename = `${sanitizeFileNamePart(`שיבוץ תורנויות - ${filenameLabel}`)}.xlsx`;
 
   return new NextResponse(buffer as BodyInit, {

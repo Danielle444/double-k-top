@@ -325,10 +325,32 @@ export async function generateSchedule({
       remainderIndex += 1;
     }
 
-    // Fill the largest squads first so they aren't left with a thin candidate pool.
+    // Fill "hardest to fill" duty types first: a duty type blocked by an
+    // active constraint today can only draw from a narrower pool (e.g. only
+    // one group), so if an unconstrained duty type (open to everyone) goes
+    // first and its fairness-based pick happens to take a student from that
+    // narrower pool, the constrained duty type can come up short later even
+    // though the totals would have worked out fine in a different order.
+    // Priority: constrained-today first, then fewest eligible candidates,
+    // then larger required count as a final tiebreak (previous behavior).
+    function eligibleCandidateCount(dutyTypeId: string): number {
+      const blocked = blockedGroupsFor(dk, dutyTypeId);
+      return remainingPool.filter((s) => !(s.groupName && blocked.has(s.groupName))).length;
+    }
+
     const dutyOrder = fixedCountDuties
       .map((d, i) => ({ dutyType: d, required: floorShares[i] }))
-      .sort((a, b) => b.required - a.required);
+      .sort((a, b) => {
+        const aBlocked = blockedGroupsFor(dk, a.dutyType.id).size > 0;
+        const bBlocked = blockedGroupsFor(dk, b.dutyType.id).size > 0;
+        if (aBlocked !== bBlocked) return aBlocked ? -1 : 1;
+
+        const aCandidates = eligibleCandidateCount(a.dutyType.id);
+        const bCandidates = eligibleCandidateCount(b.dutyType.id);
+        if (aCandidates !== bCandidates) return aCandidates - bCandidates;
+
+        return b.required - a.required;
+      });
 
     for (const { dutyType, required: proportionalRequired } of dutyOrder) {
       const alreadyFilled = preFilledCountByDuty.get(dutyType.id) ?? 0;

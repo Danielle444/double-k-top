@@ -9,11 +9,14 @@ import {
 } from "@/lib/duty-colors";
 import { computeCoverageByDate } from "@/lib/schedule-coverage";
 import type { CoverageStatus, ScheduleDiagnostics } from "@/lib/schedule-diagnostics";
+import type { FairnessReport } from "@/lib/schedule-fairness";
 import type {
   ExportCell,
   ScheduleGridExport,
   ScheduleDayExport,
 } from "@/lib/exports/schedule-export";
+
+const HIGH_REPETITION_THRESHOLD = 3;
 
 const HEADER_FILL = {
   type: "pattern" as const,
@@ -150,9 +153,69 @@ function addDiagnosticsSheet(workbook: Workbook, diagnostics: ScheduleDiagnostic
   }
 }
 
+// A read-only fairness matrix over already-generated assignments - never
+// generates, deletes, or modifies anything.
+function addFairnessSheet(workbook: Workbook, report: FairnessReport) {
+  const sheet = workbook.addWorksheet("סיכום לפי חניך", {
+    views: [{ rightToLeft: true, state: "frozen", xSplit: 3, ySplit: 2 }],
+  });
+
+  const fixedHeaders = ["שם מלא", "קבוצה", "תת-קבוצה"];
+  const dutyHeaders = report.dutyTypes.map((d) => d.name);
+  const headers = [...fixedHeaders, ...dutyHeaders, "סה\"כ"];
+
+  sheet.getColumn(1).width = 22;
+  sheet.getColumn(2).width = 10;
+  sheet.getColumn(3).width = 12;
+  for (let i = 0; i < report.dutyTypes.length; i++) {
+    sheet.getColumn(4 + i).width = 16;
+  }
+  sheet.getColumn(4 + report.dutyTypes.length).width = 10;
+
+  addTitleRow(sheet, "סיכום לפי חניך", headers.length);
+
+  const headerRow = sheet.getRow(2);
+  headers.forEach((h, i) => {
+    const c = headerRow.getCell(i + 1);
+    c.value = h;
+    c.font = { bold: true };
+    c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    c.fill = HEADER_FILL;
+  });
+  headerRow.height = 32;
+
+  let rowIndex = 3;
+  const warningFill = toArgbFill(getCoverageWarningColor());
+  for (const student of report.students) {
+    const row = sheet.getRow(rowIndex);
+    row.getCell(1).value = student.fullName;
+    row.getCell(1).alignment = { horizontal: "right", vertical: "middle" };
+    row.getCell(2).value = student.groupName ?? "";
+    row.getCell(3).value = student.subgroupNumber ?? "";
+    row.getCell(2).alignment = { horizontal: "center", vertical: "middle" };
+    row.getCell(3).alignment = { horizontal: "center", vertical: "middle" };
+
+    report.dutyTypes.forEach((dt, i) => {
+      const count = student.countByDutyType.get(dt.id) ?? 0;
+      const c = row.getCell(4 + i);
+      c.value = count > 0 ? count : "";
+      c.alignment = { horizontal: "center", vertical: "middle" };
+      if (count >= HIGH_REPETITION_THRESHOLD) c.fill = warningFill;
+    });
+
+    const totalCell = row.getCell(4 + report.dutyTypes.length);
+    totalCell.value = student.total;
+    totalCell.font = { bold: true };
+    totalCell.alignment = { horizontal: "center", vertical: "middle" };
+
+    rowIndex++;
+  }
+}
+
 export async function buildScheduleGridWorkbook(
   data: ScheduleGridExport,
-  diagnostics: ScheduleDiagnostics
+  diagnostics: ScheduleDiagnostics,
+  fairness: FairnessReport
 ): Promise<Uint8Array> {
   const workbook = new Workbook();
   const sheet = workbook.addWorksheet("שיבוץ תורנויות", {
@@ -249,6 +312,7 @@ export async function buildScheduleGridWorkbook(
   summaryRow.height = 24;
 
   addDiagnosticsSheet(workbook, diagnostics);
+  addFairnessSheet(workbook, fairness);
 
   return workbookToBytes(workbook);
 }

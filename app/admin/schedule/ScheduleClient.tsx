@@ -20,6 +20,7 @@ import {
 import type { GenerateMode } from "@/lib/scheduler";
 import { ScheduleGrid } from "@/app/admin/schedule/ScheduleGrid";
 import { ScheduleDiagnosticsPanel } from "@/app/admin/schedule/ScheduleDiagnosticsPanel";
+import { ScheduleFairnessPanel } from "@/app/admin/schedule/ScheduleFairnessPanel";
 
 interface AssignmentRow {
   id: string;
@@ -482,6 +483,10 @@ export function ScheduleClient({
       {view === "grid" ? (
         <>
         <ScheduleDiagnosticsPanel
+          startDate={gridRange?.startDate ?? null}
+          endDate={gridRange?.endDate ?? null}
+        />
+        <ScheduleFairnessPanel
           startDate={gridRange?.startDate ?? null}
           endDate={gridRange?.endDate ?? null}
         />
