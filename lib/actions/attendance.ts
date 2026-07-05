@@ -251,6 +251,42 @@ export async function getAttendanceTrackingForInstructor(
   return buildAttendanceTrackingRows(startDateKey, endDateKey);
 }
 
+export interface StudentAttendanceNotice {
+  dateKey: string;
+  status: "ABSENT" | "PARTIAL";
+  arrivalTime: string | null;
+  departureTime: string | null;
+  notes: string | null;
+}
+
+// Students have no NextAuth session in this app - identical trust model to
+// getStudentProfile/getStudentMessages: studentId is trusted the same way a
+// logged-in student's own id always is, but the query itself is scoped to
+// exactly that studentId + date, so this can never return another student's
+// row. Returns null (no notice) for a missing record or a PRESENT status -
+// only ABSENT/PARTIAL are ever surfaced to the student, and only their own,
+// never the full tracking DTO (no group/duty/availability/warning fields).
+export async function getStudentAttendanceNotice(
+  studentId: string,
+  dateKeyStr: string
+): Promise<StudentAttendanceNotice | null> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKeyStr)) return null;
+
+  const record = await prisma.studentAttendance.findUnique({
+    where: { studentId_date: { studentId, date: parseDateKey(dateKeyStr) } },
+  });
+  if (!record) return null;
+  if (record.status === "PRESENT") return null;
+
+  return {
+    dateKey: dateKeyStr,
+    status: record.status,
+    arrivalTime: record.arrivalTime,
+    departureTime: record.departureTime,
+    notes: record.notes,
+  };
+}
+
 function validateAttendanceInput(input: AttendanceInput): string | null {
   const parsed = attendanceInputSchema.safeParse(input);
   if (!parsed.success) return parsed.error.issues[0]?.message ?? "קלט לא תקין";

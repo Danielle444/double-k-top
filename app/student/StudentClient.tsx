@@ -18,6 +18,7 @@ import { ScheduleSection } from "@/app/student/ScheduleSection";
 import { DutiesSection } from "@/app/student/DutiesSection";
 import { StudentMessagesSection } from "@/app/student/StudentMessagesSection";
 import { StudentMessagesSummary } from "@/app/student/StudentMessagesSummary";
+import { StudentAttendanceNotice } from "@/app/student/StudentAttendanceNotice";
 import { ContactsSection } from "@/lib/components/ContactsSection";
 import { formatHebrewDate, formatHebrewWeekday, getLocalDateKey, parseDateKey } from "@/lib/dates";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
@@ -316,6 +317,8 @@ export function StudentClient() {
                 {formatHebrewWeekday(parseDateKey(todayKey))} · {formatHebrewDate(parseDateKey(todayKey))}
               </p>
             </div>
+
+            <StudentAttendanceNotice studentId={session.id} dateKey={todayKey} />
 
             <div className="grid grid-cols-3 gap-2">
               {STUDENT_QUICK_ACTIONS.map((action) => (
