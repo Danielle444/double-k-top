@@ -42,6 +42,20 @@ const INSTRUCTOR_MORE_ITEMS: { id: MainTabId; label: string }[] = [
 
 const INSTRUCTOR_ALL_TABS = [...INSTRUCTOR_MAIN_TABS, ...INSTRUCTOR_MORE_ITEMS];
 
+// Quick-action shortcuts shown on the "today" home screen - each just calls
+// setActiveTab, exactly like the "more" menu buttons already do. These are
+// navigation shortcuts only; they unlock nothing new and the destination
+// sections enforce their own permissions server-side regardless of how the
+// instructor got there.
+const INSTRUCTOR_QUICK_ACTIONS: { id: MainTabId; label: string }[] = [
+  { id: "schedule", label: 'לו"ז' },
+  { id: "duties", label: "תורנויות" },
+  { id: "horses", label: "קבוצות וסוסים" },
+  { id: "contacts", label: "אנשי קשר" },
+  { id: "messages", label: "הודעות ומשימות" },
+  { id: "materials", label: "חומרי קורס" },
+];
+
 interface StoredSession {
   id: string;
   fullName: string;
@@ -264,6 +278,42 @@ export function InstructorClient({
                 {formatHebrewWeekday(parseDateKey(todayKey))} · {formatHebrewDate(parseDateKey(todayKey))}
               </p>
             </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              {INSTRUCTOR_QUICK_ACTIONS.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  onClick={() => setActiveTab(action.id)}
+                  className="rounded-xl border border-border bg-card p-3 text-center text-sm font-semibold text-card-foreground hover:bg-muted"
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+
+            {(session.canSendMessages || session.canEditHorseAssignments) && (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {session.canSendMessages && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("messages")}
+                    className="rounded-xl border border-accent bg-secondary p-4 text-center text-sm font-semibold text-secondary-foreground hover:opacity-90"
+                  >
+                    שליחת הודעה/משימה
+                  </button>
+                )}
+                {session.canEditHorseAssignments && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("horses")}
+                    className="rounded-xl border border-accent bg-secondary p-4 text-center text-sm font-semibold text-secondary-foreground hover:opacity-90"
+                  >
+                    עריכת חלוקת סוסים
+                  </button>
+                )}
+              </div>
+            )}
 
             <InstructorDutiesSection
               weeklyScheduleId={todayWeek?.id ?? null}

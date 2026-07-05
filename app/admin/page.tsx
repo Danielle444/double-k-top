@@ -1,48 +1,84 @@
 import Link from "next/link";
-import { prisma } from "@/lib/prisma";
-import { formatHebrewDate, todayDateKey, parseDateKey } from "@/lib/dates";
+import { formatHebrewDate, formatHebrewDateTime } from "@/lib/dates";
 import { Logo } from "@/lib/components/Logo";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { getAdminDashboardData } from "@/lib/actions/admin-dashboard";
 
 export const dynamic = "force-dynamic";
 
-async function getDashboardData() {
-  const todayKey = todayDateKey();
-  const today = parseDateKey(todayKey);
+const QUICK_ACTIONS = [
+  { href: "/admin/students", label: "ניהול תלמידים" },
+  { href: "/admin/instructors", label: "ניהול מדריכים" },
+  { href: "/admin/weekly-schedule", label: 'לו"ז שבועי' },
+  { href: "/admin/schedule", label: "שיבוץ תורנויות" },
+  { href: "/admin/messages", label: "הודעות ומשימות" },
+  { href: "/admin/horses", label: "חלוקת סוסים" },
+  { href: "/admin/materials", label: "חומרי קורס" },
+];
 
-  const [activeStudents, activeDutyTypes, settings, todayAssignments] =
-    await Promise.all([
-      prisma.student.count({ where: { isActive: true } }),
-      prisma.dutyType.count({ where: { isActive: true } }),
-      prisma.courseSettings.findUnique({ where: { id: 1 } }),
-      prisma.dutyAssignment.findMany({
-        where: { date: today, isPublished: true },
-        include: { student: true, dutyType: true },
-      }),
-    ]);
+const MESSAGE_TYPE_LABELS: Record<"MESSAGE" | "TASK", string> = {
+  MESSAGE: "הודעה",
+  TASK: "משימה",
+};
 
-  return { activeStudents, activeDutyTypes, settings, todayAssignments };
-}
+const MATERIAL_TYPE_LABELS: Record<"FILE" | "LINK", string> = {
+  FILE: "קובץ",
+  LINK: "קישור",
+};
 
 export default async function AdminDashboardPage() {
   await requireAdmin();
-  const { activeStudents, activeDutyTypes, settings, todayAssignments } =
-    await getDashboardData();
+  const data = await getAdminDashboardData();
 
-  const completedCount = todayAssignments.filter((a) => a.isCompleted).length;
+  const attentionItems: { key: string; label: string; href: string }[] = [];
+  if (!data.courseRange) {
+    attentionItems.push({
+      key: "no-course-range",
+      label: "לא הוגדר טווח תאריכי הקורס",
+      href: "/admin/availability",
+    });
+  }
+  if (data.studentsWithoutPhone > 0) {
+    attentionItems.push({
+      key: "no-phone",
+      label: `${data.studentsWithoutPhone} תלמידים ללא מספר טלפון`,
+      href: "/admin/students",
+    });
+  }
+  if (data.studentsWithoutHorse > 0) {
+    attentionItems.push({
+      key: "no-horse",
+      label: `${data.studentsWithoutHorse} תלמידים ללא שיבוץ סוס`,
+      href: "/admin/horses",
+    });
+  }
+  if (data.incompleteTaskRecipients > 0) {
+    attentionItems.push({
+      key: "open-tasks",
+      label: `${data.incompleteTaskRecipients} משימות שטרם הושלמו`,
+      href: "/admin/messages",
+    });
+  }
+  if (data.activeMaterialsCount === 0) {
+    attentionItems.push({
+      key: "no-materials",
+      label: "לא נוספו חומרי קורס עדיין",
+      href: "/admin/materials",
+    });
+  }
 
   return (
     <div className="flex flex-col gap-6">
       <Logo width={160} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="תלמידים פעילים" value={activeStudents} />
-        <StatCard label="סוגי תורנות פעילים" value={activeDutyTypes} />
+        <StatCard label="תלמידים פעילים" value={data.activeStudents} />
+        <StatCard label="מדריכים פעילים" value={data.activeInstructors} />
         <StatCard
           label="טווח תאריכי הקורס"
           value={
-            settings
-              ? `${formatHebrewDate(settings.startDate)} - ${formatHebrewDate(settings.endDate)}`
+            data.courseRange
+              ? `${formatHebrewDate(data.courseRange.startDate)} - ${formatHebrewDate(data.courseRange.endDate)}`
               : "טרם הוגדר"
           }
           small
@@ -50,37 +86,95 @@ export default async function AdminDashboardPage() {
         <StatCard
           label="ביצוע תורנויות היום"
           value={
-            todayAssignments.length === 0
+            data.todayAssignmentsTotal === 0
               ? "אין שיבוצים שפורסמו היום"
-              : `${completedCount} / ${todayAssignments.length} בוצעו`
+              : `${data.todayAssignmentsCompleted} / ${data.todayAssignmentsTotal} בוצעו`
           }
           small
         />
+        <StatCard label="חומרי קורס פעילים" value={data.activeMaterialsCount} />
       </div>
 
-      {!settings && (
-        <div className="rounded-lg bg-warning-muted p-4 text-sm text-warning">
-          יש להגדיר תחילה את תאריכי הקורס בעמוד{" "}
-          <Link href="/admin/availability" className="underline">
-            הזמינות
-          </Link>{" "}
-          לפני ייצור שיבוץ אוטומטי.
+      {attentionItems.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <h2 className="text-base font-semibold text-card-foreground">דורש תשומת לב</h2>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {attentionItems.map((item) => (
+              <Link
+                key={item.key}
+                href={item.href}
+                className="rounded-lg bg-warning-muted p-4 text-sm font-medium text-warning underline-offset-2 hover:underline"
+              >
+                {item.label}
+              </Link>
+            ))}
+          </div>
         </div>
       )}
 
-      <div className="rounded-xl border border-border bg-card p-5">
-        <h2 className="mb-3 text-base font-semibold text-card-foreground">ייצור שיבוצים</h2>
-        <p className="text-sm text-muted-foreground">
-          ייצור ועריכת שיבוצי תורנות מתבצעים מעמוד{" "}
-          <Link href="/admin/schedule" className="underline">
-            שיבוץ
-          </Link>{" "}
-          (ניתן לבחור שבוע מתוך{" "}
-          <Link href="/admin/weekly-schedule" className="underline">
-            לו&quot;ז שבועי
-          </Link>{" "}
-          כטווח לייצור).
-        </p>
+      <div className="flex flex-col gap-2">
+        <h2 className="text-base font-semibold text-card-foreground">פעולות מהירות</h2>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {QUICK_ACTIONS.map((action) => (
+            <Link
+              key={action.href}
+              href={action.href}
+              className="rounded-xl border border-border bg-card p-4 text-center text-sm font-semibold text-card-foreground hover:bg-muted"
+            >
+              {action.label}
+            </Link>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="rounded-xl border border-border bg-card p-5">
+          <h2 className="mb-3 text-base font-semibold text-card-foreground">
+            הודעות ומשימות אחרונות
+          </h2>
+          {data.recentMessageTasks.length === 0 ? (
+            <p className="text-sm text-muted-foreground">עדיין לא נשלחו הודעות או משימות</p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {data.recentMessageTasks.map((item) => (
+                <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                  <span className="flex items-center gap-2">
+                    <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
+                      {MESSAGE_TYPE_LABELS[item.type]}
+                    </span>
+                    <span className="text-card-foreground">{item.title}</span>
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {formatHebrewDateTime(item.createdAt)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-5">
+          <h2 className="mb-3 text-base font-semibold text-card-foreground">חומרי קורס אחרונים</h2>
+          {data.recentMaterials.length === 0 ? (
+            <p className="text-sm text-muted-foreground">עדיין לא נוספו חומרי קורס</p>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {data.recentMaterials.map((item) => (
+                <li key={item.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                  <span className="flex items-center gap-2">
+                    <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
+                      {MATERIAL_TYPE_LABELS[item.materialType]}
+                    </span>
+                    <span className="text-card-foreground">{item.title}</span>
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {formatHebrewDateTime(item.createdAt)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   );
