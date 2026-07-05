@@ -5,7 +5,7 @@ import { Button } from "@/lib/components/Button";
 import { adminSetCompletion } from "@/lib/actions/completion";
 import { formatHebrewDate, formatHebrewDateTime, parseDateKey } from "@/lib/dates";
 
-interface CompletionRow {
+export interface CompletionRow {
   id: string;
   dateKey: string;
   studentName: string;

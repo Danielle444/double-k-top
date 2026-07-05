@@ -3,16 +3,19 @@ import { Logo } from "@/lib/components/Logo";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { signOutAdmin } from "@/lib/actions/auth-actions";
 
+// "זמינות" (/admin/availability) and "ביצוע" (/admin/completion) were
+// removed from the top-level nav in favor of the single "מעקב יומי" entry,
+// which now embeds both as tabs - the routes themselves are untouched and
+// still load fine by direct URL, they're just no longer separate nav items.
 const NAV_ITEMS = [
   { href: "/admin", label: "לוח בקרה" },
   { href: "/admin/students", label: "תלמידים" },
   { href: "/admin/instructors", label: "מדריכים" },
   { href: "/admin/duties", label: "סוגי תורנות" },
-  { href: "/admin/availability", label: "זמינות" },
+  { href: "/admin/daily-tracking", label: "מעקב יומי" },
   { href: "/admin/day-plan", label: "תכנון קבוצות יומי" },
   { href: "/admin/weekly-schedule", label: "לו\"ז שבועי" },
   { href: "/admin/schedule", label: "שיבוץ" },
-  { href: "/admin/completion", label: "ביצוע" },
   { href: "/admin/materials", label: "חומרי קורס" },
   { href: "/admin/horses", label: "חלוקה לקבוצות וסוסים" },
   { href: "/admin/messages", label: "הודעות ומשימות" },
