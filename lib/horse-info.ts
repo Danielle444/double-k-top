@@ -5,7 +5,12 @@ export type HorseBadgeType = "private" | "assigned" | "none";
 export interface HorseDisplayInfo {
   badgeType: HorseBadgeType;
   badgeLabel: string;
+  // Raw name as entered, or null if none was entered - use this for search/matching.
   horseName: string | null;
+  // Always non-empty - the real name, or a placeholder when none was entered.
+  // Use this for rendering so a private/assigned horse with no name yet
+  // still reads clearly instead of rendering nothing.
+  horseNameDisplay: string;
 }
 
 export interface HorseInfoInput {
@@ -14,19 +19,35 @@ export interface HorseInfoInput {
   assignedHorseName: string | null;
 }
 
-// "לא שובץ" isn't just the hasPrivateHorse=false-with-no-assignedHorseName
-// case - it's whichever side is actually relevant for this student that
-// turns out to have no name entered yet (a student marked as having a
-// private horse but with no name recorded yet is still "not assigned",
-// not silently shown as the other side's state).
+// Status depends only on hasPrivateHorse (and, when false, on whether a
+// course horse was assigned) - never on whether a name string happens to be
+// filled in. An admin can mark a student as having a private horse before
+// they know its name; that student must still show as "סוס פרטי", not
+// silently fall back to "לא שובץ".
 export function getHorseDisplayInfo(student: HorseInfoInput): HorseDisplayInfo {
   if (student.hasPrivateHorse) {
     const name = student.privateHorseName?.trim() || null;
-    if (!name) return { badgeType: "none", badgeLabel: "לא שובץ", horseName: null };
-    return { badgeType: "private", badgeLabel: "סוס פרטי", horseName: name };
+    return {
+      badgeType: "private",
+      badgeLabel: "סוס פרטי",
+      horseName: name,
+      horseNameDisplay: name ?? "שם סוס לא הוזן",
+    };
   }
 
   const name = student.assignedHorseName?.trim() || null;
-  if (!name) return { badgeType: "none", badgeLabel: "לא שובץ", horseName: null };
-  return { badgeType: "assigned", badgeLabel: "סוס קורס", horseName: name };
+  if (!name) {
+    return {
+      badgeType: "none",
+      badgeLabel: "לא שובץ",
+      horseName: null,
+      horseNameDisplay: "לא שובץ סוס",
+    };
+  }
+  return {
+    badgeType: "assigned",
+    badgeLabel: "סוס קורס",
+    horseName: name,
+    horseNameDisplay: name,
+  };
 }

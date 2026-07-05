@@ -154,7 +154,11 @@ export function HorsesClient({ students }: { students: HorseAssignmentRow[] }) {
                       {info.badgeLabel}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">{info.horseName ?? "-"}</td>
+                  <td
+                    className={`px-4 py-3 ${info.horseName ? "text-muted-foreground" : "italic text-muted-foreground/70"}`}
+                  >
+                    {info.horseNameDisplay}
+                  </td>
                   <td className="px-4 py-3">
                     <Button
                       variant="ghost"

@@ -331,11 +331,13 @@ export function StudentClient() {
                     >
                       {horseInfo.badgeLabel}
                     </span>
-                    {horseInfo.horseName && (
-                      <span className="text-lg font-bold text-card-foreground">
-                        {horseInfo.horseName}
-                      </span>
-                    )}
+                    <span
+                      className={`text-lg font-bold ${
+                        horseInfo.horseName ? "text-card-foreground" : "italic text-muted-foreground"
+                      }`}
+                    >
+                      {horseInfo.horseNameDisplay}
+                    </span>
                   </div>
                 );
               })()}
