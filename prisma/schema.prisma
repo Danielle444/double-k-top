@@ -23,6 +23,13 @@ model Student {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  // Horse assignment (Stage A - simple name fields only, no separate Horse
+  // table): hasPrivateHorse=true -> privateHorseName is the horse shown;
+  // otherwise assignedHorseName is the course-assigned horse, if any.
+  hasPrivateHorse   Boolean @default(false)
+  privateHorseName  String?
+  assignedHorseName String?
+
   availability StudentAvailability[]
   assignments  DutyAssignment[]
 
@@ -152,6 +159,10 @@ model Instructor {
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  // Stage A: field exists but nothing grants/uses edit access yet - every
+  // instructor is still view-only on the horse assignment tab this stage.
+  canEditHorseAssignments Boolean @default(false)
 
   @@map("instructors")
 }

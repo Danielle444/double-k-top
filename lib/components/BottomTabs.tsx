@@ -1,6 +1,6 @@
 "use client";
 
-export type MainTabId = "today" | "schedule" | "duties" | "booklet" | "profile";
+export type MainTabId = "today" | "schedule" | "duties" | "booklet" | "profile" | "horses";
 
 export const MAIN_TABS: { id: MainTabId; label: string }[] = [
   { id: "today", label: "היום" },
@@ -13,17 +13,19 @@ export const MAIN_TABS: { id: MainTabId; label: string }[] = [
 export function BottomTabs({
   active,
   onChange,
+  tabs = MAIN_TABS,
 }: {
   active: MainTabId;
   onChange: (id: MainTabId) => void;
+  tabs?: { id: MainTabId; label: string }[];
 }) {
   return (
     <nav
       className="fixed inset-x-0 bottom-0 z-30 mx-auto w-full max-w-lg border-t border-border bg-card pb-[env(safe-area-inset-bottom)]"
       aria-label="ניווט ראשי"
     >
-      <div className="grid grid-cols-5">
-        {MAIN_TABS.map((tab) => {
+      <div className="grid" style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}>
+        {tabs.map((tab) => {
           const isActive = tab.id === active;
           return (
             <button

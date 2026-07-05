@@ -25,6 +25,9 @@ export interface StudentProfile {
   fullName: string;
   groupName: string | null;
   subgroupNumber: number | null;
+  hasPrivateHorse: boolean;
+  privateHorseName: string | null;
+  assignedHorseName: string | null;
 }
 
 export interface LoginResult {
@@ -50,6 +53,9 @@ export async function verifyStudentLogin(
       fullName: student.fullName,
       groupName: student.groupName,
       subgroupNumber: student.subgroupNumber,
+      hasPrivateHorse: student.hasPrivateHorse,
+      privateHorseName: student.privateHorseName,
+      assignedHorseName: student.assignedHorseName,
     },
   };
 }
@@ -65,5 +71,8 @@ export async function getStudentProfile(studentId: string): Promise<StudentProfi
     fullName: student.fullName,
     groupName: student.groupName,
     subgroupNumber: student.subgroupNumber,
+    hasPrivateHorse: student.hasPrivateHorse,
+    privateHorseName: student.privateHorseName,
+    assignedHorseName: student.assignedHorseName,
   };
 }

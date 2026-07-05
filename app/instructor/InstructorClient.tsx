@@ -14,9 +14,15 @@ import {
 import { getWeeklyScheduleSelection } from "@/lib/actions/weekly-schedule";
 import { InstructorScheduleSection } from "@/app/instructor/InstructorScheduleSection";
 import { InstructorDutiesSection } from "@/app/instructor/InstructorDutiesSection";
+import { InstructorHorsesSection } from "@/app/instructor/InstructorHorsesSection";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey, todayDateKey } from "@/lib/dates";
 
 const STORAGE_KEY = "duty-manager-instructor-v2";
+
+// Instructor gets a 6th tab ("horses") that students never see - BottomTabs'
+// default tabs prop (MAIN_TABS, 5 tabs) stays exactly as it is for the
+// student app; this array is instructor-only.
+const INSTRUCTOR_TABS = [...MAIN_TABS, { id: "horses" as const, label: "קבוצות וסוסים" }];
 
 interface StoredSession {
   id: string;
@@ -197,7 +203,7 @@ export function InstructorClient({
   const todayKey = todayDateKey();
   const todayWeek = weeks?.find((w) => w.startDate <= todayKey && todayKey <= w.endDate) ?? null;
 
-  const activeTabLabel = MAIN_TABS.find((t) => t.id === activeTab)?.label ?? "";
+  const activeTabLabel = INSTRUCTOR_TABS.find((t) => t.id === activeTab)?.label ?? "";
 
   return (
     <div className="flex flex-1 flex-col">
@@ -304,9 +310,11 @@ export function InstructorClient({
             </Button>
           </div>
         )}
+
+        {activeTab === "horses" && <InstructorHorsesSection />}
       </main>
 
-      <BottomTabs active={activeTab} onChange={setActiveTab} />
+      <BottomTabs active={activeTab} onChange={setActiveTab} tabs={INSTRUCTOR_TABS} />
     </div>
   );
 }

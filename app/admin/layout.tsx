@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { href: "/admin/schedule", label: "שיבוץ" },
   { href: "/admin/completion", label: "ביצוע" },
   { href: "/admin/course-booklet", label: "חוברת קורס" },
+  { href: "/admin/horses", label: "חלוקה לקבוצות וסוסים" },
   { href: "/admin/admins", label: "מנהלים מורשים" },
 ];
 

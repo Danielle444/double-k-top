@@ -16,6 +16,7 @@ import { getWeeklyScheduleSelection } from "@/lib/actions/weekly-schedule";
 import { ScheduleSection } from "@/app/student/ScheduleSection";
 import { DutiesSection } from "@/app/student/DutiesSection";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey, todayDateKey } from "@/lib/dates";
+import { getHorseDisplayInfo } from "@/lib/horse-info";
 
 const STORAGE_KEY = "duty-manager-student";
 
@@ -24,6 +25,9 @@ interface StoredSession {
   fullName: string;
   groupName: string | null;
   subgroupNumber: number | null;
+  hasPrivateHorse: boolean;
+  privateHorseName: string | null;
+  assignedHorseName: string | null;
 }
 
 export function StudentClient() {
@@ -309,6 +313,32 @@ export function StudentClient() {
                   </p>
                 </div>
               </div>
+            </div>
+            <div className="rounded-2xl border border-border bg-card p-6">
+              <p className="mb-2 text-sm font-semibold text-muted-foreground">סוס</p>
+              {(() => {
+                const horseInfo = getHorseDisplayInfo(session);
+                return (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`rounded-full px-3 py-1 text-sm font-medium ${
+                        horseInfo.badgeType === "private"
+                          ? "bg-success-muted text-success"
+                          : horseInfo.badgeType === "assigned"
+                            ? "bg-secondary text-secondary-foreground"
+                            : "bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {horseInfo.badgeLabel}
+                    </span>
+                    {horseInfo.horseName && (
+                      <span className="text-lg font-bold text-card-foreground">
+                        {horseInfo.horseName}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
             <Button variant="secondary" onClick={handleSwitchStudent} className="!py-3 !text-base">
               החלפת תלמיד/ה
