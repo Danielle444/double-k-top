@@ -17,6 +17,7 @@ import { updateOwnPrivateHorseName } from "@/lib/actions/horses";
 import { ScheduleSection } from "@/app/student/ScheduleSection";
 import { DutiesSection } from "@/app/student/DutiesSection";
 import { StudentMessagesSection } from "@/app/student/StudentMessagesSection";
+import { StudentMessagesSummary } from "@/app/student/StudentMessagesSummary";
 import { StudentInstructorContactsSection } from "@/app/student/StudentInstructorContactsSection";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey, todayDateKey } from "@/lib/dates";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
@@ -43,6 +44,18 @@ const STUDENT_MORE_ITEMS: { id: MainTabId; label: string }[] = [
 ];
 
 const STUDENT_ALL_TABS = [...STUDENT_MAIN_TABS, ...STUDENT_MORE_ITEMS];
+
+// Quick-action shortcuts shown on the "today" home screen - each just calls
+// setActiveTab, exactly like the instructor "today" dashboard's shortcuts and
+// the "more" menu buttons already do.
+const STUDENT_QUICK_ACTIONS: { id: MainTabId; label: string }[] = [
+  { id: "schedule", label: 'לו"ז' },
+  { id: "duties", label: "תורנויות" },
+  { id: "messages", label: "הודעות ומשימות" },
+  { id: "profile", label: "פרופיל" },
+  { id: "contacts", label: "אנשי קשר" },
+  { id: "materials", label: "חומרי קורס" },
+];
 
 interface StoredSession {
   id: string;
@@ -293,6 +306,62 @@ export function StudentClient() {
               <p className="text-xl font-bold text-card-foreground">
                 {formatHebrewWeekday(parseDateKey(todayKey))} · {formatHebrewDate(parseDateKey(todayKey))}
               </p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              {STUDENT_QUICK_ACTIONS.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  onClick={() => setActiveTab(action.id)}
+                  className="rounded-xl border border-border bg-card p-3 text-center text-sm font-semibold text-card-foreground hover:bg-muted"
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+
+            <StudentMessagesSummary
+              studentId={session.id}
+              onOpen={() => setActiveTab("messages")}
+            />
+
+            <div className="rounded-2xl border border-border bg-card p-5">
+              <p className="mb-2 text-sm font-semibold text-muted-foreground">סוס</p>
+              {(() => {
+                const horseInfo = getHorseDisplayInfo(session);
+                return (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`rounded-full px-3 py-1 text-sm font-medium ${
+                          horseInfo.badgeType === "private"
+                            ? "bg-success-muted text-success"
+                            : horseInfo.badgeType === "assigned"
+                              ? "bg-secondary text-secondary-foreground"
+                              : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {horseInfo.badgeLabel}
+                      </span>
+                      <span
+                        className={`text-lg font-bold ${
+                          horseInfo.horseName ? "text-card-foreground" : "italic text-muted-foreground"
+                        }`}
+                      >
+                        {horseInfo.horseNameDisplay}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("profile")}
+                      className="text-sm font-medium text-primary underline"
+                    >
+                      עריכה בפרופיל
+                    </button>
+                  </div>
+                );
+              })()}
             </div>
 
             <DutiesSection studentId={session.id} startDateKey={todayKey} endDateKey={todayKey} />
