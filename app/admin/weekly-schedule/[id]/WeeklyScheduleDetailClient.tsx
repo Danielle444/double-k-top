@@ -7,11 +7,13 @@ import { Modal } from "@/lib/components/Modal";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates";
 import { cleanScheduleTitle } from "@/lib/schedule-title";
 import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
+import { coalesceAdjacentSameActivity } from "@/lib/schedule-grouping";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import {
   createScheduleItem,
   deleteScheduleItem,
   updateScheduleItem,
+  updateMergedScheduleItems,
   type ScheduleItemInput,
   type ScheduleItemRow,
 } from "@/lib/actions/schedule-items";
@@ -52,6 +54,16 @@ function renderScheduleCard(
   onDelete: (item: ScheduleItemView) => void,
   compact = false
 ) {
+  // Both the "all groups" grid view and the single-group list can merge two
+  // or more real rows into one display card - a continuous same-title
+  // activity, or a same-time cross-group pair - giving it a synthetic
+  // "realId1+realId2" id that was never a real row. Real cuids never contain
+  // "+", so splitting on it losslessly recovers the ordered list of real
+  // source ids (see updateMergedScheduleItems), which is what makes editing
+  // a merged card possible without ever sending the fake id to Prisma.
+  const sourceIds = item.id.split("+");
+  const isMerged = sourceIds.length > 1;
+
   return (
     <div
       key={item.id}
@@ -86,13 +98,19 @@ function renderScheduleCard(
           מיקום: {item.location}
         </p>
       )}
-      <div className="mt-2 flex gap-2">
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         <Button variant="ghost" className="!px-2 !py-1 !text-xs" onClick={() => onEdit(item)}>
           עריכה
         </Button>
-        <Button variant="danger" className="!px-2 !py-1 !text-xs" onClick={() => onDelete(item)}>
-          מחיקה
-        </Button>
+        {isMerged ? (
+          <p className="text-xs italic text-muted-foreground">
+            מחיקה לא זמינה עבור פעילות ממוזגת - ניתן לערוך את כל הפריטים המקוריים יחד
+          </p>
+        ) : (
+          <Button variant="danger" className="!px-2 !py-1 !text-xs" onClick={() => onDelete(item)}>
+            מחיקה
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -111,6 +129,7 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
   const [isSaving, startSaveTransition] = useTransition();
 
   const [deleteTarget, setDeleteTarget] = useState<ScheduleItemView | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleting, startDeleteTransition] = useTransition();
 
   useEffect(() => {
@@ -167,6 +186,22 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
     return Array.from(map.entries());
   }, [filteredItems]);
 
+  // Whether the currently-open edit modal targets a merged card whose real
+  // source rows (looked up in the raw, un-coalesced `items` state) span more
+  // than one groupName - a cross-group "שתי הקבוצות" merge. groupName must
+  // stay non-editable for those, since applying one group to all rows would
+  // reassign a row out of its real group (server-side enforces this too, in
+  // updateMergedScheduleItems).
+  const modalIsCrossGroup = useMemo(() => {
+    if (!modalItem || modalItem === "new") return false;
+    const sourceIds = modalItem.id.split("+");
+    if (sourceIds.length <= 1) return false;
+    const sourceGroups = new Set(
+      items.filter((i) => sourceIds.includes(i.id)).map((i) => i.groupName)
+    );
+    return sourceGroups.size > 1;
+  }, [modalItem, items]);
+
   function openEdit(item: ScheduleItemView) {
     setModalItem(item);
     setForm({
@@ -194,7 +229,24 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
   function handleFormSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setFormError(null);
+    const editingMergedItem =
+      modalItem && modalItem !== "new" && modalItem.id.includes("+") ? modalItem : null;
     startSaveTransition(async () => {
+      if (editingMergedItem) {
+        // A merged card's id is the "+"-joined list of its real source
+        // ScheduleItem ids - split it back and update all of them together
+        // in one transaction rather than sending the fake id to Prisma.
+        const result = await updateMergedScheduleItems(editingMergedItem.id.split("+"), form);
+        if (!result.success || !result.items) {
+          setFormError(result.error ?? "אירעה שגיאה");
+          return;
+        }
+        const updatedById = new Map(result.items.map((i) => [i.id, i]));
+        setItems((prev) => prev.map((i) => updatedById.get(i.id) ?? i));
+        setModalItem(null);
+        return;
+      }
+
       const result =
         modalItem && modalItem !== "new"
           ? await updateScheduleItem(modalItem.id, form)
@@ -214,12 +266,21 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
     });
   }
 
+  function openDelete(item: ScheduleItemView) {
+    setDeleteError(null);
+    setDeleteTarget(item);
+  }
+
   function handleConfirmDelete() {
     if (!deleteTarget) return;
+    setDeleteError(null);
     const itemId = deleteTarget.id;
     startDeleteTransition(async () => {
       const result = await deleteScheduleItem(itemId);
-      if (!result.success) return;
+      if (!result.success) {
+        setDeleteError(result.error ?? "אירעה שגיאה");
+        return;
+      }
       setItems((prev) => prev.filter((i) => i.id !== itemId));
       setDeleteTarget(null);
     });
@@ -351,11 +412,25 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
               {groupFilter === "all" ? (
                 <ScheduleTimeGrid
                   items={dayItems}
-                  renderCard={(item) => renderScheduleCard(item, openEdit, setDeleteTarget, true)}
+                  renderCard={(item) => renderScheduleCard(item, openEdit, openDelete, true)}
                 />
               ) : (
+                // A single-group filter can still include both the target
+                // group's rows and null-group "שתי הקבוצות" rows (see
+                // filteredItems above), so a continuous activity still needs
+                // the same coalescing ScheduleTimeGrid applies internally, or
+                // it renders as separate boxes here - and since coalescing
+                // buckets by groupName and concatenates each bucket in
+                // first-encountered order (not merged by time), the result
+                // needs an explicit re-sort by time afterward.
                 <div className="flex flex-col gap-3">
-                  {dayItems.map((item) => renderScheduleCard(item, openEdit, setDeleteTarget))}
+                  {[...coalesceAdjacentSameActivity(dayItems)]
+                    .sort(
+                      (a, b) =>
+                        a.startTime.localeCompare(b.startTime) ||
+                        a.endTime.localeCompare(b.endTime)
+                    )
+                    .map((item) => renderScheduleCard(item, openEdit, openDelete))}
                 </div>
               )}
             </div>
@@ -370,6 +445,13 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
         onClose={() => setModalItem(null)}
       >
         <form onSubmit={handleFormSubmit} className="flex flex-col gap-3">
+          {modalItem !== null && modalItem !== "new" && modalItem.id.includes("+") && (
+            <p className="rounded-lg bg-secondary p-3 text-xs text-secondary-foreground">
+              {modalIsCrossGroup
+                ? "פעילות זו כוללת כמה קבוצות. לא ניתן לשנות קבוצה בעריכה ממוזגת."
+                : 'פעילות זו מורכבת מכמה פריטי לו"ז רצופים. השינוי יחול על כל הפריטים המקוריים.'}
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <label className="flex flex-col gap-1 text-sm">
               תאריך
@@ -409,7 +491,8 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
               value={form.groupName}
               onChange={(e) => setForm((f) => ({ ...f, groupName: e.target.value }))}
               placeholder="א / ב"
-              className="rounded-lg border border-border px-3 py-2 text-sm"
+              disabled={modalIsCrossGroup}
+              className="rounded-lg border border-border px-3 py-2 text-sm disabled:bg-muted disabled:opacity-60"
             />
           </label>
 
@@ -474,6 +557,7 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
           ({deleteTarget?.startTime}-{deleteTarget?.endTime})? הפעולה אינה הפיכה. שיבוצי תורנות
           קיימים אינם מושפעים.
         </p>
+        {deleteError && <p className="mt-2 text-sm text-danger">{deleteError}</p>}
         <div className="mt-4 flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={() => setDeleteTarget(null)}>
             ביטול

@@ -36,6 +36,10 @@ export interface ScheduleItemActionResult extends ActionResult {
   item?: ScheduleItemRow;
 }
 
+export interface ScheduleItemGroupActionResult extends ActionResult {
+  items?: ScheduleItemRow[];
+}
+
 function timeToMinutes(t: string): number {
   const m = t.match(/^(\d{1,2}):(\d{2})/);
   if (!m) return 0;
@@ -75,6 +79,8 @@ function validate(input: ScheduleItemInput): string | null {
   return null;
 }
 
+const NOT_FOUND_ERROR = "פריט הלו\"ז לא נמצא. נסי לרענן את העמוד.";
+
 export async function updateScheduleItem(
   itemId: string,
   input: ScheduleItemInput
@@ -82,6 +88,16 @@ export async function updateScheduleItem(
   await requireAdmin();
   const error = validate(input);
   if (error) return { success: false, error };
+
+  // The "all groups" grid view can display two or more real rows merged
+  // into one card (continuous same-title activities, or same-time
+  // cross-group pairs) with a synthetic "realId1+realId2" display id - that
+  // id was never a real row, so an update/delete against it would otherwise
+  // throw a Prisma "record not found" error instead of failing cleanly.
+  const existing = await prisma.scheduleItem.findUnique({ where: { id: itemId } });
+  if (!existing) {
+    return { success: false, error: NOT_FOUND_ERROR };
+  }
 
   const updated = await prisma.scheduleItem.update({
     where: { id: itemId },
@@ -101,6 +117,91 @@ export async function updateScheduleItem(
   revalidatePath("/student");
   revalidatePath("/instructor");
   return { success: true, item: toRow(updated) };
+}
+
+// Updates a "merged" display card - one continuous logical activity that the
+// admin/student/instructor timetable views coalesce from 2+ real
+// ScheduleItem rows (contiguous same-group same-title rows, and/or a
+// same-time cross-group pair). title/instructor/location/description/date
+// apply to every source row; groupName only applies when every source row
+// already shares one group (see isCrossGroup below - a cross-group merge
+// never gets its rows reassigned to one group). startTime only changes on
+// the earliest row and endTime only on the latest row, so the internal
+// split boundaries between the original rows are left exactly as they were
+// - no rows are collapsed or created.
+export async function updateMergedScheduleItems(
+  sourceIds: string[],
+  input: ScheduleItemInput
+): Promise<ScheduleItemGroupActionResult> {
+  await requireAdmin();
+  const error = validate(input);
+  if (error) return { success: false, error };
+
+  if (sourceIds.length === 0) {
+    return { success: false, error: NOT_FOUND_ERROR };
+  }
+
+  const existing = await prisma.scheduleItem.findMany({ where: { id: { in: sourceIds } } });
+  if (existing.length !== sourceIds.length) {
+    return { success: false, error: NOT_FOUND_ERROR };
+  }
+
+  const ordered = [...existing].sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const firstRow = ordered[0];
+  const lastRow = ordered[ordered.length - 1];
+
+  // Guards against corrupting an internal row: the new overall start must
+  // stay before the first row's own original end, and the new overall end
+  // must stay after the last row's own original start - otherwise that edge
+  // row would end up with startTime >= endTime.
+  if (timeToMinutes(input.startTime) >= timeToMinutes(firstRow.endTime) && ordered.length > 1) {
+    return {
+      success: false,
+      error: "שעת ההתחלה החדשה חייבת להיות לפני סיום הפריט הראשון המקורי",
+    };
+  }
+  if (timeToMinutes(input.endTime) <= timeToMinutes(lastRow.startTime) && ordered.length > 1) {
+    return {
+      success: false,
+      error: "שעת הסיום החדשה חייבת להיות אחרי תחילת הפריט האחרון המקורי",
+    };
+  }
+
+  // A cross-group "שתי הקבוצות" merged card (source rows spanning more than
+  // one groupName) must never have all its rows reassigned to a single
+  // group - that would silently move a row out of its real group. Detected
+  // server-side (not just trusted from the UI) so groupName is only ever
+  // included in the shared update when every source row already shares one
+  // group; otherwise it's simply omitted and each row keeps its own value.
+  const distinctGroups = new Set(existing.map((row) => row.groupName));
+  const isCrossGroup = distinctGroups.size > 1;
+
+  const sharedData = {
+    date: parseDateKey(input.dateKey),
+    title: input.title,
+    description: input.description || null,
+    instructorName: input.instructorName || null,
+    location: input.location || null,
+    ...(isCrossGroup ? {} : { groupName: input.groupName || null }),
+  };
+
+  const updated = await prisma.$transaction(
+    ordered.map((row) =>
+      prisma.scheduleItem.update({
+        where: { id: row.id },
+        data: {
+          ...sharedData,
+          ...(row.id === firstRow.id ? { startTime: input.startTime } : {}),
+          ...(row.id === lastRow.id ? { endTime: input.endTime } : {}),
+        },
+      })
+    )
+  );
+
+  revalidatePath("/admin/weekly-schedule");
+  revalidatePath("/student");
+  revalidatePath("/instructor");
+  return { success: true, items: updated.map(toRow) };
 }
 
 export async function createScheduleItem(
@@ -137,6 +238,12 @@ export async function createScheduleItem(
 // touched or regenerated by this action.
 export async function deleteScheduleItem(itemId: string): Promise<ActionResult> {
   await requireAdmin();
+
+  const existing = await prisma.scheduleItem.findUnique({ where: { id: itemId } });
+  if (!existing) {
+    return { success: false, error: NOT_FOUND_ERROR };
+  }
+
   await prisma.scheduleItem.delete({ where: { id: itemId } });
 
   revalidatePath("/admin/weekly-schedule");
