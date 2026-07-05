@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { dateKey, enumerateDateKeys, parseDateKey, weekKey } from "@/lib/dates";
+import { formatSubgroupLabel, subgroupKey } from "@/lib/subgroup-identity";
 import type { CourseDayPlan, DutyConstraint, Student } from "@/app/generated/prisma/client";
 
 // Scoring weights - each tier must dominate the ones after it, so a student is
@@ -232,39 +233,52 @@ export async function generateSchedule({
     const preFilledToday = preFilledByDate.get(dk) ?? [];
     const assignedTodaySet = new Set(preFilledToday.map((m) => m.studentId));
     const preFilledCountByDuty = new Map<string, number>();
-    const preFilledSubgroupsByDuty = new Map<string, Set<number>>();
+    // Keyed by groupName+subgroupNumber (lib/subgroup-identity.ts), not
+    // subgroupNumber alone - the same number repeats across different
+    // groups (e.g. group א and group ב can each have a "subgroup 1"), so
+    // subgroupNumber alone would wrongly treat those as one subgroup.
+    const preFilledSubgroupsByDuty = new Map<string, Set<string>>();
     for (const m of preFilledToday) {
       preFilledCountByDuty.set(m.dutyTypeId, (preFilledCountByDuty.get(m.dutyTypeId) ?? 0) + 1);
-      const subgroup = studentById.get(m.studentId)?.subgroupNumber;
-      if (subgroup != null) {
+      const student = studentById.get(m.studentId);
+      if (student?.subgroupNumber != null) {
+        const key = subgroupKey(student.groupName, student.subgroupNumber);
         if (!preFilledSubgroupsByDuty.has(m.dutyTypeId)) {
           preFilledSubgroupsByDuty.set(m.dutyTypeId, new Set());
         }
-        preFilledSubgroupsByDuty.get(m.dutyTypeId)!.add(subgroup);
+        preFilledSubgroupsByDuty.get(m.dutyTypeId)!.add(key);
       }
     }
 
     // --- ONE_PER_SUBGROUP duties go first, so "safety-style" duties get
     // priority pick of one representative per active subgroup before the
     // remaining students get proportionally split among fixed-count duties. ---
-    const activeSubgroups = Array.from(
-      new Set(
-        availableStudents
-          .map((s) => s.subgroupNumber)
-          .filter((n): n is number => n !== null)
-      )
-    ).sort((a, b) => a - b);
+    const activeSubgroupMap = new Map<
+      string,
+      { groupName: string | null; subgroupNumber: number }
+    >();
+    for (const s of availableStudents) {
+      if (s.subgroupNumber == null) continue;
+      const key = subgroupKey(s.groupName, s.subgroupNumber);
+      if (!activeSubgroupMap.has(key)) {
+        activeSubgroupMap.set(key, { groupName: s.groupName, subgroupNumber: s.subgroupNumber });
+      }
+    }
+    const activeSubgroups = Array.from(activeSubgroupMap.entries())
+      .map(([key, value]) => ({ key, ...value }))
+      .sort((a, b) => a.key.localeCompare(b.key));
 
     for (const dutyType of onePerSubgroupDuties) {
-      const alreadyCovered = preFilledSubgroupsByDuty.get(dutyType.id) ?? new Set<number>();
+      const alreadyCovered = preFilledSubgroupsByDuty.get(dutyType.id) ?? new Set<string>();
       const blockedGroups = blockedGroupsFor(dk, dutyType.id);
 
-      for (const subgroupNumber of activeSubgroups) {
-        if (alreadyCovered.has(subgroupNumber)) continue;
+      for (const subgroup of activeSubgroups) {
+        if (alreadyCovered.has(subgroup.key)) continue;
 
         const candidates = students.filter(
           (s) =>
-            s.subgroupNumber === subgroupNumber &&
+            s.groupName === subgroup.groupName &&
+            s.subgroupNumber === subgroup.subgroupNumber &&
             isAvailable(s.id, dk) &&
             !assignedTodaySet.has(s.id) &&
             !(s.groupName && blockedGroups.has(s.groupName))
@@ -272,7 +286,10 @@ export async function generateSchedule({
 
         if (candidates.length === 0) {
           warnings.push(
-            `${dk}: לא נמצא חניך זמין לתת־קבוצה ${subgroupNumber} עבור תורנות "${dutyType.name}"`
+            `${dk}: לא נמצא חניך זמין לתת־קבוצה ${formatSubgroupLabel(
+              subgroup.groupName,
+              subgroup.subgroupNumber
+            )} עבור תורנות "${dutyType.name}"`
           );
           continue;
         }

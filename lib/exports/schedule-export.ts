@@ -9,6 +9,7 @@ export interface ExportStudentRow {
 }
 
 export interface ExportCell {
+  dutyTypeId: string;
   dutyTypeName: string;
   isPublished: boolean;
   isCompleted: boolean;
@@ -20,6 +21,9 @@ export interface ScheduleGridExport {
   students: ExportStudentRow[];
   cellByStudentAndDate: Map<string, Map<string, ExportCell>>;
   noDutyDateKeys: Set<string>;
+  // All currently-active duty type ids - used to build a stable, unique
+  // color assignment (lib/duty-colors.ts) shared with the admin grid.
+  dutyTypeIds: string[];
 }
 
 // A student can have at most one duty per day (DutyAssignment has a unique
@@ -32,7 +36,7 @@ export async function buildScheduleGridExport(
 ): Promise<ScheduleGridExport> {
   const dateKeys = enumerateDateKeys(startDate, endDate);
 
-  const [students, assignments, noDutyDates] = await Promise.all([
+  const [students, assignments, noDutyDates, dutyTypes] = await Promise.all([
     prisma.student.findMany({
       where: { isActive: true },
       orderBy: [{ groupName: "asc" }, { subgroupNumber: "asc" }, { lastName: "asc" }],
@@ -43,6 +47,7 @@ export async function buildScheduleGridExport(
       include: { dutyType: true },
     }),
     prisma.noDutyDate.findMany({ where: { date: { gte: startDate, lte: endDate } } }),
+    prisma.dutyType.findMany({ where: { isActive: true }, select: { id: true } }),
   ]);
 
   const cellByStudentAndDate = new Map<string, Map<string, ExportCell>>();
@@ -52,6 +57,7 @@ export async function buildScheduleGridExport(
       cellByStudentAndDate.set(a.studentId, new Map());
     }
     cellByStudentAndDate.get(a.studentId)!.set(dk, {
+      dutyTypeId: a.dutyTypeId,
       dutyTypeName: a.dutyType.name,
       isPublished: a.isPublished,
       isCompleted: a.isCompleted,
@@ -64,6 +70,7 @@ export async function buildScheduleGridExport(
     students,
     cellByStudentAndDate,
     noDutyDateKeys: new Set(noDutyDates.map((n) => dateKey(n.date))),
+    dutyTypeIds: dutyTypes.map((d) => d.id),
   };
 }
 

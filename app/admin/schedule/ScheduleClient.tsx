@@ -18,6 +18,8 @@ import {
   weekKey,
 } from "@/lib/dates";
 import type { GenerateMode } from "@/lib/scheduler";
+import { ScheduleGrid } from "@/app/admin/schedule/ScheduleGrid";
+import { ScheduleDiagnosticsPanel } from "@/app/admin/schedule/ScheduleDiagnosticsPanel";
 
 interface AssignmentRow {
   id: string;
@@ -35,7 +37,12 @@ interface Option {
   id: string;
   fullName?: string;
   name?: string;
+  lastName?: string;
+  groupName?: string | null;
+  subgroupNumber?: number | null;
 }
+
+type ViewMode = "list" | "grid";
 
 interface WeeklyScheduleOption {
   id: string;
@@ -63,14 +70,17 @@ export function ScheduleClient({
   dutyTypes,
   courseRange,
   weeklySchedules,
+  noDutyDateKeys,
 }: {
   assignments: AssignmentRow[];
   students: Option[];
   dutyTypes: Option[];
   courseRange: CourseRange | null;
   weeklySchedules: WeeklyScheduleOption[];
+  noDutyDateKeys: string[];
 }) {
   const [isPending, startTransition] = useTransition();
+  const [view, setView] = useState<ViewMode>("list");
   const [filterDate, setFilterDate] = useState("");
   const [filterStudent, setFilterStudent] = useState("");
   const [filterDuty, setFilterDuty] = useState("");
@@ -184,6 +194,8 @@ export function ScheduleClient({
     [assignments]
   );
 
+  const noDutyDateSet = useMemo(() => new Set(noDutyDateKeys), [noDutyDateKeys]);
+
   function handleReassign(assignmentId: string, newStudentId: string) {
     setError(null);
     startTransition(async () => {
@@ -218,9 +230,31 @@ export function ScheduleClient({
   }
 
   const exportHref = buildExportHref();
+  const gridRange = resolveRange();
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setView("list")}
+          className={`rounded-full px-4 py-2 text-sm font-medium ${
+            view === "list" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+          }`}
+        >
+          תצוגת רשימה
+        </button>
+        <button
+          type="button"
+          onClick={() => setView("grid")}
+          className={`rounded-full px-4 py-2 text-sm font-medium ${
+            view === "grid" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+          }`}
+        >
+          תצוגת רשת
+        </button>
+      </div>
+
       <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
         <p className="text-sm font-medium text-card-foreground">ייצור ופרסום שיבוצים</p>
         <div className="flex flex-wrap items-end gap-3">
@@ -445,6 +479,30 @@ export function ScheduleClient({
 
       {error && <p className="text-sm text-danger">{error}</p>}
 
+      {view === "grid" ? (
+        <>
+        <ScheduleDiagnosticsPanel
+          startDate={gridRange?.startDate ?? null}
+          endDate={gridRange?.endDate ?? null}
+        />
+        <ScheduleGrid
+          students={students.map((s) => ({
+            id: s.id,
+            fullName: s.fullName ?? "",
+            lastName: s.lastName,
+            groupName: s.groupName ?? null,
+            subgroupNumber: s.subgroupNumber ?? null,
+          }))}
+          assignments={assignments}
+          dutyTypeIds={dutyTypes.map((d) => d.id)}
+          startDate={gridRange?.startDate ?? null}
+          endDate={gridRange?.endDate ?? null}
+          noDutyDateKeys={noDutyDateSet}
+          filterStudentId={filterStudent}
+          filterDutyTypeId={filterDuty}
+        />
+        </>
+      ) : (
       <div className="overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full text-base">
           <thead>
@@ -552,6 +610,7 @@ export function ScheduleClient({
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }

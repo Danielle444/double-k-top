@@ -1,5 +1,14 @@
 import { Workbook } from "exceljs";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates";
+import {
+  buildDutyColorMap,
+  getCoverageWarningColor,
+  getNoDutyColor,
+  getOverfilledWarningColor,
+  type DutyColor,
+} from "@/lib/duty-colors";
+import { computeCoverageByDate } from "@/lib/schedule-coverage";
+import type { CoverageStatus, ScheduleDiagnostics } from "@/lib/schedule-diagnostics";
 import type {
   ExportCell,
   ScheduleGridExport,
@@ -11,6 +20,17 @@ const HEADER_FILL = {
   pattern: "solid" as const,
   fgColor: { argb: "FFDCEEF7" },
 };
+
+// exceljs wants ARGB (8 hex chars, alpha first); the shared palette only
+// deals in plain web hex (#RRGGBB), so the "FF" (fully opaque) prefix is
+// added only here, at the Excel-specific edge.
+function toArgbFill(color: DutyColor) {
+  return {
+    type: "pattern" as const,
+    pattern: "solid" as const,
+    fgColor: { argb: `FF${color.background.replace("#", "")}` },
+  };
+}
 
 // exceljs's bundled .d.ts declares its own local `Buffer` type that doesn't
 // structurally match Node's real (generic) Buffer type - same mismatch
@@ -39,11 +59,113 @@ function addTitleRow(sheet: import("exceljs").Worksheet, title: string, columnCo
   sheet.getRow(1).height = 26;
 }
 
-export async function buildScheduleGridWorkbook(data: ScheduleGridExport): Promise<Uint8Array> {
+function statusFill(status: CoverageStatus) {
+  if (status === "חסר") return toArgbFill(getCoverageWarningColor());
+  if (status === "עודף") return toArgbFill(getOverfilledWarningColor());
+  return undefined;
+}
+
+// A read-only report over already-generated assignments - never generates,
+// deletes, or modifies anything. Added as a second sheet on the grid export
+// so the manager can spot coverage problems without leaving Excel.
+function addDiagnosticsSheet(workbook: Workbook, diagnostics: ScheduleDiagnostics) {
+  const sheet = workbook.addWorksheet("בדיקת שיבוץ", {
+    views: [{ rightToLeft: true }],
+  });
+  sheet.getColumn(1).width = 14;
+  sheet.getColumn(2).width = 26;
+  sheet.getColumn(3).width = 16;
+  sheet.getColumn(4).width = 12;
+  sheet.getColumn(5).width = 12;
+  sheet.getColumn(6).width = 12;
+
+  let row = 1;
+
+  function sectionTitle(text: string) {
+    const cell = sheet.getCell(row, 1);
+    cell.value = text;
+    cell.font = { bold: true, size: 13 };
+    row += 2;
+  }
+
+  function headerRow(labels: string[]) {
+    labels.forEach((label, i) => {
+      const cell = sheet.getRow(row).getCell(i + 1);
+      cell.value = label;
+      cell.font = { bold: true };
+      cell.fill = HEADER_FILL;
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+    });
+    row += 1;
+  }
+
+  // --- Section A: per-date coverage ---
+  sectionTitle("א. סיכום כיסוי לפי תאריך");
+  headerRow(["תאריך", "משובצים", "פעילים", "סטטוס"]);
+  for (const c of diagnostics.dateCoverage) {
+    const r = sheet.getRow(row);
+    r.getCell(1).value = formatHebrewDate(parseDateKey(c.dateKey));
+    r.getCell(2).value = c.assignedCount;
+    r.getCell(3).value = c.activeStudentCount;
+    r.getCell(4).value = c.isNoDuty ? "אין תורנויות" : c.isShort ? "חסר" : "תקין";
+    if (!c.isNoDuty && c.isShort) {
+      const fill = toArgbFill(getCoverageWarningColor());
+      for (let col = 1; col <= 4; col++) r.getCell(col).fill = fill;
+    }
+    row += 1;
+  }
+  row += 2;
+
+  // --- Section B: per date + duty type ---
+  sectionTitle("ב. כיסוי לפי תאריך וסוג תורנות");
+  headerRow(["תאריך", "סוג תורנות", "סוג הקצאה", "משובצים", "צפוי", "סטטוס"]);
+  for (const d of diagnostics.dutyTypeCoverage) {
+    const r = sheet.getRow(row);
+    r.getCell(1).value = formatHebrewDate(parseDateKey(d.dateKey));
+    r.getCell(2).value = d.dutyTypeName;
+    r.getCell(3).value = d.allocationMode === "ONE_PER_SUBGROUP" ? "אחד לתת-קבוצה" : "כמות קבועה";
+    r.getCell(4).value = d.assignedCount;
+    r.getCell(5).value = d.expectedCount;
+    r.getCell(6).value = d.status;
+    const fill = statusFill(d.status);
+    if (fill) for (let col = 1; col <= 6; col++) r.getCell(col).fill = fill;
+    row += 1;
+  }
+  row += 2;
+
+  // --- Section C: ONE_PER_SUBGROUP breakdown ---
+  sectionTitle("ג. כיסוי תת-קבוצות (אחד לתת-קבוצה)");
+  headerRow(["תאריך", "סוג תורנות", "קבוצה", "תת-קבוצה", "משובצים", "סטטוס"]);
+  for (const s of diagnostics.subgroupCoverage) {
+    const r = sheet.getRow(row);
+    r.getCell(1).value = formatHebrewDate(parseDateKey(s.dateKey));
+    r.getCell(2).value = s.dutyTypeName;
+    r.getCell(3).value = s.groupName ?? "";
+    r.getCell(4).value = s.subgroupNumber;
+    r.getCell(5).value = s.assignedCount;
+    r.getCell(6).value = s.status;
+    const fill = statusFill(s.status);
+    if (fill) for (let col = 1; col <= 6; col++) r.getCell(col).fill = fill;
+    row += 1;
+  }
+}
+
+export async function buildScheduleGridWorkbook(
+  data: ScheduleGridExport,
+  diagnostics: ScheduleDiagnostics
+): Promise<Uint8Array> {
   const workbook = new Workbook();
   const sheet = workbook.addWorksheet("שיבוץ תורנויות", {
     views: [{ rightToLeft: true, state: "frozen", ySplit: 2 }],
   });
+
+  const colorMap = buildDutyColorMap(data.dutyTypeIds);
+  const coverageByDate = computeCoverageByDate(
+    data.dateKeys,
+    data.students.length,
+    data.cellByStudentAndDate,
+    data.noDutyDateKeys
+  );
 
   const fixedHeaders = ["שם מלא", "קבוצה", "תת-קבוצה"];
   const dayHeaders = data.dateKeys.map(
@@ -83,12 +205,50 @@ export async function buildScheduleGridWorkbook(data: ScheduleGridExport): Promi
     for (let i = 0; i < data.dateKeys.length; i++) {
       const dk = data.dateKeys[i];
       const cell = data.cellByStudentAndDate.get(student.id)?.get(dk);
+      const isNoDuty = data.noDutyDateKeys.has(dk);
       const c = row.getCell(4 + i);
-      c.value = gridCellText(cell, data.noDutyDateKeys.has(dk));
+      c.value = gridCellText(cell, isNoDuty);
       c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+      if (cell) {
+        const color = colorMap.get(cell.dutyTypeId);
+        if (color) c.fill = toArgbFill(color);
+      } else if (isNoDuty) {
+        c.fill = toArgbFill(getNoDutyColor());
+      }
     }
     rowIndex++;
   }
+
+  // Coverage summary row: per date, how many students actually got a duty
+  // out of how many active students exist. Highlighted when a non-no-duty
+  // date came up short, so a shortfall (e.g. from a group-blocking
+  // constraint) is visible at a glance instead of only showing up as blank
+  // cells scattered through the grid.
+  rowIndex += 1;
+  const summaryRow = sheet.getRow(rowIndex);
+  const summaryLabelCell = summaryRow.getCell(1);
+  summaryLabelCell.value = "כיסוי (משובצים / סה\"כ פעילים)";
+  summaryLabelCell.font = { bold: true };
+  summaryLabelCell.alignment = { horizontal: "right", vertical: "middle", wrapText: true };
+  sheet.mergeCells(rowIndex, 1, rowIndex, 3);
+
+  for (let i = 0; i < data.dateKeys.length; i++) {
+    const dk = data.dateKeys[i];
+    const coverage = coverageByDate.get(dk);
+    const c = summaryRow.getCell(4 + i);
+    if (!coverage) continue;
+    c.value = coverage.isNoDuty
+      ? "אין תורנויות"
+      : `${coverage.assignedCount}/${coverage.activeStudentCount}`;
+    c.font = { bold: true };
+    c.alignment = { horizontal: "center", vertical: "middle" };
+    if (coverage.isShort) {
+      c.fill = toArgbFill(getCoverageWarningColor());
+    }
+  }
+  summaryRow.height = 24;
+
+  addDiagnosticsSheet(workbook, diagnostics);
 
   return workbookToBytes(workbook);
 }

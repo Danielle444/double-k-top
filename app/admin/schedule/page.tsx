@@ -7,24 +7,32 @@ export const dynamic = "force-dynamic";
 
 export default async function SchedulePage() {
   await requireAdmin();
-  const [assignments, students, dutyTypes, settings, weeklySchedules] = await Promise.all([
-    prisma.dutyAssignment.findMany({
-      include: { student: true, dutyType: true },
-      orderBy: [{ date: "asc" }, { dutyType: { name: "asc" } }],
-    }),
-    prisma.student.findMany({
-      where: { isActive: true },
-      orderBy: { fullName: "asc" },
-      select: { id: true, fullName: true },
-    }),
-    prisma.dutyType.findMany({
-      where: { isActive: true },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true },
-    }),
-    prisma.courseSettings.findUnique({ where: { id: 1 } }),
-    prisma.weeklySchedule.findMany({ orderBy: { startDate: "asc" } }),
-  ]);
+  const [assignments, students, dutyTypes, settings, weeklySchedules, noDutyDates] =
+    await Promise.all([
+      prisma.dutyAssignment.findMany({
+        include: { student: true, dutyType: true },
+        orderBy: [{ date: "asc" }, { dutyType: { name: "asc" } }],
+      }),
+      prisma.student.findMany({
+        where: { isActive: true },
+        orderBy: { fullName: "asc" },
+        select: {
+          id: true,
+          fullName: true,
+          lastName: true,
+          groupName: true,
+          subgroupNumber: true,
+        },
+      }),
+      prisma.dutyType.findMany({
+        where: { isActive: true },
+        orderBy: { name: "asc" },
+        select: { id: true, name: true },
+      }),
+      prisma.courseSettings.findUnique({ where: { id: 1 } }),
+      prisma.weeklySchedule.findMany({ orderBy: { startDate: "asc" } }),
+      prisma.noDutyDate.findMany({ select: { date: true } }),
+    ]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -52,6 +60,7 @@ export default async function SchedulePage() {
           startDate: dateKey(w.startDate),
           endDate: dateKey(w.endDate),
         }))}
+        noDutyDateKeys={noDutyDates.map((n) => dateKey(n.date))}
       />
     </div>
   );
