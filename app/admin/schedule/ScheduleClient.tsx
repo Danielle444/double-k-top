@@ -2,6 +2,7 @@
 
 import { Fragment, FormEvent, useMemo, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
+import { SearchableSelect } from "@/lib/components/SearchableSelect";
 import {
   createManualAssignment,
   deleteAssignment,
@@ -108,6 +109,8 @@ export function ScheduleClient({
   const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [addFormDutyTypeId, setAddFormDutyTypeId] = useState("");
+  const [addFormStudentId, setAddFormStudentId] = useState("");
   const [selectedCell, setSelectedCell] = useState<SelectedCell | null>(null);
   const [diagnosticsRefreshKey, setDiagnosticsRefreshKey] = useState(0);
 
@@ -302,10 +305,15 @@ export function ScheduleClient({
     setError(null);
     const formData = new FormData(e.currentTarget);
     const dk = String(formData.get("date"));
-    const dutyTypeId = String(formData.get("dutyTypeId"));
-    const studentId = String(formData.get("studentId"));
+    // dutyTypeId/studentId come from SearchableSelect's own controlled state
+    // rather than FormData - it isn't a native <select>, so it has no
+    // FormData entry of its own.
+    if (!addFormDutyTypeId || !addFormStudentId) {
+      setError("יש לבחור סוג תורנות ותלמיד/ה");
+      return;
+    }
     startTransition(async () => {
-      const result = await createManualAssignment(dk, dutyTypeId, studentId);
+      const result = await createManualAssignment(dk, addFormDutyTypeId, addFormStudentId);
       if (!result.success) {
         setError(result.error ?? "אירעה שגיאה");
         return;
@@ -481,37 +489,42 @@ export function ScheduleClient({
             ))}
           </select>
         </label>
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="flex w-48 flex-col gap-1 text-sm">
           תלמיד/ה
-          <select
+          <SearchableSelect
             value={filterStudent}
-            onChange={(e) => setFilterStudent(e.target.value)}
-            className="rounded-lg border border-border px-3 py-2 text-sm"
-          >
-            <option value="">הכל</option>
-            {students.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.fullName}
-              </option>
-            ))}
-          </select>
+            onChange={setFilterStudent}
+            options={[
+              { value: "", label: "הכל" },
+              ...students.map((s) => ({ value: s.id, label: s.fullName ?? "" })),
+            ]}
+          />
         </label>
-        <label className="flex flex-col gap-1 text-sm">
+        <label className="flex w-48 flex-col gap-1 text-sm">
           סוג תורנות
-          <select
+          <SearchableSelect
             value={filterDuty}
-            onChange={(e) => setFilterDuty(e.target.value)}
-            className="rounded-lg border border-border px-3 py-2 text-sm"
-          >
-            <option value="">הכל</option>
-            {dutyTypes.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}
-              </option>
-            ))}
-          </select>
+            onChange={setFilterDuty}
+            options={[
+              { value: "", label: "הכל" },
+              ...dutyTypes.map((d) => ({ value: d.id, label: d.name ?? "" })),
+            ]}
+          />
         </label>
-        <Button variant="secondary" onClick={() => setShowAddForm((v) => !v)}>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            if (!showAddForm) {
+              // Matches the previous native <select>'s implicit default (no
+              // empty placeholder option, so the browser pre-selected the
+              // first item) - reset to the first item each time the form is
+              // freshly opened.
+              setAddFormDutyTypeId(dutyTypes[0]?.id ?? "");
+              setAddFormStudentId(students[0]?.id ?? "");
+            }
+            setShowAddForm((v) => !v);
+          }}
+        >
           {showAddForm ? "סגירה" : "+ שיבוץ ידני"}
         </Button>
         {filterDate && (
@@ -538,33 +551,21 @@ export function ScheduleClient({
               required
             />
           </label>
-          <label className="flex flex-col gap-1 text-sm">
+          <label className="flex w-48 flex-col gap-1 text-sm">
             סוג תורנות
-            <select
-              name="dutyTypeId"
-              className="rounded-lg border border-border px-3 py-2 text-sm"
-              required
-            >
-              {dutyTypes.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
+            <SearchableSelect
+              value={addFormDutyTypeId}
+              onChange={setAddFormDutyTypeId}
+              options={dutyTypes.map((d) => ({ value: d.id, label: d.name ?? "" }))}
+            />
           </label>
-          <label className="flex flex-col gap-1 text-sm">
+          <label className="flex w-48 flex-col gap-1 text-sm">
             תלמיד/ה
-            <select
-              name="studentId"
-              className="rounded-lg border border-border px-3 py-2 text-sm"
-              required
-            >
-              {students.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.fullName}
-                </option>
-              ))}
-            </select>
+            <SearchableSelect
+              value={addFormStudentId}
+              onChange={setAddFormStudentId}
+              options={students.map((s) => ({ value: s.id, label: s.fullName ?? "" }))}
+            />
           </label>
           <Button type="submit" disabled={isPending}>
             הוספה

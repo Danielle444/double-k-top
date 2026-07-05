@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { Modal } from "@/lib/components/Modal";
 import { Button } from "@/lib/components/Button";
+import { SearchableSelect } from "@/lib/components/SearchableSelect";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates";
 import { upsertManualAssignment, deleteAssignment } from "@/lib/actions/schedule";
 
@@ -120,23 +121,20 @@ export function ScheduleCellEditor({
 
         <label className="flex flex-col gap-1">
           סוג תורנות
-          <select
+          <SearchableSelect
             value={selectedDutyTypeId}
-            onChange={(e) => setSelectedDutyTypeId(e.target.value)}
-            className="rounded-lg border border-border px-3 py-2 text-sm"
-          >
-            <option value="">בחרו סוג תורנות</option>
-            {dutyTypes.map((d) => {
+            onChange={setSelectedDutyTypeId}
+            placeholder="בחרו סוג תורנות"
+            options={dutyTypes.map((d) => {
               const blocked = blockedDutyTypeIds.has(d.id);
               const conflict = subgroupConflictDutyTypeIds.has(d.id);
-              return (
-                <option key={d.id} value={d.id} disabled={blocked || conflict}>
-                  {d.name}
-                  {blocked ? " (חסום עקב אילוץ)" : conflict ? " (תפוס בתת-הקבוצה)" : ""}
-                </option>
-              );
+              return {
+                value: d.id,
+                label: `${d.name}${blocked ? " (חסום עקב אילוץ)" : conflict ? " (תפוס בתת-הקבוצה)" : ""}`,
+                disabled: blocked || conflict,
+              };
             })}
-          </select>
+          />
         </label>
 
         {error && <p className="text-danger">{error}</p>}
