@@ -8,8 +8,8 @@ const heebo = Heebo({
 });
 
 export const metadata: Metadata = {
-  title: "ניהול תורנויות - קורס מדריכי רכיבה",
-  description: "מערכת לניהול שיבוצי תורנויות יומיים בקורס מדריכי רכיבה",
+  title: "Double K Top",
+  description: "מערכת לניהול שיבוצי תורנויות יומיים בקורס מדריכי רכיבה - דאבל קיי",
 };
 
 export default function RootLayout({

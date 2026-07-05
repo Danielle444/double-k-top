@@ -30,10 +30,40 @@ export interface InstructorScheduleResult {
 
 export type InstructorScheduleFilter = "mine" | "all";
 
+// Collapses whitespace/separators and strips common punctuation so Hebrew
+// names compare reliably regardless of commas, slashes, or extra spacing
+// introduced by the Excel import.
+function normalizeHebrewName(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[,;/|]+/g, " ")
+    .replace(/["'`׳״]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+// The schedule's instructorName column is free text (there is no FK from
+// ScheduleItem to Instructor - the Excel import only ever produces a name
+// string) and can list multiple instructors, e.g. "דנה, יוסי" or "כולם".
+// A lesson is "mine" if the instructor's first name or full name appears
+// anywhere in that text, or if the text marks the lesson for everyone.
+function isInstructorMatch(
+  instructorName: string | null,
+  instructor: { firstName: string; fullName: string }
+): boolean {
+  if (!instructorName) return false;
+  const normalized = normalizeHebrewName(instructorName);
+  if (normalized.includes("כולם")) return true;
+
+  const firstName = normalizeHebrewName(instructor.firstName);
+  const fullName = normalizeHebrewName(instructor.fullName);
+  return (
+    (firstName.length > 0 && normalized.includes(firstName)) ||
+    (fullName.length > 0 && normalized.includes(fullName))
+  );
+}
+
 // dayKey: a specific date within the week, or "all" for the whole week.
-// Matching against the schedule's free-text instructorName column (there is
-// no FK from ScheduleItem to Instructor - the Excel import only ever
-// produces a name string), so comparison is trimmed/case-insensitive.
 export async function getScheduleForInstructor(
   instructorId: string,
   weeklyScheduleId: string,
@@ -49,9 +79,8 @@ export async function getScheduleForInstructor(
   });
   if (!week) return { hasSchedule: false, weekName: null, items: [] };
 
-  const normalizedName = instructor.fullName.trim().toLowerCase();
   const items = week.items.filter((i) => {
-    if (filter === "mine" && (i.instructorName ?? "").trim().toLowerCase() !== normalizedName) {
+    if (filter === "mine" && !isInstructorMatch(i.instructorName, instructor)) {
       return false;
     }
     if (dayKey !== "all" && dateKey(i.date) !== dayKey) return false;

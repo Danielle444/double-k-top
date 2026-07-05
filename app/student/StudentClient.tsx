@@ -29,7 +29,6 @@ export function StudentClient() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<StudentSearchResult[]>([]);
   const [selected, setSelected] = useState<StudentSearchResult | null>(null);
-  const [rememberMe, setRememberMe] = useState(true);
   const [loginError, setLoginError] = useState<string | null>(null);
 
   const [weeks, setWeeks] = useState<WeekOption[] | null>(null);
@@ -90,9 +89,7 @@ export function StudentClient() {
         setLoginError(result.error ?? "מספר תעודת זהות שגוי");
         return;
       }
-      if (rememberMe) {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(result.student));
-      }
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(result.student));
       setSession(result.student);
     });
   }
@@ -110,6 +107,7 @@ export function StudentClient() {
     return (
       <div className="flex flex-col items-center gap-6">
         <Logo width={220} />
+        <p className="-mt-4 text-sm font-semibold text-muted-foreground">אזור חניכים</p>
         <div className="w-full rounded-2xl border border-border bg-card p-6">
           <h1 className="mb-1 text-2xl font-bold text-card-foreground">כניסת תלמיד/ה</h1>
           <p className="mb-4 text-base text-muted-foreground">
@@ -166,15 +164,6 @@ export function StudentClient() {
                   className="rounded-xl border border-border px-4 py-3 text-base"
                 />
               </label>
-              <label className="flex items-center gap-2 text-base text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                  className="h-5 w-5"
-                />
-                זכור אותי
-              </label>
               {loginError && <p className="text-base text-danger">{loginError}</p>}
               <Button type="submit" disabled={isPending} className="!py-3 !text-base">
                 {isPending ? "מתחבר/ת..." : "כניסה"}
@@ -197,7 +186,10 @@ export function StudentClient() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-card-foreground">שלום, {session.fullName}</h1>
+        <div>
+          <p className="text-xs font-semibold text-muted-foreground">אזור חניכים</p>
+          <h1 className="text-2xl font-bold text-card-foreground">שלום, {session.fullName}</h1>
+        </div>
         <button
           onClick={handleSwitchStudent}
           className="text-sm text-muted-foreground underline hover:text-card-foreground"

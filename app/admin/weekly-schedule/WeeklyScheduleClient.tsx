@@ -15,6 +15,7 @@ import {
 import { runGenerateSchedule, setPublishStatus } from "@/lib/actions/schedule";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates";
 import type { GenerateMode } from "@/lib/scheduler";
+import { cleanScheduleTitle } from "@/lib/schedule-title";
 
 interface ScheduleItemView {
   id: string;
@@ -413,7 +414,9 @@ export function WeeklyScheduleClient({
                             {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
                           </span>
                         </div>
-                        <p className="text-base font-medium text-card-foreground">{item.title}</p>
+                        <p className="text-base font-medium text-card-foreground">
+                          {cleanScheduleTitle(item.title)}
+                        </p>
                         {item.instructorName && (
                           <p className="text-xs text-muted-foreground">
                             מדריך/ה: {item.instructorName}

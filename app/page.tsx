@@ -5,9 +5,7 @@ export default function Home() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-background px-4 py-16 text-center">
       <Logo width={260} />
-      <h1 className="text-2xl font-bold text-card-foreground">
-        ניהול תורנויות - קורס מדריכי רכיבה
-      </h1>
+      <h1 className="text-2xl font-bold text-card-foreground">Double K Top</h1>
       <div className="flex flex-col gap-3 sm:flex-row">
         <Link
           href="/admin"

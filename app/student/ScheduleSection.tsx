@@ -8,6 +8,7 @@ import {
   type StudentScheduleResult,
 } from "@/lib/actions/student-schedule";
 import { todayDateKey } from "@/lib/dates";
+import { getStudentScheduleTitle } from "@/lib/schedule-title";
 
 function isItemActiveNow(item: ScheduleItemView, now: Date): boolean {
   const todayKey = now.toISOString().slice(0, 10);
@@ -124,7 +125,9 @@ export function ScheduleSection({
                           {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
                         </span>
                       </div>
-                      <p className="text-lg font-bold text-card-foreground">{item.title}</p>
+                      <p className="text-lg font-bold text-card-foreground">
+                        {getStudentScheduleTitle(item.title)}
+                      </p>
                       {item.location && (
                         <p className="mt-1 text-sm text-muted-foreground">מיקום: {item.location}</p>
                       )}

@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { formatHebrewDate, todayDateKey, parseDateKey } from "@/lib/dates";
-import { GenerateScheduleButton } from "@/app/admin/GenerateScheduleButton";
 import { Logo } from "@/lib/components/Logo";
 import { requireAdmin } from "@/lib/auth/require-admin";
 
@@ -70,19 +69,18 @@ export default async function AdminDashboardPage() {
       )}
 
       <div className="rounded-xl border border-border bg-card p-5">
-        <h2 className="mb-3 text-base font-semibold text-card-foreground">
-          ייצור שיבוץ אוטומטי לכל טווח הקורס
-        </h2>
-        <p className="mb-4 text-sm text-muted-foreground">
-          מומלץ לייצר שיבוצים שבוע-שבוע מעמוד{" "}
+        <h2 className="mb-3 text-base font-semibold text-card-foreground">ייצור שיבוצים</h2>
+        <p className="text-sm text-muted-foreground">
+          ייצור ועריכת שיבוצי תורנות מתבצעים מעמוד{" "}
+          <Link href="/admin/schedule" className="underline">
+            שיבוץ
+          </Link>{" "}
+          (ניתן לבחור שבוע מתוך{" "}
           <Link href="/admin/weekly-schedule" className="underline">
             לו&quot;ז שבועי
           </Link>{" "}
-          לאחר העלאת הלו&quot;ז לאותו שבוע. הכפתור כאן מייצר לכל טווח תאריכי הקורס בבת
-          אחת, תוך שמירה על שיבוצים שנקבעו ידנית. שיבוצים חדשים נשארים כטיוטה עד לפרסום
-          מפורש.
+          כטווח לייצור).
         </p>
-        <GenerateScheduleButton />
       </div>
     </div>
   );

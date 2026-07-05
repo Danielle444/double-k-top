@@ -5,7 +5,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -Command \"[console]::beep(1000,700); (New-Object -ComObject Wscript.Shell).Popup('Claude Code needs your attention', 8, 'Duty Manager', 64)\""
+            "command": "powershell -NoProfile -WindowStyle Hidden -Command \"try { (New-Object Media.SoundPlayer 'C:\\Windows\\Media\\Windows Notify System Generic.wav').PlaySync() } catch { [console]::beep(1000,700) }; (New-Object -ComObject Wscript.Shell).Popup('Claude Code is waiting for your input', 8, 'Duty Manager', 64)\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -WindowStyle Hidden -Command \"try { (New-Object Media.SoundPlayer 'C:\\Windows\\Media\\tada.wav').PlaySync() } catch { [console]::beep(1200,400) }; (New-Object -ComObject Wscript.Shell).Popup('Claude Code finished responding', 5, 'Duty Manager', 64)\""
           }
         ]
       }

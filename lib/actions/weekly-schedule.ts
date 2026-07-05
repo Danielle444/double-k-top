@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { dateKey, parseDateKey, todayDateKey } from "@/lib/dates";
 import { setCourseDayPlan } from "@/lib/actions/course-day-plan";
 import type { ActionResult } from "@/lib/actions/students";
+import { cleanScheduleTitle } from "@/lib/schedule-title";
 
 // The real-world weekly schedule Excel files this needs to tolerate don't
 // necessarily have a single clean header row in row 1 - see the three-phase
@@ -269,10 +270,10 @@ function parseStructuredTable(
     const description = block.descriptionCol ? cellText(row, block.descriptionCol) : "";
 
     const groupTitleCols = block.titleCols.filter((c) => c.kind === "groupTitle");
-    const groupTitleEntries = groupTitleCols.map((c) => ({
-      group: c.group ?? null,
-      text: cellText(row, c.col),
-    }));
+    const groupTitleEntries = groupTitleCols.map((c) => {
+      const raw = cellText(row, c.col);
+      return { group: c.group ?? null, text: raw ? cleanScheduleTitle(raw) : "" };
+    });
     const nonEmptyGroupEntries = groupTitleEntries.filter((e) => e.text);
     const plainTitleCol = block.titleCols.find((c) => c.kind === "title");
     const groupValueCol = block.titleCols.find((c) => c.kind === "groupValue");
@@ -294,9 +295,14 @@ function parseStructuredTable(
         }
       }
     } else if (plainTitleCol) {
-      const title = cellText(row, plainTitleCol.col);
-      if (title) {
-        produced = [{ group: groupValueCol ? cellText(row, groupValueCol.col) || null : null, title }];
+      const rawTitle = cellText(row, plainTitleCol.col);
+      if (rawTitle) {
+        produced = [
+          {
+            group: groupValueCol ? cellText(row, groupValueCol.col) || null : null,
+            title: cleanScheduleTitle(rawTitle),
+          },
+        ];
       }
     }
 

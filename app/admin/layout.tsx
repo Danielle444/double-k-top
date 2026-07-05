@@ -25,9 +25,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <Logo variant="mark" width={36} />
-            <h1 className="text-lg font-bold text-card-foreground">
-              ניהול תורנויות - קורס מדריכי רכיבה
-            </h1>
+            <h1 className="text-lg font-bold text-card-foreground">ניהול קורס</h1>
           </div>
           <nav className="flex flex-wrap items-center gap-1">
             {NAV_ITEMS.map((item) => (

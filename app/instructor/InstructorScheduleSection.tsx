@@ -8,6 +8,7 @@ import {
   type InstructorScheduleResult,
 } from "@/lib/actions/instructor-schedule";
 import { todayDateKey } from "@/lib/dates";
+import { cleanScheduleTitle } from "@/lib/schedule-title";
 
 function isItemActiveNow(item: InstructorScheduleItem, now: Date): boolean {
   const todayKey = now.toISOString().slice(0, 10);
@@ -35,11 +36,17 @@ export function InstructorScheduleSection({
   useEffect(() => {
     if (!weeklyScheduleId) return;
     let cancelled = false;
-    getScheduleForInstructor(instructorId, weeklyScheduleId, dayFilter, scheduleFilter).then(
-      (r) => {
+    // Reset to the loading state on every filter change so a slow or failed
+    // request never leaves the previous (unfiltered) list frozen on screen.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setResult(null);
+    getScheduleForInstructor(instructorId, weeklyScheduleId, dayFilter, scheduleFilter)
+      .then((r) => {
         if (!cancelled) setResult(r);
-      }
-    );
+      })
+      .catch(() => {
+        if (!cancelled) setResult({ hasSchedule: true, weekName: null, items: [] });
+      });
     return () => {
       cancelled = true;
     };
@@ -126,7 +133,9 @@ export function InstructorScheduleSection({
                           {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
                         </span>
                       </div>
-                      <p className="text-lg font-bold text-card-foreground">{item.title}</p>
+                      <p className="text-lg font-bold text-card-foreground">
+                        {cleanScheduleTitle(item.title)}
+                      </p>
                       {item.instructorName && (
                         <p className="mt-1 text-sm text-muted-foreground">
                           מדריך/ה: {item.instructorName}

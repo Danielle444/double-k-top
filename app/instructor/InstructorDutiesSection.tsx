@@ -36,6 +36,10 @@ export function InstructorDutiesSection({
   useEffect(() => {
     if (!weeklyScheduleId) return;
     let cancelled = false;
+    // Reset to the loading state on every filter change so a slow or failed
+    // request never leaves the previous (unfiltered) rows frozen on screen.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRows(null);
     const filters =
       dayFilter === "all"
         ? { weeklyScheduleId }
@@ -44,9 +48,13 @@ export function InstructorDutiesSection({
       ...filters,
       studentId: studentFilter || undefined,
       dutyTypeId: dutyTypeFilter || undefined,
-    }).then((r) => {
-      if (!cancelled) setRows(r);
-    });
+    })
+      .then((r) => {
+        if (!cancelled) setRows(r);
+      })
+      .catch(() => {
+        if (!cancelled) setRows([]);
+      });
     return () => {
       cancelled = true;
     };
