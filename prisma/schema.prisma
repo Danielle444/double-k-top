@@ -33,6 +33,7 @@ model Student {
   availability          StudentAvailability[]
   assignments           DutyAssignment[]
   messageTaskRecipients MessageTaskRecipient[]
+  attendance            StudentAttendance[]
 
   @@map("students")
 }
@@ -48,6 +49,41 @@ model StudentAvailability {
   @@unique([studentId, date])
   @@index([date])
   @@map("student_availability")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  PARTIAL
+}
+
+// Actual presence at the course day - separate from StudentAvailability
+// (planned availability used before duty scheduling) and from
+// DutyAssignment.isCompleted (whether an assigned duty shift was carried
+// out). A missing row for a student/date means "not yet marked" - never
+// inferred as PRESENT or ABSENT.
+model StudentAttendance {
+  id            String           @id @default(cuid())
+  studentId     String
+  date          DateTime         @db.Date
+  status        AttendanceStatus
+  // "HH:MM" - set for PARTIAL when arrival is later than the day's normal
+  // start (late arrival) and/or departure is earlier than normal (early
+  // departure); both independently nullable.
+  arrivalTime   String?
+  departureTime String?
+  notes         String?
+  // Denormalized: admin's name/email or instructor's fullName, whoever last
+  // saved this row.
+  updatedByName String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, date])
+  @@index([date])
+  @@map("student_attendance")
 }
 
 enum AllocationMode {
@@ -169,6 +205,11 @@ model Instructor {
   // Grants permission to send messages/tasks to students from the instructor
   // app; false by default so sending stays admin-only until explicitly granted.
   canSendMessages Boolean @default(false)
+
+  // Grants permission to edit StudentAttendance from the instructor app;
+  // false by default so editing stays admin-only until explicitly granted.
+  // All instructors can still view attendance regardless of this flag.
+  canEditAttendance Boolean @default(false)
 
   @@map("instructors")
 }
