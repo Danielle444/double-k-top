@@ -1,10 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates";
 import { cleanScheduleTitle } from "@/lib/schedule-title";
 import { buildScheduleSlots } from "@/lib/schedule-grouping";
+import {
+  getNoDutyStatusForRange,
+  markNoDutyDate,
+  unmarkNoDutyDate,
+  type NoDutyDayStatus,
+} from "@/lib/actions/no-duty-dates";
 
 interface ScheduleItemView {
   id: string;
@@ -68,6 +74,30 @@ function renderScheduleCard(item: ScheduleItemView, compact = false) {
 
 export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView }) {
   const [groupFilter, setGroupFilter] = useState<"all" | string>("all");
+  const [noDutyStatus, setNoDutyStatus] = useState<Map<string, NoDutyDayStatus> | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  function loadNoDutyStatus() {
+    getNoDutyStatusForRange(week.startDate, week.endDate).then((rows) => {
+      setNoDutyStatus(new Map(rows.map((r) => [r.dateKey, r])));
+    });
+  }
+
+  useEffect(() => {
+    loadNoDutyStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [week.startDate, week.endDate]);
+
+  function handleToggleNoDuty(dk: string, currentlyMarked: boolean) {
+    startTransition(async () => {
+      if (currentlyMarked) {
+        await unmarkNoDutyDate(dk);
+      } else {
+        await markNoDutyDate(dk);
+      }
+      loadNoDutyStatus();
+    });
+  }
 
   const groups = useMemo(
     () =>
@@ -143,11 +173,39 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
         </p>
       ) : (
         <div className="flex flex-col gap-5">
-          {itemsByDay.map(([dk, items]) => (
+          {itemsByDay.map(([dk, items]) => {
+            const status = noDutyStatus?.get(dk);
+            const isNoDuty = status?.isNoDuty ?? false;
+            return (
             <div key={dk} className="rounded-2xl border border-border bg-card p-5">
-              <div className="mb-3 rounded-lg bg-secondary px-3 py-2 text-base font-bold text-secondary-foreground">
-                {formatHebrewWeekday(parseDateKey(dk))} · {formatHebrewDate(parseDateKey(dk))}
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary px-3 py-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-base font-bold text-secondary-foreground">
+                    {formatHebrewWeekday(parseDateKey(dk))} · {formatHebrewDate(parseDateKey(dk))}
+                  </span>
+                  {isNoDuty && (
+                    <span className="rounded-full bg-warning-muted px-3 py-1 text-xs font-medium text-warning">
+                      אין תורנויות ביום זה
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={isPending || !noDutyStatus}
+                  onClick={() => handleToggleNoDuty(dk, isNoDuty)}
+                  className="rounded-full bg-card px-3 py-1 text-xs font-medium text-card-foreground underline decoration-dotted hover:bg-muted disabled:opacity-50"
+                >
+                  {isNoDuty ? "בטל סימון ללא תורנויות" : "סמן כיום ללא תורנויות"}
+                </button>
               </div>
+
+              {isNoDuty && status && status.assignmentCount > 0 && (
+                <div className="mb-3 rounded-lg bg-danger-muted p-3 text-sm text-danger">
+                  קיימים {status.assignmentCount} שיבוצי תורנות ליום זה שלא נמחקו אוטומטית. ניתן
+                  לטפל בהם ידנית בעמוד שיבוץ.
+                </div>
+              )}
+
               <div className="flex flex-col gap-3">
                 {groupFilter === "all"
                   ? buildScheduleSlots(items).map((slot) => {
@@ -168,7 +226,8 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
                   : items.map((item) => renderScheduleCard(item))}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

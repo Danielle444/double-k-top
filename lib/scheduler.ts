@@ -56,7 +56,7 @@ export async function generateSchedule({
     return { daysProcessed: 0, assignedCount: 0, warnings: ["טווח התאריכים ריק"] };
   }
 
-  const [students, dutyTypes, allAssignments, availabilityRows, dayPlans, constraints] =
+  const [students, dutyTypes, allAssignments, availabilityRows, dayPlans, constraints, noDutyDates] =
     await Promise.all([
       prisma.student.findMany({ where: { isActive: true } }),
       prisma.dutyType.findMany({ where: { isActive: true } }),
@@ -78,7 +78,17 @@ export async function generateSchedule({
         },
       }),
       prisma.dutyConstraint.findMany({ where: { isActive: true } }),
+      prisma.noDutyDate.findMany({
+        where: {
+          date: {
+            gte: parseDateKey(dateKeys[0]),
+            lte: parseDateKey(dateKeys[dateKeys.length - 1]),
+          },
+        },
+      }),
     ]);
+
+  const noDutyDateKeys = new Set(noDutyDates.map((n) => dateKey(n.date)));
 
   if (students.length === 0) {
     return { daysProcessed: 0, assignedCount: 0, warnings: ["אין תלמידים פעילים"] };
@@ -205,6 +215,11 @@ export async function generateSchedule({
   const toCreate: { date: Date; studentId: string; dutyTypeId: string }[] = [];
 
   for (const dk of dateKeys) {
+    if (noDutyDateKeys.has(dk)) {
+      warnings.push(`${dk}: יום זה מסומן כ"אין תורנויות ביום זה" - דילוג על ייצור שיבוץ אוטומטי`);
+      continue;
+    }
+
     const date = parseDateKey(dk);
     const wk = weekKey(date);
     const availableStudents = students.filter((s) => isAvailable(s.id, dk));

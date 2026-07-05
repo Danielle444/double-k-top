@@ -182,6 +182,19 @@ model WeeklySchedule {
   @@map("weekly_schedules")
 }
 
+// Presence of a row for a date = that date is marked "אין תורנויות ביום זה" -
+// the scheduler skips automatic duty generation for it. The course schedule
+// itself (ScheduleItem) is unaffected; this only concerns duty generation.
+model NoDutyDate {
+  id        String   @id @default(cuid())
+  date      DateTime @db.Date @unique
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("no_duty_dates")
+}
+
 model ScheduleItem {
   id               String   @id @default(cuid())
   weeklyScheduleId String
