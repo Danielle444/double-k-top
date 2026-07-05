@@ -72,6 +72,32 @@ function renderScheduleCard(item: ScheduleItemView, compact = false) {
   );
 }
 
+// One group's single long activity next to several shorter, consecutive
+// activities in the other group - the long card visually spans the combined
+// height of the short cards via CSS grid-row, using explicit column
+// placement so group א always renders in the same column as the "pair" case.
+function renderSpanSlot(groupA: ScheduleItemView[], groupB: ScheduleItemView[]) {
+  const aIsLong = groupA.length === 1;
+  const longItems = aIsLong ? groupA : groupB;
+  const shortItems = aIsLong ? groupB : groupA;
+  const longColumn = aIsLong ? 1 : 2;
+  const shortColumn = aIsLong ? 2 : 1;
+  const key = `${groupA.map((i) => i.id).join("+")}|${groupB.map((i) => i.id).join("+")}`;
+
+  return (
+    <div key={key} className="grid grid-cols-2 gap-2">
+      <div style={{ gridColumn: longColumn, gridRow: `1 / span ${shortItems.length}` }}>
+        {renderScheduleCard(longItems[0], true)}
+      </div>
+      {shortItems.map((item, idx) => (
+        <div key={item.id} style={{ gridColumn: shortColumn, gridRow: idx + 1 }}>
+          {renderScheduleCard(item, true)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView }) {
   const [groupFilter, setGroupFilter] = useState<"all" | string>("all");
   const [noDutyStatus, setNoDutyStatus] = useState<Map<string, NoDutyDayStatus> | null>(null);
@@ -228,6 +254,9 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
                             {renderScheduleCard(groupB, true)}
                           </div>
                         );
+                      }
+                      if (slot.kind === "span") {
+                        return renderSpanSlot(slot.groupA, slot.groupB);
                       }
                       return renderScheduleCard(slot.item);
                     })

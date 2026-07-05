@@ -24,6 +24,16 @@ const DESCRIPTION_SYNONYMS = ["הערות", "תיאור"];
 const DATE_PATTERN = /(\d{1,2})[./](\d{1,2})[./](\d{2,4})/;
 const TIME_PATTERN = /(\d{1,2}):(\d{2})/g;
 
+// An admin can type one of these directly into an activity/title cell to
+// explicitly mark "this group has nothing in this time slot" - distinct from
+// leaving the cell truly blank, which is ambiguous (see isSkipTitle's call
+// sites for why that distinction matters).
+const SKIP_TITLE_VALUES = new Set(["ריק", "אין פעילות", "-"]);
+
+function isSkipTitle(text: string): boolean {
+  return SKIP_TITLE_VALUES.has(text.trim());
+}
+
 function normalizeHeader(h: string): string {
   return h.trim().replace(/[."'\s]/g, "");
 }
@@ -272,31 +282,45 @@ function parseStructuredTable(
     const groupTitleCols = block.titleCols.filter((c) => c.kind === "groupTitle");
     const groupTitleEntries = groupTitleCols.map((c) => {
       const raw = cellText(row, c.col);
-      return { group: c.group ?? null, text: raw ? cleanScheduleTitle(raw) : "" };
+      const text = raw ? cleanScheduleTitle(raw) : "";
+      return { group: c.group ?? null, text, isSkip: text !== "" && isSkipTitle(text) };
     });
-    const nonEmptyGroupEntries = groupTitleEntries.filter((e) => e.text);
+    // "Real" excludes both truly-blank cells and explicit skip markers -
+    // neither should ever become a ScheduleItem of its own.
+    const realGroupEntries = groupTitleEntries.filter((e) => e.text && !e.isSkip);
+    const hasExplicitSkip = groupTitleEntries.some((e) => e.isSkip);
     const plainTitleCol = block.titleCols.find((c) => c.kind === "title");
     const groupValueCol = block.titleCols.find((c) => c.kind === "groupValue");
 
     let produced: { group: string | null; title: string }[] = [];
 
     if (groupTitleCols.length > 0) {
-      if (nonEmptyGroupEntries.length === 0) {
+      if (realGroupEntries.length === 0) {
+        // Nothing real in any group column this row - either truly blank,
+        // or every filled cell was an explicit "ריק"/"אין פעילות"/"-" marker.
         produced = [];
+      } else if (hasExplicitSkip) {
+        // At least one side explicitly says "nothing here" - that's a
+        // deliberate per-group signal, so never collapse this into "both
+        // groups" the way an ambiguous blank cell would.
+        produced = realGroupEntries.map((e) => ({ group: e.group, title: e.text }));
       } else {
-        const distinctTexts = new Set(nonEmptyGroupEntries.map((e) => e.text));
+        const distinctTexts = new Set(realGroupEntries.map((e) => e.text));
         if (groupTitleCols.length >= 2 && distinctTexts.size === 1) {
-          // Either only one side had text (the other blank - typically a
-          // merged cell spanning both group columns) or both sides repeat
-          // the same text verbatim - either way, this applies to both groups.
-          produced = [{ group: null, title: nonEmptyGroupEntries[0].text }];
+          // Either only one side had text (the other genuinely blank -
+          // typically a merged cell spanning both group columns) or both
+          // sides repeat the same text verbatim - either way, this applies
+          // to both groups. Unchanged from before - only genuinely blank
+          // cells reach this branch now that explicit skip markers are
+          // handled above.
+          produced = [{ group: null, title: realGroupEntries[0].text }];
         } else {
-          produced = nonEmptyGroupEntries.map((e) => ({ group: e.group, title: e.text }));
+          produced = realGroupEntries.map((e) => ({ group: e.group, title: e.text }));
         }
       }
     } else if (plainTitleCol) {
       const rawTitle = cellText(row, plainTitleCol.col);
-      if (rawTitle) {
+      if (rawTitle && !isSkipTitle(cleanScheduleTitle(rawTitle))) {
         produced = [
           {
             group: groupValueCol ? cellText(row, groupValueCol.col) || null : null,
@@ -367,7 +391,7 @@ function parseTransposedTable(worksheet: Worksheet): ScheduleImportItem[] {
 
     for (const { col, dateKey: dk } of dateColumns) {
       const title = cellText(row, col);
-      if (!title) continue;
+      if (!title || isSkipTitle(title)) continue;
       items.push({
         key: `i${index++}`,
         dateKey: dk,
@@ -422,6 +446,8 @@ function parseFreeform(worksheet: Worksheet): ScheduleImportItem[] {
         title = t;
       }
     }
+
+    if (title && isSkipTitle(title)) continue;
 
     items.push({
       key: `i${index++}`,
@@ -649,6 +675,31 @@ export interface SuggestDayPlanResult {
   suggestions?: DayPlanSuggestion[];
 }
 
+// A single continuous riding activity for one group is often stored as
+// several consecutive rows (same reason lib/schedule-grouping.ts coalesces
+// them for display), so naively taking the first two rows by start time can
+// pick two rows from the *same* group. Instead, this looks at distinct group
+// names only, ordered by each group's earliest riding row in this daypart -
+// so two rows for the same group only ever produce one distinct entry, and
+// the "first"/"second" order reflects which group's riding started earliest.
+function firstTwoRidingGroups(
+  ridingItems: { groupName: string | null; startTime: string }[]
+): [string | null, string | null] {
+  const earliestStartByGroup = new Map<string, number>();
+  for (const item of ridingItems) {
+    if (!item.groupName) continue;
+    const start = timeToMinutes(item.startTime);
+    const existing = earliestStartByGroup.get(item.groupName);
+    if (existing === undefined || start < existing) {
+      earliestStartByGroup.set(item.groupName, start);
+    }
+  }
+  const orderedGroups = Array.from(earliestStartByGroup.entries())
+    .sort((a, b) => a[1] - b[1])
+    .map(([group]) => group);
+  return [orderedGroups[0] ?? null, orderedGroups[1] ?? null];
+}
+
 // Best-effort only: looks for riding-related items ("רכיבה") that have a
 // group, split into before/after 13:00, ordered by start time. The manager
 // reviews and edits every suggestion before it's written anywhere.
@@ -676,19 +727,17 @@ export async function suggestDayPlanFromSchedule(
       (i) =>
         i.groupName && (i.title.includes("רכיבה") || (i.description ?? "").includes("רכיבה"))
     );
-    const morning = ridingItems
-      .filter((i) => timeToMinutes(i.startTime) < 13 * 60)
-      .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
-    const afternoon = ridingItems
-      .filter((i) => timeToMinutes(i.startTime) >= 13 * 60)
-      .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
+    const morning = ridingItems.filter((i) => timeToMinutes(i.startTime) < 13 * 60);
+    const afternoon = ridingItems.filter((i) => timeToMinutes(i.startTime) >= 13 * 60);
+    const [firstMorningGroup, secondMorningGroup] = firstTwoRidingGroups(morning);
+    const [firstAfterLunchGroup, secondAfterLunchGroup] = firstTwoRidingGroups(afternoon);
 
     suggestions.push({
       dateKey: dk,
-      firstMorningGroup: morning[0]?.groupName ?? null,
-      secondMorningGroup: morning[1]?.groupName ?? null,
-      firstAfterLunchGroup: afternoon[0]?.groupName ?? null,
-      secondAfterLunchGroup: afternoon[1]?.groupName ?? null,
+      firstMorningGroup,
+      secondMorningGroup,
+      firstAfterLunchGroup,
+      secondAfterLunchGroup,
     });
   }
 

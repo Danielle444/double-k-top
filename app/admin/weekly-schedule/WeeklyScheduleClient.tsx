@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useState, useTransition } from "react";
+import { FormEvent, useMemo, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
 import {
@@ -43,6 +43,187 @@ const MODE_LABELS: Record<GenerateMode, string> = {
   regeneratePreserveManual: "ייצור מחדש, שמירה על שיבוצים ידניים",
   clearAndRegenerate: "מחיקה וייצור מחדש מלא",
 };
+
+// Which input a given issue should visually highlight - lets the preview UI
+// point at the specific field, not just the whole row.
+type IssueField = "date" | "startTime" | "endTime" | "group" | "title";
+
+interface RowIssue {
+  key: string;
+  field: IssueField;
+  message: string;
+}
+
+const DUPLICATE_ROW_FIELDS: IssueField[] = ["date", "startTime", "endTime", "group", "title"];
+
+function timeToMinutes(t: string): number | null {
+  const m = t.match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+// 1-based row number = position in the original parse order - shown to the
+// admin as a stable "שורה N" label so warnings/errors can reference each
+// other precisely, and so the same number always means the same row.
+function rowNumbersByKey(items: ScheduleImportItem[]): Map<string, number> {
+  return new Map(items.map((item, i) => [item.key, i + 1]));
+}
+
+// Short, human-readable description of a single row's key fields - used to
+// make a cross-referenced row ("חופפת לשורה 13") identifiable without having
+// to scroll to find it.
+function shortRowDescription(item: ScheduleImportItem): string {
+  const time =
+    item.startTime && item.endTime
+      ? `${item.startTime}-${item.endTime}`
+      : item.startTime || item.endTime || "ללא שעה";
+  const group = item.groupName.trim() ? `קבוצה ${item.groupName.trim()}` : "שתי הקבוצות";
+  const title = item.title.trim() || "ללא כותרת";
+  return `${time}, ${group}, ${title}`;
+}
+
+// Full context label for a row, used to prefix every summary-panel line so
+// each line is understandable on its own without looking at the row card.
+function rowContextLabel(item: ScheduleImportItem, rowNumber: number): string {
+  const dateLabel = item.dateKey ? formatHebrewDate(parseDateKey(item.dateKey)) : "ללא תאריך";
+  return `שורה ${rowNumber} · ${dateLabel} · ${shortRowDescription(item)}`;
+}
+
+// Blocking: a row with any of these can't be saved as-is - the admin must
+// fix or delete it. Deliberately does NOT flag an empty groupName - that's
+// valid and means "both groups" (שתי הקבוצות), not an error.
+function computeBlockingErrors(items: ScheduleImportItem[]): RowIssue[] {
+  const errors: RowIssue[] = [];
+  for (const item of items) {
+    if (!item.dateKey) errors.push({ key: item.key, field: "date", message: "שורה ללא תאריך" });
+    if (!item.startTime) {
+      errors.push({ key: item.key, field: "startTime", message: "שורה ללא שעת התחלה" });
+    }
+    if (!item.endTime) {
+      errors.push({ key: item.key, field: "endTime", message: "שורה ללא שעת סיום" });
+    }
+    if (item.startTime && item.endTime) {
+      const start = timeToMinutes(item.startTime);
+      const end = timeToMinutes(item.endTime);
+      if (start !== null && end !== null && end <= start) {
+        const message = "שעת הסיום קודמת או שווה לשעת ההתחלה";
+        errors.push({ key: item.key, field: "startTime", message });
+        errors.push({ key: item.key, field: "endTime", message });
+      }
+    }
+    if (!item.title.trim()) {
+      errors.push({ key: item.key, field: "title", message: "שורה ללא כותרת פעילות" });
+    }
+  }
+  return errors;
+}
+
+// Non-blocking: worth flagging, but shouldn't stop the admin from saving.
+function computeWarnings(
+  items: ScheduleImportItem[],
+  weekStart: string,
+  weekEnd: string
+): RowIssue[] {
+  const warnings: RowIssue[] = [];
+  const rowNumbers = rowNumbersByKey(items);
+
+  const byGroupDate = new Map<string, ScheduleImportItem[]>();
+  for (const item of items) {
+    if (!item.dateKey || !item.startTime || !item.endTime) continue;
+    const key = `${item.dateKey}|${item.groupName}`;
+    if (!byGroupDate.has(key)) byGroupDate.set(key, []);
+    byGroupDate.get(key)!.push(item);
+  }
+  for (const group of byGroupDate.values()) {
+    const sorted = [...group].sort(
+      (a, b) => (timeToMinutes(a.startTime) ?? 0) - (timeToMinutes(b.startTime) ?? 0)
+    );
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const a = sorted[i];
+      const b = sorted[i + 1];
+      const end = timeToMinutes(a.endTime);
+      const nextStart = timeToMinutes(b.startTime);
+      if (end !== null && nextStart !== null && end > nextStart) {
+        const messageForA = `חופפת לשורה ${rowNumbers.get(b.key)} (${shortRowDescription(b)})`;
+        const messageForB = `חופפת לשורה ${rowNumbers.get(a.key)} (${shortRowDescription(a)})`;
+        warnings.push({ key: a.key, field: "startTime", message: messageForA });
+        warnings.push({ key: a.key, field: "endTime", message: messageForA });
+        warnings.push({ key: b.key, field: "startTime", message: messageForB });
+        warnings.push({ key: b.key, field: "endTime", message: messageForB });
+      }
+    }
+  }
+
+  const firstBySig = new Map<string, ScheduleImportItem>();
+  for (const item of items) {
+    const sig = `${item.dateKey}|${item.startTime}|${item.endTime}|${item.groupName}|${item.title.trim()}`;
+    const original = firstBySig.get(sig);
+    if (original) {
+      const message = `כפולה לשורה ${rowNumbers.get(original.key)} (${shortRowDescription(original)})`;
+      for (const field of DUPLICATE_ROW_FIELDS) {
+        warnings.push({ key: item.key, field, message });
+      }
+    } else {
+      firstBySig.set(sig, item);
+    }
+  }
+
+  if (weekStart && weekEnd) {
+    for (const item of items) {
+      if (item.dateKey && (item.dateKey < weekStart || item.dateKey > weekEnd)) {
+        warnings.push({ key: item.key, field: "date", message: "תאריך מחוץ לטווח השבוע שנבחר" });
+      }
+    }
+  }
+
+  return warnings;
+}
+
+function messagesByKey(issues: RowIssue[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const issue of issues) {
+    if (!map.has(issue.key)) map.set(issue.key, []);
+    const messages = map.get(issue.key)!;
+    if (!messages.includes(issue.message)) messages.push(issue.message);
+  }
+  return map;
+}
+
+function fieldsByKey(issues: RowIssue[]): Map<string, Set<IssueField>> {
+  const map = new Map<string, Set<IssueField>>();
+  for (const issue of issues) {
+    if (!map.has(issue.key)) map.set(issue.key, new Set());
+    map.get(issue.key)!.add(issue.field);
+  }
+  return map;
+}
+
+interface SummaryLine {
+  rowNumber: number;
+  text: string;
+}
+
+// One self-contained line per unique (row, message) pair, prefixed with that
+// row's full context - used by the summary panel so each line is
+// understandable without cross-referencing the row cards below it.
+function buildSummaryLines(
+  byKey: Map<string, string[]>,
+  items: ScheduleImportItem[]
+): SummaryLine[] {
+  const itemByKey = new Map(items.map((item) => [item.key, item]));
+  const rowNumbers = rowNumbersByKey(items);
+  const lines: SummaryLine[] = [];
+  for (const [key, messages] of byKey) {
+    const item = itemByKey.get(key);
+    const rowNumber = rowNumbers.get(key);
+    if (!item || !rowNumber) continue;
+    const context = rowContextLabel(item, rowNumber);
+    for (const message of messages) {
+      lines.push({ rowNumber, text: `${context}: ${message}` });
+    }
+  }
+  return lines.sort((a, b) => a.rowNumber - b.rowNumber);
+}
 
 export function WeeklyScheduleClient({
   weeklySchedules,
@@ -101,10 +282,83 @@ export function WeeklyScheduleClient({
     );
   }
 
+  function handleRemoveRow(key: string) {
+    setParsedItems((prev) => (prev ? prev.filter((i) => i.key !== key) : prev));
+  }
+
+  function handleAddRow() {
+    setParsedItems((prev) => [
+      ...(prev ?? []),
+      {
+        key: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        dateKey: null,
+        startTime: "",
+        endTime: "",
+        title: "",
+        description: "",
+        groupName: "",
+        instructorName: "",
+        location: "",
+        rawText: "",
+        needsReview: true,
+      },
+    ]);
+  }
+
+  const blockingErrors = useMemo(
+    () => (parsedItems ? computeBlockingErrors(parsedItems) : []),
+    [parsedItems]
+  );
+  const warnings = useMemo(
+    () => (parsedItems ? computeWarnings(parsedItems, weekStart, weekEnd) : []),
+    [parsedItems, weekStart, weekEnd]
+  );
+  const errorsByKey = useMemo(() => messagesByKey(blockingErrors), [blockingErrors]);
+  const warningsByKey = useMemo(() => messagesByKey(warnings), [warnings]);
+  const errorFieldsByKey = useMemo(() => fieldsByKey(blockingErrors), [blockingErrors]);
+  const warningFieldsByKey = useMemo(() => fieldsByKey(warnings), [warnings]);
+  const rowNumberByKey = useMemo(
+    () => (parsedItems ? rowNumbersByKey(parsedItems) : new Map<string, number>()),
+    [parsedItems]
+  );
+  const errorSummaryLines = useMemo(
+    () => (parsedItems ? buildSummaryLines(errorsByKey, parsedItems) : []),
+    [errorsByKey, parsedItems]
+  );
+  const warningSummaryLines = useMemo(
+    () => (parsedItems ? buildSummaryLines(warningsByKey, parsedItems) : []),
+    [warningsByKey, parsedItems]
+  );
+
+  function fieldIssueClass(key: string, field: IssueField): string {
+    if (errorFieldsByKey.get(key)?.has(field)) return "border-danger";
+    if (warningFieldsByKey.get(key)?.has(field)) return "border-warning";
+    return "border-border";
+  }
+
+  const groupedParsedItems = useMemo(() => {
+    if (!parsedItems) return [];
+    const map = new Map<string, ScheduleImportItem[]>();
+    for (const item of parsedItems) {
+      const key = item.dateKey ?? "__no_date__";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(item);
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => {
+      if (a === "__no_date__") return 1;
+      if (b === "__no_date__") return -1;
+      return a.localeCompare(b);
+    });
+  }, [parsedItems]);
+
   function handleCommit() {
     if (!parsedItems) return;
     if (!weekName.trim() || !weekStart || !weekEnd) {
       setError("יש למלא שם וטווח תאריכים לשבוע");
+      return;
+    }
+    if (blockingErrors.length > 0) {
+      setError("יש לתקן או להסיר את השורות עם השגיאות המסומנות לפני השמירה");
       return;
     }
     setError(null);
@@ -127,7 +381,7 @@ export function WeeklyScheduleClient({
       );
       setParsedItems(null);
       if (result.weeklyScheduleId) {
-        setSuggestWeekId(result.weeklyScheduleId);
+        openSuggestions(result.weeklyScheduleId);
       }
     });
   }
@@ -142,13 +396,21 @@ export function WeeklyScheduleClient({
     setError(null);
     setSuggestWeekId(weekId);
     startTransition(async () => {
-      const result = await suggestDayPlanFromSchedule(weekId);
-      if (!result.success || !result.suggestions) {
-        setError(result.error ?? "לא ניתן היה להציע ערכים");
-        setSuggestions([]);
-        return;
+      try {
+        const result = await suggestDayPlanFromSchedule(weekId);
+        if (!result.success || !result.suggestions) {
+          // Keep suggestions at null (not []) so the modal shows the error
+          // message alone, rather than also showing "no suggestions found".
+          setError(result.error ?? "לא ניתן היה להציע ערכים");
+          return;
+        }
+        setSuggestions(result.suggestions);
+      } catch {
+        // Without this, an unexpected error would leave suggestions === null
+        // forever, and the modal would stay stuck showing "טוען..." with no
+        // indication anything went wrong.
+        setError("אירעה שגיאה בטעינת הצעות תכנון הקבוצות");
       }
-      setSuggestions(result.suggestions);
     });
   }
 
@@ -192,9 +454,10 @@ export function WeeklyScheduleClient({
         open={uploadOpen}
         title={uploadTarget ? `החלפת לו"ז - ${uploadTarget.name}` : 'העלאת לו"ז חדש'}
         onClose={() => setUploadOpen(false)}
+        size="large"
       >
-        <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="flex h-full flex-col gap-4">
+          <div className="grid shrink-0 grid-cols-1 gap-2 sm:grid-cols-3">
             <label className="flex flex-col gap-1 text-sm">
               שם השבוע
               <input
@@ -224,7 +487,7 @@ export function WeeklyScheduleClient({
           </div>
 
           {!parsedItems && (
-            <form onSubmit={handleParse} className="flex flex-col gap-3">
+            <form onSubmit={handleParse} className="flex shrink-0 flex-col gap-3">
               <input
                 type="file"
                 name="file"
@@ -240,97 +503,243 @@ export function WeeklyScheduleClient({
           )}
 
           {parsedItems && (
-            <div className="flex flex-col gap-3">
-              <p className="text-sm text-muted-foreground">
-                נמצאו {parsedItems.length} פריטים. שורות ללא תאריך תקין מסומנות וניתן לתקן
-                ידנית, אחרת ידולגו בשמירה.
+            <div className="flex min-h-0 flex-1 flex-col gap-3">
+              <p className="shrink-0 text-sm text-muted-foreground">
+                נמצאו {parsedItems.length} פריטים. שורות עם שגיאה (מסומנות באדום) חוסמות שמירה
+                עד לתיקון או הסרה. אזהרות (מסומנות בכתום) אינן חוסמות שמירה.
               </p>
               {parseWarning && (
-                <div className="rounded-lg bg-warning-muted p-3 text-sm text-warning">
+                <div className="shrink-0 rounded-lg bg-warning-muted p-3 text-sm text-warning">
                   {parseWarning}
                 </div>
               )}
-              <div className="max-h-72 overflow-y-auto rounded-lg border border-border">
-                {parsedItems.map((item) => (
-                  <div key={item.key} className="border-b border-border p-2 last:border-0">
-                    {item.needsReview && (
-                      <span className="mb-1 inline-block rounded-full bg-warning-muted px-2 py-0.5 text-xs font-medium text-warning">
-                        דורש בדיקה
-                      </span>
+              {errorSummaryLines.length > 0 && (
+                <div className="shrink-0 rounded-lg border border-danger bg-danger-muted p-3 text-sm text-danger">
+                  <p className="font-semibold">
+                    נמצאו {errorSummaryLines.length} שגיאות החוסמות שמירה - יש לתקן או להסיר את
+                    השורות המסומנות:
+                  </p>
+                  <ul className="mt-1 flex flex-col gap-0.5">
+                    {errorSummaryLines.slice(0, 12).map((line, i) => (
+                      <li key={i}>• {line.text}</li>
+                    ))}
+                    {errorSummaryLines.length > 12 && (
+                      <li>ועוד {errorSummaryLines.length - 12}...</li>
                     )}
-                    <div className="mb-1 grid grid-cols-2 gap-1 sm:grid-cols-4">
-                      <input
-                        type="date"
-                        value={item.dateKey ?? ""}
-                        onChange={(e) => updateItem(item.key, { dateKey: e.target.value || null })}
-                        className={`rounded border px-1 py-0.5 text-xs ${
-                          item.dateKey ? "border-border" : "border-danger"
-                        }`}
-                      />
-                      <input
-                        value={item.startTime}
-                        onChange={(e) => updateItem(item.key, { startTime: e.target.value })}
-                        placeholder="שעת התחלה"
-                        className="rounded border border-border px-1 py-0.5 text-xs"
-                      />
-                      <input
-                        value={item.endTime}
-                        onChange={(e) => updateItem(item.key, { endTime: e.target.value })}
-                        placeholder="שעת סיום"
-                        className="rounded border border-border px-1 py-0.5 text-xs"
-                      />
-                      <input
-                        value={item.groupName}
-                        onChange={(e) => updateItem(item.key, { groupName: e.target.value })}
-                        placeholder="קבוצה (ריק = שתי הקבוצות)"
-                        className="rounded border border-border px-1 py-0.5 text-xs"
-                      />
+                  </ul>
+                </div>
+              )}
+              {warningSummaryLines.length > 0 && (
+                <div className="shrink-0 rounded-lg border border-warning bg-warning-muted p-3 text-sm text-warning">
+                  <p className="font-semibold">
+                    נמצאו {warningSummaryLines.length} אזהרות (לא חוסמות שמירה):
+                  </p>
+                  <ul className="mt-1 flex flex-col gap-0.5">
+                    {warningSummaryLines.slice(0, 12).map((line, i) => (
+                      <li key={i}>• {line.text}</li>
+                    ))}
+                    {warningSummaryLines.length > 12 && (
+                      <li>ועוד {warningSummaryLines.length - 12}...</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
+              <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border">
+                {groupedParsedItems.map(([groupKey, rowsForDate]) => (
+                  <div key={groupKey} className="border-b border-border last:border-0">
+                    <div className="sticky top-0 z-10 bg-secondary px-4 py-2.5 text-base font-bold text-secondary-foreground">
+                      {groupKey === "__no_date__"
+                        ? "שורות ללא תאריך"
+                        : formatHebrewDate(parseDateKey(groupKey))}
                     </div>
-                    <input
-                      value={item.title}
-                      onChange={(e) => updateItem(item.key, { title: e.target.value })}
-                      placeholder="כותרת"
-                      className="mb-1 w-full rounded border border-border px-1 py-0.5 text-xs font-medium"
-                    />
-                    <div className="mb-1 grid grid-cols-2 gap-1">
-                      <input
-                        value={item.instructorName}
-                        onChange={(e) =>
-                          updateItem(item.key, { instructorName: e.target.value })
-                        }
-                        placeholder="מדריך/ה"
-                        className="rounded border border-border px-1 py-0.5 text-xs"
-                      />
-                      <input
-                        value={item.location}
-                        onChange={(e) => updateItem(item.key, { location: e.target.value })}
-                        placeholder="מיקום"
-                        className="rounded border border-border px-1 py-0.5 text-xs"
-                      />
+                    <div className="flex flex-col gap-4 p-4">
+                      {rowsForDate.map((item) => {
+                        const rowErrors = errorsByKey.get(item.key) ?? [];
+                        const rowWarnings = warningsByKey.get(item.key) ?? [];
+                        const hasError = rowErrors.length > 0;
+                        const hasWarning = rowWarnings.length > 0;
+                        return (
+                          <div
+                            key={item.key}
+                            className={`rounded-lg border-2 p-4 ${
+                              hasError
+                                ? "border-danger"
+                                : hasWarning
+                                  ? "border-warning"
+                                  : "border-border"
+                            }`}
+                          >
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span className="rounded-full bg-secondary px-2 py-0.5 text-xs font-semibold text-secondary-foreground">
+                                  שורה {rowNumberByKey.get(item.key) ?? "?"}
+                                </span>
+                                {item.needsReview && (
+                                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                                    דורש בדיקה
+                                  </span>
+                                )}
+                                {hasError && (
+                                  <span className="rounded-full bg-danger-muted px-2 py-0.5 text-xs font-medium text-danger">
+                                    שגיאה
+                                  </span>
+                                )}
+                                {hasWarning && (
+                                  <span className="rounded-full bg-warning-muted px-2 py-0.5 text-xs font-medium text-warning">
+                                    אזהרה
+                                  </span>
+                                )}
+                              </div>
+                              <Button
+                                type="button"
+                                variant="danger"
+                                className="!px-2 !py-1 text-xs"
+                                onClick={() => handleRemoveRow(item.key)}
+                              >
+                                הסרת שורה
+                              </Button>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                              <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                                תאריך
+                                <input
+                                  type="date"
+                                  value={item.dateKey ?? ""}
+                                  onChange={(e) =>
+                                    updateItem(item.key, { dateKey: e.target.value || null })
+                                  }
+                                  className={`rounded border-2 px-2 py-1.5 text-sm ${fieldIssueClass(item.key, "date")}`}
+                                />
+                              </label>
+                              <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                                שעת התחלה
+                                <input
+                                  value={item.startTime}
+                                  onChange={(e) =>
+                                    updateItem(item.key, { startTime: e.target.value })
+                                  }
+                                  placeholder="HH:MM"
+                                  className={`rounded border-2 px-2 py-1.5 text-sm ${fieldIssueClass(item.key, "startTime")}`}
+                                />
+                              </label>
+                              <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                                שעת סיום
+                                <input
+                                  value={item.endTime}
+                                  onChange={(e) =>
+                                    updateItem(item.key, { endTime: e.target.value })
+                                  }
+                                  placeholder="HH:MM"
+                                  className={`rounded border-2 px-2 py-1.5 text-sm ${fieldIssueClass(item.key, "endTime")}`}
+                                />
+                              </label>
+                              <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                                קבוצה
+                                <input
+                                  value={item.groupName}
+                                  onChange={(e) =>
+                                    updateItem(item.key, { groupName: e.target.value })
+                                  }
+                                  placeholder="ריק = שתי הקבוצות"
+                                  className={`rounded border-2 px-2 py-1.5 text-sm ${fieldIssueClass(item.key, "group")}`}
+                                />
+                              </label>
+                            </div>
+
+                            <label className="mt-2 flex flex-col gap-0.5 text-xs text-muted-foreground">
+                              כותרת פעילות
+                              <input
+                                value={item.title}
+                                onChange={(e) => updateItem(item.key, { title: e.target.value })}
+                                className={`w-full rounded border-2 px-2 py-1.5 text-sm font-medium ${fieldIssueClass(item.key, "title")}`}
+                              />
+                            </label>
+
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                                מדריך/ה
+                                <input
+                                  value={item.instructorName}
+                                  onChange={(e) =>
+                                    updateItem(item.key, { instructorName: e.target.value })
+                                  }
+                                  className="rounded border border-border px-2 py-1.5 text-sm"
+                                />
+                              </label>
+                              <label className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                                מיקום
+                                <input
+                                  value={item.location}
+                                  onChange={(e) =>
+                                    updateItem(item.key, { location: e.target.value })
+                                  }
+                                  className="rounded border border-border px-2 py-1.5 text-sm"
+                                />
+                              </label>
+                            </div>
+
+                            <label className="mt-2 flex flex-col gap-0.5 text-xs text-muted-foreground">
+                              שורה מקורית
+                              <textarea
+                                value={item.rawText}
+                                onChange={(e) =>
+                                  updateItem(item.key, { rawText: e.target.value })
+                                }
+                                rows={1}
+                                className="w-full rounded border border-border px-2 py-1.5 text-xs text-muted-foreground"
+                              />
+                            </label>
+
+                            {(rowErrors.length > 0 || rowWarnings.length > 0) && (
+                              <ul className="mt-2 flex flex-col gap-0.5 text-xs">
+                                {rowErrors.map((msg, i) => (
+                                  <li key={`e${i}`} className="text-danger">
+                                    • {msg}
+                                  </li>
+                                ))}
+                                {rowWarnings.map((msg, i) => (
+                                  <li key={`w${i}`} className="text-warning">
+                                    • {msg}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                    <textarea
-                      value={item.rawText}
-                      onChange={(e) => updateItem(item.key, { rawText: e.target.value })}
-                      placeholder="שורה מקורית"
-                      rows={1}
-                      className="w-full rounded border border-border px-1 py-0.5 text-xs text-muted-foreground"
-                    />
                   </div>
                 ))}
               </div>
-              {error && <p className="text-sm text-danger">{error}</p>}
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="secondary" onClick={() => setParsedItems(null)}>
-                  ביטול
+
+              <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
+                <Button type="button" variant="secondary" onClick={handleAddRow}>
+                  + הוספת שורה
                 </Button>
-                <Button type="button" onClick={handleCommit} disabled={isPending}>
-                  {isPending ? "שומר..." : "שמירת הלו\"ז"}
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {error && <p className="text-sm text-danger">{error}</p>}
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setParsedItems(null)}
+                  >
+                    ביטול
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleCommit}
+                    disabled={isPending || blockingErrors.length > 0}
+                  >
+                    {isPending ? "שומר..." : "שמירת הלו\"ז"}
+                  </Button>
+                </div>
               </div>
             </div>
           )}
 
-          {summary && <p className="text-sm text-success">{summary}</p>}
+          {summary && <p className="shrink-0 text-sm text-success">{summary}</p>}
         </div>
       </Modal>
 
@@ -341,66 +750,82 @@ export function WeeklyScheduleClient({
           setSuggestWeekId(null);
           setSuggestions(null);
         }}
+        size="large"
       >
-        <div className="flex flex-col gap-3">
-          <p className="text-sm text-muted-foreground">
+        <div className="flex h-full flex-col gap-3">
+          <p className="shrink-0 text-sm text-muted-foreground">
             הצעה בלבד, על בסיס פענוח מיטבי של הלו&quot;ז. בדקו ותקנו לפני האישור - שום דבר
             לא נשמר לפני לחיצה על &quot;אישור וכתיבה&quot;.
           </p>
-          {suggestions === null && <p className="text-sm text-muted-foreground">טוען...</p>}
+          {error && <p className="shrink-0 text-sm text-danger">{error}</p>}
+          {suggestions === null && !error && (
+            <p className="shrink-0 text-sm text-muted-foreground">טוען...</p>
+          )}
           {suggestions && suggestions.length === 0 && (
-            <p className="text-sm text-muted-foreground">אין הצעות לשבוע זה.</p>
+            <p className="shrink-0 text-sm text-muted-foreground">אין הצעות לשבוע זה.</p>
           )}
           {suggestions && suggestions.length > 0 && (
-            <div className="max-h-80 overflow-y-auto rounded-lg border border-border">
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border">
               {suggestions.map((s) => (
-                <div key={s.dateKey} className="border-b border-border p-2 last:border-0">
-                  <p className="mb-1 text-xs font-medium text-card-foreground">
+                <div key={s.dateKey} className="border-b border-border p-4 last:border-0">
+                  <p className="mb-3 text-base font-bold text-card-foreground">
                     {formatHebrewDate(parseDateKey(s.dateKey))}
                   </p>
-                  <div className="grid grid-cols-2 gap-1 sm:grid-cols-4">
-                    <input
-                      value={s.firstMorningGroup ?? ""}
-                      onChange={(e) =>
-                        updateSuggestion(s.dateKey, { firstMorningGroup: e.target.value || null })
-                      }
-                      placeholder="בוקר 1"
-                      className="rounded border border-border px-1 py-0.5 text-xs"
-                    />
-                    <input
-                      value={s.secondMorningGroup ?? ""}
-                      onChange={(e) =>
-                        updateSuggestion(s.dateKey, { secondMorningGroup: e.target.value || null })
-                      }
-                      placeholder="בוקר 2"
-                      className="rounded border border-border px-1 py-0.5 text-xs"
-                    />
-                    <input
-                      value={s.firstAfterLunchGroup ?? ""}
-                      onChange={(e) =>
-                        updateSuggestion(s.dateKey, {
-                          firstAfterLunchGroup: e.target.value || null,
-                        })
-                      }
-                      placeholder='אחה"צ 1'
-                      className="rounded border border-border px-1 py-0.5 text-xs"
-                    />
-                    <input
-                      value={s.secondAfterLunchGroup ?? ""}
-                      onChange={(e) =>
-                        updateSuggestion(s.dateKey, {
-                          secondAfterLunchGroup: e.target.value || null,
-                        })
-                      }
-                      placeholder='אחה"צ 2'
-                      className="rounded border border-border px-1 py-0.5 text-xs"
-                    />
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                      בוקר - קבוצה ראשונה
+                      <input
+                        value={s.firstMorningGroup ?? ""}
+                        onChange={(e) =>
+                          updateSuggestion(s.dateKey, {
+                            firstMorningGroup: e.target.value || null,
+                          })
+                        }
+                        className="rounded border border-border px-2 py-1.5 text-sm"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                      בוקר - קבוצה שנייה
+                      <input
+                        value={s.secondMorningGroup ?? ""}
+                        onChange={(e) =>
+                          updateSuggestion(s.dateKey, {
+                            secondMorningGroup: e.target.value || null,
+                          })
+                        }
+                        className="rounded border border-border px-2 py-1.5 text-sm"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                      אחה&quot;צ - קבוצה ראשונה
+                      <input
+                        value={s.firstAfterLunchGroup ?? ""}
+                        onChange={(e) =>
+                          updateSuggestion(s.dateKey, {
+                            firstAfterLunchGroup: e.target.value || null,
+                          })
+                        }
+                        className="rounded border border-border px-2 py-1.5 text-sm"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                      אחה&quot;צ - קבוצה שנייה
+                      <input
+                        value={s.secondAfterLunchGroup ?? ""}
+                        onChange={(e) =>
+                          updateSuggestion(s.dateKey, {
+                            secondAfterLunchGroup: e.target.value || null,
+                          })
+                        }
+                        className="rounded border border-border px-2 py-1.5 text-sm"
+                      />
+                    </label>
                   </div>
                 </div>
               ))}
             </div>
           )}
-          <div className="flex justify-end gap-2">
+          <div className="flex shrink-0 justify-end gap-2">
             <Button
               type="button"
               variant="secondary"
