@@ -30,8 +30,9 @@ model Student {
   privateHorseName  String?
   assignedHorseName String?
 
-  availability StudentAvailability[]
-  assignments  DutyAssignment[]
+  availability          StudentAvailability[]
+  assignments           DutyAssignment[]
+  messageTaskRecipients MessageTaskRecipient[]
 
   @@map("students")
 }
@@ -116,7 +117,7 @@ model AvailabilityRangePreset {
 // One row per course date, recording which group rides in each of the 4 daily slots
 model CourseDayPlan {
   id                    String   @id @default(cuid())
-  date                  DateTime @db.Date @unique
+  date                  DateTime @unique @db.Date
   firstMorningGroup     String?
   secondMorningGroup    String?
   firstAfterLunchGroup  String?
@@ -198,7 +199,7 @@ model WeeklySchedule {
 // itself (ScheduleItem) is unaffected; this only concerns duty generation.
 model NoDutyDate {
   id        String   @id @default(cuid())
-  date      DateTime @db.Date @unique
+  date      DateTime @unique @db.Date
   reason    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -239,4 +240,50 @@ model ScheduleItem {
 
   @@index([date])
   @@map("schedule_items")
+}
+
+enum MessageTaskType {
+  MESSAGE
+  TASK
+}
+
+enum MessageAudience {
+  ALL
+  GROUP
+  SPECIFIC
+}
+
+// Recipients are materialized into MessageTaskRecipient rows at send time -
+// audience/groupName here are kept only for the admin's own display of what
+// was sent, they are never re-queried to determine current recipients.
+model MessageTask {
+  id            String          @id @default(cuid())
+  type          MessageTaskType
+  title         String
+  body          String
+  audience      MessageAudience
+  groupName     String?
+  createdByName String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  recipients MessageTaskRecipient[]
+
+  @@map("message_tasks")
+}
+
+model MessageTaskRecipient {
+  id            String    @id @default(cuid())
+  messageTaskId String
+  studentId     String
+  readAt        DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+
+  messageTask MessageTask @relation(fields: [messageTaskId], references: [id], onDelete: Cascade)
+  student     Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([messageTaskId, studentId])
+  @@index([studentId])
+  @@map("message_task_recipients")
 }

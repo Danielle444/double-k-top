@@ -16,10 +16,16 @@ import { getWeeklyScheduleSelection } from "@/lib/actions/weekly-schedule";
 import { updateOwnPrivateHorseName } from "@/lib/actions/horses";
 import { ScheduleSection } from "@/app/student/ScheduleSection";
 import { DutiesSection } from "@/app/student/DutiesSection";
+import { StudentMessagesSection } from "@/app/student/StudentMessagesSection";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey, todayDateKey } from "@/lib/dates";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
 
 const STORAGE_KEY = "duty-manager-student";
+
+// Student gets a 6th tab ("messages") for admin-sent messages/tasks -
+// BottomTabs' default tabs prop (MAIN_TABS, 5 tabs) is unaffected since
+// instructor builds its own separate INSTRUCTOR_TABS off the same base.
+const STUDENT_TABS = [...MAIN_TABS, { id: "messages" as const, label: "הודעות ומשימות" }];
 
 interface StoredSession {
   id: string;
@@ -248,7 +254,7 @@ export function StudentClient() {
     : null;
   const rangeEnd = selectedWeek ? (dayFilter === "all" ? selectedWeek.endDate : dayFilter) : null;
 
-  const activeTabLabel = MAIN_TABS.find((t) => t.id === activeTab)?.label ?? "";
+  const activeTabLabel = STUDENT_TABS.find((t) => t.id === activeTab)?.label ?? "";
 
   return (
     <div className="flex flex-1 flex-col">
@@ -423,9 +429,11 @@ export function StudentClient() {
             </Button>
           </div>
         )}
+
+        {activeTab === "messages" && <StudentMessagesSection studentId={session.id} />}
       </main>
 
-      <BottomTabs active={activeTab} onChange={setActiveTab} />
+      <BottomTabs active={activeTab} onChange={setActiveTab} tabs={STUDENT_TABS} />
     </div>
   );
 }

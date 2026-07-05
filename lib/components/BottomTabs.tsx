@@ -1,6 +1,13 @@
 "use client";
 
-export type MainTabId = "today" | "schedule" | "duties" | "booklet" | "profile" | "horses";
+export type MainTabId =
+  | "today"
+  | "schedule"
+  | "duties"
+  | "booklet"
+  | "profile"
+  | "horses"
+  | "messages";
 
 export const MAIN_TABS: { id: MainTabId; label: string }[] = [
   { id: "today", label: "היום" },
