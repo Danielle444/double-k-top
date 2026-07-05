@@ -75,6 +75,12 @@ export interface AttendanceTrackingRow {
   isAvailable: boolean;
   assignedDuty: AttendanceAssignedDuty | null;
   warnings: AttendanceWarning[];
+  // Raw Student horse fields (no schema change - already existed on
+  // Student), shaped to match HorseInfoInput so callers can pass a row
+  // straight into getHorseDisplayInfo() from lib/horse-info.ts.
+  hasPrivateHorse: boolean;
+  privateHorseName: string | null;
+  assignedHorseName: string | null;
 }
 
 // Compact per-cell shape for a future week-view pivot grid, derived from an
@@ -157,7 +163,15 @@ async function buildAttendanceTrackingRows(
     prisma.student.findMany({
       where: { isActive: true },
       orderBy: { fullName: "asc" },
-      select: { id: true, fullName: true, groupName: true, subgroupNumber: true },
+      select: {
+        id: true,
+        fullName: true,
+        groupName: true,
+        subgroupNumber: true,
+        hasPrivateHorse: true,
+        privateHorseName: true,
+        assignedHorseName: true,
+      },
     }),
     prisma.studentAttendance.findMany({ where: { date: { gte: start, lte: end } } }),
     prisma.studentAvailability.findMany({ where: { date: { gte: start, lte: end } } }),
@@ -206,6 +220,9 @@ async function buildAttendanceTrackingRows(
         isAvailable,
         assignedDuty,
         warnings: computeWarnings({ status: attendance?.status ?? null, isAvailable, assignedDuty }),
+        hasPrivateHorse: student.hasPrivateHorse,
+        privateHorseName: student.privateHorseName,
+        assignedHorseName: student.assignedHorseName,
       });
     }
   }
