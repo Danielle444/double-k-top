@@ -10,6 +10,7 @@ import {
   setPublishStatus,
 } from "@/lib/actions/schedule";
 import {
+  dateKey,
   enumerateDateKeys,
   formatHebrewDate,
   formatHebrewWeekday,
@@ -121,6 +122,24 @@ export function ScheduleClient({
     return null;
   }
 
+  function buildExportHref(): string | null {
+    if (rangeSource === "weeklySchedule") {
+      if (!selectedWeeklyScheduleId) return null;
+      return `/api/admin/schedule/export?weeklyScheduleId=${selectedWeeklyScheduleId}`;
+    }
+    const range = resolveRange();
+    if (!range) return null;
+    const title =
+      rangeSource === "course"
+        ? "כל טווח הקורס"
+        : rangeSource === "week"
+          ? "שבוע נבחר"
+          : "טווח מותאם";
+    return `/api/admin/schedule/export?startDate=${dateKey(range.startDate)}&endDate=${dateKey(
+      range.endDate
+    )}&title=${encodeURIComponent(title)}`;
+  }
+
   function handleGenerate() {
     const range = resolveRange();
     if (!range) {
@@ -197,6 +216,8 @@ export function ScheduleClient({
       setShowAddForm(false);
     });
   }
+
+  const exportHref = buildExportHref();
 
   return (
     <div className="flex flex-col gap-4">
@@ -301,6 +322,16 @@ export function ScheduleClient({
           <Button variant="ghost" disabled={isPending} onClick={() => handlePublish(false)}>
             ביטול פרסום
           </Button>
+          {exportHref ? (
+            <a
+              href={exportHref}
+              className="rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground transition-colors hover:opacity-80"
+            >
+              ייצוא לאקסל
+            </a>
+          ) : (
+            <span className="text-sm text-muted-foreground">בחרו טווח כדי לייצא</span>
+          )}
         </div>
         {genMessage && <p className="text-sm text-muted-foreground">{genMessage}</p>}
       </div>
@@ -354,6 +385,14 @@ export function ScheduleClient({
         <Button variant="secondary" onClick={() => setShowAddForm((v) => !v)}>
           {showAddForm ? "סגירה" : "+ שיבוץ ידני"}
         </Button>
+        {filterDate && (
+          <a
+            href={`/api/admin/schedule/export?scope=day&date=${filterDate}`}
+            className="rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground transition-colors hover:opacity-80"
+          >
+            ייצוא היום הנבחר
+          </a>
+        )}
       </div>
 
       {showAddForm && (
