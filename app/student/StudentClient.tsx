@@ -5,7 +5,7 @@ import { Button } from "@/lib/components/Button";
 import { Logo } from "@/lib/components/Logo";
 import { WeekDayPicker, type WeekOption } from "@/lib/components/WeekDayPicker";
 import { BottomTabs, MAIN_TABS, type MainTabId } from "@/lib/components/BottomTabs";
-import { CourseBookletPlaceholder } from "@/lib/components/CourseBookletPlaceholder";
+import { CourseBookletSection } from "@/lib/components/CourseBookletSection";
 import {
   getStudentProfile,
   searchStudents,
@@ -290,7 +290,7 @@ export function StudentClient() {
           </div>
         )}
 
-        {activeTab === "booklet" && <CourseBookletPlaceholder />}
+        {activeTab === "booklet" && <CourseBookletSection />}
 
         {activeTab === "profile" && (
           <div className="flex flex-col gap-4">

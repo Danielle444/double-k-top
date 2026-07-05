@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { href: "/admin/weekly-schedule", label: "לו\"ז שבועי" },
   { href: "/admin/schedule", label: "שיבוץ" },
   { href: "/admin/completion", label: "ביצוע" },
+  { href: "/admin/course-booklet", label: "חוברת קורס" },
   { href: "/admin/admins", label: "מנהלים מורשים" },
 ];
 

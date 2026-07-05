@@ -195,6 +195,20 @@ model NoDutyDate {
   @@map("no_duty_dates")
 }
 
+// Singleton row (id is always 1) tracking the one current course booklet
+// PDF. The actual file lives in Supabase Storage (private bucket) at
+// storagePath - this row is just metadata, never the file itself.
+model CourseBooklet {
+  id          Int      @id @default(1)
+  fileName    String
+  storagePath String
+  uploadedAt  DateTime @default(now())
+  uploadedBy  String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("course_booklet")
+}
+
 model ScheduleItem {
   id               String   @id @default(cuid())
   weeklyScheduleId String
