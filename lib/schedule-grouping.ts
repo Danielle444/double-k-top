@@ -34,8 +34,10 @@ function mergeUnique(a: string | null, b: string | null): string | null {
 
 // Combines two same-time, opposite-group items (א + ב) into one synthetic
 // "שתי הקבוצות" item (groupName: null already renders that way) - display
-// only, nothing is written back to the DB.
-function mergeSameActivityItems<T extends GroupableScheduleItem>(a: T, b: T): T {
+// only, nothing is written back to the DB. Exported for reuse by
+// lib/schedule-timegrid.ts, which needs the same merge - export only, no
+// change to this function's own logic.
+export function mergeSameActivityItems<T extends GroupableScheduleItem>(a: T, b: T): T {
   return {
     ...a,
     id: `${a.id}+${b.id}`,
@@ -67,8 +69,10 @@ function mergeContiguousSameActivity<T extends GroupableScheduleItem>(a: T, b: T
 // Merges adjacent items within the same group (including groupName: null)
 // only when the cleaned title matches AND the previous item's endTime
 // exactly equals the next item's startTime - never across a time gap, and
-// never across different activities.
-function coalesceAdjacentSameActivity<T extends GroupableScheduleItem>(items: T[]): T[] {
+// never across different activities. Exported for reuse by
+// lib/schedule-timegrid.ts - export only, no change to this function's own
+// logic.
+export function coalesceAdjacentSameActivity<T extends GroupableScheduleItem>(items: T[]): T[] {
   const byGroup = new Map<string, T[]>();
   for (const item of items) {
     const key = item.groupName ?? "";

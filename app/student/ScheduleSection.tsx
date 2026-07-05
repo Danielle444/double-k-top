@@ -9,7 +9,7 @@ import {
 } from "@/lib/actions/student-schedule";
 import { todayDateKey } from "@/lib/dates";
 import { getStudentScheduleTitle } from "@/lib/schedule-title";
-import { buildScheduleSlots } from "@/lib/schedule-grouping";
+import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
 
 function isItemActiveNow(item: ScheduleItemView, now: Date): boolean {
   const todayKey = now.toISOString().slice(0, 10);
@@ -56,36 +56,6 @@ function renderScheduleCard(item: ScheduleItemView, active: boolean, compact = f
           מתקיים עכשיו
         </span>
       )}
-    </div>
-  );
-}
-
-// One group's single long activity next to several shorter, consecutive
-// activities in the other group - the long card visually spans the combined
-// height of the short cards via CSS grid-row, using explicit column
-// placement so group א always renders in the same column as the "pair" case.
-function renderSpanSlot(
-  groupA: ScheduleItemView[],
-  groupB: ScheduleItemView[],
-  now: Date
-) {
-  const aIsLong = groupA.length === 1;
-  const longItems = aIsLong ? groupA : groupB;
-  const shortItems = aIsLong ? groupB : groupA;
-  const longColumn = aIsLong ? 1 : 2;
-  const shortColumn = aIsLong ? 2 : 1;
-  const key = `${groupA.map((i) => i.id).join("+")}|${groupB.map((i) => i.id).join("+")}`;
-
-  return (
-    <div key={key} className="grid grid-cols-2 gap-2">
-      <div style={{ gridColumn: longColumn, gridRow: `1 / span ${shortItems.length}` }}>
-        {renderScheduleCard(longItems[0], isItemActiveNow(longItems[0], now), true)}
-      </div>
-      {shortItems.map((item, idx) => (
-        <div key={item.id} style={{ gridColumn: shortColumn, gridRow: idx + 1 }}>
-          {renderScheduleCard(item, isItemActiveNow(item, now), true)}
-        </div>
-      ))}
     </div>
   );
 }
@@ -177,27 +147,18 @@ export function ScheduleSection({
                 {items[0].dayLabel} · {items[0].dateLabel}
                 {dk === todayKey && <span className="mr-2 text-sm font-normal">(היום)</span>}
               </div>
-              <div className="flex flex-col gap-3">
-                {groupFilter === "both"
-                  ? buildScheduleSlots(items).map((slot) => {
-                      if (slot.kind === "pair") {
-                        const [groupA, groupB] = slot.items;
-                        return (
-                          <div key={`${groupA.id}|${groupB.id}`} className="grid grid-cols-2 gap-2">
-                            {renderScheduleCard(groupA, isItemActiveNow(groupA, now), true)}
-                            {renderScheduleCard(groupB, isItemActiveNow(groupB, now), true)}
-                          </div>
-                        );
-                      }
-                      if (slot.kind === "span") {
-                        return renderSpanSlot(slot.groupA, slot.groupB, now);
-                      }
-                      return renderScheduleCard(slot.item, isItemActiveNow(slot.item, now));
-                    })
-                  : // Viewing only "הקבוצה שלי" - no cross-group pairing needed,
-                    // just render each item as its own simple card.
-                    items.map((item) => renderScheduleCard(item, isItemActiveNow(item, now)))}
-              </div>
+              {groupFilter === "both" ? (
+                <ScheduleTimeGrid
+                  items={items}
+                  renderCard={(item) => renderScheduleCard(item, isItemActiveNow(item, now), true)}
+                />
+              ) : (
+                // Viewing only "הקבוצה שלי" - no cross-group layout needed,
+                // just render each item as its own simple card.
+                <div className="flex flex-col gap-3">
+                  {items.map((item) => renderScheduleCard(item, isItemActiveNow(item, now)))}
+                </div>
+              )}
             </div>
           ))}
         </div>

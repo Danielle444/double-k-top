@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates";
 import { cleanScheduleTitle } from "@/lib/schedule-title";
-import { buildScheduleSlots } from "@/lib/schedule-grouping";
+import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
 import {
   getNoDutyStatusForRange,
   markNoDutyDate,
@@ -72,34 +72,9 @@ function renderScheduleCard(item: ScheduleItemView, compact = false) {
   );
 }
 
-// One group's single long activity next to several shorter, consecutive
-// activities in the other group - the long card visually spans the combined
-// height of the short cards via CSS grid-row, using explicit column
-// placement so group א always renders in the same column as the "pair" case.
-function renderSpanSlot(groupA: ScheduleItemView[], groupB: ScheduleItemView[]) {
-  const aIsLong = groupA.length === 1;
-  const longItems = aIsLong ? groupA : groupB;
-  const shortItems = aIsLong ? groupB : groupA;
-  const longColumn = aIsLong ? 1 : 2;
-  const shortColumn = aIsLong ? 2 : 1;
-  const key = `${groupA.map((i) => i.id).join("+")}|${groupB.map((i) => i.id).join("+")}`;
-
-  return (
-    <div key={key} className="grid grid-cols-2 gap-2">
-      <div style={{ gridColumn: longColumn, gridRow: `1 / span ${shortItems.length}` }}>
-        {renderScheduleCard(longItems[0], true)}
-      </div>
-      {shortItems.map((item, idx) => (
-        <div key={item.id} style={{ gridColumn: shortColumn, gridRow: idx + 1 }}>
-          {renderScheduleCard(item, true)}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView }) {
   const [groupFilter, setGroupFilter] = useState<"all" | string>("all");
+  const [dayFilter, setDayFilter] = useState<"all" | string>("all");
   const [noDutyStatus, setNoDutyStatus] = useState<Map<string, NoDutyDayStatus> | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -133,11 +108,17 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
     [week.items]
   );
 
+  const dayOptions = useMemo(
+    () => Array.from(new Set(week.items.map((i) => i.dateKey))).sort(),
+    [week.items]
+  );
+
   const filteredItems = useMemo(() => {
     return week.items
       .filter((i) => groupFilter === "all" || !i.groupName || i.groupName === groupFilter)
+      .filter((i) => dayFilter === "all" || i.dateKey === dayFilter)
       .sort((a, b) => (a.dateKey + a.startTime).localeCompare(b.dateKey + b.startTime));
-  }, [week.items, groupFilter]);
+  }, [week.items, groupFilter, dayFilter]);
 
   const itemsByDay = useMemo(() => {
     const map = new Map<string, ScheduleItemView[]>();
@@ -201,6 +182,34 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
         ))}
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setDayFilter("all")}
+          className={`rounded-full px-4 py-2 text-sm font-medium ${
+            dayFilter === "all"
+              ? "bg-primary text-primary-foreground"
+              : "bg-muted text-muted-foreground"
+          }`}
+        >
+          כל הימים
+        </button>
+        {dayOptions.map((dk) => (
+          <button
+            key={dk}
+            type="button"
+            onClick={() => setDayFilter(dk)}
+            className={`rounded-full px-4 py-2 text-sm font-medium ${
+              dayFilter === dk
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground"
+            }`}
+          >
+            {formatHebrewWeekday(parseDateKey(dk))} · {formatHebrewDate(parseDateKey(dk))}
+          </button>
+        ))}
+      </div>
+
       {itemsByDay.length === 0 ? (
         <p className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
           אין פריטים להצגה
@@ -240,28 +249,13 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
                 </div>
               )}
 
-              <div className="flex flex-col gap-3">
-                {groupFilter === "all"
-                  ? buildScheduleSlots(items).map((slot) => {
-                      if (slot.kind === "pair") {
-                        const [groupA, groupB] = slot.items;
-                        return (
-                          <div
-                            key={`${groupA.id}|${groupB.id}`}
-                            className="grid grid-cols-2 gap-2"
-                          >
-                            {renderScheduleCard(groupA, true)}
-                            {renderScheduleCard(groupB, true)}
-                          </div>
-                        );
-                      }
-                      if (slot.kind === "span") {
-                        return renderSpanSlot(slot.groupA, slot.groupB);
-                      }
-                      return renderScheduleCard(slot.item);
-                    })
-                  : items.map((item) => renderScheduleCard(item))}
-              </div>
+              {groupFilter === "all" ? (
+                <ScheduleTimeGrid items={items} renderCard={(item) => renderScheduleCard(item, true)} />
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {items.map((item) => renderScheduleCard(item))}
+                </div>
+              )}
             </div>
             );
           })}
