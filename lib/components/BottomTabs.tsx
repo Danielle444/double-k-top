@@ -10,6 +10,7 @@ export type MainTabId =
   | "messages"
   | "contacts"
   | "materials"
+  | "attendance"
   | "more";
 
 export const MAIN_TABS: { id: MainTabId; label: string }[] = [

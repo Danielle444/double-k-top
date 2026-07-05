@@ -25,6 +25,7 @@ export interface InstructorProfile {
   fullName: string;
   canEditHorseAssignments: boolean;
   canSendMessages: boolean;
+  canEditAttendance: boolean;
 }
 
 export interface InstructorLoginResult {
@@ -54,6 +55,7 @@ export async function verifyInstructorLogin(
       fullName: instructor.fullName,
       canEditHorseAssignments: instructor.canEditHorseAssignments,
       canSendMessages: instructor.canSendMessages,
+      canEditAttendance: instructor.canEditAttendance,
     },
   };
 }
@@ -72,5 +74,6 @@ export async function getInstructorProfile(
     fullName: instructor.fullName,
     canEditHorseAssignments: instructor.canEditHorseAssignments,
     canSendMessages: instructor.canSendMessages,
+    canEditAttendance: instructor.canEditAttendance,
   };
 }

@@ -1,20 +1,20 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { FormEvent, useEffect, useMemo, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
 import {
   formatHebrewDate,
   formatHebrewWeekday,
   formatHebrewWeekdayShort,
+  getLocalDateKey,
   getWeekDateKeys,
   parseDateKey,
 } from "@/lib/dates";
 import {
-  getAttendanceTrackingForAdmin,
-  upsertAttendanceAsAdmin,
-  clearAttendanceAsAdmin,
-  markStudentUnavailableForDuty,
+  getAttendanceTrackingForInstructor,
+  upsertAttendanceAsInstructor,
+  clearAttendanceAsInstructor,
   type AttendanceTrackingRow,
   type AttendanceStatusValue,
 } from "@/lib/actions/attendance";
@@ -37,20 +37,24 @@ import {
 
 type ViewMode = "day" | "week";
 
-export function AttendanceTrackingClient({
-  initialDateKey,
-  initialRows,
-  courseStartDateKey,
-  courseEndDateKey,
+// Instructor version of app/admin/daily-tracking/AttendanceTrackingClient.tsx -
+// shares its pure display/grouping helpers via lib/attendance-ui.tsx, but is
+// its own component (not a parameterized shared one) since the two screens
+// differ in permission model: view is always unrestricted here, edit only
+// when canEdit is true, and there is no admin-only "mark unavailable" action
+// at all. No courseStartDateKey/courseEndDateKey bounds are available on
+// this screen (instructors have no server-fetched course-settings prop), so
+// the date input is unbounded - a cosmetic difference only.
+export function InstructorAttendanceSection({
+  instructorId,
+  canEdit,
 }: {
-  initialDateKey: string;
-  initialRows: AttendanceTrackingRow[];
-  courseStartDateKey: string | null;
-  courseEndDateKey: string | null;
+  instructorId: string;
+  canEdit: boolean;
 }) {
   const [viewMode, setViewMode] = useState<ViewMode>("day");
-  const [selectedDate, setSelectedDate] = useState(initialDateKey);
-  const [rows, setRows] = useState<AttendanceTrackingRow[] | null>(initialRows);
+  const [selectedDate, setSelectedDate] = useState(() => getLocalDateKey());
+  const [rows, setRows] = useState<AttendanceTrackingRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [groupFilter, setGroupFilter] = useState("");
@@ -62,19 +66,12 @@ export function AttendanceTrackingClient({
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, startSaveTransition] = useTransition();
 
-  // Which student's row currently has a quick action in flight, so only
-  // that row's buttons disable - not the whole list.
   const [pendingStudentId, setPendingStudentId] = useState<string | null>(null);
 
   const rangeKeys = useMemo(() => {
     if (viewMode === "day") return [selectedDate];
-    const week = getWeekDateKeys(selectedDate);
-    return week.filter(
-      (dk) =>
-        (!courseStartDateKey || dk >= courseStartDateKey) &&
-        (!courseEndDateKey || dk <= courseEndDateKey)
-    );
-  }, [viewMode, selectedDate, courseStartDateKey, courseEndDateKey]);
+    return getWeekDateKeys(selectedDate);
+  }, [viewMode, selectedDate]);
 
   const rangeStart = rangeKeys[0] ?? selectedDate;
   const rangeEnd = rangeKeys[rangeKeys.length - 1] ?? selectedDate;
@@ -82,31 +79,24 @@ export function AttendanceTrackingClient({
   function refetchRange() {
     setLoadError(null);
     setRows(null);
-    getAttendanceTrackingForAdmin(rangeStart, rangeEnd)
+    getAttendanceTrackingForInstructor(rangeStart, rangeEnd)
       .then((r) => setRows(r))
       .catch(() => {
         setRows([]);
-        setLoadError("שגיאה בטעינת נתוני נוכחות. נסי לרענן.");
+        setLoadError("שגיאה בטעינת נתוני נוכחות. נסו לרענן.");
       });
   }
 
-  const isFirstRender = useRef(true);
   useEffect(() => {
-    if (isFirstRender.current) {
-      isFirstRender.current = false;
-      return;
-    }
-    // Reset to the loading state on every range change so a slow request
-    // never leaves a different day/week's rows visible under the new one.
-    // `cancelled` guards against a stale request (e.g. a wide week fetch)
-    // resolving after a newer, faster one (e.g. switching back to a single
-    // day) and clobbering `rows` with mismatched-range data - that mismatch
-    // was the root cause of the duplicate-key bug, since a day view row list
-    // isn't itself deduplicated by date.
     let cancelled = false;
+    // Reset to the loading state on every range change (including the
+    // initial mount, since this screen has no server-fetched initial rows
+    // to preserve) so a slow or stale request never leaves mismatched rows
+    // visible under the current date/view mode.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoadError(null);
     setRows(null);
-    getAttendanceTrackingForAdmin(rangeStart, rangeEnd)
+    getAttendanceTrackingForInstructor(rangeStart, rangeEnd)
       .then((r) => {
         if (cancelled) return;
         setRows(r);
@@ -114,7 +104,7 @@ export function AttendanceTrackingClient({
       .catch(() => {
         if (cancelled) return;
         setRows([]);
-        setLoadError("שגיאה בטעינת נתוני נוכחות. נסי לרענן.");
+        setLoadError("שגיאה בטעינת נתוני נוכחות. נסו לרענן.");
       });
     return () => {
       cancelled = true;
@@ -142,10 +132,6 @@ export function AttendanceTrackingClient({
     [rows, groupFilter]
   );
 
-  // Day view always renders exactly one row per student for `selectedDate` -
-  // filtering by dateKey here (not just relying on the fetched range) keeps
-  // that guarantee even if `rows` momentarily holds a different range's data
-  // (e.g. mid-transition between day/week fetches).
   const filteredRows = useMemo(() => {
     const q = nameQuery.trim().toLowerCase();
     return (rows ?? [])
@@ -172,13 +158,12 @@ export function AttendanceTrackingClient({
   function handleQuickAbsent(row: AttendanceTrackingRow) {
     setPendingStudentId(row.studentId);
     startSaveTransition(async () => {
-      const result = await upsertAttendanceAsAdmin({
+      const result = await upsertAttendanceAsInstructor(instructorId, {
         studentId: row.studentId,
         dateKey: row.dateKey,
         status: "ABSENT",
         arrivalTime: "",
         departureTime: "",
-        // A quick mark only changes status - existing notes are kept.
         notes: row.attendance?.notes ?? "",
       });
       setPendingStudentId(null);
@@ -193,20 +178,7 @@ export function AttendanceTrackingClient({
   function handleClear(row: AttendanceTrackingRow) {
     setPendingStudentId(row.studentId);
     startSaveTransition(async () => {
-      const result = await clearAttendanceAsAdmin(row.studentId, row.dateKey);
-      setPendingStudentId(null);
-      if (!result.success) {
-        setLoadError(result.error ?? "אירעה שגיאה");
-        return;
-      }
-      refetchRange();
-    });
-  }
-
-  function handleMarkUnavailable(row: AttendanceTrackingRow) {
-    setPendingStudentId(row.studentId);
-    startSaveTransition(async () => {
-      const result = await markStudentUnavailableForDuty(row.studentId, row.dateKey);
+      const result = await clearAttendanceAsInstructor(instructorId, row.studentId, row.dateKey);
       setPendingStudentId(null);
       if (!result.success) {
         setLoadError(result.error ?? "אירעה שגיאה");
@@ -217,6 +189,7 @@ export function AttendanceTrackingClient({
   }
 
   function openDetails(row: AttendanceTrackingRow) {
+    if (!canEdit) return;
     setModalRow(row);
     setForm(defaultFormFromRow(row));
     setFormError(null);
@@ -238,7 +211,7 @@ export function AttendanceTrackingClient({
 
     const status = form.status;
     startSaveTransition(async () => {
-      const result = await upsertAttendanceAsAdmin({
+      const result = await upsertAttendanceAsInstructor(instructorId, {
         studentId: modalRow.studentId,
         dateKey: modalRow.dateKey,
         status,
@@ -260,7 +233,11 @@ export function AttendanceTrackingClient({
     if (!modalRow) return;
     setFormError(null);
     startSaveTransition(async () => {
-      const result = await clearAttendanceAsAdmin(modalRow.studentId, modalRow.dateKey);
+      const result = await clearAttendanceAsInstructor(
+        instructorId,
+        modalRow.studentId,
+        modalRow.dateKey
+      );
       if (!result.success) {
         setFormError(result.error ?? "אירעה שגיאה");
         return;
@@ -306,8 +283,6 @@ export function AttendanceTrackingClient({
           <input
             type="date"
             value={selectedDate}
-            min={courseStartDateKey ?? undefined}
-            max={courseEndDateKey ?? undefined}
             onChange={(e) => setSelectedDate(e.target.value)}
             className="rounded-lg border border-border px-3 py-2 text-sm"
           />
@@ -366,6 +341,9 @@ export function AttendanceTrackingClient({
             </>
           )}
         </p>
+        {!canEdit && (
+          <p className="text-xs text-muted-foreground">תצוגה בלבד - אין הרשאת עריכת נוכחות</p>
+        )}
       </div>
 
       {loadError && (
@@ -393,10 +371,7 @@ export function AttendanceTrackingClient({
                   {section.groupName ? `קבוצה ${section.groupName}` : "ללא קבוצה"}
                 </div>
                 {section.subgroups.map((sub) => (
-                  <div
-                    key={sub.subgroupNumber ?? "__none__"}
-                    className="flex flex-col gap-3"
-                  >
+                  <div key={sub.subgroupNumber ?? "__none__"} className="flex flex-col gap-3">
                     {sub.subgroupNumber != null && (
                       <p className="px-1 text-xs font-semibold text-muted-foreground">
                         תת-קבוצה {sub.subgroupNumber}
@@ -405,7 +380,6 @@ export function AttendanceTrackingClient({
                     {sub.items.map((row) => {
                       const status = row.attendance?.status ?? null;
                       const isPending = pendingStudentId === row.studentId && isSaving;
-                      const showUnavailableButton = status === "ABSENT" && row.isAvailable;
                       const horseInfo = getHorseDisplayInfo(row);
 
                       return (
@@ -486,44 +460,36 @@ export function AttendanceTrackingClient({
 
                           {renderWarnings(row)}
 
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <Button
-                              variant="secondary"
-                              className="!px-2 !py-1 !text-xs"
-                              disabled={isPending}
-                              onClick={() => handleQuickAbsent(row)}
-                            >
-                              סימון כנעדר/ת
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              className="!px-2 !py-1 !text-xs"
-                              disabled={isPending}
-                              onClick={() => openDetails(row)}
-                            >
-                              פרטים / עריכה
-                            </Button>
-                            {row.attendance && (
+                          {canEdit && (
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <Button
+                                variant="secondary"
+                                className="!px-2 !py-1 !text-xs"
+                                disabled={isPending}
+                                onClick={() => handleQuickAbsent(row)}
+                              >
+                                סימון כנעדר/ת
+                              </Button>
                               <Button
                                 variant="ghost"
                                 className="!px-2 !py-1 !text-xs"
                                 disabled={isPending}
-                                onClick={() => handleClear(row)}
+                                onClick={() => openDetails(row)}
                               >
-                                נקה סימון
+                                פרטים / עריכה
                               </Button>
-                            )}
-                            {showUnavailableButton && (
-                              <Button
-                                variant="danger"
-                                className="!px-2 !py-1 !text-xs"
-                                disabled={isPending}
-                                onClick={() => handleMarkUnavailable(row)}
-                              >
-                                סמני גם כלא זמין/ה לתורנויות
-                              </Button>
-                            )}
-                          </div>
+                              {row.attendance && (
+                                <Button
+                                  variant="ghost"
+                                  className="!px-2 !py-1 !text-xs"
+                                  disabled={isPending}
+                                  onClick={() => handleClear(row)}
+                                >
+                                  נקה סימון
+                                </Button>
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -556,13 +522,9 @@ export function AttendanceTrackingClient({
                     </p>
                   )}
                   {sub.items.map((s) => {
-                    const horseInfo =
-                      s.cells.length > 0 ? getHorseDisplayInfo(s.cells[0]) : null;
+                    const horseInfo = s.cells.length > 0 ? getHorseDisplayInfo(s.cells[0]) : null;
                     return (
-                      <div
-                        key={s.studentId}
-                        className="rounded-xl border border-border bg-card p-4"
-                      >
+                      <div key={s.studentId} className="rounded-xl border border-border bg-card p-4">
                         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                           <span className="font-semibold text-card-foreground">
                             {s.studentName}
@@ -579,40 +541,44 @@ export function AttendanceTrackingClient({
                         </div>
                         <div className="flex gap-1.5 overflow-x-auto pb-1">
                           {s.cells.map((cell) => {
-                  const status = cell.attendance?.status ?? null;
-                  const hasNote = Boolean(cell.attendance?.notes);
-                  const hasWarning = cell.warnings.length > 0;
-                  return (
-                    <button
-                      key={`${s.studentId}-${cell.dateKey}`}
-                      type="button"
-                      onClick={() => openDetails(cell)}
-                      className={`relative flex min-w-[52px] flex-col items-center gap-0.5 rounded-lg border px-2 py-1.5 text-xs ${
-                        status ? STATUS_BADGE_CLASS[status] : DEFAULT_CELL_CLASS
-                      }`}
-                    >
-                      <span className="text-[10px] opacity-80">
-                        {formatHebrewWeekdayShort(parseDateKey(cell.dateKey))}
-                      </span>
-                      <span className="font-medium">
-                        {status ? STATUS_SHORT_LABELS[status] : "–"}
-                      </span>
-                      {(hasWarning || hasNote) && (
-                        <span className="absolute -top-1 -left-1 flex gap-0.5">
-                          {hasWarning && (
-                            <span title="קיימת אזהרה" className="h-1.5 w-1.5 rounded-full bg-warning" />
-                          )}
-                          {hasNote && (
-                            <span
-                              title="קיימת הערה"
-                              className="h-1.5 w-1.5 rounded-full bg-secondary-foreground"
-                            />
-                          )}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
+                            const status = cell.attendance?.status ?? null;
+                            const hasNote = Boolean(cell.attendance?.notes);
+                            const hasWarning = cell.warnings.length > 0;
+                            return (
+                              <button
+                                key={`${s.studentId}-${cell.dateKey}`}
+                                type="button"
+                                onClick={() => openDetails(cell)}
+                                disabled={!canEdit}
+                                className={`relative flex min-w-[52px] flex-col items-center gap-0.5 rounded-lg border px-2 py-1.5 text-xs disabled:cursor-default ${
+                                  status ? STATUS_BADGE_CLASS[status] : DEFAULT_CELL_CLASS
+                                }`}
+                              >
+                                <span className="text-[10px] opacity-80">
+                                  {formatHebrewWeekdayShort(parseDateKey(cell.dateKey))}
+                                </span>
+                                <span className="font-medium">
+                                  {status ? STATUS_SHORT_LABELS[status] : "–"}
+                                </span>
+                                {(hasWarning || hasNote) && (
+                                  <span className="absolute -top-1 -left-1 flex gap-0.5">
+                                    {hasWarning && (
+                                      <span
+                                        title="קיימת אזהרה"
+                                        className="h-1.5 w-1.5 rounded-full bg-warning"
+                                      />
+                                    )}
+                                    {hasNote && (
+                                      <span
+                                        title="קיימת הערה"
+                                        className="h-1.5 w-1.5 rounded-full bg-secondary-foreground"
+                                      />
+                                    )}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                     );
@@ -624,126 +590,132 @@ export function AttendanceTrackingClient({
         </div>
       )}
 
-      <Modal
-        open={modalRow !== null}
-        title={
-          modalRow
-            ? `נוכחות - ${modalRow.studentName} - ${formatHebrewDate(parseDateKey(modalRow.dateKey))}`
-            : "נוכחות"
-        }
-        onClose={() => {
-          setModalRow(null);
-          setForm(null);
-        }}
-      >
-        {form && modalRow && (
-          <form onSubmit={handleFormSubmit} className="flex flex-col gap-3">
-            {renderWarnings(modalRow)}
+      {canEdit && (
+        <Modal
+          open={modalRow !== null}
+          title={
+            modalRow
+              ? `נוכחות - ${modalRow.studentName} - ${formatHebrewDate(parseDateKey(modalRow.dateKey))}`
+              : "נוכחות"
+          }
+          onClose={() => {
+            setModalRow(null);
+            setForm(null);
+          }}
+        >
+          {form && modalRow && (
+            <form onSubmit={handleFormSubmit} className="flex flex-col gap-3">
+              {renderWarnings(modalRow)}
 
-            <div className="flex flex-wrap gap-2">
-              {(["ABSENT", "PARTIAL"] as AttendanceStatusValue[]).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() =>
-                    setForm((f) =>
-                      f
-                        ? {
-                            ...f,
-                            status: s,
-                            ...(s === "PARTIAL" ? {} : { arrivalTime: "", departureTime: "" }),
-                          }
-                        : f
-                    )
-                  }
-                  className={`rounded-full px-4 py-2 text-sm font-medium ${
-                    form.status === s
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted text-muted-foreground"
-                  }`}
-                >
-                  {STATUS_LABELS[s]}
-                </button>
-              ))}
-            </div>
-
-            <button
-              type="button"
-              onClick={() =>
-                setForm((f) => (f ? { ...f, status: "PRESENT", arrivalTime: "", departureTime: "" } : f))
-              }
-              className={`self-start text-xs underline decoration-dotted ${
-                form.status === "PRESENT" ? "text-card-foreground" : "text-muted-foreground"
-              }`}
-            >
-              נוכח/ת — שמירה כסימון חריג
-            </button>
-
-            {form.status === "PARTIAL" && (
-              <div className="grid grid-cols-2 gap-3">
-                <label className="flex flex-col gap-1 text-sm">
-                  שעת הגעה (איחור)
-                  <input
-                    value={form.arrivalTime}
-                    onChange={(e) => setForm((f) => (f ? { ...f, arrivalTime: e.target.value } : f))}
-                    placeholder="HH:MM"
-                    className="rounded-lg border border-border px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-sm">
-                  שעת עזיבה (מוקדמת)
-                  <input
-                    value={form.departureTime}
-                    onChange={(e) =>
-                      setForm((f) => (f ? { ...f, departureTime: e.target.value } : f))
+              <div className="flex flex-wrap gap-2">
+                {(["ABSENT", "PARTIAL"] as AttendanceStatusValue[]).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() =>
+                      setForm((f) =>
+                        f
+                          ? {
+                              ...f,
+                              status: s,
+                              ...(s === "PARTIAL" ? {} : { arrivalTime: "", departureTime: "" }),
+                            }
+                          : f
+                      )
                     }
-                    placeholder="HH:MM"
-                    className="rounded-lg border border-border px-3 py-2 text-sm"
-                  />
-                </label>
+                    className={`rounded-full px-4 py-2 text-sm font-medium ${
+                      form.status === s
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {STATUS_LABELS[s]}
+                  </button>
+                ))}
               </div>
-            )}
 
-            <label className="flex flex-col gap-1 text-sm">
-              הערות / סיבה / החלפה
-              <textarea
-                value={form.notes}
-                onChange={(e) => setForm((f) => (f ? { ...f, notes: e.target.value } : f))}
-                rows={3}
-                placeholder="למשל: סיבת היעדרות, מי מחליף/ה בטיפול בסוס, הוראות מיוחדות ליום זה"
-                className="rounded-lg border border-border px-3 py-2 text-sm"
-              />
-            </label>
+              <button
+                type="button"
+                onClick={() =>
+                  setForm((f) =>
+                    f ? { ...f, status: "PRESENT", arrivalTime: "", departureTime: "" } : f
+                  )
+                }
+                className={`self-start text-xs underline decoration-dotted ${
+                  form.status === "PRESENT" ? "text-card-foreground" : "text-muted-foreground"
+                }`}
+              >
+                נוכח/ת — שמירה כסימון חריג
+              </button>
 
-            {formError && <p className="text-sm text-danger">{formError}</p>}
-            <div className="mt-2 flex flex-wrap justify-end gap-2">
-              {modalRow.attendance && (
+              {form.status === "PARTIAL" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="flex flex-col gap-1 text-sm">
+                    שעת הגעה (איחור)
+                    <input
+                      value={form.arrivalTime}
+                      onChange={(e) =>
+                        setForm((f) => (f ? { ...f, arrivalTime: e.target.value } : f))
+                      }
+                      placeholder="HH:MM"
+                      className="rounded-lg border border-border px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm">
+                    שעת עזיבה (מוקדמת)
+                    <input
+                      value={form.departureTime}
+                      onChange={(e) =>
+                        setForm((f) => (f ? { ...f, departureTime: e.target.value } : f))
+                      }
+                      placeholder="HH:MM"
+                      className="rounded-lg border border-border px-3 py-2 text-sm"
+                    />
+                  </label>
+                </div>
+              )}
+
+              <label className="flex flex-col gap-1 text-sm">
+                הערות / סיבה / החלפה
+                <textarea
+                  value={form.notes}
+                  onChange={(e) => setForm((f) => (f ? { ...f, notes: e.target.value } : f))}
+                  rows={3}
+                  placeholder="למשל: סיבת היעדרות, מי מחליף/ה בטיפול בסוס, הוראות מיוחדות ליום זה"
+                  className="rounded-lg border border-border px-3 py-2 text-sm"
+                />
+              </label>
+
+              {formError && <p className="text-sm text-danger">{formError}</p>}
+              <div className="mt-2 flex flex-wrap justify-end gap-2">
+                {modalRow.attendance && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={isSaving}
+                    onClick={handleClearFromModal}
+                  >
+                    נקה סימון
+                  </Button>
+                )}
                 <Button
                   type="button"
-                  variant="ghost"
-                  disabled={isSaving}
-                  onClick={handleClearFromModal}
+                  variant="secondary"
+                  onClick={() => {
+                    setModalRow(null);
+                    setForm(null);
+                  }}
                 >
-                  נקה סימון
+                  ביטול
                 </Button>
-              )}
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => {
-                  setModalRow(null);
-                  setForm(null);
-                }}
-              >
-                ביטול
-              </Button>
-              <Button type="submit" disabled={isSaving}>
-                {isSaving ? "שומר..." : "שמירה"}
-              </Button>
-            </div>
-          </form>
-        )}
-      </Modal>
+                <Button type="submit" disabled={isSaving}>
+                  {isSaving ? "שומר..." : "שמירה"}
+                </Button>
+              </div>
+            </form>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }

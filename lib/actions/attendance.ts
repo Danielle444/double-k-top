@@ -353,3 +353,24 @@ export async function clearAttendanceAsAdmin(
   revalidatePath("/instructor");
   return { success: true };
 }
+
+// Same behavior as clearAttendanceAsAdmin, gated the same way as
+// upsertAttendanceAsInstructor - re-reads isActive/canEditAttendance from
+// the DB by instructorId, never trusting a client-supplied boolean.
+export async function clearAttendanceAsInstructor(
+  instructorId: string,
+  studentId: string,
+  dateKeyStr: string
+): Promise<ActionResult> {
+  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
+  if (!instructor || !instructor.isActive || !instructor.canEditAttendance) {
+    return { success: false, error: "אין הרשאה לערוך נוכחות" };
+  }
+
+  const date = parseDateKey(dateKeyStr);
+  await prisma.studentAttendance.deleteMany({ where: { studentId, date } });
+
+  revalidatePath("/admin/daily-tracking");
+  revalidatePath("/instructor");
+  return { success: true };
+}
