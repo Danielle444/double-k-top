@@ -9,6 +9,7 @@ export type MainTabId =
   | "horses"
   | "messages"
   | "contacts"
+  | "materials"
   | "more";
 
 export const MAIN_TABS: { id: MainTabId; label: string }[] = [

@@ -5,7 +5,7 @@ import { Button } from "@/lib/components/Button";
 import { Logo } from "@/lib/components/Logo";
 import { WeekDayPicker, type WeekOption } from "@/lib/components/WeekDayPicker";
 import { BottomTabs, type MainTabId } from "@/lib/components/BottomTabs";
-import { CourseBookletSection } from "@/lib/components/CourseBookletSection";
+import { CourseMaterialsSection } from "@/lib/components/CourseMaterialsSection";
 import {
   getStudentProfile,
   searchStudents,
@@ -37,9 +37,9 @@ const STUDENT_MAIN_TABS: { id: MainTabId; label: string }[] = [
 ];
 
 const STUDENT_MORE_ITEMS: { id: MainTabId; label: string }[] = [
-  { id: "booklet", label: "חוברת קורס" },
   { id: "profile", label: "פרופיל" },
   { id: "contacts", label: "אנשי קשר" },
+  { id: "materials", label: "חומרי קורס" },
 ];
 
 const STUDENT_ALL_TABS = [...STUDENT_MAIN_TABS, ...STUDENT_MORE_ITEMS];
@@ -379,8 +379,6 @@ export function StudentClient() {
           </button>
         )}
 
-        {activeTab === "booklet" && <CourseBookletSection />}
-
         {activeTab === "profile" && (
           <div className="flex flex-col gap-4">
             <div className="rounded-2xl border border-border bg-card p-6">
@@ -478,6 +476,8 @@ export function StudentClient() {
         {activeTab === "messages" && <StudentMessagesSection studentId={session.id} />}
 
         {activeTab === "contacts" && <StudentInstructorContactsSection />}
+
+        {activeTab === "materials" && <CourseMaterialsSection role="student" />}
       </main>
 
       <BottomTabs active={bottomActiveTab} onChange={setActiveTab} tabs={STUDENT_MAIN_TABS} />

@@ -293,3 +293,32 @@ model MessageTaskRecipient {
   @@index([studentId])
   @@map("message_task_recipients")
 }
+
+enum CourseMaterialType {
+  FILE
+  LINK
+}
+
+enum CourseMaterialVisibility {
+  STUDENTS
+  INSTRUCTORS
+  BOTH
+}
+
+// Separate from CourseBooklet on purpose - this supports many rows, each
+// with its own storage path, unlike the booklet's singleton fixed-path file.
+model CourseMaterial {
+  id           String                   @id @default(cuid())
+  title        String
+  description  String?
+  materialType CourseMaterialType
+  visibility   CourseMaterialVisibility
+  filePath     String?
+  fileName     String?
+  externalUrl  String?
+  isActive     Boolean                  @default(true)
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+
+  @@map("course_materials")
+}

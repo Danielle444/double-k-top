@@ -6,6 +6,10 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 export const COURSE_BOOKLET_BUCKET = "course-booklets";
 export const COURSE_BOOKLET_STORAGE_PATH = "current.pdf";
 
+// Separate bucket from the booklet's - materials are many rows, each with
+// its own path (${materialId}/${sanitizedFileName}), not a single fixed path.
+export const COURSE_MATERIALS_BUCKET = "course-materials";
+
 let cachedClient: SupabaseClient | null | undefined;
 
 // Returns null (rather than throwing) whenever Supabase isn't configured,
