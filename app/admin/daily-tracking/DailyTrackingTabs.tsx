@@ -6,7 +6,7 @@ import { AttendanceTrackingClient } from "@/app/admin/daily-tracking/AttendanceT
 import { CompletionClient, type CompletionRow } from "@/app/admin/completion/CompletionClient";
 import { CourseSettingsForm } from "@/app/admin/availability/CourseSettingsForm";
 import { PresetsClient } from "@/app/admin/availability/PresetsClient";
-import { AvailabilityGrid } from "@/app/admin/availability/AvailabilityGrid";
+import { AvailabilityFilterableGrid } from "@/app/admin/availability/AvailabilityFilterableGrid";
 import type { AttendanceTrackingRow } from "@/lib/actions/attendance";
 
 type Tab = "attendance" | "completion" | "availability";
@@ -20,6 +20,8 @@ const TAB_LABELS: Record<Tab, string> = {
 interface StudentOption {
   id: string;
   fullName: string;
+  groupName: string | null;
+  subgroupNumber: number | null;
 }
 
 interface PresetRow {
@@ -124,7 +126,7 @@ export function DailyTrackingTabs({
                 <h2 className="mb-3 text-base font-semibold text-card-foreground">
                   זמינות תלמידים לפי תאריך
                 </h2>
-                <AvailabilityGrid
+                <AvailabilityFilterableGrid
                   students={availability.students}
                   dateKeys={availability.dateKeys}
                   initialAvailability={availability.availabilityMap}

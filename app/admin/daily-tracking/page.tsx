@@ -29,7 +29,7 @@ export default async function DailyTrackingPage() {
     prisma.student.findMany({
       where: { isActive: true },
       orderBy: { fullName: "asc" },
-      select: { id: true, fullName: true },
+      select: { id: true, fullName: true, groupName: true, subgroupNumber: true },
     }),
     prisma.availabilityRangePreset.findMany({ orderBy: { startDate: "asc" } }),
     settings

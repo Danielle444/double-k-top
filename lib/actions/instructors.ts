@@ -122,3 +122,17 @@ export async function setInstructorCanSendMessages(
   revalidatePath("/admin/instructors");
   return { success: true };
 }
+
+export async function setInstructorCanEditAttendance(
+  instructorId: string,
+  canEditAttendance: boolean
+): Promise<ActionResult> {
+  await requireAdmin();
+  await prisma.instructor.update({
+    where: { id: instructorId },
+    data: { canEditAttendance },
+  });
+  revalidatePath("/admin/instructors");
+  revalidatePath("/instructor");
+  return { success: true };
+}

@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { CourseSettingsForm } from "@/app/admin/availability/CourseSettingsForm";
-import { AvailabilityGrid } from "@/app/admin/availability/AvailabilityGrid";
+import { AvailabilityFilterableGrid } from "@/app/admin/availability/AvailabilityFilterableGrid";
 import { PresetsClient } from "@/app/admin/availability/PresetsClient";
 import { dateKey, enumerateDateKeys } from "@/lib/dates";
 import { requireAdmin } from "@/lib/auth/require-admin";
@@ -14,7 +14,7 @@ export default async function AvailabilityPage() {
     prisma.student.findMany({
       where: { isActive: true },
       orderBy: { fullName: "asc" },
-      select: { id: true, fullName: true },
+      select: { id: true, fullName: true, groupName: true, subgroupNumber: true },
     }),
     prisma.availabilityRangePreset.findMany({ orderBy: { startDate: "asc" } }),
   ]);
@@ -74,7 +74,7 @@ export default async function AvailabilityPage() {
             תלמיד/ה ללא סימון נחשב/ת זמין/ה כברירת מחדל. לחצו על תא כדי להחליף בין זמין/ה
             לבין לא זמין/ה.
           </p>
-          <AvailabilityGrid
+          <AvailabilityFilterableGrid
             students={students}
             dateKeys={dateKeys}
             initialAvailability={availabilityMap}

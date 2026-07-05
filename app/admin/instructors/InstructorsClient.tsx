@@ -8,6 +8,7 @@ import {
   setInstructorActive,
   setInstructorCanEditHorseAssignments,
   setInstructorCanSendMessages,
+  setInstructorCanEditAttendance,
   updateInstructor,
 } from "@/lib/actions/instructors";
 import { maskIdentityNumber } from "@/lib/format";
@@ -23,6 +24,7 @@ interface InstructorRow {
   isActive: boolean;
   canEditHorseAssignments: boolean;
   canSendMessages: boolean;
+  canEditAttendance: boolean;
 }
 
 export function InstructorsClient({ instructors }: { instructors: InstructorRow[] }) {
@@ -77,6 +79,12 @@ export function InstructorsClient({ instructors }: { instructors: InstructorRow[
     });
   }
 
+  function handleToggleCanEditAttendance(instructor: InstructorRow) {
+    startTransition(async () => {
+      await setInstructorCanEditAttendance(instructor.id, !instructor.canEditAttendance);
+    });
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap gap-2">
@@ -106,6 +114,7 @@ export function InstructorsClient({ instructors }: { instructors: InstructorRow[
               <th className="px-4 py-3 text-right font-medium">סטטוס</th>
               <th className="px-4 py-3 text-right font-medium">עריכת חלוקת סוסים</th>
               <th className="px-4 py-3 text-right font-medium">שליחת הודעות ומשימות</th>
+              <th className="px-4 py-3 text-right font-medium">עריכת נוכחות</th>
               <th className="px-4 py-3 text-right font-medium">פעולות</th>
             </tr>
           </thead>
@@ -157,6 +166,16 @@ export function InstructorsClient({ instructors }: { instructors: InstructorRow[
                   />
                 </td>
                 <td className="px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={instructor.canEditAttendance}
+                    disabled={isPending}
+                    onChange={() => handleToggleCanEditAttendance(instructor)}
+                    aria-label={`יכול/ה לערוך נוכחות עבור ${instructor.fullName}`}
+                    title="יכול/ה לערוך נוכחות"
+                  />
+                </td>
+                <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-2">
                     <Button
                       variant="ghost"
@@ -182,7 +201,7 @@ export function InstructorsClient({ instructors }: { instructors: InstructorRow[
             ))}
             {filteredInstructors.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
+                <td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">
                   {instructors.length === 0 ? "אין מדריכים עדיין" : "אין מדריכים התואמים את החיפוש"}
                 </td>
               </tr>
