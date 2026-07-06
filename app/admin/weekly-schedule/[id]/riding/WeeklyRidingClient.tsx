@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import Link from "next/link";
 import { Button } from "@/lib/components/Button";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates";
@@ -9,6 +9,8 @@ import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { RidingSlotModal } from "@/app/admin/weekly-schedule/[id]/RidingSlotModal";
 import {
   getWeeklyRidingOverview,
+  bulkApplyRidingAssignment,
+  bulkSetRidingVisibility,
   type WeeklyRidingDay,
   type WeeklyRidingActivity,
 } from "@/lib/actions/riding-slots";
@@ -19,6 +21,49 @@ interface InstructorOption {
 }
 
 type ViewMode = "likely" | "all";
+type BulkMode = "skipExisting" | "overwrite";
+
+interface BulkForm {
+  groupName: string;
+  subgroupNumber: string;
+  instructorId: string;
+  arena: string;
+  mode: BulkMode;
+}
+
+const EMPTY_BULK_FORM: BulkForm = {
+  groupName: "",
+  subgroupNumber: "",
+  instructorId: "",
+  arena: "",
+  mode: "skipExisting",
+};
+
+interface BulkVisibilityForm {
+  groupName: string;
+  showInstructorToStudents: boolean;
+  showArenaToStudents: boolean;
+  showSubgroupToStudents: boolean;
+}
+
+const EMPTY_BULK_VISIBILITY_FORM: BulkVisibilityForm = {
+  groupName: "",
+  showInstructorToStudents: false,
+  showArenaToStudents: false,
+  showSubgroupToStudents: false,
+};
+
+// A target groupName of "" (כל הרכיבה) always applies to everything shown.
+// A specific group (א/ב) only applies to activities that actually belong to
+// that group, OR to cross-group ("שתי הקבוצות", groupName null) activities -
+// never to an activity that belongs only to the other group. This is what
+// was missing before: bulk assignment/visibility applied to every
+// currently-shown activity regardless of its own real group.
+function isActivityTargeted(activity: WeeklyRidingActivity, targetGroupName: string): boolean {
+  if (!targetGroupName) return true;
+  if (activity.groupName === null) return true;
+  return activity.groupName === targetGroupName;
+}
 
 export function WeeklyRidingClient({
   weekId,
@@ -34,6 +79,18 @@ export function WeeklyRidingClient({
   const [days, setDays] = useState(initialDays);
   const [viewMode, setViewMode] = useState<ViewMode>("likely");
   const [ridingTarget, setRidingTarget] = useState<WeeklyRidingActivity | null>(null);
+
+  const [bulkForm, setBulkForm] = useState<BulkForm>(EMPTY_BULK_FORM);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+  const [isBulkApplying, startBulkTransition] = useTransition();
+
+  const [bulkVisibilityForm, setBulkVisibilityForm] = useState<BulkVisibilityForm>(
+    EMPTY_BULK_VISIBILITY_FORM
+  );
+  const [bulkVisibilityError, setBulkVisibilityError] = useState<string | null>(null);
+  const [bulkVisibilityMessage, setBulkVisibilityMessage] = useState<string | null>(null);
+  const [isBulkVisibilityApplying, startBulkVisibilityTransition] = useTransition();
 
   function refetch() {
     getWeeklyRidingOverview(weekId).then(setDays);
@@ -53,6 +110,78 @@ export function WeeklyRidingClient({
       activities: day.activities.filter((a) => viewMode === "all" || a.isLikelyRiding),
     }))
     .filter((day) => day.activities.length > 0);
+
+  const visibleActivityCount = visibleDays.reduce((sum, day) => sum + day.activities.length, 0);
+
+  // The set of activities a bulk action would actually touch: currently
+  // shown (likely-riding/show-all filter) AND relevant to the selected
+  // target group - never the full visible list when a specific group (א/ב)
+  // is chosen.
+  function getTargetedActivities(targetGroupName: string) {
+    return visibleDays.flatMap((day) =>
+      day.activities.filter((a) => isActivityTargeted(a, targetGroupName))
+    );
+  }
+
+  const assignmentTargetedCount = getTargetedActivities(bulkForm.groupName).length;
+  const visibilityTargetedCount = getTargetedActivities(bulkVisibilityForm.groupName).length;
+
+  function handleBulkApply() {
+    setBulkError(null);
+    setBulkMessage(null);
+
+    const activities = getTargetedActivities(bulkForm.groupName).map((a) => ({
+      scheduleItemIds: a.scheduleItemIds,
+    }));
+
+    startBulkTransition(async () => {
+      const result = await bulkApplyRidingAssignment({
+        activities,
+        groupName: bulkForm.groupName || undefined,
+        subgroupNumber: bulkForm.subgroupNumber ? Number(bulkForm.subgroupNumber) : undefined,
+        instructorId: bulkForm.instructorId || undefined,
+        arena: bulkForm.arena || undefined,
+        mode: bulkForm.mode,
+      });
+      if (!result.success || !result.summary) {
+        setBulkError(result.error ?? "אירעה שגיאה");
+        return;
+      }
+      const s = result.summary;
+      setBulkMessage(
+        `הפעולה הסתיימה: נוצרו ${s.createdSlots} סלוטים, נוצרו ${s.createdAssignments} שיוכים, עודכנו ${s.updatedAssignments}, דולגו ${s.skippedAssignments}.` +
+          (s.errors.length > 0 ? ` (${s.errors.length} שגיאות)` : "")
+      );
+      refetch();
+    });
+  }
+
+  function handleBulkVisibilityApply() {
+    setBulkVisibilityError(null);
+    setBulkVisibilityMessage(null);
+
+    const activities = getTargetedActivities(bulkVisibilityForm.groupName).map((a) => ({
+      scheduleItemIds: a.scheduleItemIds,
+    }));
+
+    startBulkVisibilityTransition(async () => {
+      const result = await bulkSetRidingVisibility(activities, {
+        showInstructorToStudents: bulkVisibilityForm.showInstructorToStudents,
+        showArenaToStudents: bulkVisibilityForm.showArenaToStudents,
+        showSubgroupToStudents: bulkVisibilityForm.showSubgroupToStudents,
+      });
+      if (!result.success || !result.summary) {
+        setBulkVisibilityError(result.error ?? "אירעה שגיאה");
+        return;
+      }
+      const s = result.summary;
+      setBulkVisibilityMessage(
+        `הפעולה הסתיימה: נוצרו ${s.createdSlots} סלוטים, עודכנו ${s.updatedSlots} הגדרות תצוגה.` +
+          (s.errors.length > 0 ? ` (${s.errors.length} שגיאות)` : "")
+      );
+      refetch();
+    });
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -89,6 +218,176 @@ export function WeeklyRidingClient({
         >
           הצג את כל הפעילויות
         </button>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+        <p className="text-sm font-semibold text-card-foreground">החלת שיוך בכמות (Bulk)</p>
+        <p className="text-xs text-warning">
+          הפעולה תחול על כל הפעילויות המוצגות שמתאימות לקבוצה שנבחרה ({assignmentTargetedCount}{" "}
+          מתוך {visibleActivityCount} פעילויות מוצגות) - לא על פעילויות מוסתרות ע&quot;י הסינון ולא
+          על פעילויות של הקבוצה השנייה בלבד.
+        </p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <label className="flex flex-col gap-1 text-sm">
+            קבוצה
+            <select
+              value={bulkForm.groupName}
+              onChange={(e) => setBulkForm((f) => ({ ...f, groupName: e.target.value }))}
+              className="rounded-lg border border-border px-3 py-2 text-sm"
+            >
+              <option value="">כל הרכיבה</option>
+              <option value="א">קבוצה א</option>
+              <option value="ב">קבוצה ב</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            תת-קבוצה (אופציונלי)
+            <input
+              type="number"
+              min={1}
+              value={bulkForm.subgroupNumber}
+              onChange={(e) => setBulkForm((f) => ({ ...f, subgroupNumber: e.target.value }))}
+              className="rounded-lg border border-border px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            מדריך/ה
+            <select
+              value={bulkForm.instructorId}
+              onChange={(e) => setBulkForm((f) => ({ ...f, instructorId: e.target.value }))}
+              className="rounded-lg border border-border px-3 py-2 text-sm"
+            >
+              <option value="">ללא</option>
+              {instructors.map((i) => (
+                <option key={i.id} value={i.id}>
+                  {i.fullName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-sm">
+            מגרש
+            <input
+              value={bulkForm.arena}
+              onChange={(e) => setBulkForm((f) => ({ ...f, arena: e.target.value }))}
+              placeholder="למשל: מגרש 1"
+              className="rounded-lg border border-border px-3 py-2 text-sm"
+            />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="radio"
+              name="bulkMode"
+              checked={bulkForm.mode === "skipExisting"}
+              onChange={() => setBulkForm((f) => ({ ...f, mode: "skipExisting" }))}
+            />
+            רק איפה שחסר שיוך
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="radio"
+              name="bulkMode"
+              checked={bulkForm.mode === "overwrite"}
+              onChange={() => setBulkForm((f) => ({ ...f, mode: "overwrite" }))}
+            />
+            דריסה ועדכון שיוכים קיימים
+          </label>
+        </div>
+
+        {bulkError && <p className="text-sm text-danger">{bulkError}</p>}
+        {bulkMessage && <p className="text-sm text-success">{bulkMessage}</p>}
+
+        <Button
+          className="self-start"
+          disabled={isBulkApplying || assignmentTargetedCount === 0}
+          onClick={handleBulkApply}
+        >
+          {isBulkApplying ? "מחיל..." : `החל על ${assignmentTargetedCount} פעילויות מתאימות`}
+        </Button>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
+        <p className="text-sm font-semibold text-card-foreground">החלת הגדרות תצוגה בכמות</p>
+        <p className="text-xs text-warning">
+          החלת הגדרות תצוגה על כל הפעילויות המתאימות שמוצגות כרגע ({visibilityTargetedCount} מתוך{" "}
+          {visibleActivityCount} פעילויות מוצגות). ההגדרות עדיין לא משפיעות על תצוגת התלמיד/ה בשלב
+          זה.
+        </p>
+
+        <label className="flex flex-col gap-1 text-sm">
+          קבוצה
+          <select
+            value={bulkVisibilityForm.groupName}
+            onChange={(e) =>
+              setBulkVisibilityForm((f) => ({ ...f, groupName: e.target.value }))
+            }
+            className="w-40 rounded-lg border border-border px-3 py-2 text-sm"
+          >
+            <option value="">כל הרכיבה</option>
+            <option value="א">קבוצה א</option>
+            <option value="ב">קבוצה ב</option>
+          </select>
+        </label>
+
+        <div className="flex flex-col gap-1.5 text-sm">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={bulkVisibilityForm.showInstructorToStudents}
+              onChange={() =>
+                setBulkVisibilityForm((f) => ({
+                  ...f,
+                  showInstructorToStudents: !f.showInstructorToStudents,
+                }))
+              }
+            />
+            הצגת מדריך/ה לחניכים
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={bulkVisibilityForm.showArenaToStudents}
+              onChange={() =>
+                setBulkVisibilityForm((f) => ({
+                  ...f,
+                  showArenaToStudents: !f.showArenaToStudents,
+                }))
+              }
+            />
+            הצגת מגרש לחניכים
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={bulkVisibilityForm.showSubgroupToStudents}
+              onChange={() =>
+                setBulkVisibilityForm((f) => ({
+                  ...f,
+                  showSubgroupToStudents: !f.showSubgroupToStudents,
+                }))
+              }
+            />
+            הצגת תת־קבוצה לחניכים
+          </label>
+        </div>
+
+        {bulkVisibilityError && <p className="text-sm text-danger">{bulkVisibilityError}</p>}
+        {bulkVisibilityMessage && (
+          <p className="text-sm text-success">{bulkVisibilityMessage}</p>
+        )}
+
+        <Button
+          className="self-start"
+          disabled={isBulkVisibilityApplying || visibilityTargetedCount === 0}
+          onClick={handleBulkVisibilityApply}
+        >
+          {isBulkVisibilityApplying
+            ? "מחיל..."
+            : `החל על ${visibilityTargetedCount} פעילויות מתאימות`}
+        </Button>
       </div>
 
       {visibleDays.length === 0 ? (

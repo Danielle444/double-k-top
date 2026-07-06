@@ -273,7 +273,7 @@ export function RidingSlotModal({
                     disabled={isPending}
                     onChange={() => handleToggleVisibility("showArenaToStudents")}
                   />
-                  הצג מגרש/זירה לתלמידים
+                  הצג מגרש לתלמידים
                 </label>
                 <label className="flex items-center gap-2">
                   <input
@@ -395,7 +395,7 @@ export function RidingSlotModal({
                     </select>
                   </label>
                   <label className="flex flex-col gap-1 text-sm">
-                    מגרש/זירה
+                    מגרש
                     <input
                       value={assignmentForm.arena}
                       onChange={(e) => setAssignmentForm((f) => ({ ...f, arena: e.target.value }))}

@@ -121,18 +121,20 @@ export async function getRidingSlotForScheduleItem(
   return resolveRidingSlotForIds(scheduleItemIds);
 }
 
-// The only place a RidingSlot row is ever created - never touches
-// ScheduleItem itself. Takes the full source id list of the (possibly
-// merged/coalesced) displayed card: if any of those real rows already
-// belong to a riding slot, that slot is reused and any of the card's rows
-// not yet linked are linked to it (self-healing, so the slot always ends
-// up covering the full currently-displayed activity); otherwise a new slot
-// is created anchored at the first id, then every id is linked to it.
-export async function createOrGetRidingSlot(
-  scheduleItemIds: string[]
-): Promise<RidingSlotActionResult> {
-  await requireAdmin();
+type ResolveRidingSlotResult =
+  | { success: true; ridingSlotId: string; created: boolean }
+  | { success: false; error: string };
 
+// Shared core of createOrGetRidingSlot and bulkApplyRidingAssignment - no
+// requireAdmin() here (callers already gate) and no revalidatePath (callers
+// do that once, after their own loop/single call). Takes the full source id
+// list of the (possibly merged/coalesced) displayed card: if any of those
+// real rows already belong to a riding slot, that slot is reused and any of
+// the card's rows not yet linked are linked to it (self-healing, so the
+// slot always ends up covering the full currently-displayed activity);
+// otherwise a new slot is created anchored at the first id, then every id
+// is linked to it.
+async function resolveOrCreateRidingSlot(scheduleItemIds: string[]): Promise<ResolveRidingSlotResult> {
   if (scheduleItemIds.length === 0) {
     return { success: false, error: NOT_FOUND_SCHEDULE_ITEM };
   }
@@ -149,6 +151,7 @@ export async function createOrGetRidingSlot(
   });
 
   let ridingSlotId = existingLink?.ridingSlotId ?? null;
+  let created = false;
 
   if (!ridingSlotId) {
     // Defends against a RidingSlot that predates this join-table fix (or
@@ -161,8 +164,9 @@ export async function createOrGetRidingSlot(
   }
 
   if (!ridingSlotId) {
-    const created = await prisma.ridingSlot.create({ data: { scheduleItemId: scheduleItemIds[0] } });
-    ridingSlotId = created.id;
+    const createdSlot = await prisma.ridingSlot.create({ data: { scheduleItemId: scheduleItemIds[0] } });
+    ridingSlotId = createdSlot.id;
+    created = true;
   }
 
   const alreadyLinked = await prisma.ridingSlotScheduleItem.findMany({
@@ -178,8 +182,23 @@ export async function createOrGetRidingSlot(
     });
   }
 
+  return { success: true, ridingSlotId, created };
+}
+
+// The only place a RidingSlot row is ever created for a single displayed
+// card - never touches ScheduleItem itself.
+export async function createOrGetRidingSlot(
+  scheduleItemIds: string[]
+): Promise<RidingSlotActionResult> {
+  await requireAdmin();
+
+  const resolved = await resolveOrCreateRidingSlot(scheduleItemIds);
+  if (!resolved.success) {
+    return { success: false, error: resolved.error };
+  }
+
   const slot = await prisma.ridingSlot.findUnique({
-    where: { id: ridingSlotId },
+    where: { id: resolved.ridingSlotId },
     include: RIDING_SLOT_INCLUDE,
   });
   if (!slot) {
@@ -281,35 +300,22 @@ export async function upsertRidingSlotAssignment(
   const arena = data.arena || null;
 
   try {
-    let saved;
-    if (data.id) {
-      saved = await prisma.ridingSlotAssignment.update({
-        where: { id: data.id },
-        data: { groupName, subgroupNumber, instructorId, arena },
-        include: { instructor: true },
-      });
-    } else {
-      // Postgres unique constraints treat NULL as distinct from any other
-      // NULL, so the DB-level @@unique([ridingSlotId, groupName,
-      // subgroupNumber]) constraint (and Prisma's compound-key upsert
-      // shorthand, which requires non-null values for those fields) can't
-      // reliably match a "whole slot" (both null) row. findFirst's `where`
-      // still filters null fields correctly (translates to IS NULL), so
-      // this replicates upsert-by-split manually instead.
-      const existingMatch = await prisma.ridingSlotAssignment.findFirst({
-        where: { ridingSlotId: data.ridingSlotId, groupName, subgroupNumber },
-      });
-      saved = existingMatch
-        ? await prisma.ridingSlotAssignment.update({
-            where: { id: existingMatch.id },
-            data: { instructorId, arena },
-            include: { instructor: true },
+    const saved = data.id
+      ? await prisma.ridingSlotAssignment.update({
+          where: { id: data.id },
+          data: { groupName, subgroupNumber, instructorId, arena },
+          include: { instructor: true },
+        })
+      : (
+          await applyAssignmentSplit({
+            ridingSlotId: data.ridingSlotId,
+            groupName,
+            subgroupNumber,
+            instructorId,
+            arena,
+            skipIfExists: false,
           })
-        : await prisma.ridingSlotAssignment.create({
-            data: { ridingSlotId: data.ridingSlotId, groupName, subgroupNumber, instructorId, arena },
-            include: { instructor: true },
-          });
-    }
+        ).assignment!;
 
     revalidatePath("/admin/weekly-schedule");
     return { success: true, assignment: toAssignmentRow(saved) };
@@ -319,6 +325,55 @@ export async function upsertRidingSlotAssignment(
       error: "כבר קיים שיוך לאותה קבוצה/תת-קבוצה עבור רכיבה זו",
     };
   }
+}
+
+// Shared core for creating/updating one group/subgroup split, reused by
+// upsertRidingSlotAssignment (single, no id) and bulkApplyRidingAssignment.
+// Postgres unique constraints treat NULL as distinct from any other NULL,
+// so the DB-level @@unique([ridingSlotId, groupName, subgroupNumber])
+// constraint (and Prisma's compound-key upsert shorthand, which requires
+// non-null values for those fields) can't reliably match a "whole slot"
+// (both null) row. findFirst's `where` still filters null fields correctly
+// (translates to IS NULL), so this replicates upsert-by-split manually.
+async function applyAssignmentSplit(params: {
+  ridingSlotId: string;
+  groupName: string | null;
+  subgroupNumber: number | null;
+  instructorId: string | null;
+  arena: string | null;
+  skipIfExists: boolean;
+}): Promise<{ outcome: "created" | "updated" | "skipped"; assignment: AssignmentWithInstructor | null }> {
+  const existingMatch = await prisma.ridingSlotAssignment.findFirst({
+    where: {
+      ridingSlotId: params.ridingSlotId,
+      groupName: params.groupName,
+      subgroupNumber: params.subgroupNumber,
+    },
+  });
+
+  if (existingMatch) {
+    if (params.skipIfExists) {
+      return { outcome: "skipped", assignment: null };
+    }
+    const updated = await prisma.ridingSlotAssignment.update({
+      where: { id: existingMatch.id },
+      data: { instructorId: params.instructorId, arena: params.arena },
+      include: { instructor: true },
+    });
+    return { outcome: "updated", assignment: updated };
+  }
+
+  const created = await prisma.ridingSlotAssignment.create({
+    data: {
+      ridingSlotId: params.ridingSlotId,
+      groupName: params.groupName,
+      subgroupNumber: params.subgroupNumber,
+      instructorId: params.instructorId,
+      arena: params.arena,
+    },
+    include: { instructor: true },
+  });
+  return { outcome: "created", assignment: created };
 }
 
 export async function deleteRidingSlotAssignment(assignmentId: string): Promise<ActionResult> {
@@ -428,4 +483,189 @@ export async function getWeeklyRidingOverview(weeklyScheduleId: string): Promise
   }
 
   return days;
+}
+
+const bulkAssignmentInputSchema = z.object({
+  groupName: z.enum(["", "א", "ב"]).optional(),
+  subgroupNumber: z.coerce.number().int().positive().optional(),
+  instructorId: z.string().trim().optional(),
+  arena: z.string().trim().optional(),
+  mode: z.enum(["skipExisting", "overwrite"]),
+});
+
+export interface BulkRidingAssignmentInput {
+  // Exactly the activities currently shown in the caller's filtered list -
+  // never recomputed server-side, so the bulk action only ever touches what
+  // the admin actually sees on screen.
+  activities: { scheduleItemIds: string[] }[];
+  groupName?: string;
+  subgroupNumber?: number;
+  instructorId?: string;
+  arena?: string;
+  mode: "skipExisting" | "overwrite";
+}
+
+export interface BulkRidingAssignmentSummary {
+  totalActivities: number;
+  createdSlots: number;
+  createdAssignments: number;
+  updatedAssignments: number;
+  skippedAssignments: number;
+  errors: string[];
+}
+
+export interface BulkRidingAssignmentResult extends ActionResult {
+  summary?: BulkRidingAssignmentSummary;
+}
+
+// Applies one (groupName, subgroupNumber, instructorId, arena) assignment
+// template across every given activity - reuses the exact same
+// resolveOrCreateRidingSlot (self-healing join-table logic, safe for merged
+// activities) and applyAssignmentSplit (safe null-aware upsert) used by the
+// single-activity actions above, just looped. Sequential and idempotent:
+// re-running with the same input is safe (skipExisting leaves already-set
+// splits untouched; overwrite re-applies the same values). Not wrapped in
+// one DB transaction - a partial failure is recoverable by re-running.
+export async function bulkApplyRidingAssignment(
+  input: BulkRidingAssignmentInput
+): Promise<BulkRidingAssignmentResult> {
+  await requireAdmin();
+
+  if (!input.activities || input.activities.length === 0) {
+    return { success: false, error: "לא נבחרו פעילויות להחלת השיוך" };
+  }
+
+  const parsed = bulkAssignmentInputSchema.safeParse({
+    groupName: input.groupName,
+    subgroupNumber: input.subgroupNumber,
+    instructorId: input.instructorId,
+    arena: input.arena,
+    mode: input.mode,
+  });
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
+  }
+  const data = parsed.data;
+
+  if (data.instructorId) {
+    const instructor = await prisma.instructor.findUnique({ where: { id: data.instructorId } });
+    if (!instructor) {
+      return { success: false, error: NOT_FOUND_INSTRUCTOR };
+    }
+  }
+
+  const groupName = data.groupName || null;
+  const subgroupNumber = data.subgroupNumber ?? null;
+  const instructorId = data.instructorId || null;
+  const arena = data.arena || null;
+  const skipIfExists = data.mode === "skipExisting";
+
+  const summary: BulkRidingAssignmentSummary = {
+    totalActivities: input.activities.length,
+    createdSlots: 0,
+    createdAssignments: 0,
+    updatedAssignments: 0,
+    skippedAssignments: 0,
+    errors: [],
+  };
+
+  for (const activity of input.activities) {
+    const scheduleItemIds = activity.scheduleItemIds;
+    if (!scheduleItemIds || scheduleItemIds.length === 0) {
+      summary.errors.push('פעילות ללא פריטי לו"ז - דולגה');
+      continue;
+    }
+
+    const resolved = await resolveOrCreateRidingSlot(scheduleItemIds);
+    if (!resolved.success) {
+      summary.errors.push(resolved.error);
+      continue;
+    }
+    if (resolved.created) summary.createdSlots++;
+
+    try {
+      const applied = await applyAssignmentSplit({
+        ridingSlotId: resolved.ridingSlotId,
+        groupName,
+        subgroupNumber,
+        instructorId,
+        arena,
+        skipIfExists,
+      });
+      if (applied.outcome === "created") summary.createdAssignments++;
+      else if (applied.outcome === "updated") summary.updatedAssignments++;
+      else summary.skippedAssignments++;
+    } catch {
+      summary.errors.push(`שגיאה בשמירת שיוך עבור פעילות ב-${scheduleItemIds[0]}`);
+    }
+  }
+
+  revalidatePath("/admin/weekly-schedule");
+  return { success: true, summary };
+}
+
+export interface BulkRidingVisibilitySummary {
+  totalActivities: number;
+  createdSlots: number;
+  updatedSlots: number;
+  errors: string[];
+}
+
+export interface BulkRidingVisibilityResult extends ActionResult {
+  summary?: BulkRidingVisibilitySummary;
+}
+
+// Unconditionally sets the three visibility flags on every given activity's
+// RidingSlot (creating it first via the same self-healing
+// resolveOrCreateRidingSlot if it doesn't exist yet) - no skip/overwrite
+// mode, since a boolean has no meaningful "missing" state to preserve (see
+// the single-slot updateRidingSlotVisibility, which is the same
+// unconditional set). These flags still only save for later use - no
+// effect on student-facing display yet.
+export async function bulkSetRidingVisibility(
+  activities: { scheduleItemIds: string[] }[],
+  flags: RidingSlotVisibilityInput
+): Promise<BulkRidingVisibilityResult> {
+  await requireAdmin();
+
+  if (!activities || activities.length === 0) {
+    return { success: false, error: "לא נבחרו פעילויות להחלת הגדרות התצוגה" };
+  }
+
+  const parsed = visibilitySchema.safeParse(flags);
+  if (!parsed.success) {
+    return { success: false, error: "קלט לא תקין" };
+  }
+
+  const summary: BulkRidingVisibilitySummary = {
+    totalActivities: activities.length,
+    createdSlots: 0,
+    updatedSlots: 0,
+    errors: [],
+  };
+
+  for (const activity of activities) {
+    const scheduleItemIds = activity.scheduleItemIds;
+    if (!scheduleItemIds || scheduleItemIds.length === 0) {
+      summary.errors.push('פעילות ללא פריטי לו"ז - דולגה');
+      continue;
+    }
+
+    const resolved = await resolveOrCreateRidingSlot(scheduleItemIds);
+    if (!resolved.success) {
+      summary.errors.push(resolved.error);
+      continue;
+    }
+    if (resolved.created) summary.createdSlots++;
+
+    try {
+      await prisma.ridingSlot.update({ where: { id: resolved.ridingSlotId }, data: parsed.data });
+      summary.updatedSlots++;
+    } catch {
+      summary.errors.push(`שגיאה בעדכון תצוגה עבור פעילות ב-${scheduleItemIds[0]}`);
+    }
+  }
+
+  revalidatePath("/admin/weekly-schedule");
+  return { success: true, summary };
 }
