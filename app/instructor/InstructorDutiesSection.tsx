@@ -89,13 +89,13 @@ export function InstructorDutiesSection({
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row">
         <label className="flex flex-1 flex-col gap-1 text-sm">
-          תלמיד/ה
+          חניך/ה
           <select
             value={studentFilter}
             onChange={(e) => setStudentFilter(e.target.value)}
             className="rounded-xl border border-border px-3 py-2.5 text-base"
           >
-            <option value="">כל התלמידים</option>
+            <option value="">כל החניכים</option>
             {students.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.fullName}

@@ -7,7 +7,7 @@ import { getAdminDashboardData } from "@/lib/actions/admin-dashboard";
 export const dynamic = "force-dynamic";
 
 const QUICK_ACTIONS = [
-  { href: "/admin/students", label: "ניהול תלמידים" },
+  { href: "/admin/students", label: "ניהול חניכים" },
   { href: "/admin/instructors", label: "ניהול מדריכים" },
   { href: "/admin/weekly-schedule", label: 'לו"ז שבועי' },
   { href: "/admin/schedule", label: "שיבוץ תורנויות" },
@@ -41,14 +41,14 @@ export default async function AdminDashboardPage() {
   if (data.studentsWithoutPhone > 0) {
     attentionItems.push({
       key: "no-phone",
-      label: `${data.studentsWithoutPhone} תלמידים ללא מספר טלפון`,
+      label: `${data.studentsWithoutPhone} חניכים ללא מספר טלפון`,
       href: "/admin/students",
     });
   }
   if (data.studentsWithoutHorse > 0) {
     attentionItems.push({
       key: "no-horse",
-      label: `${data.studentsWithoutHorse} תלמידים ללא שיבוץ סוס`,
+      label: `${data.studentsWithoutHorse} חניכים ללא שיבוץ סוס`,
       href: "/admin/horses",
     });
   }
@@ -72,7 +72,7 @@ export default async function AdminDashboardPage() {
       <Logo width={160} />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="תלמידים פעילים" value={data.activeStudents} />
+        <StatCard label="חניכים פעילים" value={data.activeStudents} />
         <StatCard label="מדריכים פעילים" value={data.activeInstructors} />
         <StatCard
           label="טווח תאריכי הקורס"

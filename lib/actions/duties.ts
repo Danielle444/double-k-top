@@ -8,7 +8,7 @@ import type { ActionResult } from "@/lib/actions/students";
 const dutyTypeSchema = z.object({
   name: z.string().trim().min(2, "יש להזין שם תורנות"),
   description: z.string().trim().optional(),
-  defaultRequiredCount: z.coerce.number().int().min(1, "מספר התלמידים חייב להיות לפחות 1"),
+  defaultRequiredCount: z.coerce.number().int().min(1, "מספר החניכים חייב להיות לפחות 1"),
   allocationMode: z.enum(["FIXED_COUNT", "ONE_PER_SUBGROUP"]).default("FIXED_COUNT"),
 });
 

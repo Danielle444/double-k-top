@@ -92,7 +92,7 @@ export async function generateSchedule({
   const noDutyDateKeys = new Set(noDutyDates.map((n) => dateKey(n.date)));
 
   if (students.length === 0) {
-    return { daysProcessed: 0, assignedCount: 0, warnings: ["אין תלמידים פעילים"] };
+    return { daysProcessed: 0, assignedCount: 0, warnings: ["אין חניכים פעילים"] };
   }
   if (dutyTypes.length === 0) {
     return { daysProcessed: 0, assignedCount: 0, warnings: ["אין סוגי תורנות פעילים"] };
@@ -226,7 +226,7 @@ export async function generateSchedule({
     const availableStudents = students.filter((s) => isAvailable(s.id, dk));
 
     if (availableStudents.length === 0) {
-      warnings.push(`${dk}: אין תלמידים זמינים ביום זה`);
+      warnings.push(`${dk}: אין חניכים זמינים ביום זה`);
       continue;
     }
 
@@ -366,7 +366,7 @@ export async function generateSchedule({
       const picked = scored.slice(0, autoRequired);
       if (picked.length < autoRequired) {
         warnings.push(
-          `${dk}: נדרשו ${autoRequired} תלמידים נוספים לתורנות "${dutyType.name}" אך נמצאו רק ${picked.length} זמינים (לאחר החלת אילוצים)`
+          `${dk}: נדרשו ${autoRequired} חניכים נוספים לתורנות "${dutyType.name}" אך נמצאו רק ${picked.length} זמינים (לאחר החלת אילוצים)`
         );
       }
 

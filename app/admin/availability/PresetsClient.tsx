@@ -76,7 +76,7 @@ export function PresetsClient({
         setError(result.error ?? "אירעה שגיאה");
         return;
       }
-      setMessage(`הזמינות עודכנה עבור ${selectedStudentIds.size} תלמידים`);
+      setMessage(`הזמינות עודכנה עבור ${selectedStudentIds.size} חניכים`);
     });
   }
 
@@ -146,7 +146,7 @@ export function PresetsClient({
       {presets.length > 0 && students.length > 0 && (
         <div className="rounded-lg border border-border p-3">
           <p className="mb-2 text-sm font-medium text-card-foreground">
-            החלת פריסט על מספר תלמידים
+            החלת פריסט על מספר חניכים
           </p>
           <div className="mb-3 flex max-h-40 flex-wrap gap-2 overflow-y-auto">
             {students.map((s) => (

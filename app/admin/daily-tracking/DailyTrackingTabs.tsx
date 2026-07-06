@@ -124,7 +124,7 @@ export function DailyTrackingTabs({
               </div>
               <div className="rounded-xl border border-border bg-card p-5">
                 <h2 className="mb-3 text-base font-semibold text-card-foreground">
-                  זמינות תלמידים לפי תאריך
+                  זמינות חניכים לפי תאריך
                 </h2>
                 <AvailabilityFilterableGrid
                   students={availability.students}

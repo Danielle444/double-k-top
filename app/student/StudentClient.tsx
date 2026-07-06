@@ -217,7 +217,7 @@ export function StudentClient() {
         <Logo width={220} />
         <p className="-mt-4 text-sm font-semibold text-muted-foreground">אזור חניכים</p>
         <div className="w-full rounded-2xl border border-border bg-card p-6">
-          <h1 className="mb-1 text-2xl font-bold text-card-foreground">כניסת תלמיד/ה</h1>
+          <h1 className="mb-1 text-2xl font-bold text-card-foreground">כניסת חניך/ה</h1>
           <p className="mb-4 text-base text-muted-foreground">
             הקלידו את שמכם ובחרו אותו מהרשימה
           </p>
@@ -514,7 +514,7 @@ export function StudentClient() {
                 ))}
             </div>
             <Button variant="secondary" onClick={handleSwitchStudent} className="!py-3 !text-base">
-              החלפת תלמיד/ה
+              החלפת חניך/ה
             </Button>
           </div>
         )}

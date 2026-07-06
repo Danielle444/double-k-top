@@ -226,7 +226,7 @@ export async function parseStudentsExcel(
   if (candidates.length === 0) {
     return {
       success: false,
-      error: `לא נמצאו שורות תלמידים בקובץ אחרי שורת הכותרות (שורה ${headerRow}).`,
+      error: `לא נמצאו שורות חניכים בקובץ אחרי שורת הכותרות (שורה ${headerRow}).`,
       debugInfo,
     };
   }

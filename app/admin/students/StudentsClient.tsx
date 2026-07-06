@@ -120,7 +120,7 @@ export function StudentsClient({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap gap-2">
-        <Button onClick={() => openModal("new")}>+ הוספת תלמיד/ה</Button>
+        <Button onClick={() => openModal("new")}>+ הוספת חניך/ה</Button>
         <ImportStudentsClient presets={presets} />
         <input
           value={search}
@@ -206,7 +206,7 @@ export function StudentsClient({
             {filteredStudents.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
-                  {students.length === 0 ? "אין תלמידים עדיין" : "אין תלמידים התואמים את החיפוש"}
+                  {students.length === 0 ? "אין חניכים עדיין" : "אין חניכים התואמים את החיפוש"}
                 </td>
               </tr>
             )}
@@ -216,7 +216,7 @@ export function StudentsClient({
 
       <Modal
         open={modalStudent !== null}
-        title={modalStudent === "new" ? "הוספת תלמיד/ה" : "עריכת תלמיד/ה"}
+        title={modalStudent === "new" ? "הוספת חניך/ה" : "עריכת חניך/ה"}
         onClose={() => setModalStudent(null)}
       >
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">

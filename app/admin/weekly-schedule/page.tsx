@@ -33,7 +33,7 @@ export default async function WeeklySchedulePage() {
       <h1 className="text-xl font-bold text-card-foreground">לו&quot;ז שבועי</h1>
       <p className="text-sm text-muted-foreground">
         העלו את לוח הרכיבה השבועי (Excel), שבוע אחר שבוע, כשהוא זמין. הלו&quot;ז מוצג
-        לתלמידים ולמדריכים, ומאפשר להציע ערכי תכנון קבוצות יומי ולייצר את שיבוץ
+        לחניכים ולמדריכים, ומאפשר להציע ערכי תכנון קבוצות יומי ולייצר את שיבוץ
         התורנויות לאותו שבוע.
       </p>
       <WeeklyScheduleClient

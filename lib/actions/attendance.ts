@@ -16,7 +16,7 @@ const timeSchema = z
   .optional();
 
 const attendanceInputSchema = z.object({
-  studentId: z.string().min(1, "יש לבחור תלמיד/ה"),
+  studentId: z.string().min(1, "יש לבחור חניך/ה"),
   dateKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "תאריך לא תקין"),
   status: attendanceStatusSchema,
   arrivalTime: timeSchema,
@@ -126,13 +126,13 @@ function computeWarnings(params: {
   if (status === "ABSENT" && assignedDuty) {
     warnings.push({
       type: "ABSENT_WITH_DUTY",
-      message: "התלמיד/ה נעדר/ת אך משובץ/ת לתורנות ביום זה",
+      message: "החניך/ה נעדר/ת אך משובץ/ת לתורנות ביום זה",
     });
   }
   if (!isAvailable && assignedDuty) {
     warnings.push({
       type: "UNAVAILABLE_WITH_DUTY",
-      message: "התלמיד/ה מסומן/ת כלא זמין/ה אך משובץ/ת לתורנות ביום זה",
+      message: "החניך/ה מסומן/ת כלא זמין/ה אך משובץ/ת לתורנות ביום זה",
     });
   }
   if (assignedDuty && !assignedDuty.isCompleted) {
@@ -309,7 +309,7 @@ async function upsertAttendanceRecord(
 
   const student = await prisma.student.findUnique({ where: { id: input.studentId } });
   if (!student) {
-    return { success: false, error: "התלמיד/ה לא נמצא/ה" };
+    return { success: false, error: "החניך/ה לא נמצא/ה" };
   }
 
   const date = parseDateKey(input.dateKey);

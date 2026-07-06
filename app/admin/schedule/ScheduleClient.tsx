@@ -318,7 +318,7 @@ export function ScheduleClient({
     // rather than FormData - it isn't a native <select>, so it has no
     // FormData entry of its own.
     if (!addFormDutyTypeId || !addFormStudentId) {
-      setError("יש לבחור סוג תורנות ותלמיד/ה");
+      setError("יש לבחור סוג תורנות וחניך/ה");
       return;
     }
     startTransition(async () => {
@@ -501,7 +501,7 @@ export function ScheduleClient({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="שם תלמיד/ה, סוג תורנות, קבוצה..."
+            placeholder="שם חניך/ה, סוג תורנות, קבוצה..."
             className="rounded-lg border border-border px-3 py-2 text-sm"
           />
         </label>
@@ -521,7 +521,7 @@ export function ScheduleClient({
           </select>
         </label>
         <label className="flex w-48 flex-col gap-1 text-sm">
-          תלמיד/ה
+          חניך/ה
           <SearchableSelect
             value={filterStudent}
             onChange={setFilterStudent}
@@ -606,7 +606,7 @@ export function ScheduleClient({
             />
           </label>
           <label className="flex w-48 flex-col gap-1 text-sm">
-            תלמיד/ה
+            חניך/ה
             <SearchableSelect
               value={addFormStudentId}
               onChange={setAddFormStudentId}
@@ -692,7 +692,7 @@ export function ScheduleClient({
             <tr className="border-b border-border bg-muted text-muted-foreground">
               <th className="px-4 py-3 text-right font-medium">יום</th>
               <th className="px-4 py-3 text-right font-medium">סוג תורנות</th>
-              <th className="px-4 py-3 text-right font-medium">תלמיד/ה</th>
+              <th className="px-4 py-3 text-right font-medium">חניך/ה</th>
               <th className="px-4 py-3 text-right font-medium">קבוצה</th>
               <th className="px-4 py-3 text-right font-medium">תת-קבוצה</th>
               <th className="px-4 py-3 text-right font-medium">מקור</th>

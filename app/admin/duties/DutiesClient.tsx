@@ -10,7 +10,7 @@ type AllocationMode = "FIXED_COUNT" | "ONE_PER_SUBGROUP";
 
 const ALLOCATION_MODE_LABELS: Record<AllocationMode, string> = {
   FIXED_COUNT: "כמות קבועה",
-  ONE_PER_SUBGROUP: "תלמיד/ה אחד/ת לכל תת-קבוצה",
+  ONE_PER_SUBGROUP: "חניך/ה אחד/ת לכל תת-קבוצה",
 };
 
 interface DutyTypeRow {
@@ -170,11 +170,11 @@ export function DutiesClient({ dutyTypes }: { dutyTypes: DutyTypeRow[] }) {
               className="rounded-lg border border-border px-3 py-2 text-sm"
             >
               <option value="FIXED_COUNT">כמות קבועה</option>
-              <option value="ONE_PER_SUBGROUP">תלמיד/ה אחד/ת לכל תת-קבוצה</option>
+              <option value="ONE_PER_SUBGROUP">חניך/ה אחד/ת לכל תת-קבוצה</option>
             </select>
           </label>
           <label className="flex flex-col gap-1 text-sm">
-            כמות תלמידים נדרשת כברירת מחדל
+            כמות חניכים נדרשת כברירת מחדל
             <input
               name="defaultRequiredCount"
               type="number"
@@ -184,7 +184,7 @@ export function DutiesClient({ dutyTypes }: { dutyTypes: DutyTypeRow[] }) {
               required
             />
             <span className="text-xs text-muted-foreground">
-              מתעלמים מערך זה כאשר אופן ההקצאה הוא &quot;תלמיד/ה אחד/ת לכל תת-קבוצה&quot; -
+              מתעלמים מערך זה כאשר אופן ההקצאה הוא &quot;חניך/ה אחד/ת לכל תת-קבוצה&quot; -
               במקרה זה הכמות נקבעת אוטומטית לפי מספר תתי-הקבוצות הזמינות בכל תאריך.
             </span>
           </label>

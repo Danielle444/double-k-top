@@ -42,7 +42,7 @@ export async function createStudent(formData: FormData): Promise<ActionResult> {
     where: { identityNumber: parsed.data.identityNumber },
   });
   if (existing) {
-    return { success: false, error: "כבר קיים/ת תלמיד/ה עם מספר תעודת זהות זה" };
+    return { success: false, error: "כבר קיים/ת חניך/ה עם מספר תעודת זהות זה" };
   }
 
   await prisma.student.create({
@@ -82,7 +82,7 @@ export async function updateStudent(
     where: { identityNumber: parsed.data.identityNumber },
   });
   if (conflict && conflict.id !== studentId) {
-    return { success: false, error: "כבר קיים/ת תלמיד/ה עם מספר תעודת זהות זה" };
+    return { success: false, error: "כבר קיים/ת חניך/ה עם מספר תעודת זהות זה" };
   }
 
   await prisma.student.update({

@@ -26,7 +26,7 @@ export default async function StudentRidingHistoryPage({
           href="/admin/students"
           className="text-sm text-muted-foreground underline hover:text-card-foreground"
         >
-          &larr; חזרה לתלמידים
+          &larr; חזרה לחניכים
         </Link>
         <h1 className="mt-1 text-xl font-bold text-card-foreground">
           היסטוריית רכיבה - {student.fullName}

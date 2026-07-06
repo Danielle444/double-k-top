@@ -317,7 +317,7 @@ export function AttendanceTrackingClient({
           <input
             value={nameQuery}
             onChange={(e) => setNameQuery(e.target.value)}
-            placeholder="שם תלמיד/ה..."
+            placeholder="שם חניך/ה..."
             className="rounded-lg border border-border px-3 py-2 text-sm"
           />
         </label>
@@ -379,7 +379,7 @@ export function AttendanceTrackingClient({
       ) : viewMode === "day" ? (
         filteredRows.length === 0 ? (
           <p className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
-            אין תלמידים להצגה
+            אין חניכים להצגה
           </p>
         ) : (
           <div className="flex flex-col gap-5">
@@ -535,7 +535,7 @@ export function AttendanceTrackingClient({
         )
       ) : filteredStudents.length === 0 ? (
         <p className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
-          אין תלמידים להצגה
+          אין חניכים להצגה
         </p>
       ) : (
         <div className="flex flex-col gap-5">

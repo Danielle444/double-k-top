@@ -20,7 +20,7 @@ const TYPE_LABELS: Record<CourseMaterialTypeValue, string> = {
 };
 
 const VISIBILITY_LABELS: Record<CourseMaterialVisibilityValue, string> = {
-  STUDENTS: "תלמידים",
+  STUDENTS: "חניכים",
   INSTRUCTORS: "מדריכים",
   BOTH: "כולם",
 };

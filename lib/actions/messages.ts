@@ -55,7 +55,7 @@ async function resolveRecipientIds(
   }
   const ids = data.studentIds ?? [];
   if (ids.length === 0) {
-    return { error: "יש לבחור לפחות תלמיד/ה אחד/ת" };
+    return { error: "יש לבחור לפחות חניך/ה אחד/ת" };
   }
   const students = await prisma.student.findMany({
     where: { isActive: true, id: { in: ids } },

@@ -113,7 +113,7 @@ export function HorsesClient({ students }: { students: HorseAssignmentRow[] }) {
           <input
             value={nameQuery}
             onChange={(e) => setNameQuery(e.target.value)}
-            placeholder="חיפוש לפי שם תלמיד/ה..."
+            placeholder="חיפוש לפי שם חניך/ה..."
             className="flex-1 rounded-lg border border-border px-3 py-2 text-sm"
           />
           <input
@@ -174,7 +174,7 @@ export function HorsesClient({ students }: { students: HorseAssignmentRow[] }) {
             {filteredRows.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
-                  אין תלמידים התואמים את הסינון
+                  אין חניכים התואמים את הסינון
                 </td>
               </tr>
             )}

@@ -872,7 +872,7 @@ function dutyStatusBadge(status: DutyStatus): { label: string; className: string
   }
   if (status.published === status.total) {
     return {
-      label: "תורנויות פורסמו לתלמידים",
+      label: "תורנויות פורסמו לחניכים",
       className: "bg-success-muted text-success",
     };
   }

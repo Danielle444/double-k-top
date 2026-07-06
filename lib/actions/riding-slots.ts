@@ -874,7 +874,7 @@ export async function upsertRidingLessonNoteAsInstructor(
 
   const student = await prisma.student.findUnique({ where: { id: studentId } });
   if (!student) {
-    return { success: false, error: "התלמיד/ה לא נמצא/ה" };
+    return { success: false, error: "החניך/ה לא נמצא/ה" };
   }
 
   const ratingHalfPoints = input.ratingHalfPoints ?? null;

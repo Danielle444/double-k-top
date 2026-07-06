@@ -313,7 +313,7 @@ export function WeeklyRidingClient({
         <p className="text-sm font-semibold text-card-foreground">החלת הגדרות תצוגה בכמות</p>
         <p className="text-xs text-warning">
           החלת הגדרות תצוגה על כל הפעילויות המתאימות שמוצגות כרגע ({visibilityTargetedCount} מתוך{" "}
-          {visibleActivityCount} פעילויות מוצגות). ההגדרות עדיין לא משפיעות על תצוגת התלמיד/ה בשלב
+          {visibleActivityCount} פעילויות מוצגות). ההגדרות עדיין לא משפיעות על תצוגת החניך/ה בשלב
           זה.
         </p>
 
@@ -442,7 +442,7 @@ export function WeeklyRidingClient({
                     {activity.ridingSlot && (
                       <div className="mt-2 flex flex-col gap-1 text-xs text-muted-foreground">
                         <p>
-                          חשיפה לתלמידים: מדריך/ה{" "}
+                          חשיפה לחניכים: מדריך/ה{" "}
                           {activity.ridingSlot.showInstructorToStudents ? "מוצג" : "מוסתר"} · מגרש{" "}
                           {activity.ridingSlot.showArenaToStudents ? "מוצג" : "מוסתר"} · תת-קבוצה{" "}
                           {activity.ridingSlot.showSubgroupToStudents ? "מוצג" : "מוסתר"}

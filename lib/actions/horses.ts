@@ -104,7 +104,7 @@ export async function updateOwnPrivateHorseName(
   const student = await prisma.student.findUnique({ where: { id: studentId } });
 
   if (!student || !student.isActive) {
-    return { success: false, error: "תלמיד/ה לא נמצא/ה" };
+    return { success: false, error: "חניך/ה לא נמצא/ה" };
   }
   if (!student.hasPrivateHorse) {
     return { success: false, error: "לא סומן/ה כבעל/ת סוס פרטי" };

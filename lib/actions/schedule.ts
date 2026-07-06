@@ -86,7 +86,7 @@ export async function reassignDuty(
     where: { date_studentId: { date: assignment.date, studentId: newStudentId } },
   });
   if (conflict && conflict.id !== assignmentId) {
-    return { success: false, error: "לתלמיד/ה זה כבר יש תורנות ביום זה" };
+    return { success: false, error: "לחניך/ה זה כבר יש תורנות ביום זה" };
   }
 
   await prisma.dutyAssignment.update({
@@ -110,7 +110,7 @@ export async function createManualAssignment(
     where: { date_studentId: { date, studentId } },
   });
   if (conflict) {
-    return { success: false, error: "לתלמיד/ה זה כבר יש תורנות ביום זה" };
+    return { success: false, error: "לחניך/ה זה כבר יש תורנות ביום זה" };
   }
 
   await prisma.dutyAssignment.create({
@@ -153,7 +153,7 @@ export async function upsertManualAssignment(
   ]);
 
   if (!student) {
-    return { success: false, error: "התלמיד/ה לא נמצא/ה" };
+    return { success: false, error: "החניך/ה לא נמצא/ה" };
   }
   if (!dutyType) {
     return { success: false, error: "סוג התורנות לא נמצא" };
@@ -163,7 +163,7 @@ export async function upsertManualAssignment(
   if (student.groupName && blockedGroups.has(student.groupName)) {
     return {
       success: false,
-      error: `לא ניתן לשבץ את "${dutyType.name}" לתלמיד/ה זו בתאריך זה עקב אילוץ פעיל`,
+      error: `לא ניתן לשבץ את "${dutyType.name}" לחניך/ה זו בתאריך זה עקב אילוץ פעיל`,
     };
   }
 
@@ -181,7 +181,7 @@ export async function upsertManualAssignment(
     if (conflict) {
       return {
         success: false,
-        error: `בתת-הקבוצה של תלמיד/ה זו כבר קיים שיבוץ לתורנות "${dutyType.name}" בתאריך זה`,
+        error: `בתת-הקבוצה של חניך/ה זו כבר קיים שיבוץ לתורנות "${dutyType.name}" בתאריך זה`,
       };
     }
   }

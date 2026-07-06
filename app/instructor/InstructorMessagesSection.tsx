@@ -18,9 +18,9 @@ interface StudentOption {
 }
 
 const AUDIENCE_LABELS: Record<MessageAudienceValue, string> = {
-  ALL: "כל התלמידים הפעילים",
+  ALL: "כל החניכים הפעילים",
   GROUP: "קבוצה",
-  SPECIFIC: "תלמידים ספציפיים",
+  SPECIFIC: "חניכים ספציפיים",
 };
 
 const TYPE_LABELS: Record<MessageTaskTypeValue, string> = {
@@ -262,7 +262,7 @@ export function InstructorMessagesSection({
                 <p className="text-xs text-muted-foreground">נבחרו {selectedStudentIds.length}</p>
                 <div className="max-h-60 overflow-y-auto rounded-xl border border-border">
                   {filteredStudents.length === 0 ? (
-                    <p className="px-3 py-2 text-sm text-muted-foreground">לא נמצאו תלמידים</p>
+                    <p className="px-3 py-2 text-sm text-muted-foreground">לא נמצאו חניכים</p>
                   ) : (
                     filteredStudents.map((s) => (
                       <label

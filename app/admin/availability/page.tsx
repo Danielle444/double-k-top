@@ -52,7 +52,7 @@ export default async function AvailabilityPage() {
         </h2>
         <p className="mb-3 text-sm text-muted-foreground">
           שמרו טווחי תאריכים נפוצים (למשל &quot;שבועיים ראשונים בלבד&quot;) כדי להחיל אותם
-          במהירות על מספר תלמידים.
+          במהירות על מספר חניכים.
         </p>
         <PresetsClient
           presets={presets.map((p) => ({
@@ -68,10 +68,10 @@ export default async function AvailabilityPage() {
       {settings ? (
         <div className="rounded-xl border border-border bg-card p-5">
           <h2 className="mb-3 text-base font-semibold text-card-foreground">
-            זמינות תלמידים לפי תאריך
+            זמינות חניכים לפי תאריך
           </h2>
           <p className="mb-3 text-sm text-muted-foreground">
-            תלמיד/ה ללא סימון נחשב/ת זמין/ה כברירת מחדל. לחצו על תא כדי להחליף בין זמין/ה
+            חניך/ה ללא סימון נחשב/ת זמין/ה כברירת מחדל. לחצו על תא כדי להחליף בין זמין/ה
             לבין לא זמין/ה.
           </p>
           <AvailabilityFilterableGrid

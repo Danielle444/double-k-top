@@ -30,7 +30,7 @@ export function ContactsSection() {
               : "bg-muted text-muted-foreground"
           }`}
         >
-          תלמידים
+          חניכים
         </button>
         <button
           type="button"

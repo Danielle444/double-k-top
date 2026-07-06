@@ -17,7 +17,7 @@ export default function Home() {
           href="/student"
           className="rounded-lg bg-secondary px-6 py-3 text-sm font-medium text-secondary-foreground hover:opacity-80"
         >
-          כניסת תלמיד/ה
+          כניסת חניך/ה
         </Link>
         <Link
           href="/instructor"

@@ -223,7 +223,7 @@ export function InstructorHorsesSection({
           <input
             value={nameQuery}
             onChange={(e) => setNameQuery(e.target.value)}
-            placeholder="חיפוש לפי שם תלמיד/ה..."
+            placeholder="חיפוש לפי שם חניך/ה..."
             className="rounded-xl border border-border px-3 py-2.5 text-base"
           />
           <input
@@ -239,7 +239,7 @@ export function InstructorHorsesSection({
         <p className="text-base text-muted-foreground">טוען...</p>
       ) : sections.length === 0 ? (
         <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
-          אין תלמידים התואמים את הסינון
+          אין חניכים התואמים את הסינון
         </p>
       ) : (
         <div className="flex flex-col gap-4">

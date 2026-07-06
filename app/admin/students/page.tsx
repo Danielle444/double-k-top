@@ -18,7 +18,7 @@ export default async function StudentsPage() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-card-foreground">ניהול תלמידים</h1>
+        <h1 className="text-xl font-bold text-card-foreground">ניהול חניכים</h1>
       </div>
       <StudentsClient
         students={students.map((s) => ({

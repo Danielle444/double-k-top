@@ -404,7 +404,7 @@ export function InstructorRidingSlotsSection({
       .then((rows) => setSlotStudents(rows))
       .catch(() => {
         setSlotStudents([]);
-        setStudentsError("שגיאה בטעינת רשימת התלמידים. נסו לרענן.");
+        setStudentsError("שגיאה בטעינת רשימת החניכים. נסו לרענן.");
       });
   }
 
@@ -668,7 +668,7 @@ export function InstructorRidingSlotsSection({
                             className="!px-2 !py-1 !text-xs"
                             onClick={() => openStudents(activity)}
                           >
-                            צפייה בתלמידים
+                            צפייה בחניכים
                           </Button>
                         ) : (
                           <p className="text-xs italic text-muted-foreground">
@@ -708,7 +708,7 @@ export function InstructorRidingSlotsSection({
           ) : slotStudents === null ? (
             <p className="text-sm text-muted-foreground">טוען...</p>
           ) : slotStudents.length === 0 ? (
-            <p className="text-sm text-muted-foreground">אין תלמידים רלוונטיים לרכיבה זו</p>
+            <p className="text-sm text-muted-foreground">אין חניכים רלוונטיים לרכיבה זו</p>
           ) : (
             <div className="flex max-w-full flex-col gap-3 overflow-x-hidden">
               {groupByGroupAndSubgroup(slotStudents).map((section) => (

@@ -68,7 +68,7 @@ export function AvailabilityGrid({
         <thead>
           <tr>
             <th className="sticky top-0 right-0 z-20 min-w-[10rem] border-b border-l border-border bg-muted px-3 py-2 text-right">
-              תלמיד/ה
+              חניך/ה
             </th>
             {dateKeys.map((dk) => {
               const { weekday, dayMonth } = shortDayLabel(dk);

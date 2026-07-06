@@ -28,9 +28,9 @@ const TYPE_LABELS: Record<MessageTaskTypeValue, string> = {
 };
 
 const AUDIENCE_LABELS: Record<MessageAudienceValue, string> = {
-  ALL: "כל התלמידים הפעילים",
+  ALL: "כל החניכים הפעילים",
   GROUP: "קבוצה",
-  SPECIFIC: "תלמידים ספציפיים",
+  SPECIFIC: "חניכים ספציפיים",
 };
 
 function audienceSummary(item: MessageTaskListItem): string {
@@ -314,7 +314,7 @@ export function MessagesClient({
                 checked={audience === "ALL"}
                 onChange={() => setAudience("ALL")}
               />
-              כל התלמידים הפעילים
+              כל החניכים הפעילים
             </label>
             <label className="flex items-center gap-2">
               <input
@@ -346,7 +346,7 @@ export function MessagesClient({
                 checked={audience === "SPECIFIC"}
                 onChange={() => setAudience("SPECIFIC")}
               />
-              תלמידים ספציפיים
+              חניכים ספציפיים
             </label>
             {audience === "SPECIFIC" && (
               <div className="flex flex-col gap-2">
@@ -359,7 +359,7 @@ export function MessagesClient({
                 <p className="text-xs text-muted-foreground">נבחרו {selectedStudentIds.length}</p>
                 <div className="max-h-60 overflow-y-auto rounded-lg border border-border">
                   {filteredStudents.length === 0 ? (
-                    <p className="px-3 py-2 text-sm text-muted-foreground">לא נמצאו תלמידים</p>
+                    <p className="px-3 py-2 text-sm text-muted-foreground">לא נמצאו חניכים</p>
                   ) : (
                     filteredStudents.map((s) => (
                       <label

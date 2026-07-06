@@ -9,7 +9,7 @@ import { signOutAdmin } from "@/lib/actions/auth-actions";
 // still load fine by direct URL, they're just no longer separate nav items.
 const NAV_ITEMS = [
   { href: "/admin", label: "לוח בקרה" },
-  { href: "/admin/students", label: "תלמידים" },
+  { href: "/admin/students", label: "חניכים" },
   { href: "/admin/instructors", label: "מדריכים" },
   { href: "/admin/duties", label: "סוגי תורנות" },
   { href: "/admin/daily-tracking", label: "מעקב יומי" },

@@ -106,7 +106,7 @@ export function CompletionClient({
           <input
             value={nameQuery}
             onChange={(e) => setNameQuery(e.target.value)}
-            placeholder="שם תלמיד/ה..."
+            placeholder="שם חניך/ה..."
             className="rounded-lg border border-border px-3 py-2 text-sm"
           />
         </label>
@@ -150,7 +150,7 @@ export function CompletionClient({
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-muted text-muted-foreground">
-              <th className="px-4 py-3 text-right font-medium">תלמיד/ה</th>
+              <th className="px-4 py-3 text-right font-medium">חניך/ה</th>
               <th className="px-4 py-3 text-right font-medium">קבוצה</th>
               <th className="px-4 py-3 text-right font-medium">תת-קבוצה</th>
               <th className="px-4 py-3 text-right font-medium">סוג תורנות</th>

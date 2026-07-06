@@ -104,7 +104,7 @@ export function ImportStudentsClient({ presets }: { presets: PresetOption[] }) {
         setError(result.error ?? "אירעה שגיאה בשמירה");
         return;
       }
-      setSummary(`נוצרו ${result.createdCount} תלמידים, עודכנו ${result.updatedCount}`);
+      setSummary(`נוצרו ${result.createdCount} חניכים, עודכנו ${result.updatedCount}`);
       setCandidates(null);
     });
   }
@@ -121,7 +121,7 @@ export function ImportStudentsClient({ presets }: { presets: PresetOption[] }) {
         ייבוא מקובץ Excel
       </Button>
 
-      <Modal open={open} title="ייבוא תלמידים מקובץ Excel" onClose={() => setOpen(false)}>
+      <Modal open={open} title="ייבוא חניכים מקובץ Excel" onClose={() => setOpen(false)}>
         <div className="flex flex-col gap-4">
           {!candidates && (
             <form onSubmit={handleParse} className="flex flex-col gap-3">
@@ -145,7 +145,7 @@ export function ImportStudentsClient({ presets }: { presets: PresetOption[] }) {
           {candidates && (
             <div className="flex flex-col gap-3">
               <p className="text-sm text-muted-foreground">
-                נמצאו {candidates.length} תלמידים. ניתן לערוך כל שדה ולבחור פעולה לכל שורה.
+                נמצאו {candidates.length} חניכים. ניתן לערוך כל שדה ולבחור פעולה לכל שורה.
               </p>
               <div className="max-h-72 overflow-y-auto rounded-lg border border-border">
                 {candidates.map((c) => (
@@ -217,7 +217,7 @@ export function ImportStudentsClient({ presets }: { presets: PresetOption[] }) {
                     </select>
                     {c.matchedStudentId && (
                       <span className="mr-2 text-xs text-muted-foreground">
-                        נמצא/ת תלמיד/ה קיימ/ת עם ת.ז. זהה
+                        נמצא/ת חניך/ה קיימ/ת עם ת.ז. זהה
                       </span>
                     )}
                   </div>
@@ -226,7 +226,7 @@ export function ImportStudentsClient({ presets }: { presets: PresetOption[] }) {
 
               <div className="rounded-lg bg-muted p-3">
                 <p className="mb-2 text-sm font-medium text-card-foreground">
-                  זמינות התלמידים המיובאים
+                  זמינות החניכים המיובאים
                 </p>
                 <div className="flex flex-col gap-2 text-sm">
                   <label className="flex items-center gap-2">
