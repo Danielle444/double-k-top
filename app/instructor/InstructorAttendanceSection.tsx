@@ -37,10 +37,14 @@ import {
 
 type ViewMode = "day" | "week";
 
-// Only meaningful in "day" view - "week" view is a per-student pivot grid
-// across the whole range, not a grouped-by-groups list, so these two tabs
-// don't apply there and it keeps rendering exactly as before.
+// Only meaningful in "day" view.
 type DayTab = "urgent" | "grouped";
+
+// Only meaningful in "week" view - "grouped" is the pre-existing per-student
+// pivot grid across the whole range, unchanged, while "urgent" is the new
+// cross-week absent/partial list grouped by date (the default tab, matching
+// the day-view default).
+type WeekTab = "urgent" | "grouped";
 
 // Instructor version of app/admin/daily-tracking/AttendanceTrackingClient.tsx -
 // shares its pure display/grouping helpers via lib/attendance-ui.tsx, but is
@@ -59,6 +63,7 @@ export function InstructorAttendanceSection({
 }) {
   const [viewMode, setViewMode] = useState<ViewMode>("day");
   const [dayTab, setDayTab] = useState<DayTab>("urgent");
+  const [weekTab, setWeekTab] = useState<WeekTab>("urgent");
   const [selectedDate, setSelectedDate] = useState(() => getLocalDateKey());
   const [rows, setRows] = useState<AttendanceTrackingRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -169,6 +174,35 @@ export function InstructorAttendanceSection({
     [filteredRows]
   );
 
+  // Week-view equivalent of absentOrPartialRows - reuses the same already-
+  // loaded `rows` (fetched for the whole rangeStart..rangeEnd once per range
+  // change) and the same active group/subgroup/name filters, just without
+  // the single-day restriction, so no extra query is needed.
+  const weekAbsentOrPartialRows = useMemo(() => {
+    const q = nameQuery.trim().toLowerCase();
+    return (rows ?? []).filter((r) => {
+      if (r.attendance?.status !== "ABSENT" && r.attendance?.status !== "PARTIAL") return false;
+      if (groupFilter && r.groupName !== groupFilter) return false;
+      if (subgroupFilter && String(r.subgroupNumber ?? "") !== subgroupFilter) return false;
+      if (q && !r.studentName.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [rows, groupFilter, subgroupFilter, nameQuery]);
+
+  // Buckets weekAbsentOrPartialRows by date, in the same weekday order as
+  // rangeKeys (Sun-Sat, matching the pivot grid's own column order), skipping
+  // any date with nothing to show.
+  const weekAbsentByDate = useMemo(() => {
+    const byDate = new Map<string, AttendanceTrackingRow[]>();
+    for (const row of weekAbsentOrPartialRows) {
+      if (!byDate.has(row.dateKey)) byDate.set(row.dateKey, []);
+      byDate.get(row.dateKey)!.push(row);
+    }
+    return rangeKeys
+      .filter((dateKey) => byDate.has(dateKey))
+      .map((dateKey) => ({ dateKey, rows: byDate.get(dateKey)! }));
+  }, [weekAbsentOrPartialRows, rangeKeys]);
+
   function handleQuickAbsent(row: AttendanceTrackingRow) {
     setPendingStudentId(row.studentId);
     startSaveTransition(async () => {
@@ -262,16 +296,129 @@ export function InstructorAttendanceSection({
     });
   }
 
-  // Shared by both day-view tabs ("נעדרים וחלקיים" and "לפי קבוצות") - only
-  // the input row list differs (filtered to absent/partial, or the full
-  // filtered set), the grouping/card rendering itself is identical, so the
-  // "לפי קבוצות" tab's behavior/fields stay exactly as they were before this
-  // split. showGroupOnCard additionally repeats the group/subgroup on each
-  // card itself (used only by "נעדרים וחלקיים", which is meant to be a
-  // self-contained at-a-glance list) without touching the section headers
-  // that "לפי קבוצות" still relies on unchanged.
-  function renderDayRows(rowsToRender: AttendanceTrackingRow[], options?: { showGroupOnCard?: boolean }) {
+  // Shared by every place that renders one trainee's attendance card - the
+  // day-view tabs ("נעדרים וחלקיים" and "לפי קבוצות") and the week-view
+  // "נעדרים וחלקיים" list all use this exact same card, so their fields and
+  // edit actions can never drift apart. showGroupOnCard repeats the
+  // group/subgroup on the card itself (used by both "נעדרים וחלקיים" views,
+  // which are meant to be self-contained at-a-glance lists) without touching
+  // the section headers that "לפי קבוצות" still relies on unchanged.
+  function renderAttendanceCard(row: AttendanceTrackingRow, options?: { showGroupOnCard?: boolean }) {
     const showGroupOnCard = options?.showGroupOnCard ?? false;
+    const status = row.attendance?.status ?? null;
+    const isPending = pendingStudentId === row.studentId && isSaving;
+    const horseInfo = getHorseDisplayInfo(row);
+
+    return (
+      <div key={`${row.studentId}-${row.dateKey}`} className="rounded-xl border border-border bg-card p-4">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <span className="font-semibold text-card-foreground">{row.studentName}</span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${horseBadgeClass(
+                horseInfo.badgeType
+              )}`}
+            >
+              {horseInfo.badgeLabel}
+            </span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                status ? STATUS_BADGE_CLASS[status] : DEFAULT_BADGE_CLASS
+              }`}
+            >
+              {status ? STATUS_LABELS[status] : DEFAULT_LABEL}
+            </span>
+          </div>
+        </div>
+
+        {showGroupOnCard && (
+          <p className="mb-1 text-xs text-muted-foreground">
+            קבוצה: {row.groupName ?? "ללא קבוצה"}
+            {row.subgroupNumber != null && ` · תת-קבוצה ${row.subgroupNumber}`}
+          </p>
+        )}
+
+        {status === "PARTIAL" && (row.attendance?.arrivalTime || row.attendance?.departureTime) && (
+          <p className="mb-1 text-xs text-muted-foreground">
+            {row.attendance.arrivalTime && `הגעה: ${row.attendance.arrivalTime}`}
+            {row.attendance.arrivalTime && row.attendance.departureTime && " · "}
+            {row.attendance.departureTime && `עזיבה: ${row.attendance.departureTime}`}
+          </p>
+        )}
+
+        <p className="mb-1 text-xs text-muted-foreground">
+          זמינות לתורנויות היום:{" "}
+          <span className={row.isAvailable ? "text-success" : "text-danger"}>
+            {row.isAvailable ? "זמין/ה" : "לא זמין/ה"}
+          </span>
+        </p>
+
+        <p className="mb-1 text-xs text-muted-foreground">סוס: {horseInfo.horseNameDisplay}</p>
+
+        <p className="mb-1 text-xs text-muted-foreground">
+          {row.assignedDuty ? (
+            <>
+              תורנות: {row.assignedDuty.dutyTypeName}
+              {" · "}
+              <span
+                className={row.assignedDuty.isCompleted ? "text-success" : "text-muted-foreground"}
+              >
+                {row.assignedDuty.isCompleted ? "בוצע" : "טרם בוצע"}
+              </span>
+              {!row.assignedDuty.isPublished && " · טיוטה"}
+            </>
+          ) : (
+            "אין תורנות משובצת היום"
+          )}
+        </p>
+
+        {row.attendance?.notes && (
+          <p className="mb-1 text-xs text-muted-foreground">
+            הערות / סיבה / החלפה: {row.attendance.notes}
+          </p>
+        )}
+
+        {renderWarnings(row)}
+
+        {canEdit && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              className="!px-2 !py-1 !text-xs"
+              disabled={isPending}
+              onClick={() => handleQuickAbsent(row)}
+            >
+              סימון כנעדר/ת
+            </Button>
+            <Button
+              variant="ghost"
+              className="!px-2 !py-1 !text-xs"
+              disabled={isPending}
+              onClick={() => openDetails(row)}
+            >
+              פרטים / עריכה
+            </Button>
+            {row.attendance && (
+              <Button
+                variant="ghost"
+                className="!px-2 !py-1 !text-xs"
+                disabled={isPending}
+                onClick={() => handleClear(row)}
+              >
+                נקה סימון
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Shared by both day-view tabs - only the input row list differs (filtered
+  // to absent/partial, or the full filtered set), the grouping itself is
+  // identical, so the "לפי קבוצות" tab's behavior/fields stay exactly as they
+  // were before this split.
+  function renderDayRows(rowsToRender: AttendanceTrackingRow[], options?: { showGroupOnCard?: boolean }) {
     return (
       <div className="flex flex-col gap-5">
         {groupByGroupAndSubgroup(rowsToRender).map((section) => (
@@ -290,123 +437,27 @@ export function InstructorAttendanceSection({
                     תת-קבוצה {sub.subgroupNumber}
                   </p>
                 )}
-                {sub.items.map((row) => {
-                  const status = row.attendance?.status ?? null;
-                  const isPending = pendingStudentId === row.studentId && isSaving;
-                  const horseInfo = getHorseDisplayInfo(row);
-
-                  return (
-                    <div
-                      key={`${row.studentId}-${row.dateKey}`}
-                      className="rounded-xl border border-border bg-card p-4"
-                    >
-                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-semibold text-card-foreground">{row.studentName}</span>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-xs font-medium ${horseBadgeClass(
-                              horseInfo.badgeType
-                            )}`}
-                          >
-                            {horseInfo.badgeLabel}
-                          </span>
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                              status ? STATUS_BADGE_CLASS[status] : DEFAULT_BADGE_CLASS
-                            }`}
-                          >
-                            {status ? STATUS_LABELS[status] : DEFAULT_LABEL}
-                          </span>
-                        </div>
-                      </div>
-
-                      {showGroupOnCard && (
-                        <p className="mb-1 text-xs text-muted-foreground">
-                          קבוצה: {row.groupName ?? "ללא קבוצה"}
-                          {row.subgroupNumber != null && ` · תת-קבוצה ${row.subgroupNumber}`}
-                        </p>
-                      )}
-
-                      {status === "PARTIAL" &&
-                        (row.attendance?.arrivalTime || row.attendance?.departureTime) && (
-                          <p className="mb-1 text-xs text-muted-foreground">
-                            {row.attendance.arrivalTime && `הגעה: ${row.attendance.arrivalTime}`}
-                            {row.attendance.arrivalTime && row.attendance.departureTime && " · "}
-                            {row.attendance.departureTime && `עזיבה: ${row.attendance.departureTime}`}
-                          </p>
-                        )}
-
-                      <p className="mb-1 text-xs text-muted-foreground">
-                        זמינות לתורנויות היום:{" "}
-                        <span className={row.isAvailable ? "text-success" : "text-danger"}>
-                          {row.isAvailable ? "זמין/ה" : "לא זמין/ה"}
-                        </span>
-                      </p>
-
-                      <p className="mb-1 text-xs text-muted-foreground">סוס: {horseInfo.horseNameDisplay}</p>
-
-                      <p className="mb-1 text-xs text-muted-foreground">
-                        {row.assignedDuty ? (
-                          <>
-                            תורנות: {row.assignedDuty.dutyTypeName}
-                            {" · "}
-                            <span
-                              className={
-                                row.assignedDuty.isCompleted ? "text-success" : "text-muted-foreground"
-                              }
-                            >
-                              {row.assignedDuty.isCompleted ? "בוצע" : "טרם בוצע"}
-                            </span>
-                            {!row.assignedDuty.isPublished && " · טיוטה"}
-                          </>
-                        ) : (
-                          "אין תורנות משובצת היום"
-                        )}
-                      </p>
-
-                      {row.attendance?.notes && (
-                        <p className="mb-1 text-xs text-muted-foreground">
-                          הערות / סיבה / החלפה: {row.attendance.notes}
-                        </p>
-                      )}
-
-                      {renderWarnings(row)}
-
-                      {canEdit && (
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          <Button
-                            variant="secondary"
-                            className="!px-2 !py-1 !text-xs"
-                            disabled={isPending}
-                            onClick={() => handleQuickAbsent(row)}
-                          >
-                            סימון כנעדר/ת
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            className="!px-2 !py-1 !text-xs"
-                            disabled={isPending}
-                            onClick={() => openDetails(row)}
-                          >
-                            פרטים / עריכה
-                          </Button>
-                          {row.attendance && (
-                            <Button
-                              variant="ghost"
-                              className="!px-2 !py-1 !text-xs"
-                              disabled={isPending}
-                              onClick={() => handleClear(row)}
-                            >
-                              נקה סימון
-                            </Button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                {sub.items.map((row) => renderAttendanceCard(row, options))}
               </div>
             ))}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Week-view "נעדרים וחלקיים": one date header per day that actually has an
+  // exception, followed by that day's absent/partial cards (group/subgroup
+  // shown on-card since there's no group section header here).
+  function renderWeekAbsentByDate(groups: { dateKey: string; rows: AttendanceTrackingRow[] }[]) {
+    return (
+      <div className="flex flex-col gap-5">
+        {groups.map((g) => (
+          <div key={g.dateKey} className="flex flex-col gap-3">
+            <div className="rounded-lg border border-border bg-muted px-3 py-2 text-sm font-bold text-card-foreground">
+              {formatHebrewWeekday(parseDateKey(g.dateKey))} · {formatHebrewDate(parseDateKey(g.dateKey))}
+            </div>
+            {g.rows.map((row) => renderAttendanceCard(row, { showGroupOnCard: true }))}
           </div>
         ))}
       </div>
@@ -563,94 +614,132 @@ export function InstructorAttendanceSection({
             renderDayRows(filteredRows)
           )}
         </div>
-      ) : filteredStudents.length === 0 ? (
-        <p className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
-          אין חניכים להצגה
-        </p>
       ) : (
-        <div className="flex flex-col gap-5">
-          {groupByGroupAndSubgroup(filteredStudents).map((section) => (
-            <div key={section.groupName ?? "__none__"} className="flex flex-col gap-3">
-              <div
-                className={`rounded-lg border border-border px-3 py-2 text-sm font-bold text-card-foreground ${getScheduleGroupColorClass(
-                  section.groupName
-                )}`}
-              >
-                {section.groupName ? `קבוצה ${section.groupName}` : "ללא קבוצה"}
-              </div>
-              {section.subgroups.map((sub) => (
-                <div key={sub.subgroupNumber ?? "__none__"} className="flex flex-col gap-3">
-                  {sub.subgroupNumber != null && (
-                    <p className="px-1 text-xs font-semibold text-muted-foreground">
-                      תת-קבוצה {sub.subgroupNumber}
-                    </p>
-                  )}
-                  {sub.items.map((s) => {
-                    const horseInfo = s.cells.length > 0 ? getHorseDisplayInfo(s.cells[0]) : null;
-                    return (
-                      <div key={s.studentId} className="rounded-xl border border-border bg-card p-4">
-                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                          <span className="font-semibold text-card-foreground">
-                            {s.studentName}
-                          </span>
-                          {horseInfo && (
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${horseBadgeClass(
-                                horseInfo.badgeType
-                              )}`}
-                            >
-                              {horseInfo.badgeLabel} · {horseInfo.horseNameDisplay}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex gap-1.5 overflow-x-auto pb-1">
-                          {s.cells.map((cell) => {
-                            const status = cell.attendance?.status ?? null;
-                            const hasNote = Boolean(cell.attendance?.notes);
-                            const hasWarning = cell.warnings.length > 0;
-                            return (
-                              <button
-                                key={`${s.studentId}-${cell.dateKey}`}
-                                type="button"
-                                onClick={() => openDetails(cell)}
-                                disabled={!canEdit}
-                                className={`relative flex min-w-[52px] flex-col items-center gap-0.5 rounded-lg border px-2 py-1.5 text-xs disabled:cursor-default ${
-                                  status ? STATUS_BADGE_CLASS[status] : DEFAULT_CELL_CLASS
-                                }`}
-                              >
-                                <span className="text-[10px] opacity-80">
-                                  {formatHebrewWeekdayShort(parseDateKey(cell.dateKey))}
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setWeekTab("grouped")}
+              className={`rounded-full px-4 py-2 text-sm font-medium ${
+                weekTab === "grouped"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              כל השבוע
+            </button>
+            <button
+              type="button"
+              onClick={() => setWeekTab("urgent")}
+              className={`rounded-full px-4 py-2 text-sm font-medium ${
+                weekTab === "urgent"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              נעדרים וחלקיים
+              {weekAbsentOrPartialRows.length > 0 && ` (${weekAbsentOrPartialRows.length})`}
+            </button>
+          </div>
+
+          {weekTab === "urgent" ? (
+            weekAbsentByDate.length === 0 ? (
+              <p className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
+                אין חניכים נעדרים או בנוכחות חלקית בשבוע זה
+              </p>
+            ) : (
+              renderWeekAbsentByDate(weekAbsentByDate)
+            )
+          ) : filteredStudents.length === 0 ? (
+            <p className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
+              אין חניכים להצגה
+            </p>
+          ) : (
+            <div className="flex flex-col gap-5">
+              {groupByGroupAndSubgroup(filteredStudents).map((section) => (
+                <div key={section.groupName ?? "__none__"} className="flex flex-col gap-3">
+                  <div
+                    className={`rounded-lg border border-border px-3 py-2 text-sm font-bold text-card-foreground ${getScheduleGroupColorClass(
+                      section.groupName
+                    )}`}
+                  >
+                    {section.groupName ? `קבוצה ${section.groupName}` : "ללא קבוצה"}
+                  </div>
+                  {section.subgroups.map((sub) => (
+                    <div key={sub.subgroupNumber ?? "__none__"} className="flex flex-col gap-3">
+                      {sub.subgroupNumber != null && (
+                        <p className="px-1 text-xs font-semibold text-muted-foreground">
+                          תת-קבוצה {sub.subgroupNumber}
+                        </p>
+                      )}
+                      {sub.items.map((s) => {
+                        const horseInfo = s.cells.length > 0 ? getHorseDisplayInfo(s.cells[0]) : null;
+                        return (
+                          <div key={s.studentId} className="rounded-xl border border-border bg-card p-4">
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                              <span className="font-semibold text-card-foreground">
+                                {s.studentName}
+                              </span>
+                              {horseInfo && (
+                                <span
+                                  className={`rounded-full px-2 py-0.5 text-xs font-medium ${horseBadgeClass(
+                                    horseInfo.badgeType
+                                  )}`}
+                                >
+                                  {horseInfo.badgeLabel} · {horseInfo.horseNameDisplay}
                                 </span>
-                                <span className="font-medium">
-                                  {status ? STATUS_SHORT_LABELS[status] : "–"}
-                                </span>
-                                {(hasWarning || hasNote) && (
-                                  <span className="absolute -top-1 -left-1 flex gap-0.5">
-                                    {hasWarning && (
-                                      <span
-                                        title="קיימת אזהרה"
-                                        className="h-1.5 w-1.5 rounded-full bg-warning"
-                                      />
+                              )}
+                            </div>
+                            <div className="flex gap-1.5 overflow-x-auto pb-1">
+                              {s.cells.map((cell) => {
+                                const status = cell.attendance?.status ?? null;
+                                const hasNote = Boolean(cell.attendance?.notes);
+                                const hasWarning = cell.warnings.length > 0;
+                                return (
+                                  <button
+                                    key={`${s.studentId}-${cell.dateKey}`}
+                                    type="button"
+                                    onClick={() => openDetails(cell)}
+                                    disabled={!canEdit}
+                                    className={`relative flex min-w-[52px] flex-col items-center gap-0.5 rounded-lg border px-2 py-1.5 text-xs disabled:cursor-default ${
+                                      status ? STATUS_BADGE_CLASS[status] : DEFAULT_CELL_CLASS
+                                    }`}
+                                  >
+                                    <span className="text-[10px] opacity-80">
+                                      {formatHebrewWeekdayShort(parseDateKey(cell.dateKey))}
+                                    </span>
+                                    <span className="font-medium">
+                                      {status ? STATUS_SHORT_LABELS[status] : "–"}
+                                    </span>
+                                    {(hasWarning || hasNote) && (
+                                      <span className="absolute -top-1 -left-1 flex gap-0.5">
+                                        {hasWarning && (
+                                          <span
+                                            title="קיימת אזהרה"
+                                            className="h-1.5 w-1.5 rounded-full bg-warning"
+                                          />
+                                        )}
+                                        {hasNote && (
+                                          <span
+                                            title="קיימת הערה"
+                                            className="h-1.5 w-1.5 rounded-full bg-secondary-foreground"
+                                          />
+                                        )}
+                                      </span>
                                     )}
-                                    {hasNote && (
-                                      <span
-                                        title="קיימת הערה"
-                                        className="h-1.5 w-1.5 rounded-full bg-secondary-foreground"
-                                      />
-                                    )}
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    );
-                  })}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
                 </div>
               ))}
             </div>
-          ))}
+          )}
         </div>
       )}
 
