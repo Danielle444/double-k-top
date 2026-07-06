@@ -10,11 +10,11 @@ export type FeedbackQuestionTypeValue = "RATING_5" | "COMPARISON_3" | "FREE_TEXT
 export type FeedbackQuestionSourceValue = "FIXED" | "DYNAMIC";
 
 // Question types the admin UI may set when adding/editing a question.
-// COMPARISON_3 is intentionally excluded here - it's not offered yet, per
-// the fixed-template comment above. Any pre-existing COMPARISON_3 rows
-// (none as of this stage) are unaffected since these actions only ever
-// write EditableFeedbackQuestionTypeValue values.
-export type EditableFeedbackQuestionTypeValue = "RATING_5" | "FREE_TEXT";
+// COMPARISON_3 (week-over-week comparison, 1-3) is manually added per week
+// once week-2-onward comparisons are meaningful - it's never part of
+// FIXED_QUESTION_TEMPLATE itself, only addable/editable one question at a
+// time via addWeeklyFeedbackQuestion/updateWeeklyFeedbackQuestion.
+export type EditableFeedbackQuestionTypeValue = "RATING_5" | "COMPARISON_3" | "FREE_TEXT";
 
 interface FixedQuestionTemplateItem {
   section: string;
@@ -274,7 +274,9 @@ function validateQuestionInput(
   const trimmedPrompt = prompt.trim();
   if (!trimmedSection) return { error: "יש להזין שם מקטע" };
   if (!trimmedPrompt) return { error: "יש להזין את נוסח השאלה" };
-  if (type !== "RATING_5" && type !== "FREE_TEXT") return { error: "סוג שאלה לא תקין" };
+  if (type !== "RATING_5" && type !== "COMPARISON_3" && type !== "FREE_TEXT") {
+    return { error: "סוג שאלה לא תקין" };
+  }
   return { section: trimmedSection, prompt: trimmedPrompt };
 }
 

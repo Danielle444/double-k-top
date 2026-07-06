@@ -143,21 +143,28 @@ export function StudentWeeklyFeedbackSection({
                     className="w-full rounded-xl border border-border px-3 py-2 text-sm"
                   />
                 ) : (
-                  <div className="flex gap-2">
-                    {ratingRange(q.type).map((value) => (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() => handleSetRating(q.id, value)}
-                        className={`flex h-11 w-11 items-center justify-center rounded-full border text-base font-bold transition-colors ${
-                          answers[q.id]?.ratingValue === value
-                            ? "border-primary bg-primary text-primary-foreground"
-                            : "border-border bg-card text-card-foreground active:bg-muted"
-                        }`}
-                      >
-                        {value}
-                      </button>
-                    ))}
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex gap-2">
+                      {ratingRange(q.type).map((value) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => handleSetRating(q.id, value)}
+                          className={`flex h-11 w-11 items-center justify-center rounded-full border text-base font-bold transition-colors ${
+                            answers[q.id]?.ratingValue === value
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border bg-card text-card-foreground active:bg-muted"
+                          }`}
+                        >
+                          {value}
+                        </button>
+                      ))}
+                    </div>
+                    {q.type === "COMPARISON_3" && (
+                      <p className="text-xs text-muted-foreground">
+                        1 = פחות טוב · 2 = ללא שינוי · 3 = השתפר
+                      </p>
+                    )}
                   </div>
                 )}
               </div>

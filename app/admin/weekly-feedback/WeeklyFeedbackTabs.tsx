@@ -80,13 +80,14 @@ function isQuestionsEditable(form: { status: WeeklyFeedbackStatusValue; opensAt:
 
 const TYPE_LABELS: Record<FeedbackQuestionTypeValue, string> = {
   RATING_5: "דירוג 1–5",
-  COMPARISON_3: "השוואה לשבוע שעבר (1–3)",
+  COMPARISON_3: "השוואה לשבוע קודם 1–3",
   FREE_TEXT: "טקסט חופשי",
 };
 
-// Only these two types may be assigned via the draft-editing UI - COMPARISON_3
-// is deferred (see FIXED_QUESTION_TEMPLATE's doc comment in weekly-feedback.ts).
-const EDITABLE_TYPE_OPTIONS: EditableFeedbackQuestionTypeValue[] = ["RATING_5", "FREE_TEXT"];
+// All three types may be assigned via the draft-editing UI - COMPARISON_3 is
+// never part of FIXED_QUESTION_TEMPLATE itself (see its doc comment in
+// weekly-feedback.ts), but admins can add/edit it manually per week here.
+const EDITABLE_TYPE_OPTIONS: EditableFeedbackQuestionTypeValue[] = ["RATING_5", "COMPARISON_3", "FREE_TEXT"];
 
 function weekRangeLabel(startDate: string, endDate: string): string {
   return `${formatHebrewDate(parseDateKey(startDate))} - ${formatHebrewDate(parseDateKey(endDate))}`;
@@ -296,7 +297,7 @@ export function WeeklyFeedbackTabs({
     setEditingQuestionId(question.id);
     setEditSection(question.section);
     setEditPrompt(question.prompt);
-    setEditType(question.type === "COMPARISON_3" ? "RATING_5" : question.type);
+    setEditType(question.type);
     setEditQuestionError(null);
   }
 
@@ -800,7 +801,7 @@ export function WeeklyFeedbackTabs({
                               <Button
                                 variant="ghost"
                                 className="!px-2 !py-0.5 !text-xs"
-                                disabled={isQuestionMutating || q.type === "COMPARISON_3"}
+                                disabled={isQuestionMutating}
                                 onClick={() => startEditQuestion(q)}
                               >
                                 עריכה
@@ -1097,7 +1098,10 @@ export function WeeklyFeedbackTabs({
                               {q.averageRating != null ? (
                                 <span
                                   className={`rounded-full px-2.5 py-1 text-sm font-bold ${
-                                    q.averageRating < 3
+                                    // COMPARISON_3's midpoint (2 = "ללא שינוי") is the neutral
+                                    // value, unlike RATING_5's midpoint - a plain "< 3" threshold
+                                    // would wrongly flag a neutral 2.0 average as low/bad.
+                                    q.averageRating < (q.type === "COMPARISON_3" ? 2 : 3)
                                       ? "bg-danger-muted text-danger"
                                       : "bg-success-muted text-success"
                                   }`}
