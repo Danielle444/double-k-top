@@ -17,7 +17,7 @@ export function Logo({ variant = "full", width = 220, className = "" }: LogoProp
       >
         <Image
           src="/logo.jpeg"
-          alt="Double K Ranch"
+          alt="Double K Top"
           fill
           className="object-cover object-top"
           sizes={`${width}px`}
@@ -30,7 +30,7 @@ export function Logo({ variant = "full", width = 220, className = "" }: LogoProp
   return (
     <Image
       src="/logo.jpeg"
-      alt="Double K Ranch - קורסי מדריכים ומאמנים"
+      alt="Double K Top - קורסי מדריכים ומאמנים"
       width={width}
       height={Math.round(width * LOGO_ASPECT_RATIO)}
       className={className}

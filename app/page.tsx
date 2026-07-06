@@ -4,24 +4,27 @@ import { Logo } from "@/lib/components/Logo";
 export default function Home() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-background px-4 py-16 text-center">
-      <Logo width={260} />
-      <h1 className="text-2xl font-bold text-card-foreground">Double K Top</h1>
-      <div className="flex flex-col gap-3 sm:flex-row">
+      <Logo width={260} className="h-auto w-full max-w-[260px]" />
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight text-card-foreground">Double K Top</h1>
+        <p className="mt-1 text-base text-muted-foreground">מערכת ניהול קורס מדריכים</p>
+      </div>
+      <div className="flex w-full max-w-sm flex-col gap-3 sm:max-w-none sm:flex-row">
         <Link
           href="/admin"
-          className="rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground hover:opacity-90"
+          className="rounded-xl bg-primary px-6 py-3.5 text-sm font-semibold text-primary-foreground shadow-sm transition-opacity hover:opacity-90"
         >
           כניסת מנהל/ת קורס
         </Link>
         <Link
           href="/student"
-          className="rounded-lg bg-secondary px-6 py-3 text-sm font-medium text-secondary-foreground hover:opacity-80"
+          className="rounded-xl bg-secondary px-6 py-3.5 text-sm font-semibold text-secondary-foreground shadow-sm transition-opacity hover:opacity-80"
         >
           כניסת חניך/ה
         </Link>
         <Link
           href="/instructor"
-          className="rounded-lg bg-muted px-6 py-3 text-sm font-medium text-muted-foreground hover:opacity-80"
+          className="rounded-xl bg-muted px-6 py-3.5 text-sm font-semibold text-muted-foreground shadow-sm transition-opacity hover:opacity-80"
         >
           כניסת מדריך/ה
         </Link>

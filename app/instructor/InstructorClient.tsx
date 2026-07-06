@@ -275,9 +275,12 @@ export function InstructorClient({
   if (!session) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-6 px-4 py-10">
-        <Logo width={220} />
-        <p className="-mt-4 text-sm font-semibold text-muted-foreground">אזור מדריכים</p>
-        <div className="w-full rounded-2xl border border-border bg-card p-6">
+        <Logo width={220} className="h-auto w-full max-w-[220px]" />
+        <div className="-mt-4 text-center">
+          <p className="text-lg font-bold tracking-tight text-card-foreground">Double K Top</p>
+          <p className="text-sm font-semibold text-muted-foreground">קורס מדריכים · אזור מדריכים</p>
+        </div>
+        <div className="w-full rounded-2xl border border-border bg-card p-6 shadow-sm">
           <h1 className="mb-1 text-2xl font-bold text-card-foreground">כניסת מדריך/ה</h1>
           <p className="mb-4 text-base text-muted-foreground">
             הקלידו את שמכם ובחרו אותו מהרשימה
@@ -369,11 +372,13 @@ export function InstructorClient({
 
   return (
     <div className="flex flex-1 flex-col">
-      <header className="sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-card px-4 py-3">
-        <Logo variant="mark" width={28} />
-        <div>
-          <p className="text-xs font-semibold text-muted-foreground">אזור מדריכים</p>
-          <p className="text-base font-bold text-card-foreground">{activeTabLabel}</p>
+      <header className="sticky top-0 z-20 flex items-center gap-2.5 border-b border-border bg-card px-4 py-3 shadow-sm">
+        <Logo variant="mark" width={36} className="shrink-0" />
+        <div className="min-w-0">
+          <p className="truncate text-[11px] font-semibold text-muted-foreground">
+            Double K Top · אזור מדריכים
+          </p>
+          <p className="truncate text-base font-bold text-card-foreground">{activeTabLabel}</p>
         </div>
       </header>
 
@@ -384,9 +389,9 @@ export function InstructorClient({
       <main className="flex-1 px-4 py-4 pb-28">
         {activeTab === "today" && (
           <div className="flex flex-col gap-4">
-            <div className="rounded-2xl border border-border bg-card p-5">
+            <div className="rounded-2xl border border-border bg-card p-5 shadow-sm">
               <p className="text-sm font-semibold text-muted-foreground">שלום, {session.fullName}</p>
-              <p className="text-xl font-bold text-card-foreground">
+              <p className="text-2xl font-bold tracking-tight text-card-foreground">
                 {formatHebrewWeekday(parseDateKey(todayKey))} · {formatHebrewDate(parseDateKey(todayKey))}
               </p>
               {ridingSummary && (
