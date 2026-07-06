@@ -4,7 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
-import { dateKey } from "@/lib/dates";
+import { dateKey, parseDateKey } from "@/lib/dates";
 import { buildScheduleSlots } from "@/lib/schedule-grouping";
 import type { ActionResult } from "@/lib/actions/students";
 
@@ -411,11 +411,73 @@ export interface WeeklyRidingDay {
   activities: WeeklyRidingActivity[];
 }
 
-// Read-only overview of every displayed activity across a whole week,
-// classified exactly like the admin already sees it. buildScheduleSlots is
-// run once PER DAY (never across the whole week's mixed-date items) since
-// it compares startTime/endTime as plain strings - mixing dates could
+type ScheduleItemForOverview = {
+  id: string;
+  startTime: string;
+  endTime: string;
+  title: string;
+  description: string | null;
+  groupName: string | null;
+  instructorName: string | null;
+  location: string | null;
+};
+
+// Shared by getWeeklyRidingOverview and getInstructorRidingSlots - classifies
+// one day's ScheduleItem rows exactly like the admin already sees them.
+// Callers must only ever pass items from a single date; buildScheduleSlots
+// compares startTime/endTime as plain strings, so mixing dates could
 // incorrectly merge unrelated activities that happen to share HH:MM times.
+async function buildActivitiesForDay<T extends ScheduleItemForOverview>(
+  dk: string,
+  dayItems: T[]
+): Promise<WeeklyRidingActivity[]> {
+  const slots = buildScheduleSlots(dayItems);
+
+  // Flatten each display "box" into one activity row: single/merged is one
+  // box; pair is two separate boxes (different titles, shown side by side);
+  // span is the one long box plus each of the other side's several short
+  // boxes.
+  const rawActivities: T[] = [];
+  for (const slot of slots) {
+    if (slot.kind === "single" || slot.kind === "merged") {
+      rawActivities.push(slot.item);
+    } else if (slot.kind === "pair") {
+      rawActivities.push(slot.items[0], slot.items[1]);
+    } else {
+      const longSide = slot.groupA.length === 1 ? slot.groupA : slot.groupB;
+      const shortSide = slot.groupA.length === 1 ? slot.groupB : slot.groupA;
+      rawActivities.push(...longSide, ...shortSide);
+    }
+  }
+
+  const activities: WeeklyRidingActivity[] = [];
+  for (const item of rawActivities) {
+    const scheduleItemIds = item.id.split("+");
+    const isLikelyRiding =
+      item.title.includes("רכיבה") || (item.description ?? "").includes("רכיבה");
+    const ridingSlot = await resolveRidingSlotForIds(scheduleItemIds);
+    activities.push({
+      scheduleItemIds,
+      dateKey: dk,
+      startTime: item.startTime,
+      endTime: item.endTime,
+      title: item.title,
+      groupName: item.groupName,
+      instructorName: item.instructorName,
+      location: item.location,
+      isLikelyRiding,
+      ridingSlot,
+    });
+  }
+  activities.sort(
+    (a, b) => a.startTime.localeCompare(b.startTime) || a.endTime.localeCompare(b.endTime)
+  );
+
+  return activities;
+}
+
+// Read-only overview of every displayed activity across a whole week,
+// classified exactly like the admin already sees it.
 export async function getWeeklyRidingOverview(weeklyScheduleId: string): Promise<WeeklyRidingDay[]> {
   await requireAdmin();
 
@@ -436,50 +498,53 @@ export async function getWeeklyRidingOverview(weeklyScheduleId: string): Promise
   const sortedDateKeys = Array.from(byDate.keys()).sort();
 
   for (const dk of sortedDateKeys) {
-    const dayItems = byDate.get(dk)!;
-    const slots = buildScheduleSlots(dayItems);
-
-    // Flatten each display "box" into one activity row: single/merged is
-    // one box; pair is two separate boxes (different titles, shown side by
-    // side); span is the one long box plus each of the other side's several
-    // short boxes.
-    const rawActivities: (typeof dayItems)[number][] = [];
-    for (const slot of slots) {
-      if (slot.kind === "single" || slot.kind === "merged") {
-        rawActivities.push(slot.item);
-      } else if (slot.kind === "pair") {
-        rawActivities.push(slot.items[0], slot.items[1]);
-      } else {
-        const longSide = slot.groupA.length === 1 ? slot.groupA : slot.groupB;
-        const shortSide = slot.groupA.length === 1 ? slot.groupB : slot.groupA;
-        rawActivities.push(...longSide, ...shortSide);
-      }
-    }
-
-    const activities: WeeklyRidingActivity[] = [];
-    for (const item of rawActivities) {
-      const scheduleItemIds = item.id.split("+");
-      const isLikelyRiding =
-        item.title.includes("רכיבה") || (item.description ?? "").includes("רכיבה");
-      const ridingSlot = await resolveRidingSlotForIds(scheduleItemIds);
-      activities.push({
-        scheduleItemIds,
-        dateKey: dk,
-        startTime: item.startTime,
-        endTime: item.endTime,
-        title: item.title,
-        groupName: item.groupName,
-        instructorName: item.instructorName,
-        location: item.location,
-        isLikelyRiding,
-        ridingSlot,
-      });
-    }
-    activities.sort(
-      (a, b) => a.startTime.localeCompare(b.startTime) || a.endTime.localeCompare(b.endTime)
-    );
-
+    const activities = await buildActivitiesForDay(dk, byDate.get(dk)!);
     days.push({ dateKey: dk, activities });
+  }
+
+  return days;
+}
+
+// Instructors have no NextAuth session in this app - viewing riding slots is
+// intentionally unrestricted here, mirroring getAttendanceTrackingForInstructor
+// / getDutyAssignmentsForInstructor. Takes a plain date range (not a specific
+// WeeklySchedule id) since the instructor screen has its own day/week picker,
+// independent of any single uploaded schedule.
+//
+// Operational view, not a setup view: unlike getWeeklyRidingOverview (which
+// admin uses to find/mark candidate activities and deliberately includes
+// every schedule item), this only ever returns activities that already have
+// a RidingSlot - an instructor's "כל הרכיבות" must mean "all riding slots
+// admin has defined," never "the entire weekly timetable."
+export async function getInstructorRidingSlots(
+  startDateKey: string,
+  endDateKey: string
+): Promise<WeeklyRidingDay[]> {
+  const start = parseDateKey(startDateKey);
+  const end = parseDateKey(endDateKey);
+
+  const items = await prisma.scheduleItem.findMany({
+    where: { date: { gte: start, lte: end } },
+    orderBy: [{ date: "asc" }, { startTime: "asc" }],
+  });
+
+  const byDate = new Map<string, typeof items>();
+  for (const item of items) {
+    const dk = dateKey(item.date);
+    if (!byDate.has(dk)) byDate.set(dk, []);
+    byDate.get(dk)!.push(item);
+  }
+
+  const days: WeeklyRidingDay[] = [];
+  const sortedDateKeys = Array.from(byDate.keys()).sort();
+
+  for (const dk of sortedDateKeys) {
+    const activities = (await buildActivitiesForDay(dk, byDate.get(dk)!)).filter(
+      (a) => a.ridingSlot !== null
+    );
+    if (activities.length > 0) {
+      days.push({ dateKey: dk, activities });
+    }
   }
 
   return days;
@@ -668,4 +733,154 @@ export async function bulkSetRidingVisibility(
 
   revalidatePath("/admin/weekly-schedule");
   return { success: true, summary };
+}
+
+export interface RidingSlotStudentRow {
+  studentId: string;
+  studentName: string;
+  groupName: string | null;
+  subgroupNumber: number | null;
+  hasPrivateHorse: boolean;
+  privateHorseName: string | null;
+  assignedHorseName: string | null;
+  note: string | null;
+  ratingHalfPoints: number | null;
+  // Overrides the student's normal horse for this riding session only - see
+  // RidingLessonNote.sessionHorseName. Null means "no override, use the
+  // normal horse."
+  sessionHorseName: string | null;
+  updatedByName: string | null;
+  // ISO string, null when no note/rating has ever been saved for this
+  // student+slot - kept for the future student history view too.
+  updatedAt: string | null;
+}
+
+// Read-only, unrestricted view (same "all instructors can view" convention
+// as the riding slot itself) - never creates anything. Derives which
+// students are "relevant" to this slot from its own assignment splits:
+// - a (groupName, subgroupNumber) split -> students matching both fields.
+// - a (groupName, null) split -> students matching that group, any subgroup.
+// - a whole-slot split (null, null), or no assignments at all yet -> falls
+//   back to the underlying ScheduleItem's own groupName (every student in
+//   that group), or every active student when the item has no single group
+//   (a "שתי הקבוצות" activity) - matching how the item is actually displayed.
+// Multiple splits are unioned (a student matching more than one split still
+// appears once - Prisma OR against one table never duplicates rows).
+export async function getRidingSlotStudentNotes(ridingSlotId: string): Promise<RidingSlotStudentRow[]> {
+  const slot = await prisma.ridingSlot.findUnique({
+    where: { id: ridingSlotId },
+    include: {
+      assignments: true,
+      notes: true,
+      scheduleItem: { select: { groupName: true } },
+    },
+  });
+  if (!slot) return [];
+
+  const scheduleItemGroupName = slot.scheduleItem.groupName;
+
+  const filters: { groupName: string | null; subgroupNumber: number | null }[] =
+    slot.assignments.length > 0
+      ? slot.assignments.map((a) =>
+          a.groupName === null && a.subgroupNumber === null
+            ? { groupName: scheduleItemGroupName, subgroupNumber: null }
+            : { groupName: a.groupName, subgroupNumber: a.subgroupNumber }
+        )
+      : [{ groupName: scheduleItemGroupName, subgroupNumber: null }];
+
+  const students = await prisma.student.findMany({
+    where: {
+      isActive: true,
+      OR: filters.map((f) => ({
+        ...(f.groupName !== null ? { groupName: f.groupName } : {}),
+        ...(f.subgroupNumber !== null ? { subgroupNumber: f.subgroupNumber } : {}),
+      })),
+    },
+    orderBy: { fullName: "asc" },
+  });
+
+  const noteByStudentId = new Map(slot.notes.map((n) => [n.studentId, n]));
+
+  return students.map((s) => {
+    const note = noteByStudentId.get(s.id);
+    return {
+      studentId: s.id,
+      studentName: s.fullName,
+      groupName: s.groupName,
+      subgroupNumber: s.subgroupNumber,
+      hasPrivateHorse: s.hasPrivateHorse,
+      privateHorseName: s.privateHorseName,
+      assignedHorseName: s.assignedHorseName,
+      note: note?.note ?? null,
+      ratingHalfPoints: note?.ratingHalfPoints ?? null,
+      sessionHorseName: note?.sessionHorseName ?? null,
+      updatedByName: note?.updatedByName ?? null,
+      updatedAt: note?.updatedAt ? note.updatedAt.toISOString() : null,
+    };
+  });
+}
+
+export interface RidingLessonNoteInput {
+  note?: string;
+  ratingHalfPoints?: number | null;
+  sessionHorseName?: string;
+}
+
+export interface RidingLessonNoteActionResult extends ActionResult {
+  updatedByName?: string | null;
+  updatedAt?: string | null;
+}
+
+// Instructors have no NextAuth session in this app, so the permission check
+// re-reads canEditRidingNotes from the DB by instructorId on every call - it
+// never trusts a client-supplied boolean. This is the only gate; UI hiding
+// of edit controls is not relied upon. Viewing (getRidingSlotStudentNotes
+// above) has no such gate - matches the attendance pattern exactly.
+export async function upsertRidingLessonNoteAsInstructor(
+  instructorId: string,
+  ridingSlotId: string,
+  studentId: string,
+  input: RidingLessonNoteInput
+): Promise<RidingLessonNoteActionResult> {
+  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
+  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
+    return { success: false, error: "אין הרשאה לערוך הערות רכיבה" };
+  }
+
+  const ridingSlot = await prisma.ridingSlot.findUnique({ where: { id: ridingSlotId } });
+  if (!ridingSlot) {
+    return { success: false, error: NOT_FOUND_RIDING_SLOT };
+  }
+
+  const student = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!student) {
+    return { success: false, error: "התלמיד/ה לא נמצא/ה" };
+  }
+
+  const ratingHalfPoints = input.ratingHalfPoints ?? null;
+  if (
+    ratingHalfPoints !== null &&
+    (!Number.isInteger(ratingHalfPoints) || ratingHalfPoints < 2 || ratingHalfPoints > 10)
+  ) {
+    return { success: false, error: "דירוג לא תקין - יש לבחור ערך בין 1 ל-5" };
+  }
+
+  const note = input.note?.trim() || null;
+  const sessionHorseName = input.sessionHorseName?.trim() || null;
+
+  const saved = await prisma.ridingLessonNote.upsert({
+    where: { ridingSlotId_studentId: { ridingSlotId, studentId } },
+    update: { note, ratingHalfPoints, sessionHorseName, updatedByName: instructor.fullName },
+    create: {
+      ridingSlotId,
+      studentId,
+      note,
+      ratingHalfPoints,
+      sessionHorseName,
+      updatedByName: instructor.fullName,
+    },
+  });
+
+  revalidatePath("/instructor");
+  return { success: true, updatedByName: saved.updatedByName, updatedAt: saved.updatedAt.toISOString() };
 }
