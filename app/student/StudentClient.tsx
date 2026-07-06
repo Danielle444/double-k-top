@@ -85,6 +85,13 @@ export function StudentClient() {
   const [results, setResults] = useState<StudentSearchResult[]>([]);
   const [selected, setSelected] = useState<StudentSearchResult | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
+  // Shown on the login screen after a background refresh discovers the
+  // stored account is no longer valid (deactivated/deleted) and clears it.
+  const [sessionInvalidMessage, setSessionInvalidMessage] = useState<string | null>(null);
+  // Small non-blocking notice for a failed background refresh (network/DB
+  // hiccup) - the existing stored session is deliberately left alone here,
+  // this never forces a logout.
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<MainTabId>("today");
   const [weeks, setWeeks] = useState<WeekOption[] | null>(null);
@@ -127,11 +134,28 @@ export function StudentClient() {
     // subgroupNumber existed) would otherwise keep showing stale/missing data.
     if (!session) return;
     let cancelled = false;
-    getStudentProfile(session.id).then((profile) => {
-      if (cancelled || !profile) return;
-      setSession(profile);
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
-    });
+    getStudentProfile(session.id)
+      .then((profile) => {
+        if (cancelled) return;
+        if (!profile) {
+          // Account deactivated/deleted since it was last stored - the
+          // stale session must not keep rendering the full app, so it's
+          // cleared here rather than silently left in place.
+          window.localStorage.removeItem(STORAGE_KEY);
+          setSession(null);
+          setSessionInvalidMessage("המשתמש/ת אינו/ה פעיל/ה יותר - יש להתחבר מחדש");
+          return;
+        }
+        setRefreshError(null);
+        setSession(profile);
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+      })
+      .catch(() => {
+        // Network/server hiccup - never log the user out for this; the
+        // already-stored session keeps being used as-is.
+        if (cancelled) return;
+        setRefreshError("לא ניתן היה לרענן את פרטי המשתמש כרגע");
+      });
     return () => {
       cancelled = true;
     };
@@ -180,6 +204,7 @@ export function StudentClient() {
       }
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(result.student));
       setSession(result.student);
+      setSessionInvalidMessage(null);
     });
   }
 
@@ -189,6 +214,8 @@ export function StudentClient() {
     setSelected(null);
     setQuery("");
     setActiveTab("today");
+    setSessionInvalidMessage(null);
+    setRefreshError(null);
   }
 
   function startEditingHorseName() {
@@ -231,6 +258,12 @@ export function StudentClient() {
           <p className="mb-4 text-base text-muted-foreground">
             הקלידו את שמכם ובחרו אותו מהרשימה
           </p>
+
+          {sessionInvalidMessage && (
+            <p className="mb-4 rounded-lg bg-danger-muted p-3 text-sm text-danger">
+              {sessionInvalidMessage}
+            </p>
+          )}
 
           {!selected ? (
             <div className="flex flex-col gap-2">
@@ -317,6 +350,10 @@ export function StudentClient() {
           <p className="text-base font-bold text-card-foreground">{activeTabLabel}</p>
         </div>
       </header>
+
+      {refreshError && (
+        <p className="bg-warning-muted px-4 py-2 text-center text-xs text-warning">{refreshError}</p>
+      )}
 
       <main className="flex-1 px-4 py-4 pb-28">
         {activeTab === "today" && (
