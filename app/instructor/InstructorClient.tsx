@@ -438,13 +438,14 @@ export function InstructorClient({
 
   return (
     <div className="flex flex-1 flex-col">
-      <header className="sticky top-0 z-20 flex items-center gap-2.5 border-b border-border bg-card px-4 py-3 shadow-sm">
-        <Logo variant="mark" width={36} className="shrink-0" />
+      <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-card px-4 py-3 shadow-sm">
+        <Logo variant="mark" width={44} className="shrink-0 ring-1 ring-border" />
         <div className="min-w-0">
-          <p className="truncate text-[11px] font-semibold text-muted-foreground">
-            Double K Top · אזור מדריכים
+          <p className="truncate text-base font-extrabold tracking-tight text-primary">
+            Double K Top{" "}
+            <span className="text-xs font-semibold text-muted-foreground">· אזור מדריכים</span>
           </p>
-          <p className="truncate text-base font-bold text-card-foreground">{activeTabLabel}</p>
+          <p className="truncate text-xs font-medium text-muted-foreground">{activeTabLabel}</p>
         </div>
       </header>
 
