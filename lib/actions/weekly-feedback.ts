@@ -607,3 +607,230 @@ export async function submitWeeklyFeedback(
 
   return { success: true };
 }
+
+export interface WeeklyFeedbackResultsFormInfo {
+  id: string;
+  title: string;
+  status: WeeklyFeedbackStatusValue;
+  opensAt: string | null;
+  closesAt: string | null;
+  publishedAt: string | null;
+  closedAt: string | null;
+  weekName: string;
+  weekStartDate: string;
+  weekEndDate: string;
+}
+
+export interface WeeklyFeedbackResultsSummary {
+  activeTraineeCount: number;
+  submittedCount: number;
+  notSubmittedCount: number;
+}
+
+export interface WeeklyFeedbackSubmittedTrainee {
+  studentId: string;
+  fullName: string;
+  groupName: string | null;
+  submittedAt: string;
+}
+
+export interface WeeklyFeedbackNotSubmittedTrainee {
+  studentId: string;
+  fullName: string;
+  groupName: string | null;
+}
+
+export interface WeeklyFeedbackRatingDistributionEntry {
+  value: number;
+  count: number;
+}
+
+export interface WeeklyFeedbackFreeTextAnswer {
+  studentId: string;
+  studentName: string;
+  submittedAt: string;
+  text: string;
+}
+
+export interface WeeklyFeedbackQuestionResult {
+  questionId: string;
+  section: string;
+  prompt: string;
+  type: FeedbackQuestionTypeValue;
+  sortOrder: number;
+  answerCount: number;
+  averageRating: number | null;
+  ratingDistribution: WeeklyFeedbackRatingDistributionEntry[] | null;
+  freeTextAnswers: WeeklyFeedbackFreeTextAnswer[] | null;
+}
+
+export interface WeeklyFeedbackTraineeResponseAnswer {
+  questionId: string;
+  section: string;
+  prompt: string;
+  type: FeedbackQuestionTypeValue;
+  ratingValue: number | null;
+  textValue: string | null;
+}
+
+export interface WeeklyFeedbackTraineeResponse {
+  studentId: string;
+  studentName: string;
+  submittedAt: string;
+  answers: WeeklyFeedbackTraineeResponseAnswer[];
+}
+
+export interface WeeklyFeedbackResults {
+  form: WeeklyFeedbackResultsFormInfo;
+  summary: WeeklyFeedbackResultsSummary;
+  submittedTrainees: WeeklyFeedbackSubmittedTrainee[];
+  notSubmittedTrainees: WeeklyFeedbackNotSubmittedTrainee[];
+  questionResults: WeeklyFeedbackQuestionResult[];
+  traineeResponses: WeeklyFeedbackTraineeResponse[];
+}
+
+// Active trainees are the denominator for the summary/not-submitted list -
+// a trainee who submitted and was later deactivated still shows up in
+// submittedTrainees/traineeResponses (their answer is real historical data),
+// but doesn't count toward activeTraineeCount/submittedCount so the "X מתוך
+// Y" figure always reflects the currently-active roster.
+export async function getWeeklyFeedbackResults(formId: string): Promise<WeeklyFeedbackResults | null> {
+  await requireAdmin();
+
+  const form = await prisma.weeklyFeedbackForm.findUnique({
+    where: { id: formId },
+    include: {
+      weeklySchedule: { select: { name: true, startDate: true, endDate: true } },
+      questions: { orderBy: { sortOrder: "asc" } },
+      responses: {
+        orderBy: { submittedAt: "asc" },
+        include: {
+          student: { select: { id: true, fullName: true, groupName: true } },
+          answers: true,
+        },
+      },
+    },
+  });
+  if (!form) return null;
+
+  const activeStudents = await prisma.student.findMany({
+    where: { isActive: true },
+    select: { id: true, fullName: true, groupName: true },
+    orderBy: { fullName: "asc" },
+  });
+
+  const submittedStudentIds = new Set(form.responses.map((r) => r.studentId));
+  const activeSubmittedCount = activeStudents.filter((s) => submittedStudentIds.has(s.id)).length;
+
+  const summary: WeeklyFeedbackResultsSummary = {
+    activeTraineeCount: activeStudents.length,
+    submittedCount: activeSubmittedCount,
+    notSubmittedCount: activeStudents.length - activeSubmittedCount,
+  };
+
+  const submittedTrainees: WeeklyFeedbackSubmittedTrainee[] = form.responses
+    .map((r) => ({
+      studentId: r.studentId,
+      fullName: r.student.fullName,
+      groupName: r.student.groupName,
+      submittedAt: r.submittedAt.toISOString(),
+    }))
+    .sort((a, b) => a.fullName.localeCompare(b.fullName, "he"));
+
+  const notSubmittedTrainees: WeeklyFeedbackNotSubmittedTrainee[] = activeStudents
+    .filter((s) => !submittedStudentIds.has(s.id))
+    .map((s) => ({ studentId: s.id, fullName: s.fullName, groupName: s.groupName }));
+
+  const answersByQuestionId = new Map<string, { response: (typeof form.responses)[number]; answer: (typeof form.responses)[number]["answers"][number] }[]>();
+  for (const response of form.responses) {
+    for (const answer of response.answers) {
+      const list = answersByQuestionId.get(answer.questionId) ?? [];
+      list.push({ response, answer });
+      answersByQuestionId.set(answer.questionId, list);
+    }
+  }
+
+  const questionResults: WeeklyFeedbackQuestionResult[] = form.questions.map((question) => {
+    const entries = answersByQuestionId.get(question.id) ?? [];
+
+    if (question.type === "FREE_TEXT") {
+      const freeTextAnswers: WeeklyFeedbackFreeTextAnswer[] = entries
+        .filter((e) => e.answer.textValue && e.answer.textValue.trim() !== "")
+        .map((e) => ({
+          studentId: e.response.studentId,
+          studentName: e.response.student.fullName,
+          submittedAt: e.response.submittedAt.toISOString(),
+          text: e.answer.textValue as string,
+        }));
+      return {
+        questionId: question.id,
+        section: question.section,
+        prompt: question.prompt,
+        type: question.type,
+        sortOrder: question.sortOrder,
+        answerCount: freeTextAnswers.length,
+        averageRating: null,
+        ratingDistribution: null,
+        freeTextAnswers,
+      };
+    }
+
+    const ratings = entries
+      .map((e) => e.answer.ratingValue)
+      .filter((v): v is number => v != null);
+    const maxValue = question.type === "COMPARISON_3" ? 3 : 5;
+    const ratingDistribution: WeeklyFeedbackRatingDistributionEntry[] = Array.from(
+      { length: maxValue },
+      (_, i) => ({ value: i + 1, count: ratings.filter((r) => r === i + 1).length })
+    );
+
+    return {
+      questionId: question.id,
+      section: question.section,
+      prompt: question.prompt,
+      type: question.type,
+      sortOrder: question.sortOrder,
+      answerCount: ratings.length,
+      averageRating: ratings.length > 0 ? ratings.reduce((sum, r) => sum + r, 0) / ratings.length : null,
+      ratingDistribution,
+      freeTextAnswers: null,
+    };
+  });
+
+  const traineeResponses: WeeklyFeedbackTraineeResponse[] = form.responses.map((response) => ({
+    studentId: response.studentId,
+    studentName: response.student.fullName,
+    submittedAt: response.submittedAt.toISOString(),
+    answers: form.questions.map((question) => {
+      const answer = response.answers.find((a) => a.questionId === question.id);
+      return {
+        questionId: question.id,
+        section: question.section,
+        prompt: question.prompt,
+        type: question.type,
+        ratingValue: answer?.ratingValue ?? null,
+        textValue: answer?.textValue ?? null,
+      };
+    }),
+  }));
+
+  return {
+    form: {
+      id: form.id,
+      title: form.title,
+      status: form.status,
+      opensAt: form.opensAt ? form.opensAt.toISOString() : null,
+      closesAt: form.closesAt ? form.closesAt.toISOString() : null,
+      publishedAt: form.publishedAt ? form.publishedAt.toISOString() : null,
+      closedAt: form.closedAt ? form.closedAt.toISOString() : null,
+      weekName: form.weeklySchedule.name,
+      weekStartDate: dateKey(form.weeklySchedule.startDate),
+      weekEndDate: dateKey(form.weeklySchedule.endDate),
+    },
+    summary,
+    submittedTrainees,
+    notSubmittedTrainees,
+    questionResults,
+    traineeResponses,
+  };
+}

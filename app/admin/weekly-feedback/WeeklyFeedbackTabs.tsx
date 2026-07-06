@@ -8,6 +8,7 @@ import {
   createWeeklyFeedbackDraft,
   deleteWeeklyFeedbackQuestion,
   getWeeklyFeedbackDraftForAdmin,
+  getWeeklyFeedbackResults,
   listWeeklyFeedbackForms,
   publishWeeklyFeedbackForm,
   reorderWeeklyFeedbackQuestions,
@@ -18,17 +19,20 @@ import {
   type WeeklyFeedbackDraft,
   type WeeklyFeedbackDraftQuestion,
   type WeeklyFeedbackFormListItem,
+  type WeeklyFeedbackQuestionResult,
+  type WeeklyFeedbackResults,
   type WeeklyFeedbackStatusValue,
 } from "@/lib/actions/weekly-feedback";
 import type { WeeklyScheduleOption } from "@/lib/actions/weekly-schedule";
-import { formatHebrewDate, parseDateKey } from "@/lib/dates";
+import { formatHebrewDate, formatHebrewDateTime, parseDateKey } from "@/lib/dates";
 
-type Tab = "list" | "draft" | "schedule";
+type Tab = "list" | "draft" | "schedule" | "results";
 
 const TAB_LABELS: Record<Tab, string> = {
   list: "רשימת משובים",
   draft: "בניית טיוטה / צפייה בשאלות",
   schedule: "הגדרות פתיחה וסגירה",
+  results: "תוצאות",
 };
 
 interface AvailabilityInput {
@@ -366,6 +370,29 @@ export function WeeklyFeedbackTabs({
     });
   }
 
+  const [results, setResults] = useState<WeeklyFeedbackResults | null>(null);
+  const [isResultsLoading, setIsResultsLoading] = useState(false);
+
+  // Only fetched while the "תוצאות" tab is actually open - unlike the draft
+  // loader above (shared by the draft/schedule tabs), this query pulls every
+  // response+answer for the form, so it's not worth loading on every
+  // selectedFormId change regardless of which tab is showing.
+  useEffect(() => {
+    if (!selectedFormId || tab !== "results") return;
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIsResultsLoading(true);
+    getWeeklyFeedbackResults(selectedFormId).then((result) => {
+      if (!cancelled) {
+        setResults(result);
+        setIsResultsLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFormId, tab]);
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap gap-2">
@@ -450,6 +477,13 @@ export function WeeklyFeedbackTabs({
                         onClick={() => openForm(form.id, "schedule")}
                       >
                         הגדרות פתיחה/סגירה
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="!px-2 !py-1"
+                        onClick={() => openForm(form.id, "results")}
+                      >
+                        צפייה בתוצאות
                       </Button>
                     </div>
                   </div>
@@ -719,6 +753,194 @@ export function WeeklyFeedbackTabs({
                 </div>
               )}
             </div>
+          )}
+        </div>
+      )}
+
+      {tab === "results" && (
+        <div className="flex flex-col gap-4">
+          {!selectedFormId ? (
+            <p className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
+              לא נבחר משוב. יש לבחור משוב מתוך &quot;רשימת משובים&quot;.
+            </p>
+          ) : isResultsLoading || !results ? (
+            <p className="text-sm text-muted-foreground">טוען...</p>
+          ) : (
+            <>
+              <div className="rounded-xl border border-border bg-card p-4">
+                <div className="mb-1 flex flex-wrap items-center gap-2">
+                  <AvailabilityBadge form={results.form} />
+                  <p className="text-base font-bold text-card-foreground">{results.form.title}</p>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {results.form.weekName} ·{" "}
+                  {weekRangeLabel(results.form.weekStartDate, results.form.weekEndDate)}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-border bg-card p-4 text-center">
+                  <p className="text-2xl font-bold text-card-foreground">
+                    {results.summary.submittedCount} מתוך {results.summary.activeTraineeCount}
+                  </p>
+                  <p className="text-xs text-muted-foreground">חניכים הגישו</p>
+                </div>
+                <div className="rounded-xl border border-border bg-card p-4 text-center">
+                  <p className="text-2xl font-bold text-card-foreground">
+                    {results.summary.notSubmittedCount}
+                  </p>
+                  <p className="text-xs text-muted-foreground">לא הגישו</p>
+                </div>
+              </div>
+
+              <details className="rounded-xl border border-border bg-card p-4">
+                <summary className="cursor-pointer text-sm font-bold text-card-foreground">
+                  מי הגיש / מי לא הגיש
+                </summary>
+                <div className="mt-3 flex flex-col gap-4">
+                  <div>
+                    <p className="mb-1 text-xs font-semibold text-muted-foreground">
+                      הגישו ({results.submittedTrainees.length})
+                    </p>
+                    {results.submittedTrainees.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">אין עדיין הגשות</p>
+                    ) : (
+                      <ul className="flex flex-col gap-1">
+                        {results.submittedTrainees.map((t) => (
+                          <li
+                            key={t.studentId}
+                            className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-1 text-sm last:border-0"
+                          >
+                            <span className="text-card-foreground">
+                              {t.fullName}
+                              {t.groupName ? ` · ${t.groupName}` : ""}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {formatHebrewDateTime(new Date(t.submittedAt))}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <div>
+                    <p className="mb-1 text-xs font-semibold text-muted-foreground">
+                      לא הגישו ({results.notSubmittedTrainees.length})
+                    </p>
+                    {results.notSubmittedTrainees.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">כל החניכים הפעילים הגישו</p>
+                    ) : (
+                      <ul className="flex flex-col gap-1">
+                        {results.notSubmittedTrainees.map((t) => (
+                          <li
+                            key={t.studentId}
+                            className="border-b border-border py-1 text-sm text-card-foreground last:border-0"
+                          >
+                            {t.fullName}
+                            {t.groupName ? ` · ${t.groupName}` : ""}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              </details>
+
+              <div className="flex flex-col gap-3">
+                {Object.entries(
+                  results.questionResults.reduce<Record<string, WeeklyFeedbackQuestionResult[]>>(
+                    (acc, q) => {
+                      (acc[q.section] ??= []).push(q);
+                      return acc;
+                    },
+                    {}
+                  )
+                ).map(([section, questions]) => (
+                  <div key={section} className="rounded-xl border border-border bg-card p-4">
+                    <h3 className="mb-2 text-sm font-bold text-card-foreground">{section}</h3>
+                    <div className="flex flex-col gap-3">
+                      {questions.map((q) => (
+                        <div key={q.questionId} className="border-b border-border pb-3 last:border-0 last:pb-0">
+                          <p className="mb-1.5 text-sm font-semibold text-card-foreground">{q.prompt}</p>
+                          {q.type === "FREE_TEXT" ? (
+                            q.freeTextAnswers && q.freeTextAnswers.length > 0 ? (
+                              <ul className="flex flex-col gap-1.5">
+                                {q.freeTextAnswers.map((a, i) => (
+                                  <li key={i} className="rounded-lg bg-muted p-2 text-sm">
+                                    <p className="text-card-foreground">{a.text}</p>
+                                    <p className="mt-0.5 text-xs text-muted-foreground">
+                                      {a.studentName} · {formatHebrewDateTime(new Date(a.submittedAt))}
+                                    </p>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="text-xs text-muted-foreground">אין תשובות</p>
+                            )
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-3">
+                              {q.averageRating != null ? (
+                                <span
+                                  className={`rounded-full px-2.5 py-1 text-sm font-bold ${
+                                    q.averageRating < 3
+                                      ? "bg-danger-muted text-danger"
+                                      : "bg-success-muted text-success"
+                                  }`}
+                                >
+                                  ממוצע {q.averageRating.toFixed(1)}
+                                </span>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">אין תשובות</span>
+                              )}
+                              {q.ratingDistribution && (
+                                <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                                  {q.ratingDistribution.map((d) => (
+                                    <span key={d.value} className="rounded-md bg-muted px-1.5 py-0.5">
+                                      {d.value}: {d.count}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              <span className="text-xs text-muted-foreground">
+                                ({q.answerCount} תשובות)
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {results.traineeResponses.length > 0 && (
+                <details className="rounded-xl border border-border bg-card p-4">
+                  <summary className="cursor-pointer text-sm font-bold text-card-foreground">
+                    תשובות לפי חניך ({results.traineeResponses.length})
+                  </summary>
+                  <div className="mt-3 flex flex-col gap-2">
+                    {results.traineeResponses.map((tr) => (
+                      <details key={tr.studentId} className="rounded-lg border border-border p-3">
+                        <summary className="cursor-pointer text-sm font-semibold text-card-foreground">
+                          {tr.studentName} · {formatHebrewDateTime(new Date(tr.submittedAt))}
+                        </summary>
+                        <div className="mt-2 flex flex-col gap-2">
+                          {tr.answers.map((a) => (
+                            <div key={a.questionId} className="border-b border-border pb-2 text-sm last:border-0">
+                              <p className="text-xs text-muted-foreground">{a.section}</p>
+                              <p className="font-medium text-card-foreground">{a.prompt}</p>
+                              <p className="text-card-foreground">
+                                {a.type === "FREE_TEXT" ? a.textValue || "—" : (a.ratingValue ?? "—")}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </>
           )}
         </div>
       )}
