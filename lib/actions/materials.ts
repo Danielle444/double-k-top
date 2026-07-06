@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { getSupabaseClient, COURSE_MATERIALS_BUCKET } from "@/lib/supabase";
+import { createMaterialAddedNotifications } from "@/lib/actions/notifications";
 import type { ActionResult } from "@/lib/actions/students";
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour, matches the booklet's TTL
@@ -154,7 +155,7 @@ export async function createLinkMaterial(input: CreateLinkMaterialInput): Promis
     return { success: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
   }
 
-  await prisma.courseMaterial.create({
+  const created = await prisma.courseMaterial.create({
     data: {
       title: parsed.data.title,
       description: parsed.data.description || null,
@@ -162,6 +163,12 @@ export async function createLinkMaterial(input: CreateLinkMaterialInput): Promis
       visibility: parsed.data.visibility,
       externalUrl: parsed.data.externalUrl,
     },
+  });
+
+  await createMaterialAddedNotifications({
+    materialId: created.id,
+    title: created.title,
+    visibility: created.visibility,
   });
 
   revalidatePath("/admin/materials");

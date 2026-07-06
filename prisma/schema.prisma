@@ -503,3 +503,38 @@ model CourseMaterial {
 
   @@map("course_materials")
 }
+
+enum NotificationType {
+  ATTENDANCE_MARKED
+  MATERIAL_ADDED
+}
+
+enum NotificationRecipientRole {
+  STUDENT
+  INSTRUCTOR
+}
+
+// Automatic, system-generated in-app notifications only - deliberately
+// separate from MessageTask/MessageTaskRecipient, which stay exactly as they
+// are and continue to handle admin/instructor-authored messages and tasks.
+// One row per (event, recipient) - studentId is set when recipientRole is
+// STUDENT, instructorId when INSTRUCTOR (never both). relatedId is a loose
+// pointer to the source row (e.g. a StudentAttendance.id or
+// CourseMaterial.id) for a future "open" deep-link - not a real FK, since the
+// source table differs by type.
+model Notification {
+  id            String                    @id @default(cuid())
+  type          NotificationType
+  title         String
+  body          String?
+  recipientRole NotificationRecipientRole
+  studentId     String?
+  instructorId  String?
+  relatedId     String?
+  readAt        DateTime?
+  createdAt     DateTime                  @default(now())
+
+  @@index([studentId])
+  @@index([instructorId])
+  @@map("notifications")
+}

@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { dateKey, parseDateKey, enumerateDateKeys } from "@/lib/dates";
 import { setAvailability } from "@/lib/actions/availability";
+import { syncAttendanceMarkedNotification } from "@/lib/actions/notifications";
 import type { ActionResult } from "@/lib/actions/students";
 
 const attendanceStatusSchema = z.enum(["PRESENT", "ABSENT", "PARTIAL"]);
@@ -332,6 +333,13 @@ async function upsertAttendanceRecord(
       notes,
       updatedByName,
     },
+  });
+
+  await syncAttendanceMarkedNotification({
+    studentId: saved.studentId,
+    attendanceId: saved.id,
+    status: saved.status,
+    notes: saved.notes,
   });
 
   revalidatePath("/admin/daily-tracking");

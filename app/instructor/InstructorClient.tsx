@@ -25,6 +25,15 @@ import { InstructorAttendanceSection } from "@/app/instructor/InstructorAttendan
 import { InstructorRidingSlotsSection } from "@/app/instructor/InstructorRidingSlotsSection";
 import { ContactsSection } from "@/lib/components/ContactsSection";
 import { HelpContent } from "@/lib/components/HelpContent";
+import { NotificationsList, type MessagePreviewItem } from "@/lib/components/NotificationsList";
+import {
+  getNotificationsForInstructor,
+  markNotificationReadAsInstructor,
+} from "@/lib/actions/notifications";
+import {
+  getMessageTasksForInstructorView,
+  type InstructorMessageTaskView,
+} from "@/lib/actions/messages";
 import {
   formatHebrewDate,
   formatHebrewWeekday,
@@ -55,10 +64,28 @@ const INSTRUCTOR_MORE_ITEMS: { id: MainTabId; label: string }[] = [
   { id: "messages", label: "הודעות ומשימות" },
   { id: "contacts", label: "אנשי קשר" },
   { id: "materials", label: "חומרי קורס" },
+  { id: "notifications", label: "עדכונים" },
   { id: "help", label: "עזרה" },
 ];
 
 const INSTRUCTOR_ALL_TABS = [...INSTRUCTOR_MAIN_TABS, ...INSTRUCTOR_MORE_ITEMS];
+
+// Normalizes getMessageTasksForInstructorView()'s shape for the "עדכונים"
+// preview section. isUnread is always null here on purpose: there is no
+// per-instructor read/completed tracking for MessageTask today (every
+// instructor sees the same full content list, see getMessageTasksForInstructorView's
+// own doc comment) - this stays an honest "no read state available" rather
+// than guessing at one.
+function toMessagePreview(items: InstructorMessageTaskView[]): MessagePreviewItem[] {
+  return items.map((m) => ({
+    id: m.id,
+    typeLabel: m.type === "MESSAGE" ? "הודעה" : "משימה",
+    title: m.title,
+    body: m.body,
+    createdAt: m.createdAt,
+    isUnread: null,
+  }));
+}
 
 // Shortcut grid shown on the "today" home screen - covers every instructor
 // section except "today" itself (navigating to the screen you're already on
@@ -573,6 +600,15 @@ export function InstructorClient({
         {activeTab === "materials" && <CourseMaterialsSection role="instructor" />}
 
         {activeTab === "help" && <HelpContent role="instructor" />}
+
+        {activeTab === "notifications" && (
+          <NotificationsList
+            fetchNotifications={() => getNotificationsForInstructor(session.id)}
+            onMarkRead={(notificationId) => markNotificationReadAsInstructor(notificationId, session.id)}
+            fetchMessagePreview={() => getMessageTasksForInstructorView().then(toMessagePreview)}
+            onOpenMessages={() => setActiveTab("messages")}
+          />
+        )}
       </main>
 
       <BottomTabs active={bottomActiveTab} onChange={setActiveTab} tabs={INSTRUCTOR_MAIN_TABS} />

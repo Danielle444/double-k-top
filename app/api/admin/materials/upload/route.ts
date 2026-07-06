@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { getSupabaseClient, COURSE_MATERIALS_BUCKET } from "@/lib/supabase";
+import { createMaterialAddedNotifications } from "@/lib/actions/notifications";
 
 type CourseMaterialVisibility = "STUDENTS" | "INSTRUCTORS" | "BOTH";
 
@@ -147,6 +148,14 @@ export async function POST(request: Request) {
         filePath: storagePath,
         fileName: file.name,
       },
+    });
+
+    // Only a brand-new material notifies - replacing an existing file's
+    // content (the `existing` branch above) is not "new material added".
+    await createMaterialAddedNotifications({
+      materialId: id,
+      title,
+      visibility: visibility as CourseMaterialVisibility,
     });
   }
 

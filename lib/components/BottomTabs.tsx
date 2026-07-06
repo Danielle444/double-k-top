@@ -15,6 +15,7 @@ export type MainTabId =
   | "attendance"
   | "riding"
   | "help"
+  | "notifications"
   | "more";
 
 export const MAIN_TABS: { id: MainTabId; label: string }[] = [
@@ -94,6 +95,12 @@ const TAB_ICON_PATHS: Record<MainTabId, ReactNode> = {
       <circle cx="12" cy="12" r="9" />
       <path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 .8-1 1.7" />
       <path d="M12 16.5v.01" />
+    </>
+  ),
+  notifications: (
+    <>
+      <path d="M6 10a6 6 0 1 1 12 0c0 3.5 1 5 1.5 6h-15c.5-1 1.5-2.5 1.5-6z" />
+      <path d="M10 19a2 2 0 0 0 4 0" />
     </>
   ),
   more: (

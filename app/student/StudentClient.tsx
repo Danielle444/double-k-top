@@ -21,6 +21,9 @@ import { StudentMessagesSummary } from "@/app/student/StudentMessagesSummary";
 import { StudentAttendanceNotice } from "@/app/student/StudentAttendanceNotice";
 import { ContactsSection } from "@/lib/components/ContactsSection";
 import { HelpContent } from "@/lib/components/HelpContent";
+import { NotificationsList, type MessagePreviewItem } from "@/lib/components/NotificationsList";
+import { getNotificationsForStudent, markNotificationReadAsStudent } from "@/lib/actions/notifications";
+import { getStudentMessages, type StudentMessageItem } from "@/lib/actions/messages";
 import {
   formatHebrewDate,
   formatHebrewWeekday,
@@ -49,10 +52,25 @@ const STUDENT_MORE_ITEMS: { id: MainTabId; label: string }[] = [
   { id: "profile", label: "פרופיל" },
   { id: "contacts", label: "אנשי קשר" },
   { id: "materials", label: "חומרי קורס" },
+  { id: "notifications", label: "עדכונים" },
   { id: "help", label: "עזרה" },
 ];
 
 const STUDENT_ALL_TABS = [...STUDENT_MAIN_TABS, ...STUDENT_MORE_ITEMS];
+
+// Normalizes the existing getStudentMessages() shape for the "עדכונים"
+// preview section - real per-recipient read/completed state already exists
+// for students, so isUnread is a genuine true/false, never null.
+function toMessagePreview(items: StudentMessageItem[]): MessagePreviewItem[] {
+  return items.map((m) => ({
+    id: m.recipientId,
+    typeLabel: m.type === "MESSAGE" ? "הודעה" : "משימה",
+    title: m.title,
+    body: m.body,
+    createdAt: m.createdAt,
+    isUnread: m.type === "MESSAGE" ? !m.readAt : !m.completedAt,
+  }));
+}
 
 // Quick-action shortcuts shown on the "today" home screen - each just calls
 // setActiveTab, exactly like the instructor "today" dashboard's shortcuts and
@@ -580,6 +598,15 @@ export function StudentClient() {
         {activeTab === "materials" && <CourseMaterialsSection role="student" />}
 
         {activeTab === "help" && <HelpContent role="student" />}
+
+        {activeTab === "notifications" && (
+          <NotificationsList
+            fetchNotifications={() => getNotificationsForStudent(session.id)}
+            onMarkRead={(notificationId) => markNotificationReadAsStudent(notificationId, session.id)}
+            fetchMessagePreview={() => getStudentMessages(session.id).then(toMessagePreview)}
+            onOpenMessages={() => setActiveTab("messages")}
+          />
+        )}
       </main>
 
       <BottomTabs active={bottomActiveTab} onChange={setActiveTab} tabs={STUDENT_MAIN_TABS} />
