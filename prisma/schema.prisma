@@ -465,6 +465,11 @@ model MessageTaskRecipient {
   studentId     String
   readAt        DateTime?
   completedAt   DateTime?
+  // Per-trainee archive - separate from MessageTask.isArchived (admin's own
+  // global soft-delete/restore). Set only after readAt (MESSAGE) or
+  // completedAt (TASK) is already present - enforced in
+  // archiveMessageTaskForStudent, never trusted from the client.
+  archivedAt    DateTime?
   createdAt     DateTime  @default(now())
 
   messageTask MessageTask @relation(fields: [messageTaskId], references: [id], onDelete: Cascade)

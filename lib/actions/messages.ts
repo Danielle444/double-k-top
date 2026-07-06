@@ -317,12 +317,16 @@ export interface StudentMessageItem {
   createdAt: string;
   readAt: string | null;
   completedAt: string | null;
+  archivedAt: string | null;
 }
 
 // Read-only, no permission gate - same convention as getStudentProfile /
 // getHorseAssignments, since students have no NextAuth session in this app.
-// Archived items are always excluded - a message archived after a student
-// already saw it disappears from their list too.
+// Items admin has archived (MessageTask.isArchived, a separate global
+// concept - see archiveMessageTask) are always excluded here. archivedAt is
+// this trainee's own per-recipient archive instead - still returned so the
+// component can split active/history/archived itself, rather than this
+// function returning three different shapes.
 export async function getStudentMessages(studentId: string): Promise<StudentMessageItem[]> {
   const recipients = await prisma.messageTaskRecipient.findMany({
     where: { studentId, messageTask: { isArchived: false } },
@@ -340,6 +344,7 @@ export async function getStudentMessages(studentId: string): Promise<StudentMess
     createdAt: r.messageTask.createdAt.toISOString(),
     readAt: r.readAt ? r.readAt.toISOString() : null,
     completedAt: r.completedAt ? r.completedAt.toISOString() : null,
+    archivedAt: r.archivedAt ? r.archivedAt.toISOString() : null,
   }));
 }
 
@@ -380,6 +385,70 @@ export async function setTaskCompleted(
   await prisma.messageTaskRecipient.update({
     where: { id: recipientId },
     data: { completedAt: isCompleted ? new Date() : null },
+  });
+
+  revalidatePath("/admin/messages");
+  return { success: true };
+}
+
+// Same ownership convention as markMessageRead/setTaskCompleted, plus a
+// business-rule check re-read from the row itself (never trusted from the
+// client): a MESSAGE can only be archived once read, a TASK only once
+// completed. This is a per-trainee archive, unrelated to MessageTask's own
+// isArchived (admin's global soft-delete/restore) - archiving here never
+// touches that field.
+export async function archiveMessageTaskForStudent(
+  recipientId: string,
+  studentId: string
+): Promise<ActionResult> {
+  const recipient = await prisma.messageTaskRecipient.findUnique({
+    where: { id: recipientId },
+    include: { messageTask: { select: { type: true } } },
+  });
+  if (!recipient || recipient.studentId !== studentId) {
+    return { success: false, error: "ההודעה לא נמצאה" };
+  }
+
+  const canArchive =
+    recipient.messageTask.type === "TASK" ? recipient.completedAt !== null : recipient.readAt !== null;
+  if (!canArchive) {
+    return {
+      success: false,
+      error:
+        recipient.messageTask.type === "TASK"
+          ? "ניתן להעביר לארכיון רק לאחר השלמת המשימה"
+          : "ניתן להעביר לארכיון רק לאחר קריאת ההודעה",
+    };
+  }
+
+  if (recipient.archivedAt) {
+    return { success: true };
+  }
+
+  await prisma.messageTaskRecipient.update({
+    where: { id: recipientId },
+    data: { archivedAt: new Date() },
+  });
+
+  revalidatePath("/admin/messages");
+  return { success: true };
+}
+
+export async function unarchiveMessageTaskForStudent(
+  recipientId: string,
+  studentId: string
+): Promise<ActionResult> {
+  const recipient = await prisma.messageTaskRecipient.findUnique({ where: { id: recipientId } });
+  if (!recipient || recipient.studentId !== studentId) {
+    return { success: false, error: "ההודעה לא נמצאה" };
+  }
+  if (!recipient.archivedAt) {
+    return { success: true };
+  }
+
+  await prisma.messageTaskRecipient.update({
+    where: { id: recipientId },
+    data: { archivedAt: null },
   });
 
   revalidatePath("/admin/messages");

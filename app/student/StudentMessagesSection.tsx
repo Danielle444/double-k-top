@@ -6,6 +6,8 @@ import {
   getStudentMessages,
   markMessageRead,
   setTaskCompleted,
+  archiveMessageTaskForStudent,
+  unarchiveMessageTaskForStudent,
   type StudentMessageItem,
 } from "@/lib/actions/messages";
 import { formatHebrewDateTime } from "@/lib/dates";
@@ -33,11 +35,12 @@ export function StudentMessagesSection({ studentId }: { studentId: string }) {
     };
   }, [studentId]);
 
-  const { activeItems, historyItems } = useMemo(() => {
-    if (!items) return { activeItems: [], historyItems: [] };
+  const { activeItems, historyItems, archivedItems } = useMemo(() => {
+    if (!items) return { activeItems: [], historyItems: [], archivedItems: [] };
     return {
-      activeItems: items.filter(isActive),
-      historyItems: items.filter((item) => !isActive(item)),
+      activeItems: items.filter((item) => isActive(item) && !item.archivedAt),
+      historyItems: items.filter((item) => !isActive(item) && !item.archivedAt),
+      archivedItems: items.filter((item) => item.archivedAt),
     };
   }, [items]);
 
@@ -73,7 +76,35 @@ export function StudentMessagesSection({ studentId }: { studentId: string }) {
     });
   }
 
-  function renderCard(item: StudentMessageItem) {
+  function handleArchive(recipientId: string) {
+    startTransition(async () => {
+      const result = await archiveMessageTaskForStudent(recipientId, studentId);
+      if (!result.success) return;
+      setItems((prev) =>
+        prev
+          ? prev.map((item) =>
+              item.recipientId === recipientId
+                ? { ...item, archivedAt: item.archivedAt ?? new Date().toISOString() }
+                : item
+            )
+          : prev
+      );
+    });
+  }
+
+  function handleUnarchive(recipientId: string) {
+    startTransition(async () => {
+      const result = await unarchiveMessageTaskForStudent(recipientId, studentId);
+      if (!result.success) return;
+      setItems((prev) =>
+        prev
+          ? prev.map((item) => (item.recipientId === recipientId ? { ...item, archivedAt: null } : item))
+          : prev
+      );
+    });
+  }
+
+  function renderCard(item: StudentMessageItem, options?: { showArchive?: boolean; showRestore?: boolean }) {
     return (
       <div key={item.recipientId} className="rounded-xl border-2 border-border bg-card p-4">
         <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
@@ -108,35 +139,58 @@ export function StudentMessagesSection({ studentId }: { studentId: string }) {
           <p className="text-xs text-muted-foreground">
             {item.createdByName ?? "מנהלת"} · {formatHebrewDateTime(new Date(item.createdAt))}
           </p>
-          {item.type === "MESSAGE" && !item.readAt && (
+          {options?.showRestore ? (
             <Button
               variant="secondary"
               className="!px-3 !py-1.5 !text-sm"
               disabled={isPending}
-              onClick={() => handleMarkRead(item.recipientId)}
+              onClick={() => handleUnarchive(item.recipientId)}
             >
-              סימון כנקרא
+              החזרה מהארכיון
             </Button>
+          ) : (
+            <>
+              {item.type === "MESSAGE" && !item.readAt && (
+                <Button
+                  variant="secondary"
+                  className="!px-3 !py-1.5 !text-sm"
+                  disabled={isPending}
+                  onClick={() => handleMarkRead(item.recipientId)}
+                >
+                  סימון כנקרא
+                </Button>
+              )}
+              {item.type === "TASK" &&
+                (item.completedAt ? (
+                  <Button
+                    variant="secondary"
+                    className="!px-3 !py-1.5 !text-sm"
+                    disabled={isPending}
+                    onClick={() => handleSetCompleted(item.recipientId, false)}
+                  >
+                    סימון כלא הושלמה
+                  </Button>
+                ) : (
+                  <Button
+                    className="!px-3 !py-1.5 !text-sm"
+                    disabled={isPending}
+                    onClick={() => handleSetCompleted(item.recipientId, true)}
+                  >
+                    סימון כהושלמה
+                  </Button>
+                ))}
+              {options?.showArchive && (
+                <Button
+                  variant="secondary"
+                  className="!px-3 !py-1.5 !text-sm"
+                  disabled={isPending}
+                  onClick={() => handleArchive(item.recipientId)}
+                >
+                  העברה לארכיון
+                </Button>
+              )}
+            </>
           )}
-          {item.type === "TASK" &&
-            (item.completedAt ? (
-              <Button
-                variant="secondary"
-                className="!px-3 !py-1.5 !text-sm"
-                disabled={isPending}
-                onClick={() => handleSetCompleted(item.recipientId, false)}
-              >
-                סימון כלא הושלמה
-              </Button>
-            ) : (
-              <Button
-                className="!px-3 !py-1.5 !text-sm"
-                disabled={isPending}
-                onClick={() => handleSetCompleted(item.recipientId, true)}
-              >
-                סימון כהושלמה
-              </Button>
-            ))}
         </div>
       </div>
     );
@@ -154,7 +208,7 @@ export function StudentMessagesSection({ studentId }: { studentId: string }) {
             אין הודעות או משימות פתוחות
           </p>
         ) : (
-          activeItems.map(renderCard)
+          activeItems.map((item) => renderCard(item))
         )}
       </div>
 
@@ -163,7 +217,20 @@ export function StudentMessagesSection({ studentId }: { studentId: string }) {
           <summary className="cursor-pointer text-sm font-semibold text-muted-foreground">
             היסטוריה ({historyItems.length})
           </summary>
-          <div className="mt-3 flex flex-col gap-3">{historyItems.map(renderCard)}</div>
+          <div className="mt-3 flex flex-col gap-3">
+            {historyItems.map((item) => renderCard(item, { showArchive: true }))}
+          </div>
+        </details>
+      )}
+
+      {archivedItems.length > 0 && (
+        <details className="flex flex-col gap-3">
+          <summary className="cursor-pointer text-sm font-semibold text-muted-foreground">
+            ארכיון ({archivedItems.length})
+          </summary>
+          <div className="mt-3 flex flex-col gap-3">
+            {archivedItems.map((item) => renderCard(item, { showRestore: true }))}
+          </div>
         </details>
       )}
     </div>
