@@ -30,6 +30,13 @@ import {
 } from "@/lib/actions/weekly-feedback";
 import type { WeeklyScheduleOption } from "@/lib/actions/weekly-schedule";
 import { formatHebrewDate, formatHebrewDateTime, parseDateKey } from "@/lib/dates";
+import { downloadCsv } from "@/lib/csv";
+import {
+  buildWeeklyFeedbackExportFilename,
+  buildWeeklyFeedbackNotSubmittedCsv,
+  buildWeeklyFeedbackQuestionSummaryCsv,
+  buildWeeklyFeedbackResponsesCsv,
+} from "@/lib/exports/weekly-feedback-csv";
 
 type Tab = "list" | "draft" | "schedule" | "results";
 
@@ -564,6 +571,46 @@ export function WeeklyFeedbackTabs({
       ? `קבוצה ${resultsGroupFilter} · תת-קבוצה ${resultsSubgroupFilter}`
       : `קבוצה ${resultsGroupFilter}`;
 
+  // Exports run entirely client-side from the already-loaded/filtered
+  // results state - no server round-trip, nothing uploaded or stored. Each
+  // respects whatever group/subgroup filter is currently selected, exactly
+  // like the on-screen lists/aggregates above.
+  function handleExportResponses() {
+    if (!results) return;
+    const csv = buildWeeklyFeedbackResponsesCsv(results, filteredTraineeResponses, filteredSubmittedTrainees);
+    const filename = buildWeeklyFeedbackExportFilename(
+      "תשובות",
+      results.form.title,
+      resultsGroupFilter,
+      resultsSubgroupFilter
+    );
+    downloadCsv(filename, csv);
+  }
+
+  function handleExportQuestionSummary() {
+    if (!results) return;
+    const csv = buildWeeklyFeedbackQuestionSummaryCsv(filteredQuestionResults);
+    const filename = buildWeeklyFeedbackExportFilename(
+      "סיכום-שאלות",
+      results.form.title,
+      resultsGroupFilter,
+      resultsSubgroupFilter
+    );
+    downloadCsv(filename, csv);
+  }
+
+  function handleExportNotSubmitted() {
+    if (!results) return;
+    const csv = buildWeeklyFeedbackNotSubmittedCsv(filteredNotSubmittedTrainees);
+    const filename = buildWeeklyFeedbackExportFilename(
+      "לא-הגישו",
+      results.form.title,
+      resultsGroupFilter,
+      resultsSubgroupFilter
+    );
+    downloadCsv(filename, csv);
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap gap-2">
@@ -990,6 +1037,18 @@ export function WeeklyFeedbackTabs({
                   </select>
                 </label>
                 <p className="text-xs text-muted-foreground">מציג נתונים עבור: {resultsFilterSummaryLabel}</p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" className="!text-sm" onClick={handleExportResponses}>
+                  ייצוא תשובות
+                </Button>
+                <Button variant="secondary" className="!text-sm" onClick={handleExportQuestionSummary}>
+                  ייצוא סיכום שאלות
+                </Button>
+                <Button variant="secondary" className="!text-sm" onClick={handleExportNotSubmitted}>
+                  ייצוא לא הגישו
+                </Button>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
