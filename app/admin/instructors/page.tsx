@@ -27,6 +27,7 @@ export default async function InstructorsPage() {
           canEditHorseAssignments: i.canEditHorseAssignments,
           canSendMessages: i.canSendMessages,
           canEditAttendance: i.canEditAttendance,
+          canEditRidingNotes: i.canEditRidingNotes,
         }))}
       />
     </div>

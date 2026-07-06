@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useMemo, useState, useTransition } from "react";
+import Link from "next/link";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
 import { createStudent, setStudentActive, updateStudent } from "@/lib/actions/students";
@@ -192,6 +193,12 @@ export function StudentsClient({
                     >
                       {student.isActive ? "השבתה" : "הפעלה"}
                     </Button>
+                    <Link
+                      href={`/admin/students/${student.id}/riding-history`}
+                      className="rounded-lg px-2 py-1 text-sm font-medium text-secondary-foreground underline hover:opacity-80"
+                    >
+                      היסטוריית רכיבה
+                    </Link>
                   </div>
                 </td>
               </tr>

@@ -26,6 +26,7 @@ export interface InstructorProfile {
   canEditHorseAssignments: boolean;
   canSendMessages: boolean;
   canEditAttendance: boolean;
+  canEditRidingNotes: boolean;
 }
 
 export interface InstructorLoginResult {
@@ -56,6 +57,7 @@ export async function verifyInstructorLogin(
       canEditHorseAssignments: instructor.canEditHorseAssignments,
       canSendMessages: instructor.canSendMessages,
       canEditAttendance: instructor.canEditAttendance,
+      canEditRidingNotes: instructor.canEditRidingNotes,
     },
   };
 }
@@ -75,5 +77,6 @@ export async function getInstructorProfile(
     canEditHorseAssignments: instructor.canEditHorseAssignments,
     canSendMessages: instructor.canSendMessages,
     canEditAttendance: instructor.canEditAttendance,
+    canEditRidingNotes: instructor.canEditRidingNotes,
   };
 }

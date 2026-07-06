@@ -18,6 +18,7 @@ import { InstructorDutiesSection } from "@/app/instructor/InstructorDutiesSectio
 import { InstructorHorsesSection } from "@/app/instructor/InstructorHorsesSection";
 import { InstructorMessagesSection } from "@/app/instructor/InstructorMessagesSection";
 import { InstructorAttendanceSection } from "@/app/instructor/InstructorAttendanceSection";
+import { InstructorRidingSlotsSection } from "@/app/instructor/InstructorRidingSlotsSection";
 import { ContactsSection } from "@/lib/components/ContactsSection";
 import { formatHebrewDate, formatHebrewWeekday, getLocalDateKey, parseDateKey } from "@/lib/dates";
 
@@ -37,6 +38,7 @@ const INSTRUCTOR_MAIN_TABS: { id: MainTabId; label: string }[] = [
 const INSTRUCTOR_MORE_ITEMS: { id: MainTabId; label: string }[] = [
   { id: "profile", label: "פרופיל" },
   { id: "attendance", label: "נוכחות" },
+  { id: "riding", label: "רכיבות" },
   { id: "messages", label: "הודעות ומשימות" },
   { id: "contacts", label: "אנשי קשר" },
   { id: "materials", label: "חומרי קורס" },
@@ -64,6 +66,7 @@ interface StoredSession {
   canEditHorseAssignments: boolean;
   canSendMessages: boolean;
   canEditAttendance: boolean;
+  canEditRidingNotes: boolean;
 }
 
 interface StudentOption {
@@ -437,6 +440,14 @@ export function InstructorClient({
           <InstructorAttendanceSection
             instructorId={session.id}
             canEdit={session.canEditAttendance}
+          />
+        )}
+
+        {activeTab === "riding" && (
+          <InstructorRidingSlotsSection
+            instructorId={session.id}
+            canEdit={session.canEditRidingNotes}
+            students={students}
           />
         )}
 

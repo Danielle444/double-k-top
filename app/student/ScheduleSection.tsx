@@ -53,6 +53,17 @@ function renderScheduleCard(item: ScheduleItemView, active: boolean, compact = f
           מיקום: {item.location}
         </p>
       )}
+      {item.ridingInfo && (
+        <div
+          className={`mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-muted-foreground ${
+            compact ? "text-xs" : "text-sm"
+          }`}
+        >
+          {item.ridingInfo.instructorName && <span>מאמן/ת: {item.ridingInfo.instructorName}</span>}
+          {item.ridingInfo.arena && <span>מגרש: {item.ridingInfo.arena}</span>}
+          {item.ridingInfo.subgroupLabel && <span>{item.ridingInfo.subgroupLabel}</span>}
+        </div>
+      )}
       {active && (
         <span className="mt-2 inline-block rounded-full bg-accent px-3 py-1 text-sm font-medium text-accent-foreground">
           מתקיים עכשיו

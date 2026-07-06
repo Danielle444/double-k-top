@@ -8,6 +8,17 @@ import {
   formatHebrewWeekday,
   parseDateKey,
 } from "@/lib/dates";
+import { findAssignmentForStudent, type AssignmentForMatching } from "@/lib/riding-assignment-matching";
+
+// Only the fields a student is allowed to see about their riding slot's
+// instructor/field/subgroup - never notes, ratings, sessionHorseName, or
+// history. Each field is independently null when its own visibility flag is
+// off (or there's nothing to show), never a raw ScheduleItem fallback.
+export interface ScheduleItemRidingInfo {
+  instructorName: string | null;
+  arena: string | null;
+  subgroupLabel: string | null;
+}
 
 export interface ScheduleItemView {
   id: string;
@@ -21,6 +32,40 @@ export interface ScheduleItemView {
   groupName: string | null;
   instructorName: string | null;
   location: string | null;
+  // Null for non-riding items, or for riding items where no field is
+  // currently visible to students - the card should render no info box at
+  // all in that case, not an empty one.
+  ridingInfo: ScheduleItemRidingInfo | null;
+}
+
+type RidingSlotForStudentView = {
+  showInstructorToStudents: boolean;
+  showArenaToStudents: boolean;
+  showSubgroupToStudents: boolean;
+  assignments: AssignmentForMatching[];
+};
+
+// Resolves the same (group, subgroup) -> assignment fallback used by the
+// instructor/admin riding views, then gates each field behind its own
+// visibility flag - never behind whether the raw ScheduleItem fields happen
+// to be set.
+function buildRidingInfoForStudent(
+  ridingSlot: RidingSlotForStudentView,
+  groupName: string | null,
+  subgroupNumber: number | null
+): ScheduleItemRidingInfo | null {
+  const assignment = findAssignmentForStudent(ridingSlot.assignments, groupName, subgroupNumber);
+
+  const instructorName =
+    ridingSlot.showInstructorToStudents && assignment?.instructor?.fullName
+      ? assignment.instructor.fullName
+      : null;
+  const arena = ridingSlot.showArenaToStudents && assignment?.arena ? assignment.arena : null;
+  const subgroupLabel =
+    ridingSlot.showSubgroupToStudents && subgroupNumber != null ? `תת-קבוצה ${subgroupNumber}` : null;
+
+  if (!instructorName && !arena && !subgroupLabel) return null;
+  return { instructorName, arena, subgroupLabel };
 }
 
 export interface StudentScheduleResult {
@@ -43,7 +88,18 @@ export async function getScheduleForStudent(
 
   const week = await prisma.weeklySchedule.findUnique({
     where: { id: weeklyScheduleId },
-    include: { items: { orderBy: [{ date: "asc" }, { startTime: "asc" }] } },
+    include: {
+      items: {
+        orderBy: [{ date: "asc" }, { startTime: "asc" }],
+        include: {
+          ridingSlotLink: {
+            include: {
+              ridingSlot: { include: { assignments: { include: { instructor: true } } } },
+            },
+          },
+        },
+      },
+    },
   });
   if (!week) return { hasSchedule: false, weekName: null, items: [] };
 
@@ -56,19 +112,29 @@ export async function getScheduleForStudent(
   return {
     hasSchedule: true,
     weekName: week.name,
-    items: items.map((i) => ({
-      id: i.id,
-      dateKey: dateKey(i.date),
-      dateLabel: formatHebrewDate(i.date),
-      dayLabel: formatHebrewWeekday(i.date),
-      startTime: i.startTime,
-      endTime: i.endTime,
-      title: i.title,
-      description: i.description,
-      groupName: i.groupName,
-      instructorName: i.instructorName,
-      location: i.location,
-    })),
+    items: items.map((i) => {
+      const ridingSlot = i.ridingSlotLink?.ridingSlot ?? null;
+      const ridingInfo = ridingSlot
+        ? buildRidingInfoForStudent(ridingSlot, student.groupName, student.subgroupNumber)
+        : null;
+      return {
+        id: i.id,
+        dateKey: dateKey(i.date),
+        dateLabel: formatHebrewDate(i.date),
+        dayLabel: formatHebrewWeekday(i.date),
+        startTime: i.startTime,
+        endTime: i.endTime,
+        title: i.title,
+        description: i.description,
+        groupName: i.groupName,
+        // Riding-slot-linked items never fall back to the raw free-text
+        // fields - a student only sees instructor/location for those via
+        // ridingInfo, gated by the slot's own visibility flags.
+        instructorName: ridingSlot ? null : i.instructorName,
+        location: ridingSlot ? null : i.location,
+        ridingInfo,
+      };
+    }),
   };
 }
 

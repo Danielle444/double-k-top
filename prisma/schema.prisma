@@ -373,6 +373,11 @@ model RidingLessonNote {
   // 1.0-5.0 in 0.5 steps, stored as half-points (2-10) - validated in the
   // action layer, not the schema.
   ratingHalfPoints Int?
+  // Overrides the student's normal horse (getHorseDisplayInfo) for display
+  // in this specific riding session only - never written back to
+  // Student.assignedHorseName/privateHorseName, and has no effect outside
+  // this one row.
+  sessionHorseName String?
   updatedByName    String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
