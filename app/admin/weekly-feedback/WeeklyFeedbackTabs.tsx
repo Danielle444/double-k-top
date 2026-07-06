@@ -3,12 +3,18 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
 import {
+  addWeeklyFeedbackQuestion,
   createWeeklyFeedbackDraft,
+  deleteWeeklyFeedbackQuestion,
   getWeeklyFeedbackDraftForAdmin,
   listWeeklyFeedbackForms,
+  reorderWeeklyFeedbackQuestions,
+  updateWeeklyFeedbackQuestion,
   updateWeeklyFeedbackSchedule,
+  type EditableFeedbackQuestionTypeValue,
   type FeedbackQuestionTypeValue,
   type WeeklyFeedbackDraft,
+  type WeeklyFeedbackDraftQuestion,
   type WeeklyFeedbackFormListItem,
   type WeeklyFeedbackStatusValue,
 } from "@/lib/actions/weekly-feedback";
@@ -40,6 +46,10 @@ const TYPE_LABELS: Record<FeedbackQuestionTypeValue, string> = {
   COMPARISON_3: "השוואה לשבוע שעבר (1–3)",
   FREE_TEXT: "טקסט חופשי",
 };
+
+// Only these two types may be assigned via the draft-editing UI - COMPARISON_3
+// is deferred (see FIXED_QUESTION_TEMPLATE's doc comment in weekly-feedback.ts).
+const EDITABLE_TYPE_OPTIONS: EditableFeedbackQuestionTypeValue[] = ["RATING_5", "FREE_TEXT"];
 
 function weekRangeLabel(startDate: string, endDate: string): string {
   return `${formatHebrewDate(parseDateKey(startDate))} - ${formatHebrewDate(parseDateKey(endDate))}`;
@@ -141,6 +151,102 @@ export function WeeklyFeedbackTabs({
       cancelled = true;
     };
   }, [selectedFormId]);
+
+  const [isQuestionMutating, startQuestionMutation] = useTransition();
+
+  const [newSection, setNewSection] = useState("");
+  const [newPrompt, setNewPrompt] = useState("");
+  const [newType, setNewType] = useState<EditableFeedbackQuestionTypeValue>("RATING_5");
+  const [addQuestionError, setAddQuestionError] = useState<string | null>(null);
+
+  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
+  const [editSection, setEditSection] = useState("");
+  const [editPrompt, setEditPrompt] = useState("");
+  const [editType, setEditType] = useState<EditableFeedbackQuestionTypeValue>("RATING_5");
+  const [editQuestionError, setEditQuestionError] = useState<string | null>(null);
+
+  const [questionActionError, setQuestionActionError] = useState<string | null>(null);
+
+  async function refreshDraft() {
+    if (!selectedFormId) return;
+    const fresh = await getWeeklyFeedbackDraftForAdmin(selectedFormId);
+    setDraft(fresh);
+    await refreshForms();
+  }
+
+  function handleAddQuestion() {
+    if (!draft) return;
+    setAddQuestionError(null);
+    startQuestionMutation(async () => {
+      const result = await addWeeklyFeedbackQuestion(draft.id, newSection, newPrompt, newType);
+      if (!result.success) {
+        setAddQuestionError(result.error ?? "אירעה שגיאה");
+        return;
+      }
+      setNewSection("");
+      setNewPrompt("");
+      setNewType("RATING_5");
+      await refreshDraft();
+    });
+  }
+
+  function startEditQuestion(question: WeeklyFeedbackDraftQuestion) {
+    setEditingQuestionId(question.id);
+    setEditSection(question.section);
+    setEditPrompt(question.prompt);
+    setEditType(question.type === "COMPARISON_3" ? "RATING_5" : question.type);
+    setEditQuestionError(null);
+  }
+
+  function cancelEditQuestion() {
+    setEditingQuestionId(null);
+    setEditQuestionError(null);
+  }
+
+  function handleSaveEditQuestion() {
+    if (!editingQuestionId) return;
+    setEditQuestionError(null);
+    startQuestionMutation(async () => {
+      const result = await updateWeeklyFeedbackQuestion(editingQuestionId, editSection, editPrompt, editType);
+      if (!result.success) {
+        setEditQuestionError(result.error ?? "אירעה שגיאה");
+        return;
+      }
+      setEditingQuestionId(null);
+      await refreshDraft();
+    });
+  }
+
+  function handleDeleteQuestion(questionId: string) {
+    setQuestionActionError(null);
+    startQuestionMutation(async () => {
+      const result = await deleteWeeklyFeedbackQuestion(questionId);
+      if (!result.success) {
+        setQuestionActionError(result.error ?? "אירעה שגיאה");
+        return;
+      }
+      await refreshDraft();
+    });
+  }
+
+  function handleMoveQuestion(questionId: string, direction: "up" | "down") {
+    if (!draft) return;
+    const ids = draft.questions.map((q) => q.id);
+    const index = ids.indexOf(questionId);
+    const swapWith = direction === "up" ? index - 1 : index + 1;
+    if (index === -1 || swapWith < 0 || swapWith >= ids.length) return;
+    const reordered = [...ids];
+    [reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]];
+    setQuestionActionError(null);
+    startQuestionMutation(async () => {
+      const result = await reorderWeeklyFeedbackQuestions(draft.id, reordered);
+      if (!result.success) {
+        setQuestionActionError(result.error ?? "אירעה שגיאה");
+        return;
+      }
+      await refreshDraft();
+    });
+  }
 
   const [opensAtInput, setOpensAtInput] = useState("");
   const [closesAtInput, setClosesAtInput] = useState("");
@@ -304,6 +410,8 @@ export function WeeklyFeedbackTabs({
                 </p>
               </div>
 
+              {questionActionError && <p className="text-sm text-danger">{questionActionError}</p>}
+
               <div className="flex flex-col gap-3">
                 {Object.entries(
                   draft.questions.reduce<Record<string, typeof draft.questions>>((acc, q) => {
@@ -313,20 +421,161 @@ export function WeeklyFeedbackTabs({
                 ).map(([section, questions]) => (
                   <div key={section} className="rounded-xl border border-border bg-card p-4">
                     <h3 className="mb-2 text-sm font-bold text-card-foreground">{section}</h3>
-                    <div className="flex flex-col gap-1">
-                      {questions.map((q) => (
-                        <div
-                          key={q.id}
-                          className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-1.5 text-sm last:border-0"
-                        >
-                          <span className="text-card-foreground">{q.prompt}</span>
-                          <span className="text-xs text-muted-foreground">{TYPE_LABELS[q.type]}</span>
-                        </div>
-                      ))}
+                    <div className="flex flex-col gap-2">
+                      {questions.map((q) => {
+                        const globalIndex = draft.questions.findIndex((x) => x.id === q.id);
+                        const isFirst = globalIndex === 0;
+                        const isLast = globalIndex === draft.questions.length - 1;
+                        const isEditingThis = editingQuestionId === q.id;
+
+                        if (draft.status !== "DRAFT") {
+                          return (
+                            <div
+                              key={q.id}
+                              className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-1.5 text-sm last:border-0"
+                            >
+                              <span className="text-card-foreground">{q.prompt}</span>
+                              <span className="text-xs text-muted-foreground">{TYPE_LABELS[q.type]}</span>
+                            </div>
+                          );
+                        }
+
+                        if (isEditingThis) {
+                          return (
+                            <div
+                              key={q.id}
+                              className="flex flex-col gap-2 border-b border-border py-2 last:border-0"
+                            >
+                              <div className="flex flex-col gap-2 sm:flex-row">
+                                <input
+                                  value={editSection}
+                                  onChange={(e) => setEditSection(e.target.value)}
+                                  placeholder="מקטע"
+                                  className="w-full rounded-lg border border-border px-3 py-2 text-sm sm:w-40"
+                                />
+                                <input
+                                  value={editPrompt}
+                                  onChange={(e) => setEditPrompt(e.target.value)}
+                                  placeholder="נוסח השאלה"
+                                  className="w-full flex-1 rounded-lg border border-border px-3 py-2 text-sm"
+                                />
+                                <select
+                                  value={editType}
+                                  onChange={(e) => setEditType(e.target.value as EditableFeedbackQuestionTypeValue)}
+                                  className="w-full rounded-lg border border-border px-3 py-2 text-sm sm:w-40"
+                                >
+                                  {EDITABLE_TYPE_OPTIONS.map((t) => (
+                                    <option key={t} value={t}>
+                                      {TYPE_LABELS[t]}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              {editQuestionError && <p className="text-sm text-danger">{editQuestionError}</p>}
+                              <div className="flex gap-2">
+                                <Button
+                                  className="!px-2 !py-1"
+                                  disabled={isQuestionMutating}
+                                  onClick={handleSaveEditQuestion}
+                                >
+                                  שמירה
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  className="!px-2 !py-1"
+                                  disabled={isQuestionMutating}
+                                  onClick={cancelEditQuestion}
+                                >
+                                  ביטול
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div
+                            key={q.id}
+                            className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-1.5 text-sm last:border-0"
+                          >
+                            <span className="text-card-foreground">{q.prompt}</span>
+                            <div className="flex flex-wrap items-center gap-1">
+                              <span className="text-xs text-muted-foreground">{TYPE_LABELS[q.type]}</span>
+                              <Button
+                                variant="ghost"
+                                className="!px-1.5 !py-0.5 !text-xs"
+                                disabled={isQuestionMutating || isFirst}
+                                onClick={() => handleMoveQuestion(q.id, "up")}
+                              >
+                                ⬆
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                className="!px-1.5 !py-0.5 !text-xs"
+                                disabled={isQuestionMutating || isLast}
+                                onClick={() => handleMoveQuestion(q.id, "down")}
+                              >
+                                ⬇
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                className="!px-2 !py-0.5 !text-xs"
+                                disabled={isQuestionMutating || q.type === "COMPARISON_3"}
+                                onClick={() => startEditQuestion(q)}
+                              >
+                                עריכה
+                              </Button>
+                              <Button
+                                variant="danger"
+                                className="!px-2 !py-0.5 !text-xs"
+                                disabled={isQuestionMutating || draft.questions.length <= 1}
+                                onClick={() => handleDeleteQuestion(q.id)}
+                              >
+                                מחיקה
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
               </div>
+
+              {draft.status === "DRAFT" && (
+                <div className="rounded-xl border border-border bg-card p-4">
+                  <h3 className="mb-2 text-sm font-bold text-card-foreground">הוספת שאלה</h3>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      value={newSection}
+                      onChange={(e) => setNewSection(e.target.value)}
+                      placeholder="מקטע"
+                      className="w-full rounded-lg border border-border px-3 py-2 text-sm sm:w-40"
+                    />
+                    <input
+                      value={newPrompt}
+                      onChange={(e) => setNewPrompt(e.target.value)}
+                      placeholder="נוסח השאלה"
+                      className="w-full flex-1 rounded-lg border border-border px-3 py-2 text-sm"
+                    />
+                    <select
+                      value={newType}
+                      onChange={(e) => setNewType(e.target.value as EditableFeedbackQuestionTypeValue)}
+                      className="w-full rounded-lg border border-border px-3 py-2 text-sm sm:w-40"
+                    >
+                      {EDITABLE_TYPE_OPTIONS.map((t) => (
+                        <option key={t} value={t}>
+                          {TYPE_LABELS[t]}
+                        </option>
+                      ))}
+                    </select>
+                    <Button disabled={isQuestionMutating} onClick={handleAddQuestion}>
+                      הוספה
+                    </Button>
+                  </div>
+                  {addQuestionError && <p className="mt-2 text-sm text-danger">{addQuestionError}</p>}
+                </div>
+              )}
             </>
           )}
         </div>

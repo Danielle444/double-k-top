@@ -9,6 +9,13 @@ export type WeeklyFeedbackStatusValue = "DRAFT" | "PUBLISHED" | "CLOSED";
 export type FeedbackQuestionTypeValue = "RATING_5" | "COMPARISON_3" | "FREE_TEXT";
 export type FeedbackQuestionSourceValue = "FIXED" | "DYNAMIC";
 
+// Question types the admin UI may set when adding/editing a question.
+// COMPARISON_3 is intentionally excluded here - it's not offered yet, per
+// the fixed-template comment above. Any pre-existing COMPARISON_3 rows
+// (none as of this stage) are unaffected since these actions only ever
+// write EditableFeedbackQuestionTypeValue values.
+export type EditableFeedbackQuestionTypeValue = "RATING_5" | "FREE_TEXT";
+
 interface FixedQuestionTemplateItem {
   section: string;
   prompt: string;
@@ -254,6 +261,132 @@ export async function updateWeeklyFeedbackSchedule(
     where: { id: formId },
     data: { opensAt: opensAtDate, closesAt: closesAtDate },
   });
+
+  return { success: true };
+}
+
+function validateQuestionInput(
+  section: string,
+  prompt: string,
+  type: EditableFeedbackQuestionTypeValue
+): { error: string } | { section: string; prompt: string } {
+  const trimmedSection = section.trim();
+  const trimmedPrompt = prompt.trim();
+  if (!trimmedSection) return { error: "יש להזין שם מקטע" };
+  if (!trimmedPrompt) return { error: "יש להזין את נוסח השאלה" };
+  if (type !== "RATING_5" && type !== "FREE_TEXT") return { error: "סוג שאלה לא תקין" };
+  return { section: trimmedSection, prompt: trimmedPrompt };
+}
+
+// Only DRAFT forms may have their questions edited - once PUBLISHED, חניכים
+// may already be answering against the existing question set, and once
+// CLOSED the form is final. Enforced fresh from the DB on every call since
+// the admin client only holds a possibly-stale draft snapshot.
+export async function addWeeklyFeedbackQuestion(
+  formId: string,
+  section: string,
+  prompt: string,
+  type: EditableFeedbackQuestionTypeValue
+): Promise<ActionResult> {
+  await requireAdmin();
+
+  const form = await prisma.weeklyFeedbackForm.findUnique({
+    where: { id: formId },
+    include: { questions: { select: { sortOrder: true } } },
+  });
+  if (!form) return { success: false, error: "טופס המשוב לא נמצא" };
+  if (form.status !== "DRAFT") return { success: false, error: "ניתן לערוך שאלות רק בטיוטה" };
+
+  const validated = validateQuestionInput(section, prompt, type);
+  if ("error" in validated) return { success: false, error: validated.error };
+
+  const maxSortOrder = form.questions.reduce((max, q) => Math.max(max, q.sortOrder), -1);
+
+  await prisma.weeklyFeedbackQuestion.create({
+    data: {
+      formId,
+      section: validated.section,
+      prompt: validated.prompt,
+      type,
+      source: "DYNAMIC",
+      sortOrder: maxSortOrder + 1,
+    },
+  });
+
+  return { success: true };
+}
+
+export async function updateWeeklyFeedbackQuestion(
+  questionId: string,
+  section: string,
+  prompt: string,
+  type: EditableFeedbackQuestionTypeValue
+): Promise<ActionResult> {
+  await requireAdmin();
+
+  const question = await prisma.weeklyFeedbackQuestion.findUnique({
+    where: { id: questionId },
+    include: { form: { select: { status: true } } },
+  });
+  if (!question) return { success: false, error: "השאלה לא נמצאה" };
+  if (question.form.status !== "DRAFT") return { success: false, error: "ניתן לערוך שאלות רק בטיוטה" };
+
+  const validated = validateQuestionInput(section, prompt, type);
+  if ("error" in validated) return { success: false, error: validated.error };
+
+  await prisma.weeklyFeedbackQuestion.update({
+    where: { id: questionId },
+    data: { section: validated.section, prompt: validated.prompt, type },
+  });
+
+  return { success: true };
+}
+
+export async function deleteWeeklyFeedbackQuestion(questionId: string): Promise<ActionResult> {
+  await requireAdmin();
+
+  const question = await prisma.weeklyFeedbackQuestion.findUnique({
+    where: { id: questionId },
+    include: { form: { select: { status: true, _count: { select: { questions: true } } } } },
+  });
+  if (!question) return { success: false, error: "השאלה לא נמצאה" };
+  if (question.form.status !== "DRAFT") return { success: false, error: "ניתן לערוך שאלות רק בטיוטה" };
+  if (question.form._count.questions <= 1) {
+    return { success: false, error: "לא ניתן למחוק את השאלה האחרונה בטופס" };
+  }
+
+  await prisma.weeklyFeedbackQuestion.delete({ where: { id: questionId } });
+
+  return { success: true };
+}
+
+export async function reorderWeeklyFeedbackQuestions(
+  formId: string,
+  orderedQuestionIds: string[]
+): Promise<ActionResult> {
+  await requireAdmin();
+
+  const form = await prisma.weeklyFeedbackForm.findUnique({
+    where: { id: formId },
+    include: { questions: { select: { id: true } } },
+  });
+  if (!form) return { success: false, error: "טופס המשוב לא נמצא" };
+  if (form.status !== "DRAFT") return { success: false, error: "ניתן לערוך שאלות רק בטיוטה" };
+
+  const existingIds = new Set(form.questions.map((q) => q.id));
+  const sameSet =
+    orderedQuestionIds.length === existingIds.size &&
+    new Set(orderedQuestionIds).size === existingIds.size &&
+    orderedQuestionIds.every((id) => existingIds.has(id));
+  if (!sameSet) {
+    return { success: false, error: "רשימת השאלות לא תואמת את הטופס" };
+  }
+
+  await prisma.$transaction(
+    orderedQuestionIds.map((id, index) =>
+      prisma.weeklyFeedbackQuestion.update({ where: { id }, data: { sortOrder: index } })
+    )
+  );
 
   return { success: true };
 }
