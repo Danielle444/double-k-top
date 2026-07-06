@@ -17,6 +17,7 @@ import { updateOwnPrivateHorseName } from "@/lib/actions/horses";
 import { ScheduleSection } from "@/app/student/ScheduleSection";
 import { DutiesSection } from "@/app/student/DutiesSection";
 import { StudentMessagesSection } from "@/app/student/StudentMessagesSection";
+import { StudentWeeklyFeedbackSection } from "@/app/student/StudentWeeklyFeedbackSection";
 import { StudentPushSection } from "@/app/student/StudentPushSection";
 import { StudentMessagesSummary } from "@/app/student/StudentMessagesSummary";
 import { StudentAttendanceNotice } from "@/app/student/StudentAttendanceNotice";
@@ -66,6 +67,7 @@ const STUDENT_MORE_ITEMS: { id: MainTabId; label: string }[] = [
   { id: "contacts", label: "אנשי קשר" },
   { id: "materials", label: "חומרי קורס" },
   { id: "notifications", label: "עדכונים" },
+  { id: "weeklyFeedback", label: "משוב שבועי" },
   { id: "help", label: "עזרה" },
 ];
 
@@ -667,6 +669,8 @@ export function StudentClient() {
         {activeTab === "contacts" && <ContactsSection />}
 
         {activeTab === "materials" && <CourseMaterialsSection role="student" />}
+
+        {activeTab === "weeklyFeedback" && <StudentWeeklyFeedbackSection studentId={session.id} />}
 
         {activeTab === "help" && <HelpContent role="student" />}
 

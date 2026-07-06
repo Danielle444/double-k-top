@@ -456,3 +456,154 @@ export async function closeWeeklyFeedbackForm(formId: string): Promise<ActionRes
 
   return { success: true };
 }
+
+export interface WeeklyFeedbackQuestionForStudent {
+  id: string;
+  section: string;
+  prompt: string;
+  type: FeedbackQuestionTypeValue;
+  sortOrder: number;
+}
+
+// A discriminated union rather than one flat shape - "submitted" intentionally
+// omits the question list (no editable state to expose once answered), and
+// "none" covers both "no published form right now" and "student inactive",
+// so the trainee UI never learns which of those two it is.
+export type WeeklyFeedbackForStudent =
+  | { status: "none" }
+  | { status: "submitted"; formTitle: string; submittedAt: string }
+  | { status: "open"; formId: string; formTitle: string; questions: WeeklyFeedbackQuestionForStudent[] };
+
+// Students have no NextAuth session, so studentId is re-verified against the
+// DB on every call (same convention as getScheduleForStudent/verifyStudentLogin)
+// rather than trusted from the client's cached localStorage session.
+export async function getOpenWeeklyFeedbackForStudent(studentId: string): Promise<WeeklyFeedbackForStudent> {
+  const student = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!student || !student.isActive) return { status: "none" };
+
+  // The "relevant" form is the most recently published one, whether or not
+  // it's still open (DRAFT forms are excluded - trainees never had access
+  // to them). "Already submitted" is checked against this form before the
+  // open-window gate below, so a trainee who submitted while it was open
+  // keeps seeing "תודה, המשוב הוגש" even after the admin closes it or its
+  // closesAt passes, instead of that confirmation silently disappearing.
+  const form = await prisma.weeklyFeedbackForm.findFirst({
+    where: { status: { in: ["PUBLISHED", "CLOSED"] } },
+    orderBy: { publishedAt: "desc" },
+    include: { questions: { orderBy: { sortOrder: "asc" } } },
+  });
+  if (!form) return { status: "none" };
+
+  const response = await prisma.weeklyFeedbackResponse.findUnique({
+    where: { formId_studentId: { formId: form.id, studentId } },
+  });
+  if (response) {
+    return { status: "submitted", formTitle: form.title, submittedAt: response.submittedAt.toISOString() };
+  }
+
+  const now = new Date();
+  const isCurrentlyOpen =
+    form.status === "PUBLISHED" &&
+    (!form.opensAt || form.opensAt <= now) &&
+    (!form.closesAt || form.closesAt > now);
+  if (!isCurrentlyOpen) return { status: "none" };
+
+  return {
+    status: "open",
+    formId: form.id,
+    formTitle: form.title,
+    questions: form.questions.map((q) => ({
+      id: q.id,
+      section: q.section,
+      prompt: q.prompt,
+      type: q.type,
+      sortOrder: q.sortOrder,
+    })),
+  };
+}
+
+export interface WeeklyFeedbackAnswerInput {
+  questionId: string;
+  ratingValue: number | null;
+  textValue: string | null;
+}
+
+// Re-validates everything server-side rather than trusting the client's
+// question list - opensAt/closesAt/status are re-read fresh, and every
+// RATING_5 (or, if one ever exists, COMPARISON_3) question in the form must
+// have a valid in-range answer, FREE_TEXT stays optional. The @@unique on
+// (formId, studentId) is the last line of defense against a duplicate
+// submission race, on top of the findUnique check below.
+export async function submitWeeklyFeedback(
+  studentId: string,
+  formId: string,
+  answers: WeeklyFeedbackAnswerInput[]
+): Promise<ActionResult> {
+  const student = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!student || !student.isActive) {
+    return { success: false, error: "חניך/ה לא נמצא/ה" };
+  }
+
+  const form = await prisma.weeklyFeedbackForm.findUnique({
+    where: { id: formId },
+    include: { questions: true },
+  });
+  if (!form) return { success: false, error: "המשוב לא נמצא" };
+
+  const now = new Date();
+  if (form.status !== "PUBLISHED") {
+    return { success: false, error: "המשוב אינו פתוח למילוי" };
+  }
+  if (form.opensAt && form.opensAt > now) {
+    return { success: false, error: "המשוב עדיין לא נפתח למילוי" };
+  }
+  if (form.closesAt && form.closesAt <= now) {
+    return { success: false, error: "המשוב נסגר למילוי" };
+  }
+
+  const existing = await prisma.weeklyFeedbackResponse.findUnique({
+    where: { formId_studentId: { formId, studentId } },
+  });
+  if (existing) {
+    return { success: false, error: "כבר הגשת את המשוב הזה" };
+  }
+
+  const answerByQuestionId = new Map(answers.map((a) => [a.questionId, a]));
+  const answerRowsToCreate: { questionId: string; ratingValue?: number; textValue?: string }[] = [];
+
+  for (const question of form.questions) {
+    const answer = answerByQuestionId.get(question.id);
+    if (question.type === "FREE_TEXT") {
+      const text = answer?.textValue?.trim();
+      if (text) {
+        answerRowsToCreate.push({ questionId: question.id, textValue: text });
+      }
+      continue;
+    }
+
+    const max = question.type === "COMPARISON_3" ? 3 : 5;
+    const rating = answer?.ratingValue;
+    if (rating == null || !Number.isInteger(rating) || rating < 1 || rating > max) {
+      return { success: false, error: "יש למלא את כל שאלות הדירוג" };
+    }
+    answerRowsToCreate.push({ questionId: question.id, ratingValue: rating });
+  }
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      const response = await tx.weeklyFeedbackResponse.create({ data: { formId, studentId } });
+      if (answerRowsToCreate.length > 0) {
+        await tx.weeklyFeedbackAnswer.createMany({
+          data: answerRowsToCreate.map((a) => ({ ...a, responseId: response.id })),
+        });
+      }
+    });
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && err.code === "P2002") {
+      return { success: false, error: "כבר הגשת את המשוב הזה" };
+    }
+    throw err;
+  }
+
+  return { success: true };
+}
