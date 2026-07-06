@@ -291,8 +291,9 @@ model ScheduleItem {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  weeklySchedule WeeklySchedule @relation(fields: [weeklyScheduleId], references: [id], onDelete: Cascade)
+  weeklySchedule WeeklySchedule          @relation(fields: [weeklyScheduleId], references: [id], onDelete: Cascade)
   ridingSlot     RidingSlot?
+  ridingSlotLink RidingSlotScheduleItem?
 
   @@index([date])
   @@map("schedule_items")
@@ -313,11 +314,31 @@ model RidingSlot {
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 
-  scheduleItem ScheduleItem           @relation(fields: [scheduleItemId], references: [id], onDelete: Cascade)
-  assignments  RidingSlotAssignment[]
-  notes        RidingLessonNote[]
+  scheduleItem  ScheduleItem             @relation(fields: [scheduleItemId], references: [id], onDelete: Cascade)
+  assignments   RidingSlotAssignment[]
+  notes         RidingLessonNote[]
+  scheduleItems RidingSlotScheduleItem[]
 
   @@map("riding_slots")
+}
+
+// A logical riding slot can span more than one real ScheduleItem row (e.g. a
+// 2-hour lesson stored as two contiguous 1-hour Excel rows, coalesced into
+// one display card) - this records every real row a RidingSlot covers,
+// including its own anchor row (RidingSlot.scheduleItemId), so instructor
+// views/student visibility (later stages) can resolve the full lesson
+// instead of only the anchor. One real row belongs to at most one riding
+// slot (scheduleItemId unique).
+model RidingSlotScheduleItem {
+  id             String @id @default(cuid())
+  ridingSlotId   String
+  scheduleItemId String @unique
+
+  ridingSlot   RidingSlot   @relation(fields: [ridingSlotId], references: [id], onDelete: Cascade)
+  scheduleItem ScheduleItem @relation(fields: [scheduleItemId], references: [id], onDelete: Cascade)
+
+  @@unique([ridingSlotId, scheduleItemId])
+  @@map("riding_slot_schedule_items")
 }
 
 // One row per group/subgroup split within a slot. groupName/subgroupNumber

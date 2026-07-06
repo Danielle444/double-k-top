@@ -23,8 +23,14 @@ import {
   unmarkNoDutyDate,
   type NoDutyDayStatus,
 } from "@/lib/actions/no-duty-dates";
+import { RidingSlotModal } from "@/app/admin/weekly-schedule/[id]/RidingSlotModal";
 
 type ScheduleItemView = ScheduleItemRow;
+
+interface InstructorOption {
+  id: string;
+  fullName: string;
+}
 
 interface WeeklyScheduleView {
   id: string;
@@ -52,6 +58,7 @@ function renderScheduleCard(
   item: ScheduleItemView,
   onEdit: (item: ScheduleItemView) => void,
   onDelete: (item: ScheduleItemView) => void,
+  onManageRiding: (item: ScheduleItemView) => void,
   compact = false
 ) {
   // Both the "all groups" grid view and the single-group list can merge two
@@ -111,12 +118,25 @@ function renderScheduleCard(
             מחיקה
           </Button>
         )}
+        <Button
+          variant="secondary"
+          className="!px-2 !py-1 !text-xs"
+          onClick={() => onManageRiding(item)}
+        >
+          ניהול רכיבה
+        </Button>
       </div>
     </div>
   );
 }
 
-export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView }) {
+export function WeeklyScheduleDetailClient({
+  week,
+  instructors,
+}: {
+  week: WeeklyScheduleView;
+  instructors: InstructorOption[];
+}) {
   const [items, setItems] = useState(week.items);
   const [groupFilter, setGroupFilter] = useState<"all" | string>("all");
   const [dayFilter, setDayFilter] = useState<"all" | string>("all");
@@ -131,6 +151,8 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
   const [deleteTarget, setDeleteTarget] = useState<ScheduleItemView | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleting, startDeleteTransition] = useTransition();
+
+  const [ridingTarget, setRidingTarget] = useState<ScheduleItemView | null>(null);
 
   useEffect(() => {
     // Resyncs local editable state when the server-provided week prop
@@ -271,6 +293,17 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
     setDeleteTarget(item);
   }
 
+  function openManageRiding(item: ScheduleItemView) {
+    setRidingTarget(item);
+  }
+
+  // A merged display card's id is the "+"-joined list of its real source
+  // ScheduleItem ids (see updateMergedScheduleItems) - passing the full list
+  // lets the riding slot actions manage the whole logical activity the
+  // admin actually sees, not just its first row (see RidingSlotScheduleItem).
+  const ridingScheduleItemIds = ridingTarget ? ridingTarget.id.split("+") : [];
+  const ridingIsMergedDisplay = ridingTarget ? ridingTarget.id.includes("+") : false;
+
   function handleConfirmDelete() {
     if (!deleteTarget) return;
     setDeleteError(null);
@@ -305,6 +338,12 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
         </div>
         <div className="flex flex-wrap gap-2">
           <Button onClick={openCreate}>+ הוספת פריט</Button>
+          <Link
+            href={`/admin/weekly-schedule/${week.id}/riding`}
+            className="rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground transition-colors hover:opacity-80"
+          >
+            ניהול רכיבות לשבוע
+          </Link>
           <a
             href={`/api/admin/schedule/export?weeklyScheduleId=${week.id}`}
             className="rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground transition-colors hover:opacity-80"
@@ -412,7 +451,9 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
               {groupFilter === "all" ? (
                 <ScheduleTimeGrid
                   items={dayItems}
-                  renderCard={(item) => renderScheduleCard(item, openEdit, openDelete, true)}
+                  renderCard={(item) =>
+                    renderScheduleCard(item, openEdit, openDelete, openManageRiding, true)
+                  }
                 />
               ) : (
                 // A single-group filter can still include both the target
@@ -430,7 +471,9 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
                         a.startTime.localeCompare(b.startTime) ||
                         a.endTime.localeCompare(b.endTime)
                     )
-                    .map((item) => renderScheduleCard(item, openEdit, openDelete))}
+                    .map((item) =>
+                      renderScheduleCard(item, openEdit, openDelete, openManageRiding)
+                    )}
                 </div>
               )}
             </div>
@@ -572,6 +615,25 @@ export function WeeklyScheduleDetailClient({ week }: { week: WeeklyScheduleView 
           </Button>
         </div>
       </Modal>
+
+      {ridingTarget && ridingScheduleItemIds.length > 0 && (
+        <RidingSlotModal
+          open={ridingTarget !== null}
+          onClose={() => setRidingTarget(null)}
+          scheduleItemIds={ridingScheduleItemIds}
+          scheduleItemInfo={{
+            title: ridingTarget.title,
+            dateKey: ridingTarget.dateKey,
+            startTime: ridingTarget.startTime,
+            endTime: ridingTarget.endTime,
+            groupName: ridingTarget.groupName,
+            instructorName: ridingTarget.instructorName,
+            location: ridingTarget.location,
+          }}
+          isMergedDisplay={ridingIsMergedDisplay}
+          instructors={instructors}
+        />
+      )}
     </div>
   );
 }

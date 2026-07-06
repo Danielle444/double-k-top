@@ -14,15 +14,23 @@ export default async function WeeklyScheduleDetailPage({
   await requireAdmin();
   const { id } = await params;
 
-  const week = await prisma.weeklySchedule.findUnique({
-    where: { id },
-    include: { items: { orderBy: [{ date: "asc" }, { startTime: "asc" }] } },
-  });
+  const [week, instructors] = await Promise.all([
+    prisma.weeklySchedule.findUnique({
+      where: { id },
+      include: { items: { orderBy: [{ date: "asc" }, { startTime: "asc" }] } },
+    }),
+    prisma.instructor.findMany({
+      where: { isActive: true },
+      orderBy: { fullName: "asc" },
+      select: { id: true, fullName: true },
+    }),
+  ]);
 
   if (!week) notFound();
 
   return (
     <WeeklyScheduleDetailClient
+      instructors={instructors}
       week={{
         id: week.id,
         name: week.name,
