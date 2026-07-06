@@ -3,16 +3,16 @@
 import { useEffect, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
+import { RidingHistoryList } from "@/lib/components/RidingHistoryList";
 import {
   formatHebrewDate,
   formatHebrewDateTime,
   formatHebrewWeekday,
-  getDayPartLabel,
   getLocalDateKey,
   getWeekDateKeys,
   parseDateKey,
 } from "@/lib/dates";
-import { cleanScheduleTitle, getRidingHistoryTitle } from "@/lib/schedule-title";
+import { cleanScheduleTitle } from "@/lib/schedule-title";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
 import { groupByGroupAndSubgroup } from "@/lib/attendance-ui";
@@ -735,44 +735,7 @@ export function InstructorRidingSlotsSection({
                 · סוס: {historyResult.student.horseNameDisplay}
               </p>
 
-              {historyResult.rows.length === 0 ? (
-                <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
-                  עדיין לא הוזנו הערות רכיבה לחניך/ה זה/זו.
-                </p>
-              ) : (
-                historyResult.rows.map((row) => (
-                  <div key={row.ridingSlotId} className="rounded-xl border border-border bg-card p-3">
-                    <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm font-semibold text-card-foreground">
-                        {formatHebrewDate(parseDateKey(row.dateKey))}
-                        {getDayPartLabel(row.startTime) && ` · ${getDayPartLabel(row.startTime)}`}
-                      </span>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                          row.ratingHalfPoints != null
-                            ? "bg-success-muted text-success"
-                            : "bg-muted text-muted-foreground"
-                        }`}
-                      >
-                        {row.ratingHalfPoints != null ? `דירוג: ${row.ratingHalfPoints / 2}` : "אין דירוג"}
-                      </span>
-                    </div>
-                    <p className="mb-1 text-sm font-bold text-card-foreground">
-                      {getRidingHistoryTitle(row.title)}
-                    </p>
-                    <p className="mb-1 text-xs text-muted-foreground">
-                      מאמן/ת: {row.instructorName ?? "לא הוגדר"} · מגרש: {row.arena ?? "לא הוגדר"}
-                    </p>
-                    <p className="mb-1 text-xs text-muted-foreground">{row.horseDisplay}</p>
-                    {row.note && <p className="mb-1 text-sm text-card-foreground">הערה: {row.note}</p>}
-                    <p className="text-xs text-muted-foreground">
-                      {row.updatedByName && `עודכן על ידי: ${row.updatedByName}`}
-                      {row.updatedByName && " · "}
-                      עודכן בתאריך: {formatHebrewDateTime(new Date(row.updatedAt))}
-                    </p>
-                  </div>
-                ))
-              )}
+              <RidingHistoryList rows={historyResult.rows} />
             </>
           ) : null}
         </div>
