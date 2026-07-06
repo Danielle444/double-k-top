@@ -630,6 +630,25 @@ export function WeeklyFeedbackTabs({
     return computeQuestionResults(results.questionResults, filteredTraineeResponses);
   }, [results, filteredTraineeResponses]);
 
+  // Derived entirely from filteredQuestionResults/filteredSummary (already
+  // scoped to the current group/subgroup filter) - no separate query, no
+  // text analysis. Thresholds: RATING_5 average below 3, COMPARISON_3
+  // average below 2 (its own neutral midpoint, same reasoning as the
+  // average-badge coloring above), FREE_TEXT with 3+ non-empty answers.
+  const lowRatingQuestions = useMemo(
+    () =>
+      filteredQuestionResults.filter(
+        (q) =>
+          q.averageRating != null && q.averageRating < (q.type === "COMPARISON_3" ? 2 : 3)
+      ),
+    [filteredQuestionResults]
+  );
+
+  const commentHeavyQuestions = useMemo(
+    () => filteredQuestionResults.filter((q) => (q.freeTextAnswers?.length ?? 0) >= 3),
+    [filteredQuestionResults]
+  );
+
   const resultsFilterSummaryLabel = !resultsGroupFilter
     ? "כל החניכים"
     : resultsSubgroupFilter
@@ -1159,6 +1178,62 @@ export function WeeklyFeedbackTabs({
                   </select>
                 </label>
                 <p className="text-xs text-muted-foreground">מציג נתונים עבור: {resultsFilterSummaryLabel}</p>
+              </div>
+
+              <div className="rounded-xl border border-border bg-card p-4">
+                <h3 className="mb-2 text-sm font-bold text-card-foreground">דורש תשומת לב</h3>
+                {lowRatingQuestions.length === 0 &&
+                commentHeavyQuestions.length === 0 &&
+                filteredSummary.notSubmittedCount === 0 ? (
+                  <p className="text-sm text-success">אין כרגע נקודות חריגות במשוב הזה</p>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {filteredSummary.notSubmittedCount > 0 && (
+                      <p className="text-sm text-warning">
+                        {filteredSummary.notSubmittedCount} חניכים עדיין לא הגישו
+                      </p>
+                    )}
+                    {lowRatingQuestions.length > 0 && (
+                      <div>
+                        <p className="mb-1 text-xs font-semibold text-muted-foreground">דירוגים נמוכים</p>
+                        <ul className="flex flex-col gap-1">
+                          {lowRatingQuestions.map((q) => (
+                            <li
+                              key={q.questionId}
+                              className="rounded-lg bg-danger-muted p-2 text-sm text-danger"
+                            >
+                              <span className="font-medium">
+                                {q.section} · {q.prompt}
+                              </span>
+                              <span className="block text-xs">
+                                ממוצע {q.averageRating?.toFixed(1)} · {q.answerCount} תשובות
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {commentHeavyQuestions.length > 0 && (
+                      <div>
+                        <p className="mb-1 text-xs font-semibold text-muted-foreground">
+                          שאלות עם הרבה הערות
+                        </p>
+                        <ul className="flex flex-col gap-1">
+                          {commentHeavyQuestions.map((q) => (
+                            <li key={q.questionId} className="rounded-lg bg-muted p-2 text-sm">
+                              <span className="font-medium text-card-foreground">
+                                {q.section} · {q.prompt}
+                              </span>
+                              <span className="block text-xs text-muted-foreground">
+                                {q.freeTextAnswers?.length ?? 0} הערות
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="flex flex-wrap gap-2">
