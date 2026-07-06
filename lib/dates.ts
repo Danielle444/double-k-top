@@ -5,6 +5,15 @@ export function dateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+// Coarse morning/afternoon label for contexts (like riding history) that
+// don't need the exact time range, just which part of the day a lesson was in.
+export function getDayPartLabel(startTime: string | null | undefined): string {
+  if (!startTime) return "";
+  const hour = Number(startTime.split(":")[0]);
+  if (Number.isNaN(hour)) return "";
+  return hour < 12 ? "בוקר" : 'אחה"צ';
+}
+
 export function parseDateKey(key: string): Date {
   return new Date(`${key}T00:00:00.000Z`);
 }

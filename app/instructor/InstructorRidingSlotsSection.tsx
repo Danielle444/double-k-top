@@ -7,26 +7,37 @@ import {
   formatHebrewDate,
   formatHebrewDateTime,
   formatHebrewWeekday,
+  getDayPartLabel,
   getLocalDateKey,
   getWeekDateKeys,
   parseDateKey,
 } from "@/lib/dates";
-import { cleanScheduleTitle } from "@/lib/schedule-title";
+import { cleanScheduleTitle, getRidingHistoryTitle } from "@/lib/schedule-title";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
 import { groupByGroupAndSubgroup } from "@/lib/attendance-ui";
 import {
   getInstructorRidingSlots,
   getRidingSlotStudentNotes,
+  getStudentRidingHistoryForInstructor,
   upsertRidingLessonNoteAsInstructor,
   type WeeklyRidingDay,
   type WeeklyRidingActivity,
   type RidingSlotStudentRow,
   type RidingSlotAssignmentRow,
+  type StudentRidingHistoryResult,
 } from "@/lib/actions/riding-slots";
 
 type ViewMode = "day" | "week";
 type ScopeMode = "mine" | "all";
+type BrowseMode = "slot" | "student";
+
+interface RidingStudentOption {
+  id: string;
+  fullName: string;
+  groupName: string | null;
+  subgroupNumber: number | null;
+}
 
 // 1.0-5.0 in 0.5 steps, shown as ratingHalfPoints/2.
 const RATING_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -283,10 +294,13 @@ function StudentEditor({
 export function InstructorRidingSlotsSection({
   instructorId,
   canEdit,
+  students,
 }: {
   instructorId: string;
   canEdit: boolean;
+  students: RidingStudentOption[];
 }) {
+  const [browseMode, setBrowseMode] = useState<BrowseMode>("slot");
   const [viewMode, setViewMode] = useState<ViewMode>("day");
   const [scopeMode, setScopeMode] = useState<ScopeMode>("mine");
   const [selectedDate, setSelectedDate] = useState(() => getLocalDateKey());
@@ -294,9 +308,14 @@ export function InstructorRidingSlotsSection({
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [openActivity, setOpenActivity] = useState<WeeklyRidingActivity | null>(null);
-  const [students, setStudents] = useState<RidingSlotStudentRow[] | null>(null);
+  const [slotStudents, setSlotStudents] = useState<RidingSlotStudentRow[] | null>(null);
   const [studentsError, setStudentsError] = useState<string | null>(null);
   const [editingStudent, setEditingStudent] = useState<RidingSlotStudentRow | null>(null);
+
+  const [studentSearch, setStudentSearch] = useState("");
+  const [historyStudentId, setHistoryStudentId] = useState<string | null>(null);
+  const [historyResult, setHistoryResult] = useState<StudentRidingHistoryResult | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   const rangeKeys = viewMode === "day" ? [selectedDate] : getWeekDateKeys(selectedDate);
   const rangeStart = rangeKeys[0] ?? selectedDate;
@@ -325,21 +344,34 @@ export function InstructorRidingSlotsSection({
   function openStudents(activity: WeeklyRidingActivity) {
     if (!activity.ridingSlot) return;
     setOpenActivity(activity);
-    setStudents(null);
+    setSlotStudents(null);
     setStudentsError(null);
     setEditingStudent(null);
     getRidingSlotStudentNotes(activity.ridingSlot.id)
-      .then((rows) => setStudents(rows))
+      .then((rows) => setSlotStudents(rows))
       .catch(() => {
-        setStudents([]);
+        setSlotStudents([]);
         setStudentsError("שגיאה בטעינת רשימת התלמידים. נסו לרענן.");
       });
   }
 
   function handleStudentSaved(updated: RidingSlotStudentRow) {
-    setStudents((prev) => (prev ? prev.map((s) => (s.studentId === updated.studentId ? updated : s)) : prev));
+    setSlotStudents((prev) => (prev ? prev.map((s) => (s.studentId === updated.studentId ? updated : s)) : prev));
     setEditingStudent(null);
   }
+
+  function openHistory(studentId: string) {
+    setHistoryStudentId(studentId);
+    setHistoryResult(null);
+    setHistoryError(null);
+    getStudentRidingHistoryForInstructor(studentId)
+      .then((r) => setHistoryResult(r))
+      .catch(() => setHistoryError("שגיאה בטעינת היסטוריית הרכיבה. נסו לרענן."));
+  }
+
+  const filteredStudents = students.filter((s) =>
+    s.fullName.toLowerCase().includes(studentSearch.trim().toLowerCase())
+  );
 
   const visibleDays = (days ?? [])
     .map((day) => ({
@@ -354,6 +386,99 @@ export function InstructorRidingSlotsSection({
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1 text-sm">
+        עיון
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setBrowseMode("slot")}
+            className={`rounded-full px-4 py-2 text-sm font-medium ${
+              browseMode === "slot"
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground"
+            }`}
+          >
+            לפי רכיבה
+          </button>
+          <button
+            type="button"
+            onClick={() => setBrowseMode("student")}
+            className={`rounded-full px-4 py-2 text-sm font-medium ${
+              browseMode === "student"
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground"
+            }`}
+          >
+            לפי חניך
+          </button>
+        </div>
+      </div>
+
+      {browseMode === "student" ? (
+        <div className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1 text-sm">
+            חיפוש חניך/ה
+            <input
+              type="text"
+              value={studentSearch}
+              onChange={(e) => setStudentSearch(e.target.value)}
+              placeholder="הקלידו שם..."
+              className="rounded-lg border border-border px-3 py-2 text-sm"
+            />
+          </label>
+
+          {filteredStudents.length === 0 ? (
+            <p className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
+              לא נמצאו חניכים תואמים
+            </p>
+          ) : (
+            <div className="flex max-w-full flex-col gap-3 overflow-x-hidden">
+              {groupByGroupAndSubgroup(filteredStudents).map((section) => (
+                <div
+                  key={section.groupName ?? "__none__"}
+                  className={`rounded-xl border-2 border-border p-3 ${getScheduleGroupColorClass(
+                    section.groupName
+                  )}`}
+                >
+                  <p className="mb-2 text-sm font-bold text-card-foreground">
+                    {section.groupName ? `קבוצה ${section.groupName}` : "ללא קבוצה"}
+                  </p>
+                  <div className="flex flex-col gap-2">
+                    {section.subgroups.map((sub) => (
+                      <div
+                        key={sub.subgroupNumber ?? "__none__"}
+                        className="rounded-lg border border-border bg-card p-2"
+                      >
+                        <p className="mb-2 text-xs font-bold text-card-foreground">
+                          {sub.subgroupNumber != null
+                            ? `תת-קבוצה ${sub.subgroupNumber}`
+                            : "ללא תת-קבוצה"}
+                        </p>
+                        <div className="flex flex-col gap-1.5">
+                          {sub.items.map((s) => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              onClick={() => openHistory(s.id)}
+                              className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-card p-2.5 text-right hover:bg-muted"
+                            >
+                              <span className="min-w-0 flex-1 truncate text-sm font-semibold text-card-foreground">
+                                {s.fullName}
+                              </span>
+                              <span className="shrink-0 text-xs text-muted-foreground">היסטוריה ›</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
       <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card p-4">
         <div className="flex flex-col gap-1 text-sm">
           תצוגה
@@ -512,7 +637,7 @@ export function InstructorRidingSlotsSection({
         title={openActivity ? cleanScheduleTitle(openActivity.title) : "רכיבה"}
         onClose={() => {
           setOpenActivity(null);
-          setStudents(null);
+          setSlotStudents(null);
           setEditingStudent(null);
         }}
       >
@@ -527,13 +652,13 @@ export function InstructorRidingSlotsSection({
               onBack={() => setEditingStudent(null)}
               onSaved={handleStudentSaved}
             />
-          ) : students === null ? (
+          ) : slotStudents === null ? (
             <p className="text-sm text-muted-foreground">טוען...</p>
-          ) : students.length === 0 ? (
+          ) : slotStudents.length === 0 ? (
             <p className="text-sm text-muted-foreground">אין תלמידים רלוונטיים לרכיבה זו</p>
           ) : (
             <div className="flex max-w-full flex-col gap-3 overflow-x-hidden">
-              {groupByGroupAndSubgroup(students).map((section) => (
+              {groupByGroupAndSubgroup(slotStudents).map((section) => (
                 <div
                   key={section.groupName ?? "__none__"}
                   className={`rounded-xl border-2 border-border p-3 ${getScheduleGroupColorClass(
@@ -582,6 +707,74 @@ export function InstructorRidingSlotsSection({
               ))}
             </div>
           )}
+        </div>
+      </Modal>
+        </>
+      )}
+
+      <Modal
+        open={historyStudentId !== null}
+        title={historyResult ? `היסטוריית רכיבה - ${historyResult.student.fullName}` : "היסטוריית רכיבה"}
+        onClose={() => {
+          setHistoryStudentId(null);
+          setHistoryResult(null);
+          setHistoryError(null);
+        }}
+      >
+        <div className="flex max-h-[70vh] max-w-full flex-col gap-3 overflow-y-auto overflow-x-hidden ps-1">
+          {historyError && <p className="text-sm text-danger">{historyError}</p>}
+          {!historyError && historyResult === null ? (
+            <p className="text-sm text-muted-foreground">טוען...</p>
+          ) : historyResult ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                {historyResult.student.groupName ? `קבוצה ${historyResult.student.groupName}` : "ללא קבוצה"}
+                {historyResult.student.subgroupNumber != null
+                  ? ` / תת-קבוצה ${historyResult.student.subgroupNumber}`
+                  : ""}{" "}
+                · סוס: {historyResult.student.horseNameDisplay}
+              </p>
+
+              {historyResult.rows.length === 0 ? (
+                <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
+                  עדיין לא הוזנו הערות רכיבה לחניך/ה זה/זו.
+                </p>
+              ) : (
+                historyResult.rows.map((row) => (
+                  <div key={row.ridingSlotId} className="rounded-xl border border-border bg-card p-3">
+                    <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-sm font-semibold text-card-foreground">
+                        {formatHebrewDate(parseDateKey(row.dateKey))}
+                        {getDayPartLabel(row.startTime) && ` · ${getDayPartLabel(row.startTime)}`}
+                      </span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                          row.ratingHalfPoints != null
+                            ? "bg-success-muted text-success"
+                            : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {row.ratingHalfPoints != null ? `דירוג: ${row.ratingHalfPoints / 2}` : "אין דירוג"}
+                      </span>
+                    </div>
+                    <p className="mb-1 text-sm font-bold text-card-foreground">
+                      {getRidingHistoryTitle(row.title)}
+                    </p>
+                    <p className="mb-1 text-xs text-muted-foreground">
+                      מאמן/ת: {row.instructorName ?? "לא הוגדר"} · מגרש: {row.arena ?? "לא הוגדר"}
+                    </p>
+                    <p className="mb-1 text-xs text-muted-foreground">{row.horseDisplay}</p>
+                    {row.note && <p className="mb-1 text-sm text-card-foreground">הערה: {row.note}</p>}
+                    <p className="text-xs text-muted-foreground">
+                      {row.updatedByName && `עודכן על ידי: ${row.updatedByName}`}
+                      {row.updatedByName && " · "}
+                      עודכן בתאריך: {formatHebrewDateTime(new Date(row.updatedAt))}
+                    </p>
+                  </div>
+                ))
+              )}
+            </>
+          ) : null}
         </div>
       </Modal>
     </div>

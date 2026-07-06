@@ -26,3 +26,13 @@ export function getStudentScheduleTitle(title: string): string {
   const [mainActivity] = cleaned.split(/[-–]/);
   return mainActivity.trim() || cleaned;
 }
+
+// Riding history cards want the topic, not the "רכיבה - " prefix, e.g.
+// "רכיבה - מעברים" -> "מעברים". Opposite half of getStudentScheduleTitle.
+export function getRidingHistoryTitle(title: string): string {
+  const cleaned = cleanScheduleTitle(title);
+  const dashIndex = cleaned.search(/[-–]/);
+  if (dashIndex === -1) return cleaned;
+  const afterDash = cleaned.slice(dashIndex + 1).trim();
+  return afterDash || cleaned;
+}
