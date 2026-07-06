@@ -53,6 +53,23 @@ export async function getNotificationsForInstructor(instructorId: string): Promi
   return rows.map(toNotificationRow);
 }
 
+// Cheap existence checks for the "עוד" tab / "עדכונים" menu-row unread dot -
+// a count query instead of fetching full rows, since the caller only needs a
+// boolean.
+export async function hasUnreadNotificationsForStudent(studentId: string): Promise<boolean> {
+  const count = await prisma.notification.count({
+    where: { recipientRole: "STUDENT", studentId, readAt: null },
+  });
+  return count > 0;
+}
+
+export async function hasUnreadNotificationsForInstructor(instructorId: string): Promise<boolean> {
+  const count = await prisma.notification.count({
+    where: { recipientRole: "INSTRUCTOR", instructorId, readAt: null },
+  });
+  return count > 0;
+}
+
 // Students/instructors have no NextAuth session, so ownership is re-verified
 // by re-reading the row and comparing studentId/instructorId before writing -
 // never trusted from client-supplied state, same convention as

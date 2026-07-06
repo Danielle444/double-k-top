@@ -29,7 +29,9 @@ import { NotificationsList } from "@/lib/components/NotificationsList";
 import {
   getNotificationsForInstructor,
   markNotificationReadAsInstructor,
+  hasUnreadNotificationsForInstructor,
 } from "@/lib/actions/notifications";
+import { getMessageTasksForInstructorView } from "@/lib/actions/messages";
 import {
   formatHebrewDate,
   formatHebrewWeekday,
@@ -39,6 +41,14 @@ import {
 } from "@/lib/dates";
 
 const STORAGE_KEY = "duty-manager-instructor-v2";
+
+// Instructors have no per-recipient read tracking for messages/tasks (see
+// InstructorMessageTaskRecipient revert), so the "new messages/tasks"
+// shortcut dot uses a lightweight, device-local "created after I last opened
+// the screen" timestamp instead of a real read state.
+function instructorMessagesLastSeenKey(instructorId: string): string {
+  return `duty-manager-instructor-messages-last-seen-${instructorId}`;
+}
 
 // Instructor has its own 6 main bottom tabs (independent of the student
 // MAIN_TABS, which stays untouched) plus a "more" menu for lower-frequency
@@ -141,6 +151,57 @@ export function InstructorClient({
   const [selectedWeekId, setSelectedWeekId] = useState<string | null>(null);
   const [dayFilter, setDayFilter] = useState<string | "all">("all");
   const [ridingSummary, setRidingSummary] = useState<InstructorRidingAssignmentSummary | null>(null);
+
+  // Drives the "עוד" tab / "עדכונים" menu-row dot (a real unread count).
+  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
+  // Drives the "הודעות ומשימות" shortcut/menu-row dot - device-local "new
+  // since last opened" only, not a real per-instructor read state (see
+  // instructorMessagesLastSeenKey above).
+  const [hasNewMessages, setHasNewMessages] = useState(false);
+
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    hasUnreadNotificationsForInstructor(session.id).then((value) => {
+      if (!cancelled) setHasUnreadNotifications(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id]);
+
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    getMessageTasksForInstructorView().then((items) => {
+      if (cancelled) return;
+      const lastSeenRaw = window.localStorage.getItem(instructorMessagesLastSeenKey(session.id));
+      const lastSeen = lastSeenRaw ? new Date(lastSeenRaw).getTime() : 0;
+      // Best-effort exclusion of the instructor's own messages: createdByName
+      // is just the sender's display name (see createMessageTaskAsInstructor),
+      // not a strict identity check, so two instructors sharing an exact full
+      // name would under-count for each other here - acceptable since this
+      // only suppresses a decorative dot, nothing else.
+      const hasNew = items.some(
+        (item) =>
+          item.createdByName !== session.fullName && new Date(item.createdAt).getTime() > lastSeen
+      );
+      setHasNewMessages(hasNew);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id, session?.fullName]);
+
+  useEffect(() => {
+    if (!session || activeTab !== "messages") return;
+    window.localStorage.setItem(instructorMessagesLastSeenKey(session.id), new Date().toISOString());
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setHasNewMessages(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, session?.id]);
 
   // Recomputed every minute (not just once at mount) so "today" rolls over
   // to the new local day on its own if the app is left open across
@@ -420,12 +481,18 @@ export function InstructorClient({
                     key={`${action.id}-${action.label}`}
                     type="button"
                     onClick={() => setActiveTab(action.id)}
-                    className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-2 text-right hover:bg-muted"
+                    className="relative flex items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-2 text-right hover:bg-muted"
                   >
                     <TabIcon id={action.id} className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 flex-1 truncate text-xs font-semibold text-card-foreground">
                       {action.label}
                     </span>
+                    {action.id === "messages" && hasNewMessages && (
+                      <span
+                        className="absolute top-1 right-1 h-2 w-2 rounded-full bg-primary"
+                        aria-hidden="true"
+                      />
+                    )}
                   </button>
                 ))}
               </div>
@@ -522,7 +589,13 @@ export function InstructorClient({
                 onClick={() => setActiveTab(item.id)}
                 className="flex items-center justify-between rounded-2xl border border-border bg-card p-5 text-right"
               >
-                <span className="text-lg font-bold text-card-foreground">{item.label}</span>
+                <span className="flex items-center gap-1.5 text-lg font-bold text-card-foreground">
+                  {item.label}
+                  {((item.id === "notifications" && hasUnreadNotifications) ||
+                    (item.id === "messages" && hasNewMessages)) && (
+                    <span className="h-2 w-2 rounded-full bg-primary" aria-hidden="true" />
+                  )}
+                </span>
                 <span className="text-muted-foreground">‹</span>
               </button>
             ))}
@@ -584,11 +657,17 @@ export function InstructorClient({
           <NotificationsList
             fetchNotifications={() => getNotificationsForInstructor(session.id)}
             onMarkRead={(notificationId) => markNotificationReadAsInstructor(notificationId, session.id)}
+            onUnreadChange={setHasUnreadNotifications}
           />
         )}
       </main>
 
-      <BottomTabs active={bottomActiveTab} onChange={setActiveTab} tabs={INSTRUCTOR_MAIN_TABS} />
+      <BottomTabs
+        active={bottomActiveTab}
+        onChange={setActiveTab}
+        tabs={INSTRUCTOR_MAIN_TABS}
+        dotTabIds={hasUnreadNotifications || hasNewMessages ? (["more"] as MainTabId[]) : []}
+      />
     </div>
   );
 }

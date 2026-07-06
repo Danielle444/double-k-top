@@ -22,8 +22,16 @@ import { StudentAttendanceNotice } from "@/app/student/StudentAttendanceNotice";
 import { ContactsSection } from "@/lib/components/ContactsSection";
 import { HelpContent } from "@/lib/components/HelpContent";
 import { NotificationsList, type MessagePreviewItem } from "@/lib/components/NotificationsList";
-import { getNotificationsForStudent, markNotificationReadAsStudent } from "@/lib/actions/notifications";
-import { getStudentMessages, type StudentMessageItem } from "@/lib/actions/messages";
+import {
+  getNotificationsForStudent,
+  markNotificationReadAsStudent,
+  hasUnreadNotificationsForStudent,
+} from "@/lib/actions/notifications";
+import {
+  getStudentMessages,
+  hasUnreadMessagesForStudent,
+  type StudentMessageItem,
+} from "@/lib/actions/messages";
 import {
   formatHebrewDate,
   formatHebrewWeekday,
@@ -115,6 +123,29 @@ export function StudentClient() {
   const [weeks, setWeeks] = useState<WeekOption[] | null>(null);
   const [selectedWeekId, setSelectedWeekId] = useState<string | null>(null);
   const [dayFilter, setDayFilter] = useState<string | "all">("all");
+
+  // Drives the "עוד" tab / "עדכונים" menu-row dot and the "הודעות" tab /
+  // home-shortcut dot. Fetched proactively on login (a lightweight count
+  // query) so the dot is correct before the student ever opens either
+  // screen; NotificationsList/StudentMessagesSection then keep it in sync via
+  // onUnreadChange whenever their own list loads or changes.
+  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
+  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
+
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    hasUnreadNotificationsForStudent(session.id).then((value) => {
+      if (!cancelled) setHasUnreadNotifications(value);
+    });
+    hasUnreadMessagesForStudent(session.id).then((value) => {
+      if (!cancelled) setHasUnreadMessages(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id]);
 
   // Recomputed every minute (not just once at mount) so "today" rolls over
   // to the new local day on its own if the app is left open across
@@ -396,9 +427,15 @@ export function StudentClient() {
                   key={action.id}
                   type="button"
                   onClick={() => setActiveTab(action.id)}
-                  className="rounded-xl border border-border bg-card p-3 text-center text-sm font-semibold text-card-foreground hover:bg-muted"
+                  className="relative rounded-xl border border-border bg-card p-3 text-center text-sm font-semibold text-card-foreground hover:bg-muted"
                 >
                   {action.label}
+                  {action.id === "messages" && hasUnreadMessages && (
+                    <span
+                      className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-primary"
+                      aria-hidden="true"
+                    />
+                  )}
                 </button>
               ))}
             </div>
@@ -477,7 +514,12 @@ export function StudentClient() {
                 onClick={() => setActiveTab(item.id)}
                 className="flex items-center justify-between rounded-2xl border border-border bg-card p-5 text-right"
               >
-                <span className="text-lg font-bold text-card-foreground">{item.label}</span>
+                <span className="flex items-center gap-1.5 text-lg font-bold text-card-foreground">
+                  {item.label}
+                  {item.id === "notifications" && hasUnreadNotifications && (
+                    <span className="h-2 w-2 rounded-full bg-primary" aria-hidden="true" />
+                  )}
+                </span>
                 <span className="text-muted-foreground">‹</span>
               </button>
             ))}
@@ -591,7 +633,9 @@ export function StudentClient() {
           </div>
         )}
 
-        {activeTab === "messages" && <StudentMessagesSection studentId={session.id} />}
+        {activeTab === "messages" && (
+          <StudentMessagesSection studentId={session.id} onUnreadChange={setHasUnreadMessages} />
+        )}
 
         {activeTab === "contacts" && <ContactsSection />}
 
@@ -605,11 +649,20 @@ export function StudentClient() {
             onMarkRead={(notificationId) => markNotificationReadAsStudent(notificationId, session.id)}
             fetchMessagePreview={() => getStudentMessages(session.id).then(toMessagePreview)}
             onOpenMessages={() => setActiveTab("messages")}
+            onUnreadChange={setHasUnreadNotifications}
           />
         )}
       </main>
 
-      <BottomTabs active={bottomActiveTab} onChange={setActiveTab} tabs={STUDENT_MAIN_TABS} />
+      <BottomTabs
+        active={bottomActiveTab}
+        onChange={setActiveTab}
+        tabs={STUDENT_MAIN_TABS}
+        dotTabIds={[
+          ...(hasUnreadMessages ? (["messages"] as MainTabId[]) : []),
+          ...(hasUnreadNotifications ? (["more"] as MainTabId[]) : []),
+        ]}
+      />
     </div>
   );
 }

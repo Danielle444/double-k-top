@@ -136,10 +136,14 @@ export function BottomTabs({
   active,
   onChange,
   tabs = MAIN_TABS,
+  dotTabIds = [],
 }: {
   active: MainTabId;
   onChange: (id: MainTabId) => void;
   tabs?: { id: MainTabId; label: string }[];
+  // Tab ids that should show a small unread dot on their icon - e.g. "more"
+  // when something inside the "עוד" menu is unread.
+  dotTabIds?: MainTabId[];
 }) {
   return (
     <nav
@@ -160,11 +164,17 @@ export function BottomTabs({
               }`}
             >
               <span
-                className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
+                className={`relative flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
                   isActive ? "bg-primary/10" : ""
                 }`}
               >
                 <TabIcon id={tab.id} />
+                {dotTabIds.includes(tab.id) && (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-primary ring-2 ring-card"
+                    aria-hidden="true"
+                  />
+                )}
               </span>
               <span
                 className={`max-w-full truncate text-xs leading-tight ${

@@ -41,16 +41,26 @@ export function NotificationsList({
   onMarkRead,
   fetchMessagePreview,
   onOpenMessages,
+  onUnreadChange,
 }: {
   fetchNotifications: () => Promise<NotificationRow[]>;
   onMarkRead: (notificationId: string) => Promise<ActionResult>;
   fetchMessagePreview?: () => Promise<MessagePreviewItem[]>;
   onOpenMessages?: () => void;
+  // Reports whether any notification is currently unread, so a parent
+  // component can keep its own bottom-tab/menu dot in sync immediately after
+  // this list loads or after a mark-as-read, without a second fetch.
+  onUnreadChange?: (hasUnread: boolean) => void;
 }) {
   const [rows, setRows] = useState<NotificationRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [messagePreview, setMessagePreview] = useState<MessagePreviewItem[] | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    if (rows) onUnreadChange?.(rows.some((n) => !n.readAt));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
 
   function load() {
     setLoadError(null);

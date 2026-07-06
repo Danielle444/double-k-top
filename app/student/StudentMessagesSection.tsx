@@ -19,7 +19,16 @@ function isActive(item: StudentMessageItem): boolean {
   return item.type === "TASK" ? !item.completedAt : !item.readAt;
 }
 
-export function StudentMessagesSection({ studentId }: { studentId: string }) {
+export function StudentMessagesSection({
+  studentId,
+  onUnreadChange,
+}: {
+  studentId: string;
+  // Reports whether any item is currently unread/incomplete, so a parent
+  // component can keep its own shortcut/tab dot in sync immediately after
+  // this list loads or after a mark-read/complete, without a second fetch.
+  onUnreadChange?: (hasUnread: boolean) => void;
+}) {
   const [items, setItems] = useState<StudentMessageItem[] | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -32,6 +41,11 @@ export function StudentMessagesSection({ studentId }: { studentId: string }) {
       cancelled = true;
     };
   }, [studentId]);
+
+  useEffect(() => {
+    if (items) onUnreadChange?.(items.some(isActive));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
 
   const { activeItems, historyItems } = useMemo(() => {
     if (!items) return { activeItems: [], historyItems: [] };
