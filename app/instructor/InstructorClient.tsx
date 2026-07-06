@@ -71,11 +71,8 @@ const INSTRUCTOR_MORE_ITEMS: { id: MainTabId; label: string }[] = [
 const INSTRUCTOR_ALL_TABS = [...INSTRUCTOR_MAIN_TABS, ...INSTRUCTOR_MORE_ITEMS];
 
 // Normalizes getMessageTasksForInstructorView()'s shape for the "עדכונים"
-// preview section. isUnread is always null here on purpose: there is no
-// per-instructor read/completed tracking for MessageTask today (every
-// instructor sees the same full content list, see getMessageTasksForInstructorView's
-// own doc comment) - this stays an honest "no read state available" rather
-// than guessing at one.
+// preview section, using this instructor's own InstructorMessageTaskRecipient
+// row (readAt for MESSAGE, completedAt for TASK) as the unread flag.
 function toMessagePreview(items: InstructorMessageTaskView[]): MessagePreviewItem[] {
   return items.map((m) => ({
     id: m.id,
@@ -83,7 +80,7 @@ function toMessagePreview(items: InstructorMessageTaskView[]): MessagePreviewIte
     title: m.title,
     body: m.body,
     createdAt: m.createdAt,
-    isUnread: null,
+    isUnread: m.type === "MESSAGE" ? !m.readAt : !m.completedAt,
   }));
 }
 
@@ -605,7 +602,7 @@ export function InstructorClient({
           <NotificationsList
             fetchNotifications={() => getNotificationsForInstructor(session.id)}
             onMarkRead={(notificationId) => markNotificationReadAsInstructor(notificationId, session.id)}
-            fetchMessagePreview={() => getMessageTasksForInstructorView().then(toMessagePreview)}
+            fetchMessagePreview={() => getMessageTasksForInstructorView(session.id).then(toMessagePreview)}
             onOpenMessages={() => setActiveTab("messages")}
           />
         )}
