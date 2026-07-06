@@ -15,7 +15,7 @@ import {
 import { cleanScheduleTitle } from "@/lib/schedule-title";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
-import { groupByGroupAndSubgroup, STATUS_BADGE_CLASS } from "@/lib/attendance-ui";
+import { groupByGroupAndSubgroup, STATUS_BADGE_CLASS, type GroupSection } from "@/lib/attendance-ui";
 import {
   getInstructorRidingSlots,
   getRidingSlotStudentNotes,
@@ -62,6 +62,133 @@ function findAssignmentForSection(
   if (groupLevel) return groupLevel;
   const wholeSlot = assignments.find((a) => a.groupName === null && a.subgroupNumber === null);
   return wholeSlot ?? null;
+}
+
+type AssignmentTier = "exact" | "group" | "none";
+
+// Classifies the assignment resolved for this exact group/subgroup (via the
+// same exact -> group-level -> whole-slot fallback above) by how specific
+// it is, but only when it actually belongs to the given instructor:
+// - "exact": a real per-subgroup assignment row (groupName + subgroupNumber
+//   both set) assigned to this instructor - the strongest signal, since it
+//   names this precise subgroup.
+// - "group": a group-level row (groupName set, subgroupNumber null)
+//   assigned to this instructor - applies to the whole group, not one
+//   specific subgroup.
+// - "none": no assignment resolved here belongs to this instructor, OR it
+//   only resolved via a whole-slot (null/null) row - deliberately not
+//   promoted, since a whole-slot assignment already covers every section
+//   equally and shouldn't reorder anything.
+function getInstructorAssignmentTier(
+  assignments: RidingSlotAssignmentRow[],
+  groupName: string | null,
+  subgroupNumber: number | null,
+  instructorId: string
+): AssignmentTier {
+  const assignment = findAssignmentForSection(assignments, groupName, subgroupNumber);
+  if (!assignment || assignment.instructorId !== instructorId) return "none";
+  if (assignment.groupName !== null && assignment.subgroupNumber !== null) return "exact";
+  if (assignment.groupName !== null && assignment.subgroupNumber === null) return "group";
+  return "none";
+}
+
+interface FlatStudentSection<T> {
+  groupName: string | null;
+  subgroupNumber: number | null;
+  items: T[];
+}
+
+// Flattens groupByGroupAndSubgroup's nested group -> subgroups shape into
+// one subgroup-per-entry list, in the exact same order (group alpha, then
+// subgroup numeric) - the baseline order before any instructor-priority
+// reordering runs.
+function flattenGroupSections<T>(sections: GroupSection<T>[]): FlatStudentSection<T>[] {
+  const flat: FlatStudentSection<T>[] = [];
+  for (const section of sections) {
+    for (const sub of section.subgroups) {
+      flat.push({ groupName: section.groupName, subgroupNumber: sub.subgroupNumber, items: sub.items });
+    }
+  }
+  return flat;
+}
+
+// Moves the current instructor's own subgroup section(s) to the very top -
+// not just their parent group - so an instructor assigned to "קבוצה א /
+// תת-קבוצה 2" sees that exact section first, even ahead of "קבוצה א /
+// תת-קבוצה 1". A three-bucket stable sort: exact-assigned subgroups first,
+// then other subgroups within a group-level-assigned group, then
+// everything else untouched - each bucket keeps its own original relative
+// order. A whole-slot assignment (or no assignment at all) puts every
+// section in the "none" bucket, so nothing moves.
+function sortFlatSectionsForInstructor<T>(
+  flatSections: FlatStudentSection<T>[],
+  assignments: RidingSlotAssignmentRow[],
+  instructorId: string
+): (FlatStudentSection<T> & { tier: AssignmentTier })[] {
+  const withTier = flatSections.map((section) => ({
+    ...section,
+    tier: getInstructorAssignmentTier(assignments, section.groupName, section.subgroupNumber, instructorId),
+  }));
+  const exact = withTier.filter((s) => s.tier === "exact");
+  const group = withTier.filter((s) => s.tier === "group");
+  const none = withTier.filter((s) => s.tier === "none");
+  return [...exact, ...group, ...none];
+}
+
+function timeToMinutes(time: string): number {
+  const [h, m] = time.split(":").map(Number);
+  return h * 60 + m;
+}
+
+// Sorts one day's activities so, for today only, whatever hasn't finished
+// yet (endTime after now) leads chronologically, followed by whatever
+// already ended earlier today, also chronological - any other day is
+// either entirely future or entirely past already, so its own order is
+// left as-is.
+function sortActivitiesForDisplay(
+  activities: WeeklyRidingActivity[],
+  isToday: boolean,
+  nowMinutes: number
+): WeeklyRidingActivity[] {
+  if (!isToday) {
+    return [...activities].sort((a, b) => a.startTime.localeCompare(b.startTime));
+  }
+  const upcoming = activities
+    .filter((a) => timeToMinutes(a.endTime) > nowMinutes)
+    .sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const past = activities
+    .filter((a) => timeToMinutes(a.endTime) <= nowMinutes)
+    .sort((a, b) => a.startTime.localeCompare(b.startTime));
+  return [...upcoming, ...past];
+}
+
+// A day still counts as "upcoming" if it's strictly in the future, or it's
+// today and at least one of today's (already scope/assignment-filtered)
+// activities hasn't finished yet - so once today's last ride ends, today
+// drops behind tomorrow instead of still blocking the top of the list.
+function isDayUpcoming(day: WeeklyRidingDay, todayKey: string, nowMinutes: number): boolean {
+  if (day.dateKey > todayKey) return true;
+  if (day.dateKey < todayKey) return false;
+  return day.activities.some((a) => timeToMinutes(a.endTime) > nowMinutes);
+}
+
+// Orders day sections so the nearest upcoming day (today, if it still has
+// something left, otherwise the next future day) comes first, continuing
+// chronologically into the future; fully-past days are pushed to the end,
+// closest (most recent) first - so a week view that's entirely in the past
+// still opens on the most recent day instead of the oldest one.
+function sortDaysForDisplay(
+  days: WeeklyRidingDay[],
+  todayKey: string,
+  nowMinutes: number
+): WeeklyRidingDay[] {
+  const upcoming = days
+    .filter((d) => isDayUpcoming(d, todayKey, nowMinutes))
+    .sort((a, b) => a.dateKey.localeCompare(b.dateKey));
+  const past = days
+    .filter((d) => !isDayUpcoming(d, todayKey, nowMinutes))
+    .sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+  return [...upcoming, ...past];
 }
 
 // A session-specific horse (this riding slot/student only) always wins over
@@ -426,14 +553,26 @@ export function InstructorRidingSlotsSection({
     s.fullName.toLowerCase().includes(studentSearch.trim().toLowerCase())
   );
 
-  const visibleDays = (days ?? [])
-    .map((day) => ({
-      ...day,
-      activities: day.activities.filter(
-        (a) => scopeMode === "all" || isAssignedToInstructor(a, instructorId)
-      ),
-    }))
-    .filter((day) => day.activities.length > 0);
+  const todayKey = getLocalDateKey();
+  const nowMinutes = (() => {
+    const now = new Date();
+    return now.getHours() * 60 + now.getMinutes();
+  })();
+
+  const visibleDays = sortDaysForDisplay(
+    (days ?? [])
+      .map((day) => ({
+        ...day,
+        activities: sortActivitiesForDisplay(
+          day.activities.filter((a) => scopeMode === "all" || isAssignedToInstructor(a, instructorId)),
+          day.dateKey === todayKey,
+          nowMinutes
+        ),
+      }))
+      .filter((day) => day.activities.length > 0),
+    todayKey,
+    nowMinutes
+  );
 
   const openAssignments = openActivity?.ridingSlot?.assignments ?? [];
 
@@ -711,53 +850,52 @@ export function InstructorRidingSlotsSection({
             <p className="text-sm text-muted-foreground">אין חניכים רלוונטיים לרכיבה זו</p>
           ) : (
             <div className="flex max-w-full flex-col gap-3 overflow-x-hidden">
-              {groupByGroupAndSubgroup(slotStudents).map((section) => (
-                <div
-                  key={section.groupName ?? "__none__"}
-                  className={`rounded-xl border-2 border-border p-3 ${getScheduleGroupColorClass(
-                    section.groupName
-                  )}`}
-                >
-                  <p className="mb-2 text-sm font-bold text-card-foreground">
-                    {section.groupName ? `קבוצה ${section.groupName}` : "ללא קבוצה"}
-                  </p>
-                  <div className="flex flex-col gap-2">
-                    {section.subgroups.map((sub) => {
-                      const assignment = findAssignmentForSection(
-                        openAssignments,
-                        section.groupName,
-                        sub.subgroupNumber
-                      );
-                      return (
-                        <div
-                          key={sub.subgroupNumber ?? "__none__"}
-                          className="rounded-lg border border-border bg-card p-2"
-                        >
-                          <p className="text-xs font-bold text-card-foreground">
-                            {sub.subgroupNumber != null
-                              ? `תת-קבוצה ${sub.subgroupNumber}`
-                              : "ללא תת-קבוצה"}
-                          </p>
-                          <p className="mb-2 text-[11px] text-muted-foreground">
-                            מאמן/ת: {assignment?.instructorName ?? "לא הוגדר"} · מגרש:{" "}
-                            {assignment?.arena ?? "לא הוגדר"}
-                          </p>
-                          <div className="flex flex-col gap-1.5">
-                            {sub.items.map((row) => (
-                              <StudentCompactRow
-                                key={row.studentId}
-                                row={row}
-                                canEdit={canEdit}
-                                onOpen={() => setEditingStudent(row)}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })}
+              {sortFlatSectionsForInstructor(
+                flattenGroupSections(groupByGroupAndSubgroup(slotStudents)),
+                openAssignments,
+                instructorId
+              ).map((section) => {
+                const assignment = findAssignmentForSection(
+                  openAssignments,
+                  section.groupName,
+                  section.subgroupNumber
+                );
+                return (
+                  <div
+                    key={`${section.groupName ?? "__none__"}-${section.subgroupNumber ?? "__none__"}`}
+                    className={`rounded-xl border-2 border-border p-3 ${getScheduleGroupColorClass(
+                      section.groupName
+                    )}`}
+                  >
+                    <p className="mb-2 flex flex-wrap items-center gap-1.5 text-xs font-bold text-card-foreground">
+                      {section.groupName ? `קבוצה ${section.groupName}` : "ללא קבוצה"}
+                      {" · "}
+                      {section.subgroupNumber != null
+                        ? `תת-קבוצה ${section.subgroupNumber}`
+                        : "ללא תת-קבוצה"}
+                      {section.tier !== "none" && (
+                        <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                          הקבוצה שלך
+                        </span>
+                      )}
+                    </p>
+                    <p className="mb-2 text-[11px] text-muted-foreground">
+                      מאמן/ת: {assignment?.instructorName ?? "לא הוגדר"} · מגרש:{" "}
+                      {assignment?.arena ?? "לא הוגדר"}
+                    </p>
+                    <div className="flex flex-col gap-1.5">
+                      {section.items.map((row) => (
+                        <StudentCompactRow
+                          key={row.studentId}
+                          row={row}
+                          canEdit={canEdit}
+                          onOpen={() => setEditingStudent(row)}
+                        />
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
