@@ -17,6 +17,7 @@ export type MainTabId =
   | "help"
   | "notifications"
   | "weeklyFeedback"
+  | "teachingPractice"
   | "more";
 
 export const MAIN_TABS: { id: MainTabId; label: string }[] = [
@@ -106,6 +107,14 @@ const TAB_ICON_PATHS: Record<MainTabId, ReactNode> = {
   ),
   weeklyFeedback: (
     <path d="M12 3.5l2.5 5.2 5.7.8-4.1 4 1 5.7-5.1-2.7-5.1 2.7 1-5.7-4.1-4 5.7-.8z" />
+  ),
+  teachingPractice: (
+    <>
+      <circle cx="12" cy="8" r="3" />
+      <circle cx="6" cy="17" r="2.5" />
+      <circle cx="18" cy="17" r="2.5" />
+      <path d="M12 11v3M9.5 15.5 12 14M14.5 15.5 12 14" />
+    </>
   ),
   more: (
     <>

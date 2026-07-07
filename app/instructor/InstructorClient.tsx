@@ -23,6 +23,7 @@ import { InstructorHorsesSection } from "@/app/instructor/InstructorHorsesSectio
 import { InstructorMessagesSection } from "@/app/instructor/InstructorMessagesSection";
 import { InstructorAttendanceSection } from "@/app/instructor/InstructorAttendanceSection";
 import { InstructorRidingSlotsSection } from "@/app/instructor/InstructorRidingSlotsSection";
+import { InstructorTeachingPracticeSection } from "@/app/instructor/InstructorTeachingPracticeSection";
 import { ContactsSection } from "@/lib/components/ContactsSection";
 import { HelpContent } from "@/lib/components/HelpContent";
 import { NotificationsList } from "@/lib/components/NotificationsList";
@@ -71,6 +72,7 @@ const INSTRUCTOR_MORE_ITEMS: { id: MainTabId; label: string }[] = [
   { id: "contacts", label: "אנשי קשר" },
   { id: "materials", label: "חומרי קורס" },
   { id: "notifications", label: "עדכונים" },
+  { id: "teachingPractice", label: "התנסויות מתחילים" },
   { id: "help", label: "עזרה" },
 ];
 
@@ -109,6 +111,8 @@ interface StoredSession {
   canEditAttendance: boolean;
   canEditRidingNotes: boolean;
   canEditHorseFeeding: boolean;
+  canManageTeachingPracticeAssignments: boolean;
+  canManageTeachingPracticeHorses: boolean;
 }
 
 interface StudentOption {
@@ -123,12 +127,19 @@ interface DutyTypeOption {
   name: string;
 }
 
+interface InstructorOption {
+  id: string;
+  fullName: string;
+}
+
 export function InstructorClient({
   students,
   dutyTypes,
+  instructors,
 }: {
   students: StudentOption[];
   dutyTypes: DutyTypeOption[];
+  instructors: InstructorOption[];
 }) {
   const [session, setSession] = useState<StoredSession | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -659,6 +670,16 @@ export function InstructorClient({
         {activeTab === "contacts" && <ContactsSection />}
 
         {activeTab === "materials" && <CourseMaterialsSection role="instructor" />}
+
+        {activeTab === "teachingPractice" && (
+          <InstructorTeachingPracticeSection
+            instructorId={session.id}
+            canManageAssignments={session.canManageTeachingPracticeAssignments}
+            canManageHorses={session.canManageTeachingPracticeHorses}
+            students={students}
+            instructors={instructors}
+          />
+        )}
 
         {activeTab === "help" && <HelpContent role="instructor" />}
 

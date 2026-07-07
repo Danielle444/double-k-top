@@ -20,6 +20,7 @@ const NAV_ITEMS = [
   { href: "/admin/horses", label: "חלוקה לקבוצות וסוסים" },
   { href: "/admin/messages", label: "הודעות ומשימות" },
   { href: "/admin/weekly-feedback", label: "משוב שבועי" },
+  { href: "/admin/teaching-practice", label: "התנסויות מתחילים" },
   { href: "/admin/admins", label: "מנהלים מורשים" },
   { href: "/admin/help", label: "מדריך שימוש" },
 ];

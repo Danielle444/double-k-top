@@ -28,6 +28,8 @@ export interface InstructorProfile {
   canEditAttendance: boolean;
   canEditRidingNotes: boolean;
   canEditHorseFeeding: boolean;
+  canManageTeachingPracticeAssignments: boolean;
+  canManageTeachingPracticeHorses: boolean;
 }
 
 export interface InstructorLoginResult {
@@ -60,6 +62,8 @@ export async function verifyInstructorLogin(
       canEditAttendance: instructor.canEditAttendance,
       canEditRidingNotes: instructor.canEditRidingNotes,
       canEditHorseFeeding: instructor.canEditHorseFeeding,
+      canManageTeachingPracticeAssignments: instructor.canManageTeachingPracticeAssignments,
+      canManageTeachingPracticeHorses: instructor.canManageTeachingPracticeHorses,
     },
   };
 }
@@ -81,5 +85,7 @@ export async function getInstructorProfile(
     canEditAttendance: instructor.canEditAttendance,
     canEditRidingNotes: instructor.canEditRidingNotes,
     canEditHorseFeeding: instructor.canEditHorseFeeding,
+    canManageTeachingPracticeAssignments: instructor.canManageTeachingPracticeAssignments,
+    canManageTeachingPracticeHorses: instructor.canManageTeachingPracticeHorses,
   };
 }

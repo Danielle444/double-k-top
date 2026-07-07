@@ -741,12 +741,20 @@ model TeachingPracticeTrack {
   isActive                       Boolean              @default(true)
   createdAt                      DateTime             @default(now())
   updatedAt                      DateTime             @updatedAt
+  // Only ever set on a BEGINNER_PRIVATE track - the BEGINNER_GROUP track its
+  // child eventually joins. Several private tracks can point at the same
+  // group track (many private lessons -> one shared group class), which is
+  // why this is a plain FK on the "many" side, not a join table.
+  groupTrackId                   String?
 
   defaultResponsibleInstructor Instructor?                    @relation(fields: [defaultResponsibleInstructorId], references: [id])
   trainees                     TeachingPracticeTrackTrainee[]
   children                     TeachingPracticeTrackChild[]
   lessons                      TeachingPracticeLesson[]
+  groupTrack                   TeachingPracticeTrack?         @relation("PrivateFeedsGroup", fields: [groupTrackId], references: [id], onDelete: SetNull)
+  feedingPrivateTracks         TeachingPracticeTrack[]        @relation("PrivateFeedsGroup")
 
+  @@index([groupTrackId])
   @@map("teaching_practice_tracks")
 }
 

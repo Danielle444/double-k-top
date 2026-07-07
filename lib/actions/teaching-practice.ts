@@ -5,19 +5,27 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 import { dateKey, parseDateKey } from "@/lib/dates";
 import type { ActionResult } from "@/lib/actions/students";
 import {
+  addMinutesToTimeString,
   computeTeachingPracticeRotation,
+  TEACHING_PRACTICE_DURATION_MINUTES,
   TEACHING_PRACTICE_TEAM_SIZE,
   type TeachingPracticeRoleValue,
   type TeachingPracticeTypeValue,
 } from "@/lib/teaching-practice-rotation";
 
-export type { TeachingPracticeRoleValue, TeachingPracticeTypeValue };
+// Deliberately not re-exported from here: this is a "use server" module, and
+// Next.js's server-actions transform scans every export to build a client
+// reference stub for it - a type-only `export type { ... }` has no runtime
+// value at all, but the transform still tried to wrap it, producing a
+// reference to a binding that was never actually defined at runtime
+// ("TeachingPracticeRoleValue is not defined"). Consumers must import these
+// two types directly from lib/teaching-practice-rotation instead.
 
 const NOT_FOUND_TRACK = "מסלול ההתנסות לא נמצא";
 const NOT_FOUND_LESSON = "שיעור ההתנסות לא נמצא";
 const NOT_FOUND_CHILD = "הילד/ה לא נמצא/ת";
-const NO_ASSIGNMENT_PERMISSION = "אין הרשאה לניהול שיבוצי התנסויות הדרכה";
-const NO_HORSE_PERMISSION = "אין הרשאה לניהול סוסים וציוד להתנסויות הדרכה";
+const NO_ASSIGNMENT_PERMISSION = "אין הרשאה לניהול שיבוצי התנסויות מתחילים";
+const NO_HORSE_PERMISSION = "אין הרשאה לניהול סוסים וציוד להתנסויות מתחילים";
 
 const VALID_PRACTICE_TYPES: TeachingPracticeTypeValue[] = ["LUNGE", "BEGINNER_PRIVATE", "BEGINNER_GROUP"];
 const VALID_ROLES: TeachingPracticeRoleValue[] = [
@@ -81,6 +89,12 @@ export interface TeachingPracticeTrackSummary {
   defaultLocation: string | null;
   defaultResponsibleInstructorId: string | null;
   defaultResponsibleInstructorName: string | null;
+  // Only ever set on a BEGINNER_PRIVATE track - the BEGINNER_GROUP track its
+  // child eventually joins. The UI derives the linked track's own time (and,
+  // for a group track, every private track linking to it) by cross-
+  // referencing the already-loaded track list client-side - no extra fields
+  // needed here beyond the raw id.
+  groupTrackId: string | null;
   notes: string | null;
   isActive: boolean;
   createdAt: string;
@@ -117,6 +131,7 @@ function toTrackSummary(track: TrackWithIncludes): TeachingPracticeTrackSummary 
     defaultLocation: track.defaultLocation,
     defaultResponsibleInstructorId: track.defaultResponsibleInstructorId,
     defaultResponsibleInstructorName: track.defaultResponsibleInstructor?.fullName ?? null,
+    groupTrackId: track.groupTrackId,
     notes: track.notes,
     isActive: track.isActive,
     createdAt: track.createdAt.toISOString(),
@@ -167,14 +182,27 @@ export async function listTeachingPracticeTracksForInstructor(
 // Tracks - create / update / activate
 // ---------------------------------------------------------------------------
 
+// The only two real course groups (matches Student.groupName's existing
+// values and the same fixed-choice convention already used for group in
+// lib/actions/riding-slots.ts's bulkAssignmentInputSchema) - free text was
+// replaced with this closed set so the group reliably filters trainee
+// options and can't drift from what Student.groupName actually contains.
+const VALID_GROUP_NAMES = ["א", "ב"];
+
 export interface TeachingPracticeTrackInput {
   practiceType: TeachingPracticeTypeValue;
   groupName?: string | null;
   weekday?: number | null;
+  // No defaultEndTime here - the manager only ever supplies a start time;
+  // the end time is always derived server-side (see validateTrackInput),
+  // never accepted from the client.
   defaultStartTime: string;
-  defaultEndTime: string;
   defaultLocation?: string | null;
   defaultResponsibleInstructorId?: string | null;
+  // Only meaningful when practiceType is BEGINNER_PRIVATE - see
+  // validateGroupTrackLink. Silently ignored (must be null) for every other
+  // practiceType.
+  groupTrackId?: string | null;
   notes?: string | null;
 }
 
@@ -201,9 +229,13 @@ function validateTrackInput(
     return { error: "סוג התנסות לא תקין" };
   }
   const defaultStartTime = input.defaultStartTime?.trim();
-  const defaultEndTime = input.defaultEndTime?.trim();
   if (!defaultStartTime) return { error: "יש להזין שעת התחלה" };
-  if (!defaultEndTime) return { error: "יש להזין שעת סיום" };
+
+  const groupName = input.groupName?.trim() || null;
+  if (groupName !== null && !VALID_GROUP_NAMES.includes(groupName)) {
+    return { error: "קבוצה לא תקינה - יש לבחור קבוצה א, קבוצה ב, או ללא קבוצה" };
+  }
+
   if (
     input.weekday != null &&
     (!Number.isInteger(input.weekday) || input.weekday < 0 || input.weekday > 6)
@@ -211,10 +243,18 @@ function validateTrackInput(
     return { error: "יום בשבוע לא תקין" };
   }
 
+  // Duration is fixed per practiceType - always derived here, never taken
+  // from the client, so defaultEndTime can never drift from practiceType.
+  const defaultEndTime = addMinutesToTimeString(
+    defaultStartTime,
+    TEACHING_PRACTICE_DURATION_MINUTES[input.practiceType]
+  );
+  if (!defaultEndTime) return { error: "שעת התחלה לא תקינה" };
+
   return {
     data: {
       practiceType: input.practiceType,
-      groupName: input.groupName?.trim() || null,
+      groupName,
       weekday: input.weekday ?? null,
       defaultStartTime,
       defaultEndTime,
@@ -237,6 +277,35 @@ async function validateResponsibleInstructor(
   return { id: instructor.id };
 }
 
+// Re-checked fresh from the DB on every call - groupTrackId may only be set
+// on a BEGINNER_PRIVATE track and must point to a real, existing
+// BEGINNER_GROUP track, never to itself. A groupName mismatch between the
+// two tracks is intentionally NOT rejected here - it's surfaced only as a
+// UI-level advisory, since an admin may have a deliberate reason to
+// cross-link groups; this stays a hard validation only for practiceType
+// and existence/self-link, per product direction.
+async function validateGroupTrackLink(
+  practiceType: TeachingPracticeTypeValue,
+  groupTrackId: string | null | undefined,
+  ownTrackId: string | null
+): Promise<{ error: string } | { id: string | null }> {
+  if (!groupTrackId) return { id: null };
+
+  if (practiceType !== "BEGINNER_PRIVATE") {
+    return { error: "שיוך לשיעור קבוצתי אפשרי רק עבור שיעור פרטי מתחילים" };
+  }
+  if (ownTrackId && groupTrackId === ownTrackId) {
+    return { error: "לא ניתן לשייך סלוט לעצמו" };
+  }
+
+  const groupTrack = await prisma.teachingPracticeTrack.findUnique({ where: { id: groupTrackId } });
+  if (!groupTrack || groupTrack.practiceType !== "BEGINNER_GROUP") {
+    return { error: "הסלוט המקושר חייב להיות שיעור קבוצתי מתחילים קיים" };
+  }
+
+  return { id: groupTrack.id };
+}
+
 async function createTeachingPracticeTrackInternal(
   input: TeachingPracticeTrackInput
 ): Promise<TeachingPracticeTrackActionResult> {
@@ -246,8 +315,15 @@ async function createTeachingPracticeTrackInternal(
   const responsible = await validateResponsibleInstructor(input.defaultResponsibleInstructorId);
   if ("error" in responsible) return { success: false, error: responsible.error };
 
+  const groupTrackLink = await validateGroupTrackLink(input.practiceType, input.groupTrackId, null);
+  if ("error" in groupTrackLink) return { success: false, error: groupTrackLink.error };
+
   const track = await prisma.teachingPracticeTrack.create({
-    data: { ...validated.data, defaultResponsibleInstructorId: responsible.id },
+    data: {
+      ...validated.data,
+      defaultResponsibleInstructorId: responsible.id,
+      groupTrackId: groupTrackLink.id,
+    },
   });
 
   return { success: true, trackId: track.id };
@@ -282,9 +358,16 @@ async function updateTeachingPracticeTrackInternal(
   const responsible = await validateResponsibleInstructor(input.defaultResponsibleInstructorId);
   if ("error" in responsible) return { success: false, error: responsible.error };
 
+  const groupTrackLink = await validateGroupTrackLink(input.practiceType, input.groupTrackId, trackId);
+  if ("error" in groupTrackLink) return { success: false, error: groupTrackLink.error };
+
   await prisma.teachingPracticeTrack.update({
     where: { id: trackId },
-    data: { ...validated.data, defaultResponsibleInstructorId: responsible.id },
+    data: {
+      ...validated.data,
+      defaultResponsibleInstructorId: responsible.id,
+      groupTrackId: groupTrackLink.id,
+    },
   });
 
   return { success: true };
@@ -306,6 +389,112 @@ export async function updateTeachingPracticeTrackAsInstructor(
   const instructor = await getInstructorForAssignmentWrite(instructorId);
   if (!instructor) return { success: false, error: NO_ASSIGNMENT_PERMISSION };
   return updateTeachingPracticeTrackInternal(trackId, input);
+}
+
+// ---------------------------------------------------------------------------
+// Beginner group block - one BEGINNER_GROUP track + N linked BEGINNER_PRIVATE
+// tracks, created together
+// ---------------------------------------------------------------------------
+
+const DEFAULT_BEGINNER_GROUP_BLOCK_PRIVATE_COUNT = 3;
+const MAX_BEGINNER_GROUP_BLOCK_PRIVATE_COUNT = 6;
+
+export interface TeachingPracticeGroupBlockInput {
+  groupName: string;
+  weekday?: number | null;
+  groupStartTime: string;
+  privateStartTime: string;
+  defaultLocation?: string | null;
+  defaultResponsibleInstructorId?: string | null;
+  notes?: string | null;
+  privateCount?: number;
+}
+
+export interface TeachingPracticeGroupBlockActionResult extends ActionResult {
+  groupTrackId?: string;
+  privateTrackIds?: string[];
+}
+
+// A server action (not client orchestration) precisely because the private
+// tracks need the group track's freshly-created id, and because a
+// transaction is the only way to avoid a half-created block (group track
+// committed, some but not all private tracks committed) if something fails
+// partway through - client-side sequential calls could leave exactly that
+// inconsistent state on a mid-loop failure. All rows are created in one
+// prisma.$transaction: either the whole block exists, or none of it does.
+async function createTeachingPracticeGroupBlockInternal(
+  input: TeachingPracticeGroupBlockInput
+): Promise<TeachingPracticeGroupBlockActionResult> {
+  const groupName = input.groupName?.trim() || null;
+  if (!groupName || !VALID_GROUP_NAMES.includes(groupName)) {
+    return { success: false, error: "יש לבחור קבוצה א או קבוצה ב עבור בלוק שיעור קבוצתי" };
+  }
+
+  const privateCount = Math.min(
+    MAX_BEGINNER_GROUP_BLOCK_PRIVATE_COUNT,
+    Math.max(1, Math.trunc(input.privateCount ?? DEFAULT_BEGINNER_GROUP_BLOCK_PRIVATE_COUNT) || 1)
+  );
+
+  const groupValidated = validateTrackInput({
+    practiceType: "BEGINNER_GROUP",
+    groupName,
+    weekday: input.weekday,
+    defaultStartTime: input.groupStartTime,
+    defaultLocation: input.defaultLocation,
+    notes: input.notes,
+  });
+  if ("error" in groupValidated) return { success: false, error: groupValidated.error };
+
+  const privateValidated = validateTrackInput({
+    practiceType: "BEGINNER_PRIVATE",
+    groupName,
+    weekday: input.weekday,
+    defaultStartTime: input.privateStartTime,
+    defaultLocation: input.defaultLocation,
+    notes: input.notes,
+  });
+  if ("error" in privateValidated) return { success: false, error: privateValidated.error };
+
+  const responsible = await validateResponsibleInstructor(input.defaultResponsibleInstructorId);
+  if ("error" in responsible) return { success: false, error: responsible.error };
+
+  const created = await prisma.$transaction(async (tx) => {
+    const groupTrack = await tx.teachingPracticeTrack.create({
+      data: { ...groupValidated.data, defaultResponsibleInstructorId: responsible.id },
+    });
+
+    const privateTrackIds: string[] = [];
+    for (let i = 0; i < privateCount; i++) {
+      const privateTrack = await tx.teachingPracticeTrack.create({
+        data: {
+          ...privateValidated.data,
+          defaultResponsibleInstructorId: responsible.id,
+          groupTrackId: groupTrack.id,
+        },
+      });
+      privateTrackIds.push(privateTrack.id);
+    }
+
+    return { groupTrackId: groupTrack.id, privateTrackIds };
+  });
+
+  return { success: true, ...created };
+}
+
+export async function createTeachingPracticeGroupBlockAsAdmin(
+  input: TeachingPracticeGroupBlockInput
+): Promise<TeachingPracticeGroupBlockActionResult> {
+  await requireAdmin();
+  return createTeachingPracticeGroupBlockInternal(input);
+}
+
+export async function createTeachingPracticeGroupBlockAsInstructor(
+  instructorId: string,
+  input: TeachingPracticeGroupBlockInput
+): Promise<TeachingPracticeGroupBlockActionResult> {
+  const instructor = await getInstructorForAssignmentWrite(instructorId);
+  if (!instructor) return { success: false, error: NO_ASSIGNMENT_PERMISSION };
+  return createTeachingPracticeGroupBlockInternal(input);
 }
 
 async function setTeachingPracticeTrackActiveInternal(
@@ -337,6 +526,58 @@ export async function setTeachingPracticeTrackActiveAsInstructor(
 }
 
 // ---------------------------------------------------------------------------
+// Track deletion - only ever allowed when the track is genuinely empty, so
+// a delete can never silently destroy real assignment data. Deactivating
+// (isActive above) remains the normal way to retire a track that has
+// history; delete is only for cleaning up a mistake before anything real
+// was attached to it.
+// ---------------------------------------------------------------------------
+
+async function deleteTeachingPracticeTrackInternal(trackId: string): Promise<ActionResult> {
+  const track = await prisma.teachingPracticeTrack.findUnique({
+    where: { id: trackId },
+    include: {
+      _count: { select: { lessons: true, trainees: true, children: true, feedingPrivateTracks: true } },
+    },
+  });
+  if (!track) return { success: false, error: NOT_FOUND_TRACK };
+
+  if (track._count.lessons > 0) {
+    return { success: false, error: "לא ניתן למחוק סלוט שכבר נוצרו ממנו שיעורים" };
+  }
+  if (track._count.trainees > 0) {
+    return { success: false, error: "לא ניתן למחוק סלוט עם צוות חניכים משובץ - יש להסיר את הצוות תחילה" };
+  }
+  if (track._count.children > 0) {
+    return { success: false, error: "לא ניתן למחוק סלוט עם ילדים משובצים - יש להסיר את הילדים תחילה" };
+  }
+  if (track._count.feedingPrivateTracks > 0) {
+    return {
+      success: false,
+      error:
+        "לא ניתן למחוק שיעור קבוצתי שיש לו שיעורים פרטיים משויכים אליו - יש לבטל את השיוך או למחוק אותם תחילה",
+    };
+  }
+
+  await prisma.teachingPracticeTrack.delete({ where: { id: trackId } });
+  return { success: true };
+}
+
+export async function deleteTeachingPracticeTrackAsAdmin(trackId: string): Promise<ActionResult> {
+  await requireAdmin();
+  return deleteTeachingPracticeTrackInternal(trackId);
+}
+
+export async function deleteTeachingPracticeTrackAsInstructor(
+  instructorId: string,
+  trackId: string
+): Promise<ActionResult> {
+  const instructor = await getInstructorForAssignmentWrite(instructorId);
+  if (!instructor) return { success: false, error: NO_ASSIGNMENT_PERMISSION };
+  return deleteTeachingPracticeTrackInternal(trackId);
+}
+
+// ---------------------------------------------------------------------------
 // Track trainee team management (replace-all)
 // ---------------------------------------------------------------------------
 
@@ -352,14 +593,20 @@ async function setTeachingPracticeTrackTraineesInternal(
     return { success: false, error: "לא ניתן לשבץ אותו חניך/ה יותר מפעם אחת בצוות" };
   }
 
+  // Partial teams are allowed here on purpose - the fixed-structure tables
+  // assign trainees one role-cell at a time (מדריך ראשון first, מדריך שני
+  // later, etc.), so this action must accept 0..expectedSize trainees, not
+  // only a complete team. A complete team is only required later, at lesson
+  // generation time (generateTeachingPracticeLessonFromTrackInternal), which
+  // still enforces the exact size unchanged.
   const expectedSize = TEACHING_PRACTICE_TEAM_SIZE[track.practiceType];
-  if (traineeIdsInRotationOrder.length !== expectedSize) {
+  if (traineeIdsInRotationOrder.length > expectedSize) {
     return {
       success: false,
       error:
         track.practiceType === "BEGINNER_GROUP"
-          ? "התנסות הדרכה קבוצתית לחניכי מתחילים דורשת בדיוק 3 חניכים בצוות"
-          : "התנסות זו דורשת בדיוק 2 חניכים בצוות",
+          ? "התנסות מתחילים קבוצתית תומכת בעד 3 חניכים בצוות"
+          : "התנסות זו תומכת בעד 2 חניכים בצוות",
     };
   }
 
@@ -504,6 +751,11 @@ export async function setTeachingPracticeTrackChildrenAsInstructor(
 // External children - CRUD
 // ---------------------------------------------------------------------------
 
+// No horse field here on purpose - the "ילדים" registry is identity/contact
+// only. Horse/equipment is only ever set where it's actually assigned:
+// TeachingPracticeTrackChild / TeachingPracticeChildAssignment.
+// TeachingPracticeChild.defaultHorseName still exists in the schema but is
+// intentionally left untouched by these actions (unused for now).
 export interface TeachingPracticeChildInput {
   firstName: string;
   lastName: string;
@@ -512,7 +764,6 @@ export interface TeachingPracticeChildInput {
   parentName?: string | null;
   parentPhone?: string | null;
   notes?: string | null;
-  defaultHorseName?: string | null;
 }
 
 export interface TeachingPracticeChildRow {
@@ -599,7 +850,6 @@ function validateChildInput(
         parentName: string | null;
         parentPhone: string | null;
         notes: string | null;
-        defaultHorseName: string | null;
       };
     } {
   const firstName = input.firstName?.trim();
@@ -620,7 +870,6 @@ function validateChildInput(
       parentName: input.parentName?.trim() || null,
       parentPhone: input.parentPhone?.trim() || null,
       notes: input.notes?.trim() || null,
-      defaultHorseName: input.defaultHorseName?.trim() || null,
     },
   };
 }
@@ -641,20 +890,15 @@ export async function createTeachingPracticeChildAsAdmin(
   return createTeachingPracticeChildInternal(input);
 }
 
-// Base identity/contact fields need canManageTeachingPracticeAssignments;
-// setting defaultHorseName at creation time additionally needs
+// Just canManageTeachingPracticeAssignments - child identity/contact fields
+// have no horse-related field anymore, so there's nothing left here needing
 // canManageTeachingPracticeHorses.
 export async function createTeachingPracticeChildAsInstructor(
   instructorId: string,
   input: TeachingPracticeChildInput
 ): Promise<TeachingPracticeChildActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canManageTeachingPracticeAssignments) {
-    return { success: false, error: NO_ASSIGNMENT_PERMISSION };
-  }
-  if (input.defaultHorseName?.trim() && !instructor.canManageTeachingPracticeHorses) {
-    return { success: false, error: NO_HORSE_PERMISSION };
-  }
+  const instructor = await getInstructorForAssignmentWrite(instructorId);
+  if (!instructor) return { success: false, error: NO_ASSIGNMENT_PERMISSION };
   return createTeachingPracticeChildInternal(input);
 }
 
@@ -685,20 +929,8 @@ export async function updateTeachingPracticeChildAsInstructor(
   childId: string,
   input: TeachingPracticeChildInput
 ): Promise<ActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canManageTeachingPracticeAssignments) {
-    return { success: false, error: NO_ASSIGNMENT_PERMISSION };
-  }
-
-  if (!instructor.canManageTeachingPracticeHorses) {
-    const child = await prisma.teachingPracticeChild.findUnique({ where: { id: childId } });
-    if (!child) return { success: false, error: NOT_FOUND_CHILD };
-    const nextDefaultHorseName = input.defaultHorseName?.trim() || null;
-    if (child.defaultHorseName !== nextDefaultHorseName) {
-      return { success: false, error: NO_HORSE_PERMISSION };
-    }
-  }
-
+  const instructor = await getInstructorForAssignmentWrite(instructorId);
+  if (!instructor) return { success: false, error: NO_ASSIGNMENT_PERMISSION };
   return updateTeachingPracticeChildInternal(childId, input);
 }
 
@@ -1083,6 +1315,80 @@ export async function setTeachingPracticeLessonPublishedAsInstructor(
   const instructor = await getInstructorForAssignmentWrite(instructorId);
   if (!instructor) return { success: false, error: NO_ASSIGNMENT_PERMISSION };
   return setTeachingPracticeLessonPublishedInternal(lessonId, isPublished);
+}
+
+// ---------------------------------------------------------------------------
+// Lesson basic-field override (date/time/responsible instructor/location/notes)
+// ---------------------------------------------------------------------------
+
+export interface TeachingPracticeLessonInput {
+  date: string;
+  startTime: string;
+  responsibleInstructorId?: string | null;
+  location?: string | null;
+  notes?: string | null;
+}
+
+// v1 keeps a single responsible instructor per lesson (overriding the
+// track's default, same as generation time) - not a list. If an occasional
+// second instructor is involved, that belongs in notes for now; supporting
+// several responsible instructors would need a real schema addition (a
+// join table), deferred until it's a confirmed need.
+async function updateTeachingPracticeLessonInternal(
+  lessonId: string,
+  input: TeachingPracticeLessonInput
+): Promise<ActionResult> {
+  const lesson = await prisma.teachingPracticeLesson.findUnique({ where: { id: lessonId } });
+  if (!lesson) return { success: false, error: NOT_FOUND_LESSON };
+
+  const startTime = input.startTime?.trim();
+  if (!startTime) return { success: false, error: "יש להזין שעת התחלה" };
+
+  const parsedDate = parseDateKey(input.date);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return { success: false, error: "תאריך לא תקין" };
+  }
+
+  // Duration is fixed per the lesson's own practiceType (set once at
+  // generation, never edited here) - endTime is always re-derived, never
+  // accepted from the client.
+  const endTime = addMinutesToTimeString(startTime, TEACHING_PRACTICE_DURATION_MINUTES[lesson.practiceType]);
+  if (!endTime) return { success: false, error: "שעת התחלה לא תקינה" };
+
+  const responsible = await validateResponsibleInstructor(input.responsibleInstructorId);
+  if ("error" in responsible) return { success: false, error: responsible.error };
+
+  await prisma.teachingPracticeLesson.update({
+    where: { id: lessonId },
+    data: {
+      date: parsedDate,
+      startTime,
+      endTime,
+      responsibleInstructorId: responsible.id,
+      location: input.location?.trim() || null,
+      notes: input.notes?.trim() || null,
+    },
+  });
+
+  return { success: true };
+}
+
+export async function updateTeachingPracticeLessonAsAdmin(
+  lessonId: string,
+  input: TeachingPracticeLessonInput
+): Promise<ActionResult> {
+  await requireAdmin();
+  return updateTeachingPracticeLessonInternal(lessonId, input);
+}
+
+export async function updateTeachingPracticeLessonAsInstructor(
+  instructorId: string,
+  lessonId: string,
+  input: TeachingPracticeLessonInput
+): Promise<ActionResult> {
+  const instructor = await getInstructorForAssignmentWrite(instructorId);
+  if (!instructor) return { success: false, error: NO_ASSIGNMENT_PERMISSION };
+  return updateTeachingPracticeLessonInternal(lessonId, input);
 }
 
 // ---------------------------------------------------------------------------

@@ -59,7 +59,7 @@ export function computeTeachingPracticeRotation(
   if (trainees.length !== expectedSize) {
     throw new Error(
       practiceType === "BEGINNER_GROUP"
-        ? "התנסות הדרכה קבוצתית לחניכי מתחילים דורשת בדיוק 3 חניכים בצוות"
+        ? "התנסות מתחילים קבוצתית דורשת בדיוק 3 חניכים בצוות"
         : "התנסות זו דורשת בדיוק 2 חניכים בצוות"
     );
   }
@@ -69,4 +69,33 @@ export function computeTeachingPracticeRotation(
     const roleIndex = (((i - occurrenceIndex) % expectedSize) + expectedSize) % expectedSize;
     return { traineeId: trainee.traineeId, role: roles[roleIndex] };
   });
+}
+
+// Manager enters only a start time; duration is fixed per practiceType, not
+// user-editable - end time is always derived from these two, both here (for
+// the UI's live preview) and, authoritatively, server-side in
+// lib/actions/teaching-practice.ts (never trusting a client-submitted end
+// time).
+export const TEACHING_PRACTICE_DURATION_MINUTES: Record<TeachingPracticeTypeValue, number> = {
+  LUNGE: 30,
+  BEGINNER_PRIVATE: 30,
+  BEGINNER_GROUP: 60,
+};
+
+// Pure "HH:MM" arithmetic - no Date object involved, so it can't be skewed
+// by timezone. Wraps past midnight (e.g. "23:45" + 30 -> "00:15") rather
+// than throwing, since a lesson time is just a time-of-day, not a real
+// instant. Returns null for an unparsable input so callers can show/reject
+// a clear "invalid time" state instead of silently producing "NaN:NaN".
+export function addMinutesToTimeString(time: string, minutesToAdd: number): string | null {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(time.trim());
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+
+  const totalMinutes = (((hours * 60 + minutes + minutesToAdd) % 1440) + 1440) % 1440;
+  const resultHours = Math.floor(totalMinutes / 60);
+  const resultMinutes = totalMinutes % 60;
+  return `${String(resultHours).padStart(2, "0")}:${String(resultMinutes).padStart(2, "0")}`;
 }
