@@ -37,6 +37,9 @@ model Student {
   ridingLessonNotes       RidingLessonNote[]
   weeklyFeedbackResponses WeeklyFeedbackResponse[]
 
+  teachingPracticeTrackMemberships TeachingPracticeTrackTrainee[]
+  teachingPracticeParticipations   TeachingPracticeParticipant[]
+
   @@map("students")
 }
 
@@ -258,7 +261,27 @@ model Instructor {
   // instructions regardless of this flag.
   canEditHorseFeeding Boolean @default(false)
 
+  // Grants permission to manage Teaching Practice tracks/lessons/participant
+  // roles/child assignments (who's teaching whom, when) from the instructor
+  // app; false by default. All instructors can still view the full teaching
+  // practice schedule regardless of this flag.
+  canManageTeachingPracticeAssignments Boolean @default(false)
+
+  // Grants permission to edit Teaching Practice horse/equipment fields
+  // specifically; false by default. Independent of
+  // canManageTeachingPracticeAssignments - same trust-level split as
+  // canEditHorseAssignments vs canEditHorseFeeding above.
+  canManageTeachingPracticeHorses Boolean @default(false)
+
+  // Grants permission to write/edit TeachingPracticeFeedback; false by
+  // default. All instructors can still view the schedule regardless of this
+  // flag; feedback content itself stays admin/authorized-instructor-only.
+  canEditTeachingPracticeFeedback Boolean @default(false)
+
   ridingSlotAssignments RidingSlotAssignment[]
+
+  teachingPracticeTracksResponsible  TeachingPracticeTrack[]
+  teachingPracticeLessonsResponsible TeachingPracticeLesson[]
 
   @@map("instructors")
 }
@@ -679,4 +702,203 @@ model WeeklyFeedbackAnswer {
   @@unique([responseId, questionId])
   @@index([questionId])
   @@map("weekly_feedback_answers")
+}
+
+enum TeachingPracticeType {
+  LUNGE
+  BEGINNER_PRIVATE
+  BEGINNER_GROUP
+}
+
+enum TeachingPracticeRole {
+  LEAD_INSTRUCTOR
+  SECOND_INSTRUCTOR
+  ASSISTANT_INSTRUCTOR
+  EVALUATOR
+}
+
+// The stable, recurring plan - "this team + these children + this weekly
+// time slot" - used only as a template to generate real
+// TeachingPracticeLesson rows; never itself shown to trainees. A group
+// having two teaching-practice days per week is just two separate tracks
+// (each its own weekday/team), not one track spanning two days.
+model TeachingPracticeTrack {
+  id                             String               @id @default(cuid())
+  practiceType                   TeachingPracticeType
+  groupName                      String?
+  // 0=Sunday..6=Saturday, matches JS Date#getDay() - free-standing hint only,
+  // not enforced against actual generated lesson dates.
+  weekday                        Int?
+  defaultStartTime               String
+  defaultEndTime                 String
+  defaultLocation                String?
+  defaultResponsibleInstructorId String?
+  notes                          String?
+  // Stops this track being offered as a "generate next lesson" template
+  // (e.g. a mid-course team change) without touching lessons already
+  // generated from it - same isActive-not-delete convention used elsewhere
+  // (Student.isActive, Instructor.isActive, TeachingPracticeChild.isActive).
+  isActive                       Boolean              @default(true)
+  createdAt                      DateTime             @default(now())
+  updatedAt                      DateTime             @updatedAt
+
+  defaultResponsibleInstructor Instructor?                    @relation(fields: [defaultResponsibleInstructorId], references: [id])
+  trainees                     TeachingPracticeTrackTrainee[]
+  children                     TeachingPracticeTrackChild[]
+  lessons                      TeachingPracticeLesson[]
+
+  @@map("teaching_practice_tracks")
+}
+
+// Ordered team membership - rotationOrder (0,1[,2]) is the position consumed
+// by the role-rotation formula, not a display order.
+model TeachingPracticeTrackTrainee {
+  id            String   @id @default(cuid())
+  trackId       String
+  traineeId     String
+  rotationOrder Int
+  createdAt     DateTime @default(now())
+
+  track   TeachingPracticeTrack @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  trainee Student               @relation(fields: [traineeId], references: [id], onDelete: Cascade)
+
+  @@unique([trackId, traineeId])
+  @@unique([trackId, rotationOrder])
+  @@map("teaching_practice_track_trainees")
+}
+
+// Default child(ren) + their default horse/equipment for this track - copied
+// (materialized) onto each generated lesson's TeachingPracticeChildAssignment
+// at generation time; never read live by an already-generated lesson.
+model TeachingPracticeTrackChild {
+  id             String   @id @default(cuid())
+  trackId        String
+  childId        String
+  horseName      String?
+  equipmentNotes String?
+  createdAt      DateTime @default(now())
+
+  track TeachingPracticeTrack @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  child TeachingPracticeChild @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([trackId, childId])
+  @@map("teaching_practice_track_children")
+}
+
+// The concrete occurrence - fully self-contained once generated (own
+// date/time/roles/children), so trainee-facing reads never need to touch the
+// track. trackId is nullable to still allow a fully ad-hoc one-off lesson
+// with no recurring plan behind it. practiceType is denormalized at creation
+// time (materialize-at-creation, same principle as WeeklyFeedbackQuestion) -
+// editing the track's practiceType later never retroactively changes an
+// already-generated lesson.
+model TeachingPracticeLesson {
+  id                      String               @id @default(cuid())
+  trackId                 String?
+  practiceType            TeachingPracticeType
+  date                    DateTime             @db.Date
+  startTime               String
+  endTime                 String
+  groupName               String?
+  location                String?
+  responsibleInstructorId String?
+  notes                   String?
+  isPublished             Boolean              @default(false)
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+
+  track                 TeachingPracticeTrack?            @relation(fields: [trackId], references: [id])
+  responsibleInstructor Instructor?                       @relation(fields: [responsibleInstructorId], references: [id])
+  participants          TeachingPracticeParticipant[]
+  childAssignments      TeachingPracticeChildAssignment[]
+
+  @@index([date])
+  @@map("teaching_practice_lessons")
+}
+
+// The flexible per-lesson role table - covers both the 2-role
+// (LEAD_INSTRUCTOR/ASSISTANT_INSTRUCTOR) lunge/private rotation and the
+// 3-role (LEAD_INSTRUCTOR/SECOND_INSTRUCTOR/EVALUATOR) beginner-group
+// rotation with one shape, rather than fixed lead/assistant columns.
+model TeachingPracticeParticipant {
+  id               String               @id @default(cuid())
+  lessonId         String
+  traineeId        String
+  role             TeachingPracticeRole
+  // Marks a role that was hand-changed from what the rotation formula would
+  // have produced, so a future "regenerate remaining rotation" tool can
+  // skip it - same isManual convention as DutyAssignment.isManual.
+  isManualOverride Boolean              @default(false)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  lesson   TeachingPracticeLesson    @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  trainee  Student                   @relation(fields: [traineeId], references: [id], onDelete: Cascade)
+  feedback TeachingPracticeFeedback?
+
+  @@unique([lessonId, traineeId])
+  @@map("teaching_practice_participants")
+}
+
+// External child - explicitly not a Student. isActive (not delete) supports
+// mid-course replacement while preserving history on past
+// lessons/assignments/feedback references.
+model TeachingPracticeChild {
+  id               String   @id @default(cuid())
+  firstName        String
+  lastName         String
+  fullName         String
+  age              Int?
+  gender           String?
+  parentName       String?
+  parentPhone      String?
+  notes            String?
+  defaultHorseName String?
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  trackDefaults TeachingPracticeTrackChild[]
+  assignments   TeachingPracticeChildAssignment[]
+
+  @@map("teaching_practice_children")
+}
+
+// One row per child per lesson - materialized from TeachingPracticeTrackChild
+// at generation time, then freely editable per occurrence (one-off absence,
+// one-week replacement, horse/equipment swap) without touching the track.
+model TeachingPracticeChildAssignment {
+  id             String   @id @default(cuid())
+  lessonId       String
+  childId        String
+  horseName      String?
+  equipmentNotes String?
+  isAbsent       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  lesson TeachingPracticeLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  child  TeachingPracticeChild  @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([lessonId, childId])
+  @@map("teaching_practice_child_assignments")
+}
+
+// One row per participant (per trainee-role-in-lesson), never per lesson -
+// this is what makes group-lesson feedback separate per trainee/role by
+// construction. No history (each save overwrites), same convention as
+// RidingLessonNote. v1: never exposed to trainees, admin/authorized-
+// instructor-only.
+model TeachingPracticeFeedback {
+  id               String   @id @default(cuid())
+  participantId    String   @unique
+  feedback         String?
+  ratingHalfPoints Int?
+  updatedByName    String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  participant TeachingPracticeParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@map("teaching_practice_feedback")
 }
