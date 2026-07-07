@@ -75,7 +75,11 @@ export function InstructorScheduleSection({
   weeklyScheduleId: string | null;
   dayFilter: string | "all";
 }) {
-  const [scheduleFilter, setScheduleFilter] = useState<InstructorScheduleFilter>("mine");
+  // Defaults to the full schedule ("כל הלו"ז") rather than the
+  // instructor's own lessons - not persisted anywhere, so every mount
+  // (home tab or schedule tab) starts here; the instructor can still switch
+  // to "השיעורים שלי" manually.
+  const [scheduleFilter, setScheduleFilter] = useState<InstructorScheduleFilter>("all");
   const [result, setResult] = useState<InstructorScheduleResult | null>(null);
   const [now, setNow] = useState<Date>(() => new Date());
 
