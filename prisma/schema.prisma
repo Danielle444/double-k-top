@@ -35,6 +35,7 @@ model Student {
   messageTaskRecipients   MessageTaskRecipient[]
   attendance              StudentAttendance[]
   ridingLessonNotes       RidingLessonNote[]
+  ridingLessonNotesTaught RidingLessonNoteTaughtStudent[]
   weeklyFeedbackResponses WeeklyFeedbackResponse[]
 
   teachingPracticeTrackMemberships TeachingPracticeTrackTrainee[]
@@ -278,7 +279,8 @@ model Instructor {
   // flag; feedback content itself stays admin/authorized-instructor-only.
   canEditTeachingPracticeFeedback Boolean @default(false)
 
-  ridingSlotAssignments RidingSlotAssignment[]
+  ridingSlotAssignments           RidingSlotAssignment[]
+  ridingSlotAssignmentInstructors RidingSlotAssignmentInstructor[]
 
   teachingPracticeTracksResponsible  TeachingPracticeTrack[]
   teachingPracticeLessonsResponsible TeachingPracticeLesson[]
@@ -413,16 +415,38 @@ model RidingSlotAssignment {
   ridingSlotId   String
   groupName      String?
   subgroupNumber Int?
+  // Legacy/primary instructor - kept for backward compat during the
+  // transition to multi-instructor support (see RidingSlotAssignmentInstructor
+  // below). Still written on every save as the first-selected instructor, so
+  // any consumer not yet migrated to the join table keeps working.
   instructorId   String?
   arena          String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  ridingSlot RidingSlot  @relation(fields: [ridingSlotId], references: [id], onDelete: Cascade)
-  instructor Instructor? @relation(fields: [instructorId], references: [id])
+  ridingSlot  RidingSlot                       @relation(fields: [ridingSlotId], references: [id], onDelete: Cascade)
+  instructor  Instructor?                      @relation(fields: [instructorId], references: [id])
+  instructors RidingSlotAssignmentInstructor[]
 
   @@unique([ridingSlotId, groupName, subgroupNumber])
   @@map("riding_slot_assignments")
+}
+
+// Full set of instructors/coaches responsible for one assignment split -
+// supersedes RidingSlotAssignment.instructorId as the source of truth going
+// forward. That legacy column stays in sync (first-selected instructor) but
+// is no longer the only place an assignment's instructor(s) live.
+model RidingSlotAssignmentInstructor {
+  id                     String   @id @default(cuid())
+  ridingSlotAssignmentId String
+  instructorId           String
+  createdAt              DateTime @default(now())
+
+  assignment RidingSlotAssignment @relation(fields: [ridingSlotAssignmentId], references: [id], onDelete: Cascade)
+  instructor Instructor           @relation(fields: [instructorId], references: [id], onDelete: Cascade)
+
+  @@unique([ridingSlotAssignmentId, instructorId])
+  @@map("riding_slot_assignment_instructors")
 }
 
 // One row per student per riding slot - a missing row means no note/rating
@@ -442,15 +466,37 @@ model RidingLessonNote {
   // Student.assignedHorseName/privateHorseName, and has no effect outside
   // this one row.
   sessionHorseName String?
+  // Free text, same "grows from whatever gets typed" convention as
+  // hayType/concentrateType on HorseFeedingMeal - never a closed list.
+  lessonTopic      String?
   updatedByName    String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  ridingSlot RidingSlot @relation(fields: [ridingSlotId], references: [id], onDelete: Cascade)
-  student    Student    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  ridingSlot     RidingSlot                       @relation(fields: [ridingSlotId], references: [id], onDelete: Cascade)
+  student        Student                          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  taughtStudents RidingLessonNoteTaughtStudent[]
 
   @@unique([ridingSlotId, studentId])
   @@map("riding_lesson_notes")
+}
+
+// Which חניך/ים the note's own trainee (student above) instructed/taught
+// during this riding session - a separate student from the note's subject,
+// many-to-many since one trainee may teach more than one student in a
+// session. Presence of a row = "taught this student"; no row means nothing
+// recorded yet, same convention as the rest of this model.
+model RidingLessonNoteTaughtStudent {
+  id                 String   @id @default(cuid())
+  ridingLessonNoteId String
+  studentId          String
+  createdAt          DateTime @default(now())
+
+  ridingLessonNote RidingLessonNote @relation(fields: [ridingLessonNoteId], references: [id], onDelete: Cascade)
+  student          Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([ridingLessonNoteId, studentId])
+  @@map("riding_lesson_note_taught_students")
 }
 
 enum MessageTaskType {
