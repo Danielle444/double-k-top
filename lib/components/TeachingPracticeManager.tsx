@@ -350,6 +350,38 @@ function previewEndTime(startTime: string, practiceType: TeachingPracticeTypeVal
   return addMinutesToTimeString(startTime, TEACHING_PRACTICE_DURATION_MINUTES[practiceType]) ?? "—";
 }
 
+// Display-order comparators for the Beginners block table only (buildBeginnerBlocks/
+// buildUnlinkedPrivateTracks) - purely how rows are laid out, never written back
+// anywhere. defaultStartTime is "HH:MM", so a plain string compare already sorts
+// chronologically; the extra fallback fields only ever matter as tie-breakers when
+// two tracks share the exact same start time, so the table has a stable, predictable
+// order instead of whatever order the tracks happened to come back from the server.
+function compareGroupBlocks(a: TeachingPracticeTrackSummary, b: TeachingPracticeTrackSummary): number {
+  return (
+    a.defaultStartTime.localeCompare(b.defaultStartTime) ||
+    (a.groupName ?? "").localeCompare(b.groupName ?? "") ||
+    (a.defaultLocation ?? "").localeCompare(b.defaultLocation ?? "") ||
+    a.id.localeCompare(b.id)
+  );
+}
+
+function compareLinkedPrivateRows(a: TeachingPracticeTrackSummary, b: TeachingPracticeTrackSummary): number {
+  return (
+    a.defaultStartTime.localeCompare(b.defaultStartTime) ||
+    a.createdAt.localeCompare(b.createdAt) ||
+    a.id.localeCompare(b.id)
+  );
+}
+
+function compareUnlinkedPrivateRows(a: TeachingPracticeTrackSummary, b: TeachingPracticeTrackSummary): number {
+  return (
+    a.defaultStartTime.localeCompare(b.defaultStartTime) ||
+    (a.groupName ?? "").localeCompare(b.groupName ?? "") ||
+    a.createdAt.localeCompare(b.createdAt) ||
+    a.id.localeCompare(b.id)
+  );
+}
+
 // No horse field here on purpose - the "ילדים" registry is identity/contact
 // only now; horse/equipment only ever lives at the track/lesson-assignment
 // level (see the "ילדים וסוסים במסלול" section below).
@@ -676,11 +708,11 @@ export function TeachingPracticeManager({
     return tracks
       .filter((t) => t.practiceType === "BEGINNER_GROUP" && (t.groupName ?? null) === groupValue)
       .slice()
-      .sort((a, b) => a.defaultStartTime.localeCompare(b.defaultStartTime))
+      .sort(compareGroupBlocks)
       .map((groupTrack) => {
         const privateTracks = (feedingPrivateTracksByGroupId.get(groupTrack.id) ?? [])
           .slice()
-          .sort((a, b) => a.defaultStartTime.localeCompare(b.defaultStartTime));
+          .sort(compareLinkedPrivateRows);
         const privateRows = privateTracks.map((t) => ({ key: t.id, ...buildTrackRowData(t) }));
         return {
           key: groupTrack.id,
@@ -700,7 +732,7 @@ export function TeachingPracticeManager({
     return tracks
       .filter((t) => t.practiceType === "BEGINNER_PRIVATE" && (t.groupName ?? null) === groupValue && !t.groupTrackId)
       .slice()
-      .sort((a, b) => a.defaultStartTime.localeCompare(b.defaultStartTime))
+      .sort(compareUnlinkedPrivateRows)
       .map((t) => ({ key: t.id, ...buildTrackRowData(t) }));
   }
 
