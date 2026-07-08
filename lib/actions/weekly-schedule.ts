@@ -766,10 +766,30 @@ export interface WeeklyScheduleOption {
   endDate: string;
 }
 
-// Read-only week list used by the student/instructor week pickers (in
+// Read-only week list used by the admin/instructor week pickers (in
 // addition to the admin pages) - just metadata, no PII, so no auth gate.
+// Includes unpublished weeks so admins/instructors can prepare/check them
+// before publishing - never use this for חניכים, use
+// listPublishedWeeklyScheduleOptions / getWeeklyScheduleSelectionForStudent
+// instead.
 export async function listWeeklyScheduleOptions(): Promise<WeeklyScheduleOption[]> {
   const weeks = await prisma.weeklySchedule.findMany({
+    orderBy: { startDate: "asc" },
+    select: { id: true, name: true, startDate: true, endDate: true },
+  });
+  return weeks.map((w) => ({
+    id: w.id,
+    name: w.name,
+    startDate: dateKey(w.startDate),
+    endDate: dateKey(w.endDate),
+  }));
+}
+
+// Same as listWeeklyScheduleOptions but restricted to published weeks - the
+// only variant a חניך/ה should ever see.
+export async function listPublishedWeeklyScheduleOptions(): Promise<WeeklyScheduleOption[]> {
+  const weeks = await prisma.weeklySchedule.findMany({
+    where: { isPublished: true },
     orderBy: { startDate: "asc" },
     select: { id: true, name: true, startDate: true, endDate: true },
   });
@@ -815,6 +835,14 @@ export interface WeeklyScheduleSelection {
 
 export async function getWeeklyScheduleSelection(): Promise<WeeklyScheduleSelection> {
   const weeks = await listWeeklyScheduleOptions();
+  const defaultWeekId = pickDefaultWeekId(weeks, todayDateKey());
+  return { weeks, defaultWeekId };
+}
+
+// Student-facing equivalent of getWeeklyScheduleSelection - only ever
+// offers published weeks, so a חניך/ה can't select/land on one that isn't.
+export async function getWeeklyScheduleSelectionForStudent(): Promise<WeeklyScheduleSelection> {
+  const weeks = await listPublishedWeeklyScheduleOptions();
   const defaultWeekId = pickDefaultWeekId(weeks, todayDateKey());
   return { weeks, defaultWeekId };
 }

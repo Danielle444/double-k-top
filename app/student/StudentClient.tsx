@@ -12,7 +12,7 @@ import {
   verifyStudentLogin,
   type StudentSearchResult,
 } from "@/lib/actions/auth";
-import { getWeeklyScheduleSelection } from "@/lib/actions/weekly-schedule";
+import { getWeeklyScheduleSelectionForStudent } from "@/lib/actions/weekly-schedule";
 import { updateOwnPrivateHorseName } from "@/lib/actions/horses";
 import { ScheduleSection } from "@/app/student/ScheduleSection";
 import { DutiesSection } from "@/app/student/DutiesSection";
@@ -265,7 +265,7 @@ export function StudentClient() {
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
-    getWeeklyScheduleSelection().then((sel) => {
+    getWeeklyScheduleSelectionForStudent().then((sel) => {
       if (cancelled) return;
       setWeeks(sel.weeks);
       setSelectedWeekId(sel.defaultWeekId);

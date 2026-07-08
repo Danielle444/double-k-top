@@ -116,7 +116,10 @@ export async function getScheduleForStudent(
       },
     },
   });
-  if (!week) return { hasSchedule: false, weekName: null, items: [] };
+  // Defense-in-depth: the student week picker already only offers published
+  // weeks (see getWeeklyScheduleSelectionForStudent), but a stale/tampered
+  // weeklyScheduleId must never leak an unpublished week's items either.
+  if (!week || !week.isPublished) return { hasSchedule: false, weekName: null, items: [] };
 
   const items = week.items.filter((i) => {
     if (groupFilter === "mine" && i.groupName && i.groupName !== student.groupName) return false;
