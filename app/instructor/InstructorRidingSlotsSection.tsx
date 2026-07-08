@@ -1,6 +1,6 @@
 "use client";
 
-import { Dispatch, SetStateAction, useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useImperativeHandle, useMemo, useRef, useState, useTransition, type Ref } from "react";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
 import { RidingHistoryList } from "@/lib/components/RidingHistoryList";
@@ -284,26 +284,22 @@ function StudentCompactRow({
 // other field re-renders made a freshly-toggled id disappear a moment after
 // being selected. This checklist holds no selection state of its own -
 // every checkbox's checked value reads taughtStudentIds directly, and
-// toggling writes straight back into it via a functional setState.
+// toggling calls straight back out via onToggle (owned by StudentEditor,
+// which computes the next array itself so it can autosave with a value
+// that's guaranteed fresh, not a stale pre-toggle closure).
 function TaughtStudentsChecklist({
   options,
   selectedIds,
-  setTaughtStudentIds,
+  onToggle,
 }: {
   options: { value: string; label: string }[];
   selectedIds: string[];
-  setTaughtStudentIds: Dispatch<SetStateAction<string[]>>;
+  onToggle: (id: string) => void;
 }) {
   const [search, setSearch] = useState("");
 
   const filteredOptions = options.filter((o) => o.label.toLowerCase().includes(search.trim().toLowerCase()));
   const selectedOptions = options.filter((o) => selectedIds.includes(o.value));
-
-  function toggle(id: string) {
-    setTaughtStudentIds((current) =>
-      current.includes(id) ? current.filter((v) => v !== id) : [...current, id]
-    );
-  }
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -317,7 +313,7 @@ function TaughtStudentsChecklist({
               {o.label}
               <button
                 type="button"
-                onClick={() => toggle(o.value)}
+                onClick={() => onToggle(o.value)}
                 aria-label={`הסרת ${o.label}`}
                 className="text-secondary-foreground/70 hover:text-secondary-foreground"
               >
@@ -336,14 +332,14 @@ function TaughtStudentsChecklist({
       />
       <div className="flex max-h-40 flex-col gap-0.5 overflow-y-auto rounded-lg border border-border p-1.5">
         {filteredOptions.length === 0 ? (
-          <p className="px-1.5 py-1 text-xs text-muted-foreground">לא נמצאו חניכים</p>
+          <p className="px-1.5 py-1 text-sm text-muted-foreground">לא נמצאו חניכים</p>
         ) : (
           filteredOptions.map((o) => (
             <label
               key={o.value}
-              className="flex items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-muted"
+              className="flex items-center gap-2 rounded px-1.5 py-1 text-base hover:bg-muted"
             >
-              <input type="checkbox" checked={selectedIds.includes(o.value)} onChange={() => toggle(o.value)} />
+              <input type="checkbox" checked={selectedIds.includes(o.value)} onChange={() => onToggle(o.value)} />
               {o.label}
             </label>
           ))
@@ -357,6 +353,16 @@ function TaughtStudentsChecklist({
 // row, never rendered for every student at once. The session-horse input
 // stays collapsed behind its own small button so the default view is just
 // the resolved horse line, note, and rating - not a busy form up front.
+// Imperative handle so the parent's Modal close button (X / backdrop click)
+// can trigger a full save from inside StudentEditor before returning to the
+// list - without lifting the editable fields up into the parent (which would
+// mean two places tracking the same draft and risking them drifting apart).
+// The parent only ever calls requestClose(); StudentEditor remains the sole
+// owner of every field's state.
+export interface StudentEditorHandle {
+  requestClose: () => void;
+}
+
 function StudentEditor({
   row,
   ridingSlotId,
@@ -367,6 +373,8 @@ function StudentEditor({
   knownHorseNames,
   onBack,
   onSaved,
+  onAutoSaved,
+  ref,
 }: {
   row: RidingSlotStudentRow;
   ridingSlotId: string;
@@ -377,6 +385,12 @@ function StudentEditor({
   knownHorseNames: string[];
   onBack: () => void;
   onSaved: (updated: RidingSlotStudentRow) => void;
+  // Same shape as onSaved, but for a field-level autosave (topic/session-
+  // horse blur, taught-students toggle) - updates the parent's copy of this
+  // row without closing the editor, unlike onSaved which also returns to the
+  // list (see handleStudentSaved vs handleStudentAutoSaved in the parent).
+  onAutoSaved: (updated: RidingSlotStudentRow) => void;
+  ref?: Ref<StudentEditorHandle>;
 }) {
   const [note, setNote] = useState(row.note ?? "");
   const [rating, setRating] = useState(row.ratingHalfPoints != null ? String(row.ratingHalfPoints) : "");
@@ -386,6 +400,14 @@ function StudentEditor({
   const [taughtStudentIds, setTaughtStudentIds] = useState(row.taughtStudents.map((s) => s.id));
   const [isSaving, startSaveTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // Synchronous guard (isSaving from useTransition only updates on the next
+  // render) so a manual save, an autosave, and requestClose can never
+  // overlap - a duplicate save request that arrives while one is already in
+  // flight is simply dropped rather than racing it. requestClose is the one
+  // exception (see pendingCloseRef/requestClose below) - a close must never
+  // be silently dropped just because an autosave happened to be mid-flight.
+  const isSavingRef = useRef(false);
+  const pendingCloseRef = useRef(false);
 
   // A trainee can't be recorded as teaching themselves - excluded from the
   // "who did they teach" options rather than left selectable-but-nonsensical.
@@ -397,8 +419,19 @@ function StudentEditor({
     [students, row.studentId]
   );
 
-  function handleSave() {
+  // Single save path for the manual button, every autosave trigger, and
+  // requestClose - always sends the full current snapshot of every field
+  // (never a partial diff), per the product rule that note/rating stay
+  // optional while topic/taught-students/session-horse must be independently
+  // saveable. `overrideTaughtStudentIds` exists only because a just-computed
+  // toggle result isn't in `taughtStudentIds` yet (state updates are async) -
+  // every other field is read directly from current state, which is already
+  // up to date by the time a blur fires.
+  function performSave(options?: { manual?: boolean; overrideTaughtStudentIds?: string[] }) {
+    if (isSavingRef.current) return;
+    isSavingRef.current = true;
     setError(null);
+    const nextTaughtStudentIds = options?.overrideTaughtStudentIds ?? taughtStudentIds;
     startSaveTransition(async () => {
       const ratingHalfPoints = rating ? Number(rating) : null;
       const result = await upsertRidingLessonNoteAsInstructor(instructorId, ridingSlotId, row.studentId, {
@@ -406,16 +439,23 @@ function StudentEditor({
         ratingHalfPoints,
         sessionHorseName,
         lessonTopic,
-        taughtStudentIds,
+        taughtStudentIds: nextTaughtStudentIds,
       });
+      isSavingRef.current = false;
+      // A close requested while THIS save was already in flight (see
+      // requestClose below, which sets pendingCloseRef instead of starting a
+      // second overlapping save) must still be honored once this save
+      // finishes, even if this particular save was only an autosave.
+      const shouldReturnToList = options?.manual || pendingCloseRef.current;
+      pendingCloseRef.current = false;
       if (!result.success) {
         setError(result.error ?? "אירעה שגיאה");
         return;
       }
       const taughtStudents = students
-        .filter((s) => taughtStudentIds.includes(s.id))
+        .filter((s) => nextTaughtStudentIds.includes(s.id))
         .map((s) => ({ id: s.id, fullName: s.fullName }));
-      onSaved({
+      const updated: RidingSlotStudentRow = {
         ...row,
         note: note.trim() || null,
         ratingHalfPoints,
@@ -424,10 +464,51 @@ function StudentEditor({
         taughtStudents,
         updatedByName: result.updatedByName ?? row.updatedByName,
         updatedAt: result.updatedAt ?? row.updatedAt,
-      });
-      setIsEditingHorse(false);
+      };
+      if (shouldReturnToList) {
+        setIsEditingHorse(false);
+        onSaved(updated);
+      } else {
+        onAutoSaved(updated);
+      }
     });
   }
+
+  function handleSave() {
+    performSave({ manual: true });
+  }
+
+  function handleToggleTaughtStudent(id: string) {
+    const next = taughtStudentIds.includes(id)
+      ? taughtStudentIds.filter((v) => v !== id)
+      : [...taughtStudentIds, id];
+    setTaughtStudentIds(next);
+    performSave({ overrideTaughtStudentIds: next });
+  }
+
+  useImperativeHandle(ref, () => ({
+    // View-only instructors have no editable state to save - just go back.
+    // Editors get a full save (same fields the manual button saves,
+    // including note/rating) before returning to the list; a failed save
+    // leaves the editor open with `error` set, same as the manual button.
+    //
+    // If an autosave is already mid-flight, this must NOT be silently
+    // dropped just because performSave's own duplicate-request guard would
+    // otherwise ignore it - set pendingCloseRef instead, so the in-flight
+    // save's own completion (above) returns to the list once it succeeds,
+    // or leaves the editor open with the error shown if it fails.
+    requestClose: () => {
+      if (!canEdit) {
+        onBack();
+        return;
+      }
+      if (isSavingRef.current) {
+        pendingCloseRef.current = true;
+        return;
+      }
+      performSave({ manual: true });
+    },
+  }));
 
   return (
     <div className="flex flex-col gap-3">
@@ -441,15 +522,15 @@ function StudentEditor({
 
       <div>
         <p className="font-semibold text-card-foreground">{row.studentName}</p>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           {row.groupName ? `קבוצה ${row.groupName}` : "ללא קבוצה"}
           {row.subgroupNumber != null ? ` / תת-קבוצה ${row.subgroupNumber}` : ""}
         </p>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           {resolvedHorseLine({ ...row, sessionHorseName })}
         </p>
         {(row.updatedByName || row.updatedAt) && (
-          <p className="mt-1 text-xs text-muted-foreground">
+          <p className="mt-1 text-sm text-muted-foreground">
             {row.updatedByName && `עודכן על ידי: ${row.updatedByName}`}
             {row.updatedByName && row.updatedAt && " · "}
             {row.updatedAt && `עודכן בתאריך: ${formatHebrewDateTime(new Date(row.updatedAt))}`}
@@ -470,14 +551,14 @@ function StudentEditor({
             </p>
           )}
           {(row.attendanceArrivalTime || row.attendanceDepartureTime) && (
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="mt-1 text-sm text-muted-foreground">
               {row.attendanceArrivalTime && `הגעה: ${row.attendanceArrivalTime}`}
               {row.attendanceArrivalTime && row.attendanceDepartureTime && " · "}
               {row.attendanceDepartureTime && `יציאה: ${row.attendanceDepartureTime}`}
             </p>
           )}
           {row.attendanceNotes && (
-            <p className="mt-1 text-xs text-card-foreground">הערת נוכחות: {row.attendanceNotes}</p>
+            <p className="mt-1 text-sm text-card-foreground">הערת נוכחות: {row.attendanceNotes}</p>
           )}
         </div>
       )}
@@ -486,7 +567,7 @@ function StudentEditor({
         <button
           type="button"
           onClick={() => setIsEditingHorse(true)}
-          className="self-start text-xs text-muted-foreground underline decoration-dotted"
+          className="self-start text-sm text-muted-foreground underline decoration-dotted"
         >
           עריכת סוס בשיעור
         </button>
@@ -494,7 +575,7 @@ function StudentEditor({
 
       {canEdit && isEditingHorse && (
         <div className="flex flex-col gap-1.5 rounded-lg border border-border p-2.5">
-          <label className="flex flex-col gap-1 text-sm">
+          <label className="flex flex-col gap-1 text-base" onBlur={() => performSave()}>
             סוס בשיעור זה (לא משנה את השיוך הרגיל)
             <SuggestInput
               value={sessionHorseName}
@@ -508,7 +589,7 @@ function StudentEditor({
               <button
                 type="button"
                 onClick={() => setSessionHorseName("")}
-                className="text-xs text-muted-foreground underline"
+                className="text-sm text-muted-foreground underline"
               >
                 נקה שינוי - חזרה לסוס הרגיל
               </button>
@@ -516,34 +597,34 @@ function StudentEditor({
             <button
               type="button"
               onClick={() => setIsEditingHorse(false)}
-              className="text-xs text-muted-foreground underline"
+              className="text-sm text-muted-foreground underline"
             >
               סגירה
             </button>
           </div>
-          <p className="text-[11px] text-muted-foreground">
-            השינוי נשמר יחד עם ההערה/דירוג בלחיצה על &quot;שמירה&quot; למטה.
+          <p className="text-xs text-muted-foreground">
+            שינויים כאן נשמרים אוטומטית ביציאה מהשדה - אין צורך ללחוץ &quot;שמירה&quot;.
           </p>
         </div>
       )}
 
       {canEdit ? (
         <>
-          <label className="flex flex-col gap-1 text-sm">
+          <label className="flex flex-col gap-1 text-base">
             הערת רכיבה
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
               rows={3}
-              className="rounded-lg border border-border px-3 py-2 text-sm"
+              className="rounded-lg border border-border px-3 py-2 text-base"
             />
           </label>
-          <label className="flex flex-col gap-1 text-sm">
+          <label className="flex flex-col gap-1 text-base">
             דירוג
             <select
               value={rating}
               onChange={(e) => setRating(e.target.value)}
-              className="w-32 rounded-lg border border-border px-3 py-2 text-sm"
+              className="w-32 rounded-lg border border-border px-3 py-2 text-base"
             >
               <option value="">ללא</option>
               {RATING_OPTIONS.map((v) => (
@@ -553,7 +634,7 @@ function StudentEditor({
               ))}
             </select>
           </label>
-          <label className="flex flex-col gap-1 text-sm">
+          <label className="flex flex-col gap-1 text-base" onBlur={() => performSave()}>
             נושא השיעור
             <SuggestInput
               value={lessonTopic}
@@ -562,15 +643,15 @@ function StudentEditor({
               placeholder="לדוגמה: מעברים"
             />
           </label>
-          <label className="flex flex-col gap-1 text-sm">
+          <label className="flex flex-col gap-1 text-base">
             את מי החניך/ה הדריך/ה
             <TaughtStudentsChecklist
               options={taughtStudentOptions}
               selectedIds={taughtStudentIds}
-              setTaughtStudentIds={setTaughtStudentIds}
+              onToggle={handleToggleTaughtStudent}
             />
           </label>
-          {error && <p className="text-sm text-danger">{error}</p>}
+          {error && <p className="text-base text-danger">{error}</p>}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={onBack}>
               ביטול
@@ -582,12 +663,12 @@ function StudentEditor({
         </>
       ) : (
         <>
-          <p className="text-sm text-muted-foreground">הערת רכיבה: {row.note ?? "אין הערה"}</p>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">הערת רכיבה: {row.note ?? "אין הערה"}</p>
+          <p className="text-base text-muted-foreground">
             דירוג: {row.ratingHalfPoints != null ? row.ratingHalfPoints / 2 : "ללא"}
           </p>
-          <p className="text-sm text-muted-foreground">נושא השיעור: {row.lessonTopic ?? "אין"}</p>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-base text-muted-foreground">נושא השיעור: {row.lessonTopic ?? "אין"}</p>
+          <p className="text-base text-muted-foreground">
             הדריך/ה:{" "}
             {row.taughtStudents.length > 0 ? row.taughtStudents.map((s) => s.fullName).join(", ") : "אין"}
           </p>
@@ -617,6 +698,11 @@ export function InstructorRidingSlotsSection({
   const [slotStudents, setSlotStudents] = useState<RidingSlotStudentRow[] | null>(null);
   const [studentsError, setStudentsError] = useState<string | null>(null);
   const [editingStudent, setEditingStudent] = useState<RidingSlotStudentRow | null>(null);
+  // Lets the Modal's X/backdrop-close reach into the currently-mounted
+  // StudentEditor and trigger its own save-then-close, without lifting the
+  // editable fields up here (which would create a second, easily-desynced
+  // copy of the same draft).
+  const studentEditorRef = useRef<StudentEditorHandle>(null);
 
   const [studentSearch, setStudentSearch] = useState("");
   const [historyStudentId, setHistoryStudentId] = useState<string | null>(null);
@@ -685,6 +771,15 @@ export function InstructorRidingSlotsSection({
     // A newly-typed lesson topic/horse name only becomes a suggestion for
     // the *next* student once this refetches - same reasoning as
     // HorseFeedingSection's post-save loadKnownValues() call.
+    loadKnownValues();
+  }
+
+  // Same as handleStudentSaved but for a field-level autosave - updates the
+  // list's copy of this row so it reflects what was just saved, but keeps
+  // the editor open (unlike a manual/close-triggered save, an autosave was
+  // never a request to leave this student).
+  function handleStudentAutoSaved(updated: RidingSlotStudentRow) {
+    setSlotStudents((prev) => (prev ? prev.map((s) => (s.studentId === updated.studentId ? updated : s)) : prev));
     loadKnownValues();
   }
 
@@ -990,7 +1085,18 @@ export function InstructorRidingSlotsSection({
       <Modal
         open={openActivity !== null}
         title={openActivity ? cleanScheduleTitle(openActivity.title) : "רכיבה"}
+        size="wide"
         onClose={() => {
+          // Inside a specific student's editor, X/backdrop-close should save
+          // (same fields the manual button saves) and return to this slot's
+          // grouped list, not close the whole modal back to the main
+          // schedule - delegate to the editor itself (see StudentEditorHandle),
+          // since it alone holds the current draft. A failed save leaves the
+          // editor's own error state visible and the modal open.
+          if (editingStudent) {
+            studentEditorRef.current?.requestClose();
+            return;
+          }
           setOpenActivity(null);
           setSlotStudents(null);
           setEditingStudent(null);
@@ -1000,6 +1106,7 @@ export function InstructorRidingSlotsSection({
           {studentsError && <p className="mb-2 text-sm text-danger">{studentsError}</p>}
           {editingStudent ? (
             <StudentEditor
+              ref={studentEditorRef}
               row={editingStudent}
               ridingSlotId={openActivity!.ridingSlot!.id}
               instructorId={instructorId}
@@ -1009,6 +1116,7 @@ export function InstructorRidingSlotsSection({
               knownHorseNames={knownHorseNames}
               onBack={() => setEditingStudent(null)}
               onSaved={handleStudentSaved}
+              onAutoSaved={handleStudentAutoSaved}
             />
           ) : slotStudents === null ? (
             <p className="text-sm text-muted-foreground">טוען...</p>
