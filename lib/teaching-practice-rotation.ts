@@ -19,6 +19,17 @@ export const TEACHING_PRACTICE_TEAM_SIZE: Record<TeachingPracticeTypeValue, numb
   BEGINNER_GROUP: 3,
 };
 
+// Default display text for each role - shared by the client-side manager
+// (as a fallback when a lesson has no roleLabelOverrides entry for a role)
+// and the server-side Excel export, so both agree on the same wording
+// without duplicating this map.
+export const ROLE_LABELS: Record<TeachingPracticeRoleValue, string> = {
+  LEAD_INSTRUCTOR: "מדריך ראשון",
+  SECOND_INSTRUCTOR: "מדריך שני",
+  ASSISTANT_INSTRUCTOR: "עוזר מדריך",
+  EVALUATOR: "ממשב",
+};
+
 const TWO_ROLE_ROTATION: TeachingPracticeRoleValue[] = ["LEAD_INSTRUCTOR", "ASSISTANT_INSTRUCTOR"];
 const THREE_ROLE_ROTATION: TeachingPracticeRoleValue[] = [
   "LEAD_INSTRUCTOR",

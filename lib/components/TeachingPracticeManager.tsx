@@ -17,6 +17,7 @@ import { formatHebrewDate, formatHebrewWeekday, parseDateKey, todayDateKey } fro
 import type { ActionResult } from "@/lib/actions/students";
 import {
   addMinutesToTimeString,
+  ROLE_LABELS,
   TEACHING_PRACTICE_DURATION_MINUTES,
   TEACHING_PRACTICE_TEAM_SIZE,
   type TeachingPracticeRoleValue,
@@ -120,13 +121,6 @@ const PRACTICE_TYPE_LABELS: Record<TeachingPracticeTypeValue, string> = {
   BEGINNER_GROUP: "שיעור קבוצתי מתחילים",
 };
 const PRACTICE_TYPES: TeachingPracticeTypeValue[] = ["LUNGE", "BEGINNER_PRIVATE", "BEGINNER_GROUP"];
-
-const ROLE_LABELS: Record<TeachingPracticeRoleValue, string> = {
-  LEAD_INSTRUCTOR: "מדריך ראשון",
-  SECOND_INSTRUCTOR: "מדריך שני",
-  ASSISTANT_INSTRUCTOR: "עוזר מדריך",
-  EVALUATOR: "ממשב",
-};
 
 // The fixed role columns shown per practiceType in the scheduled-lessons
 // table (Stage A) - mirrors the 2-role LUNGE/BEGINNER_PRIVATE rotation and
@@ -3554,6 +3548,14 @@ export function TeachingPracticeManager({
                           <span className="rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground">
                             {beginnerTypeSummaryLabel}
                           </span>
+                        )}
+                        {hasAnySection && (
+                          <a
+                            href={`/api/admin/teaching-practice/export?date=${selectedLessonDate}`}
+                            className="mr-auto rounded-lg bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground transition-colors hover:opacity-80"
+                          >
+                            ייצוא לאקסל
+                          </a>
                         )}
                       </div>
 
