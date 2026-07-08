@@ -1,0 +1,399 @@
+"use server";
+
+import { Workbook, type Row, type Worksheet } from "exceljs";
+import { prisma } from "@/lib/prisma";
+import { requireAdmin } from "@/lib/auth/require-admin";
+
+const MAX_HEADER_SCAN_ROWS = 20;
+
+export type ChildImportRowAction = "create" | "update" | "skip";
+export type ChildImportMatchConfidence = "high" | "low" | "sibling" | null;
+
+export interface TeachingPracticeChildImportCandidate {
+  key: string;
+  rowNumber: number;
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  age: number | null;
+  gender: string;
+  parentName: string;
+  parentPhone: string;
+  notes: string;
+  action: ChildImportRowAction;
+  matchedChildId: string | null;
+  matchConfidence: ChildImportMatchConfidence;
+  warnings: string[];
+}
+
+export interface ParseTeachingPracticeChildrenExcelResult {
+  success: boolean;
+  error?: string;
+  candidates?: TeachingPracticeChildImportCandidate[];
+  debugInfo?: string;
+}
+
+// Header synonyms for the real-world Excel export column names, plus a few
+// shorter fallbacks - same "resilient to header drift" convention as
+// student-import.ts's HEADER_SYNONYMS.
+const HEADER_SYNONYMS: Record<string, string[]> = {
+  firstName: ["שם פרטי של הילד/ה", "שם פרטי"],
+  lastName: ["שם משפחה של הילד/ה", "שם משפחה"],
+  age: ["גיל הילד/ה (במספר)", "גיל הילד/ה", "גיל"],
+  gender: ["מין הילד", "מגדר"],
+  parentName: ["שם ההורה", "שם הורה"],
+  parentPhone: ["טלפון זמין של ההורה", "טלפון הורה", "טלפון"],
+  email: ["כתובת אימייל", "אימייל", "מייל"],
+  grade: ["כיתה"],
+  city: ["כתובת מגורים (שם הישוב בלבד)", "כתובת מגורים", "ישוב", "יישוב"],
+  groupAHours: ["שעות מועדפות קבוצה א"],
+  groupBHours: ["שעות מועדפות קבוצה ב"],
+  priorInstructorsCourse: [
+    "האם ילדך השתתף בעבר בשעורי רכיבה במסגרת קורס המדריכים של דאבל קיי?",
+    "האם ילדך השתתף בעבר בשעורי רכיבה במסגרת קורס המדריכים של דאבל קיי",
+  ],
+  priorRidingExperience: [
+    "האם לילדך ניסיון קודם ברכיבה? במידה וכן - פרט",
+    "האם לילדך ניסיון קודם ברכיבה",
+  ],
+  attendanceCommitment: [
+    "ביכולתי להגיע לכל ששת שעורי הרכיבה בתאריכים אליהם נרשמתי",
+    "יכול להגיע לכל ששת השיעורים",
+  ],
+  attendanceExceptionDetails: [
+    'במידה וענית "לא" - אנא פרט מתי לא תוכל להגיע',
+    "פירוט מתי לא יוכל להגיע",
+  ],
+  specialNotes: ["הערות/ בקשות מיוחדות", "הערות/בקשות מיוחדות", "הערות"],
+};
+
+// Strips zero-width/bidi-control characters (common in Hebrew Excel exports),
+// trims, drops punctuation, collapses whitespace, and lowercases - same
+// normalization as student-import.ts's normalizeHeader.
+function normalizeHeader(h: string): string {
+  return h
+    .replace(/[​-‏‪-‮﻿]/g, "") // zero-width & bidi control chars
+    .trim()
+    .replace(/[."'׳״]/g, "") // periods/quotes/geresh/gershayim
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function columnLetter(col: number): string {
+  let n = col;
+  let letters = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    letters = String.fromCharCode(65 + rem) + letters;
+    n = Math.floor((n - 1) / 26);
+  }
+  return letters;
+}
+
+function cellText(row: Row, colNumber: number | undefined): string {
+  if (!colNumber) return "";
+  const value = row.getCell(colNumber).value;
+  if (value === null || value === undefined) return "";
+  if (value instanceof Date) return "";
+  if (typeof value === "object" && "richText" in (value as object)) {
+    return (value as { richText: { text: string }[] }).richText
+      .map((t) => t.text)
+      .join("")
+      .trim();
+  }
+  if (typeof value === "object" && "text" in (value as object)) {
+    return String((value as { text: unknown }).text ?? "").trim();
+  }
+  return String(value).trim();
+}
+
+interface HeaderDetection {
+  headerRow: number;
+  columnIndex: Record<string, number>;
+}
+
+// Scans the first MAX_HEADER_SCAN_ROWS rows for a row containing at least
+// first name and last name headers - that row is accepted as the header row.
+function detectHeaderRow(worksheet: Worksheet): HeaderDetection | null {
+  const lastRow = Math.min(worksheet.rowCount, MAX_HEADER_SCAN_ROWS);
+
+  for (let r = 1; r <= lastRow; r++) {
+    const row = worksheet.getRow(r);
+    const columnIndex: Record<string, number> = {};
+
+    for (let c = 1; c <= worksheet.columnCount; c++) {
+      const text = cellText(row, c);
+      if (!text) continue;
+      const normalized = normalizeHeader(text);
+      for (const [field, synonyms] of Object.entries(HEADER_SYNONYMS)) {
+        if (columnIndex[field]) continue;
+        if (synonyms.some((s) => normalizeHeader(s) === normalized)) {
+          columnIndex[field] = c;
+        }
+      }
+    }
+
+    if (columnIndex.firstName && columnIndex.lastName) {
+      return { headerRow: r, columnIndex };
+    }
+  }
+
+  return null;
+}
+
+function scannedRowsDebugText(worksheet: Worksheet): string {
+  const lastRow = Math.min(worksheet.rowCount, MAX_HEADER_SCAN_ROWS);
+  const lines: string[] = [];
+  for (let r = 1; r <= lastRow; r++) {
+    const row = worksheet.getRow(r);
+    const found: string[] = [];
+    for (let c = 1; c <= worksheet.columnCount; c++) {
+      const t = cellText(row, c);
+      if (t) found.push(t);
+    }
+    if (found.length > 0) lines.push(`שורה ${r}: ${found.join(", ")}`);
+  }
+  return lines.length > 0 ? lines.join("\n") : "לא נמצא תוכן כלשהו בשורות שנסרקו";
+}
+
+function normalizePhone(phone: string): string {
+  return phone.replace(/[\s-]+/g, "");
+}
+
+function normalizeFullName(name: string): string {
+  return name.trim().replace(/\s+/g, " ");
+}
+
+interface ParsedAge {
+  age: number | null;
+  warning: string | null;
+  rawNote: string | null;
+}
+
+// Decimal ages (e.g. "6.5") are floored for storage but the raw value is
+// surfaced both as a non-blocking warning and as a notes line - never
+// silently dropped. Unparseable text sets age to null with a warning instead
+// of blocking the row (age is optional per the import spec).
+function parseAgeCell(text: string): ParsedAge {
+  if (!text) return { age: null, warning: null, rawNote: null };
+  const n = parseFloat(text.replace(",", "."));
+  if (Number.isNaN(n)) {
+    return { age: null, warning: `גיל לא ניתן לפענוח: "${text}"`, rawNote: null };
+  }
+  const floored = Math.floor(n);
+  if (!Number.isInteger(n)) {
+    return {
+      age: floored,
+      warning: `גיל עשרוני עוגל מ-${text} ל-${floored}`,
+      rawNote: `גיל מקורי שצוין: ${text}`,
+    };
+  }
+  return { age: floored, warning: null, rawNote: null };
+}
+
+function composeNotes(fields: {
+  grade: string;
+  city: string;
+  email: string;
+  groupAHours: string;
+  groupBHours: string;
+  priorInstructorsCourse: string;
+  priorRidingExperience: string;
+  attendanceCommitment: string;
+  attendanceExceptionDetails: string;
+  specialNotes: string;
+  ageRawNote: string | null;
+}): string {
+  const lines: string[] = [];
+  if (fields.grade) lines.push(`כיתה: ${fields.grade}`);
+  if (fields.city) lines.push(`יישוב: ${fields.city}`);
+  if (fields.email) lines.push(`אימייל הורה: ${fields.email}`);
+  if (fields.groupAHours) lines.push(`שעות מועדפות קבוצה א: ${fields.groupAHours}`);
+  if (fields.groupBHours) lines.push(`שעות מועדפות קבוצה ב: ${fields.groupBHours}`);
+  if (fields.priorInstructorsCourse) {
+    lines.push(`השתתפות קודמת בקורס מדריכים: ${fields.priorInstructorsCourse}`);
+  }
+  if (fields.priorRidingExperience) {
+    lines.push(`ניסיון קודם ברכיבה: ${fields.priorRidingExperience}`);
+  }
+  // Only surfaced as an attendance-constraint warning when the commitment
+  // answer isn't a plain "כן" - matches the source form's own follow-up
+  // question ("במידה וענית 'לא'...").
+  if (fields.attendanceCommitment && !fields.attendanceCommitment.trim().startsWith("כן")) {
+    lines.push(
+      `⚠ אילוץ נוכחות: ${fields.attendanceExceptionDetails || fields.attendanceCommitment}`
+    );
+  }
+  if (fields.specialNotes) lines.push(`הערות: ${fields.specialNotes}`);
+  if (fields.ageRawNote) lines.push(fields.ageRawNote);
+  return lines.join("\n");
+}
+
+async function parseTeachingPracticeChildrenExcelInternal(
+  formData: FormData
+): Promise<ParseTeachingPracticeChildrenExcelResult> {
+  const file = formData.get("file");
+  if (!(file instanceof File)) {
+    return { success: false, error: "לא נבחר קובץ" };
+  }
+
+  let workbook: Workbook;
+  try {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    workbook = new Workbook();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await workbook.xlsx.load(buffer as any);
+  } catch {
+    return { success: false, error: "לא ניתן היה לקרוא את הקובץ" };
+  }
+
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
+    return { success: false, error: "לא נמצא גיליון בקובץ" };
+  }
+
+  const detection = detectHeaderRow(worksheet);
+  if (!detection) {
+    return {
+      success: false,
+      error: `לא זוהו עמודות חובה (שם פרטי/שם משפחה). נמצאו הכותרות הבאות בשורות שנסרקו:\n${scannedRowsDebugText(worksheet)}`,
+    };
+  }
+
+  const { headerRow, columnIndex } = detection;
+  const mappedCols = Object.entries(columnIndex)
+    .map(([field, col]) => `${field}=${columnLetter(col)}`)
+    .join(", ");
+  const debugInfo = `זוהתה שורת כותרות מספר ${headerRow}. עמודות שזוהו: ${mappedCols}`;
+
+  const existingChildren = await prisma.teachingPracticeChild.findMany({
+    select: { id: true, fullName: true, parentPhone: true },
+  });
+  const byName = new Map<string, typeof existingChildren>();
+  const byPhone = new Map<string, typeof existingChildren>();
+  for (const child of existingChildren) {
+    const nameKey = normalizeFullName(child.fullName);
+    byName.set(nameKey, [...(byName.get(nameKey) ?? []), child]);
+    if (child.parentPhone) {
+      const phoneKey = normalizePhone(child.parentPhone);
+      if (phoneKey) byPhone.set(phoneKey, [...(byPhone.get(phoneKey) ?? []), child]);
+    }
+  }
+
+  const candidates: TeachingPracticeChildImportCandidate[] = [];
+  let index = 0;
+
+  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    if (rowNumber <= headerRow) return;
+
+    const firstName = cellText(row, columnIndex.firstName);
+    const lastName = cellText(row, columnIndex.lastName);
+    if (!firstName && !lastName) return;
+
+    const warnings: string[] = [];
+    if (!firstName) warnings.push("חסר שם פרטי");
+    if (!lastName) warnings.push("חסר שם משפחה");
+
+    const ageText = cellText(row, columnIndex.age);
+    const parsedAge = parseAgeCell(ageText);
+    if (parsedAge.warning) warnings.push(parsedAge.warning);
+
+    const gender = cellText(row, columnIndex.gender);
+    const parentName = cellText(row, columnIndex.parentName);
+    const parentPhoneRaw = cellText(row, columnIndex.parentPhone);
+    const parentPhone = parentPhoneRaw ? normalizePhone(parentPhoneRaw) : "";
+
+    const notes = composeNotes({
+      grade: cellText(row, columnIndex.grade),
+      city: cellText(row, columnIndex.city),
+      email: cellText(row, columnIndex.email),
+      groupAHours: cellText(row, columnIndex.groupAHours),
+      groupBHours: cellText(row, columnIndex.groupBHours),
+      priorInstructorsCourse: cellText(row, columnIndex.priorInstructorsCourse),
+      priorRidingExperience: cellText(row, columnIndex.priorRidingExperience),
+      attendanceCommitment: cellText(row, columnIndex.attendanceCommitment),
+      attendanceExceptionDetails: cellText(row, columnIndex.attendanceExceptionDetails),
+      specialNotes: cellText(row, columnIndex.specialNotes),
+      ageRawNote: parsedAge.rawNote,
+    });
+
+    const fullName = normalizeFullName(`${firstName} ${lastName}`.trim());
+
+    let action: ChildImportRowAction = firstName && lastName ? "create" : "skip";
+    let matchedChildId: string | null = null;
+    let matchConfidence: ChildImportMatchConfidence = null;
+
+    const nameMatches = byName.get(fullName) ?? [];
+    if (nameMatches.length > 0) {
+      const phoneMatch = parentPhone
+        ? nameMatches.find((c) => c.parentPhone && normalizePhone(c.parentPhone) === parentPhone)
+        : undefined;
+      if (phoneMatch) {
+        matchedChildId = phoneMatch.id;
+        matchConfidence = "high";
+        if (action !== "skip") action = "update";
+      } else {
+        matchedChildId = nameMatches[0].id;
+        matchConfidence = "low";
+        warnings.push(
+          `שם זהה לילד/ה קיים/ת (${nameMatches[0].fullName}) אך פרטי הקשר שונים - יש לבדוק לפני מיזוג`
+        );
+      }
+    } else if (parentPhone) {
+      const siblingMatches = (byPhone.get(parentPhone) ?? []).filter(
+        (c) => normalizeFullName(c.fullName) !== fullName
+      );
+      if (siblingMatches.length > 0) {
+        matchConfidence = "sibling";
+        warnings.push(
+          `טלפון הורה זהה לילד/ה קיים/ת בשם ${siblingMatches[0].fullName} - ייתכן אח/אחות ולא כפילות`
+        );
+      }
+    }
+
+    candidates.push({
+      key: `c${index++}`,
+      rowNumber,
+      firstName,
+      lastName,
+      fullName,
+      age: parsedAge.age,
+      gender,
+      parentName,
+      parentPhone,
+      notes,
+      action,
+      matchedChildId,
+      matchConfidence,
+      warnings,
+    });
+  });
+
+  if (candidates.length === 0) {
+    return {
+      success: false,
+      error: `לא נמצאו שורות ילדים בקובץ אחרי שורת הכותרות (שורה ${headerRow}).`,
+      debugInfo,
+    };
+  }
+
+  return { success: true, candidates, debugInfo };
+}
+
+export async function parseTeachingPracticeChildrenExcelAsAdmin(
+  formData: FormData
+): Promise<ParseTeachingPracticeChildrenExcelResult> {
+  await requireAdmin();
+  return parseTeachingPracticeChildrenExcelInternal(formData);
+}
+
+export async function parseTeachingPracticeChildrenExcelAsInstructor(
+  instructorId: string,
+  formData: FormData
+): Promise<ParseTeachingPracticeChildrenExcelResult> {
+  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
+  if (!instructor || !instructor.isActive || !instructor.canManageTeachingPracticeAssignments) {
+    return { success: false, error: "אין הרשאה לניהול שיבוצי התנסויות מתחילים" };
+  }
+  return parseTeachingPracticeChildrenExcelInternal(formData);
+}

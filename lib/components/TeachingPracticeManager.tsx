@@ -1,6 +1,14 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState, useTransition, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useState,
+  useTransition,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
 import { SearchableSelect, type SearchableSelectOption } from "@/lib/components/SearchableSelect";
@@ -57,6 +65,12 @@ import {
   type TeachingPracticeTrackInput,
   type TeachingPracticeTrackSummary,
 } from "@/lib/actions/teaching-practice";
+import {
+  parseTeachingPracticeChildrenExcelAsAdmin,
+  parseTeachingPracticeChildrenExcelAsInstructor,
+  type ChildImportRowAction,
+  type TeachingPracticeChildImportCandidate,
+} from "@/lib/actions/teaching-practice-child-import";
 
 type Role = "admin" | "instructor";
 type Tab = "tracks" | "lessons" | "children";
@@ -1279,6 +1293,53 @@ export function TeachingPracticeManager({
       }
       await refreshChildren();
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Children: Excel import preview (Stage B - preview only, no DB writes;
+  // the commit/save step is a later stage).
+  // -------------------------------------------------------------------------
+
+  const [childImportCandidates, setChildImportCandidates] = useState<
+    TeachingPracticeChildImportCandidate[] | null
+  >(null);
+  const [childImportError, setChildImportError] = useState<string | null>(null);
+  const [childImportDebugInfo, setChildImportDebugInfo] = useState<string | null>(null);
+  const [isParsingChildImport, startChildImportTransition] = useTransition();
+
+  function handleParseChildImport(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setChildImportError(null);
+    setChildImportDebugInfo(null);
+    const formData = new FormData(e.currentTarget);
+    startChildImportTransition(async () => {
+      const result =
+        role === "admin"
+          ? await parseTeachingPracticeChildrenExcelAsAdmin(formData)
+          : await parseTeachingPracticeChildrenExcelAsInstructor(actorId!, formData);
+      if (!result.success || !result.candidates) {
+        setChildImportError(result.error ?? "אירעה שגיאה");
+        setChildImportCandidates(null);
+        return;
+      }
+      setChildImportCandidates(result.candidates);
+      setChildImportDebugInfo(result.debugInfo ?? null);
+    });
+  }
+
+  function updateChildImportCandidate(
+    key: string,
+    patch: Partial<TeachingPracticeChildImportCandidate>
+  ) {
+    setChildImportCandidates((prev) =>
+      prev ? prev.map((c) => (c.key === key ? { ...c, ...patch } : c)) : prev
+    );
+  }
+
+  function resetChildImport() {
+    setChildImportCandidates(null);
+    setChildImportError(null);
+    setChildImportDebugInfo(null);
   }
 
   return (
@@ -2729,6 +2790,104 @@ export function TeachingPracticeManager({
 
       {tab === "children" && (
         <div className="flex flex-col gap-4">
+          {effectiveCanEdit && (
+            <div className="rounded-xl border border-border bg-card p-4">
+              <h2 className="mb-3 text-base font-semibold text-card-foreground">
+                ייבוא ילדים מקובץ Excel (תצוגה מקדימה בלבד)
+              </h2>
+              {!childImportCandidates && (
+                <form onSubmit={handleParseChildImport} className="flex flex-col gap-3">
+                  <p className="text-sm text-muted-foreground">
+                    יש לבחור קובץ Excel עם עמודות שם פרטי/שם משפחה של הילד/ה ופרטים נלווים. שלב זה
+                    מציג תצוגה מקדימה בלבד - לא נשמר דבר במסד הנתונים.
+                  </p>
+                  <input
+                    type="file"
+                    name="file"
+                    accept=".xlsx"
+                    required
+                    className="rounded-lg border border-border px-3 py-2 text-sm"
+                  />
+                  {childImportError && (
+                    <p className="whitespace-pre-line text-sm text-danger">{childImportError}</p>
+                  )}
+                  <Button type="submit" disabled={isParsingChildImport} className="self-start">
+                    {isParsingChildImport ? "מפענח..." : "פענוח קובץ"}
+                  </Button>
+                </form>
+              )}
+
+              {childImportCandidates && (
+                <div className="flex flex-col gap-3">
+                  <p className="text-sm text-muted-foreground">
+                    נמצאו {childImportCandidates.length} שורות. זוהי תצוגה מקדימה בלבד - ניתן לערוך
+                    את פעולת השורה, אך אין עדיין אפשרות לשמור את הייבוא במסד הנתונים.
+                  </p>
+                  {childImportDebugInfo && (
+                    <p className="whitespace-pre-line text-xs text-muted-foreground">
+                      {childImportDebugInfo}
+                    </p>
+                  )}
+                  <div className="max-h-96 overflow-y-auto rounded-lg border border-border">
+                    {childImportCandidates.map((c) => (
+                      <div key={c.key} className="border-b border-border p-3 last:border-0">
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-sm font-semibold text-card-foreground">
+                            {c.fullName || `שורה ${c.rowNumber}`}
+                          </span>
+                          <select
+                            value={c.action}
+                            onChange={(e) =>
+                              updateChildImportCandidate(c.key, {
+                                action: e.target.value as ChildImportRowAction,
+                              })
+                            }
+                            className="rounded-lg border border-border px-2 py-1 text-sm"
+                          >
+                            <option value="create">יצירת חדש</option>
+                            {c.matchedChildId && <option value="update">עדכון קיים</option>}
+                            <option value="skip">דילוג</option>
+                          </select>
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm text-muted-foreground sm:grid-cols-4">
+                          <span>גיל: {c.age ?? "—"}</span>
+                          <span>מגדר: {c.gender || "—"}</span>
+                          <span>הורה: {c.parentName || "—"}</span>
+                          <span>טלפון: {c.parentPhone || "—"}</span>
+                        </div>
+                        {c.notes && (
+                          <p className="mt-2 whitespace-pre-line rounded-lg bg-muted p-2 text-xs text-muted-foreground">
+                            {c.notes}
+                          </p>
+                        )}
+                        {c.matchConfidence === "high" && (
+                          <p className="mt-2 text-xs text-success">
+                            התאמה ודאית לילד/ה קיים/ת - מוצע לעדכן
+                          </p>
+                        )}
+                        {c.warnings.length > 0 && (
+                          <ul className="mt-2 list-inside list-disc text-xs text-warning">
+                            {c.warnings.map((w, i) => (
+                              <li key={i}>{w}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button type="button" variant="secondary" onClick={resetChildImport}>
+                      ביטול
+                    </Button>
+                    <Button type="button" disabled title="שמירת הייבוא תתאפשר בשלב הבא">
+                      שמירת הייבוא (בקרוב)
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {effectiveCanEdit && (
             <div className="rounded-xl border border-border bg-card p-4">
               <h2 className="mb-3 text-base font-semibold text-card-foreground">הוספת ילד/ה</h2>
