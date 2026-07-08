@@ -724,6 +724,9 @@ export function StudentClient() {
           ...(hasNewMessages ? (["messages"] as MainTabId[]) : []),
           ...(hasUnreadNotifications || hasOpenWeeklyFeedback ? (["more"] as MainTabId[]) : []),
         ]}
+        // Matches the widened shell in app/student/page.tsx so the fixed
+        // bottom nav's width tracks the content above it at every breakpoint.
+        maxWidthClassName="max-w-lg sm:max-w-[640px] md:max-w-[768px] lg:max-w-[1024px] xl:max-w-[1280px]"
       />
     </div>
   );
