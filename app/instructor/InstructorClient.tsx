@@ -93,6 +93,11 @@ const INSTRUCTOR_ACTIVITY_SHORTCUTS: { id: MainTabId; label: string }[] = [
   { id: "schedule", label: 'לו"ז' },
   { id: "duties", label: "תורנויות" },
   { id: "horses", label: "סוסים" },
+  // Every instructor can at least view this section (edit access is its own,
+  // separate permission enforced inside TeachingPracticeManager/its server
+  // actions) - so unlike "messages" above, this shortcut is never filtered
+  // out here.
+  { id: "teachingPractice", label: "התנסויות מתחילים" },
 ];
 
 const INSTRUCTOR_INFO_SHORTCUTS: { id: MainTabId; label: string }[] = [
