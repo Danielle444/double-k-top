@@ -96,8 +96,12 @@ export interface TeachingPracticeTrackTraineeRow {
 }
 
 export interface TeachingPracticeTrackChildRow {
-  childId: string;
-  fullName: string;
+  // Null means "childless horse/equipment placeholder" (Approach A) - a row
+  // that exists only to hold horseName/equipmentNotes before a child is
+  // known/chosen yet. At most one such row per track (see the partial
+  // unique index in the migration).
+  childId: string | null;
+  fullName: string | null;
   isActive: boolean;
   horseName: string | null;
   equipmentNotes: string | null;
@@ -169,8 +173,8 @@ function toTrackSummary(track: TrackWithIncludes): TeachingPracticeTrackSummary 
     })),
     children: track.children.map((c) => ({
       childId: c.childId,
-      fullName: c.child.fullName,
-      isActive: c.child.isActive,
+      fullName: c.child?.fullName ?? null,
+      isActive: c.child?.isActive ?? true,
       horseName: c.horseName,
       equipmentNotes: c.equipmentNotes,
     })),
@@ -743,28 +747,50 @@ export async function setTeachingPracticeTrackTraineesAsInstructor(
 // ---------------------------------------------------------------------------
 
 export interface TeachingPracticeTrackChildInput {
-  childId: string;
+  // Null means "save this row as a childless horse/equipment placeholder" -
+  // see TeachingPracticeTrackChildRow.
+  childId: string | null;
   horseName?: string | null;
   equipmentNotes?: string | null;
 }
 
 async function setTeachingPracticeTrackChildrenInternal(
   trackId: string,
-  children: TeachingPracticeTrackChildInput[]
+  childrenInput: TeachingPracticeTrackChildInput[]
 ): Promise<ActionResult> {
   const track = await prisma.teachingPracticeTrack.findUnique({ where: { id: trackId } });
   if (!track) return { success: false, error: NOT_FOUND_TRACK };
 
-  const uniqueChildIds = new Set(children.map((c) => c.childId));
-  if (uniqueChildIds.size !== children.length) {
+  // Defensive normalization (mirrors the same rule enforced client-side in
+  // handleInlineEditTrackChildField): a childless row with no horse/
+  // equipment text either is a blank row, not a real placeholder - dropped
+  // here too so no caller can ever persist a fully empty
+  // TeachingPracticeTrackChild row.
+  const children = childrenInput.filter(
+    (c) => c.childId !== null || (c.horseName?.trim() || "") !== "" || (c.equipmentNotes?.trim() || "") !== ""
+  );
+
+  // At most one childless placeholder row per track (matches the DB-level
+  // partial unique index) - checked separately from the real-childId dedupe
+  // below so the error message is accurate either way.
+  const nullChildCount = children.filter((c) => c.childId === null).length;
+  if (nullChildCount > 1) {
+    return { success: false, error: "ניתן לשמור לכל היותר שורת סוס/ציוד אחת ללא ילד/ה משויך/ת" };
+  }
+
+  const realChildIds = children.map((c) => c.childId).filter((id): id is string => id !== null);
+  const uniqueChildIds = new Set(realChildIds);
+  if (uniqueChildIds.size !== realChildIds.length) {
     return { success: false, error: "לא ניתן לשבץ אותו ילד/ה יותר מפעם אחת" };
   }
 
-  if (children.length > 0) {
+  // Childless rows skip the existence/active lookup entirely - there's no
+  // childId to validate.
+  if (realChildIds.length > 0) {
     const foundChildren = await prisma.teachingPracticeChild.findMany({
-      where: { id: { in: children.map((c) => c.childId) } },
+      where: { id: { in: realChildIds } },
     });
-    if (foundChildren.length !== children.length) {
+    if (foundChildren.length !== realChildIds.length) {
       return { success: false, error: "אחד או יותר מהילדים שנבחרו לא נמצאו" };
     }
     if (foundChildren.some((c) => !c.isActive)) {
@@ -1375,9 +1401,16 @@ async function generateTeachingPracticeLessonFromTrackInternal(
       });
     }
 
-    if (track.children.length > 0) {
+    // Childless horse/equipment placeholder rows (Approach A) have nothing
+    // to materialize onto the lesson yet - TeachingPracticeChildAssignment.
+    // childId stays required/NOT NULL, so these are skipped here rather than
+    // attempted (which would fail the insert) or crashing generation.
+    const childrenWithChild = track.children.filter(
+      (c): c is typeof c & { childId: string } => c.childId !== null
+    );
+    if (childrenWithChild.length > 0) {
       await tx.teachingPracticeChildAssignment.createMany({
-        data: track.children.map((c) => ({
+        data: childrenWithChild.map((c) => ({
           lessonId: created.id,
           childId: c.childId,
           horseName: c.horseName,

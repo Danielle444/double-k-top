@@ -4,6 +4,7 @@ import {
   Fragment,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useTransition,
   type FormEvent,
@@ -72,6 +73,7 @@ import {
   type TeachingPracticeLessonSummary,
   type TeachingPracticeParticipantInput,
   type TeachingPracticeScheduleCheckResult,
+  type TeachingPracticeTrackChildInput,
   type TeachingPracticeTrackInput,
   type TeachingPracticeTrackSummary,
 } from "@/lib/actions/teaching-practice";
@@ -833,7 +835,7 @@ export function TeachingPracticeManager({
     const traineeNamesBySlot = Array.from({ length: teamSize }, (_, i) => sortedTrainees[i]?.fullName ?? "—");
     const rosterSummary = sortedTrainees.length > 0 ? sortedTrainees.map((t) => t.fullName).join(", ") : "—";
     const childRows = track.children.map((tc) => ({
-      registryChild: childById.get(tc.childId) ?? null,
+      registryChild: tc.childId ? (childById.get(tc.childId) ?? null) : null,
       trackChild: tc,
     }));
     return {
@@ -1083,7 +1085,11 @@ export function TeachingPracticeManager({
     setTeamSelections(sortedTraineeIds);
     setTrackChildRows(
       track.children.map((c) => ({
-        childId: c.childId,
+        // A null childId (childless horse/equipment placeholder) is shown
+        // the same way the form already shows any not-yet-chosen row: an
+        // empty select. handleSaveTrackChildren re-derives null from "" on
+        // save (see below), so this round-trips correctly.
+        childId: c.childId ?? "",
         horseName: c.horseName ?? "",
         equipmentNotes: c.equipmentNotes ?? "",
       }))
@@ -1268,6 +1274,129 @@ export function TeachingPracticeManager({
     });
   }
 
+  // Same replace-all idiom as handleInlineAssignTrainee, but for this
+  // track's single child/horse/equipment row (track.children is normally 0
+  // or 1 row - callers only wire this cell up when that holds). Preserves
+  // whatever horseName/equipmentNotes the track already had so switching (or
+  // clearing) which child is assigned never wipes them. Clearing the child
+  // keeps the row - as a childless horse/equipment placeholder (Approach A)
+  // - when there's still horse/equipment worth keeping, and only drops the
+  // row entirely once it would otherwise be completely empty, so data is
+  // never silently lost.
+  function handleInlineAssignTrackChild(track: TeachingPracticeTrackSummary, childId: string) {
+    const cellKey = `${track.id}-child`;
+    const current = track.children[0] ?? null;
+    const horseName = current?.horseName ?? null;
+    const equipmentNotes = current?.equipmentNotes ?? null;
+    const finalRows: TeachingPracticeTrackChildInput[] =
+      childId || horseName || equipmentNotes ? [{ childId: childId || null, horseName, equipmentNotes }] : [];
+
+    setInlineAssignError(null);
+    setSavingCellKey(cellKey);
+    startInlineAssignTransition(async () => {
+      const result =
+        role === "admin"
+          ? await setTeachingPracticeTrackChildrenAsAdmin(track.id, finalRows)
+          : await setTeachingPracticeTrackChildrenAsInstructor(actorId!, track.id, finalRows);
+      setSavingCellKey(null);
+      if (!result.success) {
+        setInlineAssignError(result.error ?? "אירעה שגיאה בשיבוץ הילד/ה");
+        return;
+      }
+      await refreshTracks();
+    });
+  }
+
+  // Edits just one of horseName/equipmentNotes on the track's single
+  // child/horse/equipment row, leaving childId and the other field
+  // untouched. Child, horse, and equipment are independent fields (product
+  // rule) - this saves a childless placeholder row (childId: null) when
+  // there's no child assigned yet, rather than requiring one to be picked
+  // first. Later assigning a child via handleInlineAssignTrackChild reuses
+  // this same row (same track.children[0]) and preserves these values.
+  function handleInlineEditTrackChildField(
+    track: TeachingPracticeTrackSummary,
+    field: "horseName" | "equipmentNotes",
+    value: string
+  ) {
+    const current = track.children[0] ?? null;
+    const cellKey = `${track.id}-${field}`;
+    const nextRow: TeachingPracticeTrackChildInput = {
+      childId: current?.childId ?? null,
+      horseName: field === "horseName" ? value || null : (current?.horseName ?? null),
+      equipmentNotes: field === "equipmentNotes" ? value || null : (current?.equipmentNotes ?? null),
+    };
+    // Clearing the only field a childless row had (e.g. deleting the horse
+    // text when there's no child and no equipment either) must not save a
+    // completely empty placeholder row - drop it entirely instead.
+    const finalRows: TeachingPracticeTrackChildInput[] =
+      nextRow.childId || nextRow.horseName || nextRow.equipmentNotes ? [nextRow] : [];
+
+    setInlineAssignError(null);
+    setSavingCellKey(cellKey);
+    startInlineAssignTransition(async () => {
+      const result =
+        role === "admin"
+          ? await setTeachingPracticeTrackChildrenAsAdmin(track.id, finalRows)
+          : await setTeachingPracticeTrackChildrenAsInstructor(actorId!, track.id, finalRows);
+      setSavingCellKey(null);
+      if (!result.success) {
+        setInlineAssignError(result.error ?? "אירעה שגיאה בשמירת פרטי הסוס/ציוד");
+        return;
+      }
+      await refreshTracks();
+    });
+  }
+
+  // Reuses the same full-object-rebuild idiom updateTeachingPracticeTrackAs*
+  // already requires (see trackFormToInput) - every other field is copied
+  // as-is from the already-loaded track summary, only notes changes.
+  function handleInlineEditTrackNotes(track: TeachingPracticeTrackSummary, notes: string) {
+    const cellKey = `${track.id}-notes`;
+    const input: TeachingPracticeTrackInput = {
+      practiceType: track.practiceType,
+      groupName: track.groupName,
+      weekday: track.weekday,
+      defaultStartTime: track.defaultStartTime,
+      defaultLocation: track.defaultLocation,
+      defaultResponsibleInstructorId: track.defaultResponsibleInstructorId,
+      groupTrackId: track.groupTrackId,
+      notes: notes || null,
+    };
+
+    setInlineAssignError(null);
+    setSavingCellKey(cellKey);
+    startInlineAssignTransition(async () => {
+      const result =
+        role === "admin"
+          ? await updateTeachingPracticeTrackAsAdmin(track.id, input)
+          : await updateTeachingPracticeTrackAsInstructor(actorId!, track.id, input);
+      setSavingCellKey(null);
+      if (!result.success) {
+        setInlineAssignError(result.error ?? "אירעה שגיאה בשמירת ההערות");
+        return;
+      }
+      await refreshTracks();
+    });
+  }
+
+  // Same group-filtered-with-visible-outlier pattern as teamOptionsForSlot,
+  // but children aren't grouped, so this is just "make sure the currently
+  // assigned child stays selectable even if somehow missing from the loaded
+  // registry list" (e.g. mid-refresh). Always leads with an explicit
+  // value=="" clear option - SearchableSelect only lets the user change to a
+  // value that's actually in `options`, so without this there would be no
+  // way to clear an already-assigned child back to childless.
+  function childSelectOptions(selectedId: string): SearchableSelectOption[] {
+    const clearOption: SearchableSelectOption = { value: "", label: "ללא ילד/ה" };
+    const options = (children ?? []).map((c) => ({ value: c.id, label: c.fullName }));
+    if (selectedId && !options.some((o) => o.value === selectedId)) {
+      const selected = childById.get(selectedId);
+      if (selected) return [clearOption, { value: selected.id, label: selected.fullName }, ...options];
+    }
+    return [clearOption, ...options];
+  }
+
   function addTrackChildRow() {
     setTrackChildRows((prev) => [...prev, { childId: "", horseName: "", equipmentNotes: "" }]);
   }
@@ -1284,10 +1413,14 @@ export function TeachingPracticeManager({
     if (!openTrackId) return;
     setTrackActionError(null);
     setTrackActionSuccess(null);
+    // A row with no child but real horse/equipment text is a valid childless
+    // placeholder (Approach A) and must be kept, not silently dropped - only
+    // a genuinely blank row (no child, no horse, no equipment - e.g. left
+    // over from "הוספת ילד/ה" without filling anything in) is discarded.
     const rows = trackChildRows
-      .filter((r) => r.childId !== "")
+      .filter((r) => r.childId !== "" || r.horseName.trim() !== "" || r.equipmentNotes.trim() !== "")
       .map((r) => ({
-        childId: r.childId,
+        childId: r.childId || null,
         horseName: r.horseName.trim() || null,
         equipmentNotes: r.equipmentNotes.trim() || null,
       }));
@@ -2258,16 +2391,41 @@ export function TeachingPracticeManager({
                                     />
                                   )}
                                   {columnVisibility.childFirstName && (
-                                    <td className="px-2 py-2">{row.childFirstName}</td>
+                                    <ChildAssignmentCell
+                                      value={row.track.children[0]?.childId ?? ""}
+                                      label={row.childFirstName}
+                                      options={childSelectOptions(row.track.children[0]?.childId ?? "")}
+                                      editable={effectiveCanEdit && row.track.children.length <= 1}
+                                      disabled={savingCellKey === `${row.track.id}-child`}
+                                      onAssign={(childId) => handleInlineAssignTrackChild(row.track, childId)}
+                                    />
                                   )}
                                   {columnVisibility.childLastName && (
                                     <td className="px-2 py-2">{row.childLastName}</td>
                                   )}
                                   {columnVisibility.age && <td className="px-2 py-2">{row.childAge}</td>}
                                   {columnVisibility.gender && <td className="px-2 py-2">{row.childGender}</td>}
-                                  {columnVisibility.horse && <td className="px-2 py-2">{row.horseName}</td>}
+                                  {columnVisibility.horse && (
+                                    <InlineTextEditCell
+                                      value={row.track.children[0]?.horseName ?? ""}
+                                      label={row.horseName}
+                                      editable={effectiveCanEditHorseFields && row.track.children.length <= 1}
+                                      disabled={savingCellKey === `${row.track.id}-horseName`}
+                                      placeholder="סוס"
+                                      onCommit={(value) => handleInlineEditTrackChildField(row.track, "horseName", value)}
+                                    />
+                                  )}
                                   {columnVisibility.equipment && (
-                                    <td className="px-2 py-2">{row.equipmentNotes}</td>
+                                    <InlineTextEditCell
+                                      value={row.track.children[0]?.equipmentNotes ?? ""}
+                                      label={row.equipmentNotes}
+                                      editable={effectiveCanEditHorseFields && row.track.children.length <= 1}
+                                      disabled={savingCellKey === `${row.track.id}-equipmentNotes`}
+                                      placeholder="ציוד"
+                                      onCommit={(value) =>
+                                        handleInlineEditTrackChildField(row.track, "equipmentNotes", value)
+                                      }
+                                    />
                                   )}
                                   {columnVisibility.parentName && (
                                     <td className="px-2 py-2">{row.parentName}</td>
@@ -2276,9 +2434,16 @@ export function TeachingPracticeManager({
                                     <td className="px-2 py-2">{row.parentPhone}</td>
                                   )}
                                   {columnVisibility.notes && (
-                                    <td className="max-w-[220px] truncate px-2 py-2" title={row.track.notes ?? undefined}>
-                                      {row.track.notes || "—"}
-                                    </td>
+                                    <InlineTextEditCell
+                                      value={row.track.notes ?? ""}
+                                      label={row.track.notes || "—"}
+                                      editable={effectiveCanEdit}
+                                      disabled={savingCellKey === `${row.track.id}-notes`}
+                                      placeholder="הערות"
+                                      truncateClassName="max-w-[220px] truncate"
+                                      title={row.track.notes ?? undefined}
+                                      onCommit={(value) => handleInlineEditTrackNotes(row.track, value)}
+                                    />
                                   )}
                                 </tr>
                               ))}
@@ -2527,12 +2692,20 @@ export function TeachingPracticeManager({
                                                 />
                                               )}
                                               {columnVisibility.childFirstName && (
-                                                <ClickableCell
-                                                  isActive={privateRow.track.isActive}
+                                                <ChildAssignmentCell
+                                                  value={privateRow.track.children[0]?.childId ?? ""}
+                                                  label={privateRow.childFirstName}
+                                                  options={childSelectOptions(
+                                                    privateRow.track.children[0]?.childId ?? ""
+                                                  )}
+                                                  editable={effectiveCanEdit && privateRow.track.children.length <= 1}
+                                                  disabled={savingCellKey === `${privateRow.track.id}-child`}
+                                                  onAssign={(childId) =>
+                                                    handleInlineAssignTrackChild(privateRow.track, childId)
+                                                  }
                                                   onOpen={() => openTrackManager(privateRow.track)}
-                                                >
-                                                  {privateRow.childFirstName}
-                                                </ClickableCell>
+                                                  isActive={privateRow.track.isActive}
+                                                />
                                               )}
                                               {columnVisibility.childLastName && (
                                                 <ClickableCell
@@ -2559,20 +2732,40 @@ export function TeachingPracticeManager({
                                                 </ClickableCell>
                                               )}
                                               {columnVisibility.horse && (
-                                                <ClickableCell
-                                                  isActive={privateRow.track.isActive}
+                                                <InlineTextEditCell
+                                                  value={privateRow.track.children[0]?.horseName ?? ""}
+                                                  label={privateRow.horseName}
+                                                  editable={
+                                                    effectiveCanEditHorseFields && privateRow.track.children.length <= 1
+                                                  }
+                                                  disabled={savingCellKey === `${privateRow.track.id}-horseName`}
+                                                  placeholder="סוס"
+                                                  onCommit={(value) =>
+                                                    handleInlineEditTrackChildField(privateRow.track, "horseName", value)
+                                                  }
                                                   onOpen={() => openTrackManager(privateRow.track)}
-                                                >
-                                                  {privateRow.horseName}
-                                                </ClickableCell>
+                                                  isActive={privateRow.track.isActive}
+                                                />
                                               )}
                                               {columnVisibility.equipment && (
-                                                <ClickableCell
-                                                  isActive={privateRow.track.isActive}
+                                                <InlineTextEditCell
+                                                  value={privateRow.track.children[0]?.equipmentNotes ?? ""}
+                                                  label={privateRow.equipmentNotes}
+                                                  editable={
+                                                    effectiveCanEditHorseFields && privateRow.track.children.length <= 1
+                                                  }
+                                                  disabled={savingCellKey === `${privateRow.track.id}-equipmentNotes`}
+                                                  placeholder="ציוד"
+                                                  onCommit={(value) =>
+                                                    handleInlineEditTrackChildField(
+                                                      privateRow.track,
+                                                      "equipmentNotes",
+                                                      value
+                                                    )
+                                                  }
                                                   onOpen={() => openTrackManager(privateRow.track)}
-                                                >
-                                                  {privateRow.equipmentNotes}
-                                                </ClickableCell>
+                                                  isActive={privateRow.track.isActive}
+                                                />
                                               )}
                                               {columnVisibility.parentName && (
                                                 <ClickableCell
@@ -2591,17 +2784,18 @@ export function TeachingPracticeManager({
                                                 </ClickableCell>
                                               )}
                                               {columnVisibility.notes && (
-                                                <ClickableCell
-                                                  isActive={privateRow.track.isActive}
+                                                <InlineTextEditCell
+                                                  value={privateRow.track.notes ?? ""}
+                                                  label={privateRow.track.notes || "—"}
+                                                  editable={effectiveCanEdit}
+                                                  disabled={savingCellKey === `${privateRow.track.id}-notes`}
+                                                  placeholder="הערות"
+                                                  truncateClassName="max-w-[220px] truncate"
+                                                  title={privateRow.track.notes ?? undefined}
+                                                  onCommit={(value) => handleInlineEditTrackNotes(privateRow.track, value)}
                                                   onOpen={() => openTrackManager(privateRow.track)}
-                                                >
-                                                  <span
-                                                    className="block max-w-[220px] truncate"
-                                                    title={privateRow.track.notes ?? undefined}
-                                                  >
-                                                    {privateRow.track.notes || "—"}
-                                                  </span>
-                                                </ClickableCell>
+                                                  isActive={privateRow.track.isActive}
+                                                />
                                               )}
                                             </>
                                           ) : (
@@ -2739,9 +2933,16 @@ export function TeachingPracticeManager({
                                       />
                                     )}
                                     {columnVisibility.childFirstName && (
-                                      <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
-                                        {row.childFirstName}
-                                      </ClickableCell>
+                                      <ChildAssignmentCell
+                                        value={row.track.children[0]?.childId ?? ""}
+                                        label={row.childFirstName}
+                                        options={childSelectOptions(row.track.children[0]?.childId ?? "")}
+                                        editable={effectiveCanEdit && row.track.children.length <= 1}
+                                        disabled={savingCellKey === `${row.track.id}-child`}
+                                        onAssign={(childId) => handleInlineAssignTrackChild(row.track, childId)}
+                                        onOpen={() => openTrackManager(row.track)}
+                                        isActive={row.track.isActive}
+                                      />
                                     )}
                                     {columnVisibility.childLastName && (
                                       <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
@@ -2759,14 +2960,30 @@ export function TeachingPracticeManager({
                                       </ClickableCell>
                                     )}
                                     {columnVisibility.horse && (
-                                      <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
-                                        {row.horseName}
-                                      </ClickableCell>
+                                      <InlineTextEditCell
+                                        value={row.track.children[0]?.horseName ?? ""}
+                                        label={row.horseName}
+                                        editable={effectiveCanEditHorseFields && row.track.children.length <= 1}
+                                        disabled={savingCellKey === `${row.track.id}-horseName`}
+                                        placeholder="סוס"
+                                        onCommit={(value) => handleInlineEditTrackChildField(row.track, "horseName", value)}
+                                        onOpen={() => openTrackManager(row.track)}
+                                        isActive={row.track.isActive}
+                                      />
                                     )}
                                     {columnVisibility.equipment && (
-                                      <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
-                                        {row.equipmentNotes}
-                                      </ClickableCell>
+                                      <InlineTextEditCell
+                                        value={row.track.children[0]?.equipmentNotes ?? ""}
+                                        label={row.equipmentNotes}
+                                        editable={effectiveCanEditHorseFields && row.track.children.length <= 1}
+                                        disabled={savingCellKey === `${row.track.id}-equipmentNotes`}
+                                        placeholder="ציוד"
+                                        onCommit={(value) =>
+                                          handleInlineEditTrackChildField(row.track, "equipmentNotes", value)
+                                        }
+                                        onOpen={() => openTrackManager(row.track)}
+                                        isActive={row.track.isActive}
+                                      />
                                     )}
                                     {columnVisibility.parentName && (
                                       <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
@@ -2779,11 +2996,18 @@ export function TeachingPracticeManager({
                                       </ClickableCell>
                                     )}
                                     {columnVisibility.notes && (
-                                      <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
-                                        <span className="block max-w-[220px] truncate" title={row.track.notes ?? undefined}>
-                                          {row.track.notes || "—"}
-                                        </span>
-                                      </ClickableCell>
+                                      <InlineTextEditCell
+                                        value={row.track.notes ?? ""}
+                                        label={row.track.notes || "—"}
+                                        editable={effectiveCanEdit}
+                                        disabled={savingCellKey === `${row.track.id}-notes`}
+                                        placeholder="הערות"
+                                        truncateClassName="max-w-[220px] truncate"
+                                        title={row.track.notes ?? undefined}
+                                        onCommit={(value) => handleInlineEditTrackNotes(row.track, value)}
+                                        onOpen={() => openTrackManager(row.track)}
+                                        isActive={row.track.isActive}
+                                      />
                                     )}
                                   </tr>
                                 ))}
@@ -4106,6 +4330,162 @@ function TraineeAssignmentCell({
         disabled={disabled}
         placeholder="בחרו חניך/ה"
         className="!px-2 !py-1 text-xs"
+      />
+    </td>
+  );
+}
+
+// Same shape/behavior as TraineeAssignmentCell, for this track's single
+// child assignment instead of a trainee slot - selecting a child commits
+// immediately (see handleInlineAssignTrackChild), same as a trainee pick.
+// Callers only ever pass editable=true when the track has at most one
+// TeachingPracticeTrackChild row (the normal case) - a track with more than
+// one falls back to editable=false here, showing the existing joined
+// "child1 / child2" text and leaving the drawer as the only editing path.
+function ChildAssignmentCell({
+  value,
+  label,
+  options,
+  editable,
+  disabled,
+  onAssign,
+  onOpen,
+  isActive = true,
+  sticky,
+}: {
+  value: string;
+  label: string;
+  options: SearchableSelectOption[];
+  editable: boolean;
+  disabled: boolean;
+  onAssign: (childId: string) => void;
+  onOpen?: () => void;
+  isActive?: boolean;
+  sticky?: boolean;
+}) {
+  if (!editable) {
+    if (onOpen) {
+      return (
+        <ClickableCell isActive={isActive} onOpen={onOpen} sticky={sticky}>
+          {label}
+        </ClickableCell>
+      );
+    }
+    return <td className={`px-2 py-2 ${sticky ? "sticky right-0 z-10 bg-card" : ""}`}>{label}</td>;
+  }
+  return (
+    <td
+      className={`max-w-[150px] px-2 py-2 ${sticky ? "sticky right-0 z-10 bg-card" : ""}`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <SearchableSelect
+        value={value}
+        options={options}
+        onChange={onAssign}
+        disabled={disabled}
+        placeholder="בחרו ילד/ה"
+        className="!px-2 !py-1 text-xs"
+      />
+    </td>
+  );
+}
+
+// A free-text table cell (horse / equipment / notes) that only commits on
+// blur or Enter, never per keystroke - a local `draft` buffer is the single
+// source of truth while focused, reset from `value` whenever the committed
+// value changes underneath it (e.g. after a save elsewhere triggers
+// refreshTracks). Escape restores `draft` to `value` and blurs without
+// committing (skipCommitRef guards the blur that Escape itself triggers, so
+// the reverted draft - not the stale pre-Escape text - is what would apply
+// if this ever fired a commit).
+function InlineTextEditCell({
+  value,
+  label,
+  editable,
+  disabled,
+  placeholder,
+  onCommit,
+  onOpen,
+  isActive = true,
+  sticky,
+  truncateClassName,
+  title,
+}: {
+  value: string;
+  label: string;
+  editable: boolean;
+  disabled: boolean;
+  placeholder?: string;
+  onCommit: (value: string) => void;
+  onOpen?: () => void;
+  isActive?: boolean;
+  sticky?: boolean;
+  // e.g. "max-w-[220px] truncate" for the notes column - left unset for
+  // horse/equipment, which never truncated in the read-only view either.
+  truncateClassName?: string;
+  title?: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  const skipCommitRef = useRef(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDraft(value);
+  }, [value]);
+
+  if (!editable) {
+    const content = truncateClassName ? (
+      <span className={`block ${truncateClassName}`} title={title}>
+        {label}
+      </span>
+    ) : (
+      label
+    );
+    if (onOpen) {
+      return (
+        <ClickableCell isActive={isActive} onOpen={onOpen} sticky={sticky}>
+          {content}
+        </ClickableCell>
+      );
+    }
+    return <td className={`px-2 py-2 ${sticky ? "sticky right-0 z-10 bg-card" : ""}`}>{content}</td>;
+  }
+
+  function commit() {
+    const trimmed = draft.trim();
+    if (trimmed === value.trim()) return;
+    onCommit(trimmed);
+  }
+
+  return (
+    <td
+      className={`px-2 py-2 ${sticky ? "sticky right-0 z-10 bg-card" : ""}`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          if (skipCommitRef.current) {
+            skipCommitRef.current = false;
+            return;
+          }
+          commit();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.currentTarget.blur();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            skipCommitRef.current = true;
+            setDraft(value);
+            e.currentTarget.blur();
+          }
+        }}
+        disabled={disabled}
+        placeholder={placeholder}
+        className="w-full min-w-[70px] rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50"
       />
     </td>
   );

@@ -478,8 +478,8 @@ model RidingLessonNote {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  ridingSlot     RidingSlot                       @relation(fields: [ridingSlotId], references: [id], onDelete: Cascade)
-  student        Student                          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  ridingSlot     RidingSlot                      @relation(fields: [ridingSlotId], references: [id], onDelete: Cascade)
+  student        Student                         @relation(fields: [studentId], references: [id], onDelete: Cascade)
   taughtStudents RidingLessonNoteTaughtStudent[]
 
   @@unique([ridingSlotId, studentId])
@@ -830,16 +830,22 @@ model TeachingPracticeTrackTrainee {
 // Default child(ren) + their default horse/equipment for this track - copied
 // (materialized) onto each generated lesson's TeachingPracticeChildAssignment
 // at generation time; never read live by an already-generated lesson.
+// childId is nullable so horse/equipment can be entered as a placeholder
+// before a child is known/chosen yet - a DB-level partial unique index (see
+// migration) enforces at most one such childless row per track, since the
+// @@unique below (Postgres treats each NULL as distinct) doesn't by itself
+// prevent more than one. Generation skips childless rows entirely -
+// TeachingPracticeChildAssignment.childId stays required/NOT NULL.
 model TeachingPracticeTrackChild {
   id             String   @id @default(cuid())
   trackId        String
-  childId        String
+  childId        String?
   horseName      String?
   equipmentNotes String?
   createdAt      DateTime @default(now())
 
-  track TeachingPracticeTrack @relation(fields: [trackId], references: [id], onDelete: Cascade)
-  child TeachingPracticeChild @relation(fields: [childId], references: [id], onDelete: Cascade)
+  track TeachingPracticeTrack  @relation(fields: [trackId], references: [id], onDelete: Cascade)
+  child TeachingPracticeChild? @relation(fields: [childId], references: [id], onDelete: Cascade)
 
   @@unique([trackId, childId])
   @@map("teaching_practice_track_children")
