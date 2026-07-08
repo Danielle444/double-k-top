@@ -23,10 +23,19 @@ export default async function InstructorPage() {
   ]);
 
   return (
-    // Widens from tablet upward (mobile portrait keeps today's max-w-lg) -
-    // BottomTabs gets the same ladder via its maxWidthClassName prop below,
-    // so the fixed bottom nav never mismatches this shell's width.
-    <div className="mx-auto flex min-h-screen w-full max-w-lg flex-col bg-background sm:max-w-xl md:max-w-3xl lg:max-w-4xl">
+    // Widens from tablet upward (mobile portrait keeps today's max-w-lg).
+    // Each tier's cap is set to that breakpoint's own viewport width (px
+    // arbitrary values, not max-w-3xl/4xl or max-w-screen-*, which Tailwind
+    // v4 doesn't ship - verified against node_modules/tailwindcss/theme.css,
+    // whose max-width scale is --container-* only, with no screen-based
+    // entries) - so the shell is effectively edge-to-edge (minus header/
+    // main's own px-4) right up until the next breakpoint, instead of
+    // leaving a visible unused margin on phone landscape and tablet sizes.
+    // xl:max-w-[1280px] still caps very wide desktop windows so lines don't
+    // grow unreasonably long. BottomTabs gets the same ladder via its
+    // maxWidthClassName prop below, so the fixed bottom nav never
+    // mismatches this shell's width.
+    <div className="mx-auto flex min-h-screen w-full max-w-lg flex-col bg-background sm:max-w-[640px] md:max-w-[768px] lg:max-w-[1024px] xl:max-w-[1280px]">
       <InstructorClient students={students} dutyTypes={dutyTypes} instructors={instructors} />
     </div>
   );

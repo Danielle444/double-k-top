@@ -704,7 +704,7 @@ export function InstructorClient({
         dotTabIds={hasUnreadNotifications || hasNewMessages ? (["more"] as MainTabId[]) : []}
         // Matches the widened shell in app/instructor/page.tsx so the fixed
         // bottom nav's width tracks the content above it at every breakpoint.
-        maxWidthClassName="max-w-lg sm:max-w-xl md:max-w-3xl lg:max-w-4xl"
+        maxWidthClassName="max-w-lg sm:max-w-[640px] md:max-w-[768px] lg:max-w-[1024px] xl:max-w-[1280px]"
       />
     </div>
   );
