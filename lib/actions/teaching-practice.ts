@@ -1348,6 +1348,141 @@ export async function generateTeachingPracticeLessonFromTrackAsInstructor(
 }
 
 // ---------------------------------------------------------------------------
+// Generate dates for a whole fixed-schedule block in one call - resolves a
+// header/group (lunge group, beginner-private group, beginner-group-lesson
+// group, or a single track) to its member track ids, then generates only
+// the lessons that don't already exist for each track+date pair. Purely
+// additive: reuses generateTeachingPracticeLessonFromTrackInternal per
+// track/date (so it inherits the same "works without trainees assigned
+// yet" behavior), and never touches a lesson that already exists for that
+// track+date - there is no DB unique constraint on (trackId, date), so
+// existence is always checked with a query before create.
+//
+// Beginner dates are deliberately resolved by (practiceType, groupName) -
+// the same group/type level as lunge - not by an individual
+// BEGINNER_GROUP track's groupTrackId. The product need is "set dates for
+// all of קבוצה א's private lessons" / "...group lessons" in one action, not
+// per individual beginner block.
+// ---------------------------------------------------------------------------
+
+export type TeachingPracticeDateBlockType =
+  | "LUNGE_GROUP"
+  | "BEGINNER_PRIVATE_GROUP"
+  | "BEGINNER_GROUP_LESSONS_GROUP"
+  | "SINGLE_TRACK";
+
+export interface TeachingPracticeDatesForBlockInput {
+  blockType: TeachingPracticeDateBlockType;
+  groupName?: string | null;
+  trackId?: string;
+  dates: string[];
+}
+
+export interface TeachingPracticeDatesForBlockResult extends ActionResult {
+  createdCount?: number;
+  skippedExistingCount?: number;
+  warnings?: string[];
+}
+
+const DATE_BLOCK_PRACTICE_TYPE: Partial<Record<TeachingPracticeDateBlockType, TeachingPracticeTypeValue>> = {
+  LUNGE_GROUP: "LUNGE",
+  BEGINNER_PRIVATE_GROUP: "BEGINNER_PRIVATE",
+  BEGINNER_GROUP_LESSONS_GROUP: "BEGINNER_GROUP",
+};
+
+const DATE_BLOCK_EMPTY_ERROR: Partial<Record<TeachingPracticeDateBlockType, string>> = {
+  LUNGE_GROUP: "לא נמצאו סלוטים פעילים בקבוצת הלונג׳ הזו",
+  BEGINNER_PRIVATE_GROUP: "לא נמצאו סלוטים פרטניים פעילים בקבוצה זו",
+  BEGINNER_GROUP_LESSONS_GROUP: "לא נמצאו סלוטים קבוצתיים פעילים בקבוצה זו",
+};
+
+async function resolveTeachingPracticeDateBlockTrackIds(
+  input: TeachingPracticeDatesForBlockInput
+): Promise<{ trackIds: string[] } | { error: string }> {
+  if (input.blockType === "SINGLE_TRACK") {
+    if (!input.trackId) return { error: "יש לבחור מסלול" };
+    const track = await prisma.teachingPracticeTrack.findUnique({ where: { id: input.trackId } });
+    if (!track) return { error: NOT_FOUND_TRACK };
+    if (!track.isActive) return { error: "לא ניתן ליצור שיעורים ממסלול לא פעיל" };
+    return { trackIds: [track.id] };
+  }
+
+  // LUNGE_GROUP / BEGINNER_PRIVATE_GROUP / BEGINNER_GROUP_LESSONS_GROUP all
+  // resolve the same way - every active track of the block's fixed
+  // practiceType sharing this groupName.
+  const practiceType = DATE_BLOCK_PRACTICE_TYPE[input.blockType];
+  if (!practiceType) return { error: "סוג בלוק לא תקין" };
+
+  const groupName = input.groupName ?? null;
+  const tracks = await prisma.teachingPracticeTrack.findMany({
+    where: { practiceType, groupName, isActive: true },
+    select: { id: true },
+  });
+  if (tracks.length === 0) {
+    return { error: DATE_BLOCK_EMPTY_ERROR[input.blockType] ?? "לא נמצאו סלוטים פעילים בקבוצה זו" };
+  }
+  return { trackIds: tracks.map((t) => t.id) };
+}
+
+async function setTeachingPracticeDatesForBlockInternal(
+  input: TeachingPracticeDatesForBlockInput
+): Promise<TeachingPracticeDatesForBlockResult> {
+  if (!Array.isArray(input.dates) || input.dates.length === 0) {
+    return { success: false, error: "יש לבחור לפחות תאריך אחד" };
+  }
+
+  const uniqueDateKeys = Array.from(new Set(input.dates));
+  const parsedDates: { key: string; date: Date }[] = [];
+  for (const key of uniqueDateKeys) {
+    const parsed = parseDateKey(key);
+    if (Number.isNaN(parsed.getTime())) {
+      return { success: false, error: `תאריך לא תקין: ${key}` };
+    }
+    parsedDates.push({ key, date: parsed });
+  }
+
+  const resolved = await resolveTeachingPracticeDateBlockTrackIds(input);
+  if ("error" in resolved) return { success: false, error: resolved.error };
+
+  let createdCount = 0;
+  let skippedExistingCount = 0;
+  const warnings: string[] = [];
+
+  // Sequential on purpose (never Promise.all) - each generated lesson's
+  // role-rotation depends on that same track's prior lesson count already
+  // being committed, same reasoning as the per-track "generate lessons"
+  // loop in the UI.
+  for (const trackId of resolved.trackIds) {
+    for (const { key, date } of parsedDates) {
+      const existing = await prisma.teachingPracticeLesson.findFirst({
+        where: { trackId, date },
+        select: { id: true },
+      });
+      if (existing) {
+        skippedExistingCount += 1;
+        continue;
+      }
+
+      const result = await generateTeachingPracticeLessonFromTrackInternal(trackId, key);
+      if (!result.success) {
+        warnings.push(`שגיאה ביצירת שיעור לתאריך ${key} (מסלול ${trackId}): ${result.error ?? "אירעה שגיאה"}`);
+        continue;
+      }
+      createdCount += 1;
+    }
+  }
+
+  return { success: true, createdCount, skippedExistingCount, warnings };
+}
+
+export async function setTeachingPracticeDatesForBlockAsAdmin(
+  input: TeachingPracticeDatesForBlockInput
+): Promise<TeachingPracticeDatesForBlockResult> {
+  await requireAdmin();
+  return setTeachingPracticeDatesForBlockInternal(input);
+}
+
+// ---------------------------------------------------------------------------
 // Lesson publish/unpublish
 // ---------------------------------------------------------------------------
 

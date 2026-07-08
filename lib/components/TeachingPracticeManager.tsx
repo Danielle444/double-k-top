@@ -43,6 +43,7 @@ import {
   listTeachingPracticeTracksForInstructor,
   setTeachingPracticeChildActiveAsAdmin,
   setTeachingPracticeChildActiveAsInstructor,
+  setTeachingPracticeDatesForBlockAsAdmin,
   setTeachingPracticeLessonPublishedAsAdmin,
   setTeachingPracticeLessonPublishedAsInstructor,
   setTeachingPracticeTrackActiveAsAdmin,
@@ -59,6 +60,7 @@ import {
   updateTeachingPracticeTrackAsInstructor,
   type TeachingPracticeChildInput,
   type TeachingPracticeChildRow,
+  type TeachingPracticeDateBlockType,
   type TeachingPracticeGroupBlockInput,
   type TeachingPracticeLessonDetail,
   type TeachingPracticeLessonInput,
@@ -1219,6 +1221,82 @@ export function TeachingPracticeManager({
     setLessonDates((prev) => prev.filter((d) => d !== date));
   }
 
+  // -------------------------------------------------------------------------
+  // Block/header date assignment (admin-only) - lets an admin define dates
+  // for a whole lunge group, or a whole beginner-private/beginner-group
+  // set within one group (א/ב), in one call instead of generating dates one
+  // track at a time. Reuses the same additive, skip-if-exists server action
+  // for every block type; the modal itself doesn't need to know which
+  // tracks are involved.
+  // -------------------------------------------------------------------------
+
+  interface BlockDateTarget {
+    blockType: TeachingPracticeDateBlockType;
+    groupName?: string | null;
+    label: string;
+  }
+
+  const [blockDateTarget, setBlockDateTarget] = useState<BlockDateTarget | null>(null);
+  const [blockDateDraft, setBlockDateDraft] = useState("");
+  const [blockDates, setBlockDates] = useState<string[]>([]);
+  const [blockDateError, setBlockDateError] = useState<string | null>(null);
+  const [blockDateSummary, setBlockDateSummary] = useState<{
+    createdCount: number;
+    skippedExistingCount: number;
+    warnings: string[];
+  } | null>(null);
+  const [isBlockDatePending, startBlockDateTransition] = useTransition();
+
+  function openBlockDateModal(target: BlockDateTarget) {
+    setBlockDateTarget(target);
+    setBlockDateDraft("");
+    setBlockDates([]);
+    setBlockDateError(null);
+    setBlockDateSummary(null);
+  }
+
+  function closeBlockDateModal() {
+    setBlockDateTarget(null);
+  }
+
+  function addBlockDate() {
+    if (!blockDateDraft) return;
+    setBlockDates((prev) => (prev.includes(blockDateDraft) ? prev : [...prev, blockDateDraft].sort()));
+    setBlockDateDraft("");
+  }
+
+  function removeBlockDate(date: string) {
+    setBlockDates((prev) => prev.filter((d) => d !== date));
+  }
+
+  function handleSubmitBlockDates() {
+    if (!blockDateTarget) return;
+    if (blockDates.length === 0) {
+      setBlockDateError("יש לבחור לפחות תאריך אחד");
+      return;
+    }
+    setBlockDateError(null);
+    setBlockDateSummary(null);
+    startBlockDateTransition(async () => {
+      const result = await setTeachingPracticeDatesForBlockAsAdmin({
+        blockType: blockDateTarget.blockType,
+        groupName: blockDateTarget.groupName,
+        dates: blockDates,
+      });
+      if (!result.success) {
+        setBlockDateError(result.error ?? "אירעה שגיאה");
+        return;
+      }
+      setBlockDateSummary({
+        createdCount: result.createdCount ?? 0,
+        skippedExistingCount: result.skippedExistingCount ?? 0,
+        warnings: result.warnings ?? [],
+      });
+      setBlockDates([]);
+      await Promise.all([refreshTracks(), refreshLessons()]);
+    });
+  }
+
   // Generates one lesson per selected date, sequentially (never
   // Promise.all) - occurrenceIndex/rotation for each date depends on the
   // previous date's lesson having already committed, so calls must be
@@ -1905,8 +1983,23 @@ export function TeachingPracticeManager({
                   const rows = buildAssignmentRows("LUNGE", section.groupValue);
                   return (
                     <div key={`lunge-${section.groupValue ?? "none"}`}>
-                      <h3 className="mb-2 rounded-lg bg-secondary px-3 py-2 text-sm font-bold text-secondary-foreground">
-                        {section.label}
+                      <h3 className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary px-3 py-2 text-sm font-bold text-secondary-foreground">
+                        <span>{section.label}</span>
+                        {role === "admin" && (
+                          <Button
+                            variant="secondary"
+                            className="!px-2 !py-1 !text-xs font-normal"
+                            onClick={() =>
+                              openBlockDateModal({
+                                blockType: "LUNGE_GROUP",
+                                groupName: section.groupValue,
+                                label: section.label,
+                              })
+                            }
+                          >
+                            הגדרת תאריכים
+                          </Button>
+                        )}
                       </h3>
                       {rows.length === 0 ? (
                         <p className="rounded-xl border border-dashed border-border bg-card p-3 text-center text-xs text-muted-foreground">
@@ -2062,10 +2155,53 @@ export function TeachingPracticeManager({
                 .map((section) => {
                   const blocks = buildBeginnerBlocks(section.groupValue);
                   const unlinkedPrivate = buildUnlinkedPrivateTracks(section.groupValue);
+                  // Date assignment for beginners is by (practiceType,
+                  // groupName), not per individual block - one action for
+                  // every private track in this group, one for every group
+                  // track in this group, matching how LUNGE_GROUP already
+                  // works. Buttons only appear when the group actually has
+                  // that kind of track to act on.
+                  const hasPrivateTracks =
+                    blocks.some((b) => b.privateRows.length > 0) || unlinkedPrivate.length > 0;
+                  const hasGroupTracks = blocks.length > 0;
                   return (
                     <div key={`beginner-${section.groupValue ?? "none"}`}>
-                      <h3 className="mb-2 rounded-lg bg-secondary px-3 py-2 text-sm font-bold text-secondary-foreground">
-                        {section.label}
+                      <h3 className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary px-3 py-2 text-sm font-bold text-secondary-foreground">
+                        <span>{section.label}</span>
+                        {role === "admin" && (hasPrivateTracks || hasGroupTracks) && (
+                          <div className="flex flex-wrap gap-2">
+                            {hasPrivateTracks && (
+                              <Button
+                                variant="secondary"
+                                className="!px-2 !py-1 !text-xs font-normal"
+                                onClick={() =>
+                                  openBlockDateModal({
+                                    blockType: "BEGINNER_PRIVATE_GROUP",
+                                    groupName: section.groupValue,
+                                    label: `${section.label} · פרטני`,
+                                  })
+                                }
+                              >
+                                הגדרת תאריכים - פרטני
+                              </Button>
+                            )}
+                            {hasGroupTracks && (
+                              <Button
+                                variant="secondary"
+                                className="!px-2 !py-1 !text-xs font-normal"
+                                onClick={() =>
+                                  openBlockDateModal({
+                                    blockType: "BEGINNER_GROUP_LESSONS_GROUP",
+                                    groupName: section.groupValue,
+                                    label: `${section.label} · קבוצתי`,
+                                  })
+                                }
+                              >
+                                הגדרת תאריכים - קבוצתי
+                              </Button>
+                            )}
+                          </div>
+                        )}
                       </h3>
                       <p className="mb-2 text-xs text-muted-foreground">
                         כל בלוק מציג שיעור קבוצתי אחד (עמודת &quot;קבוצתי&quot;, מוצגת פעם אחת לכל בלוק) יחד
@@ -2863,6 +2999,68 @@ export function TeachingPracticeManager({
                     </p>
                   )}
                 </div>
+                )}
+              </div>
+            </Modal>
+          )}
+
+          {blockDateTarget && (
+            <Modal open title={`הגדרת תאריכים - ${blockDateTarget.label}`} onClose={closeBlockDateModal}>
+              <div className="flex flex-col gap-3">
+                <p className="text-xs text-muted-foreground">
+                  התאריכים שייבחרו יצרו שיעורים חסרים בלבד עבור כל הסלוטים הפעילים בבלוק הזה - שיעורים
+                  שכבר קיימים לתאריך זה לא יימחקו ולא ישתנו. ניתן להגדיר תאריכים גם לפני שיבוץ חניכים.
+                </p>
+                {blockDateError && <p className="text-sm text-danger">{blockDateError}</p>}
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="flex flex-col gap-1 text-sm">
+                    הוספת תאריך
+                    <input
+                      type="date"
+                      value={blockDateDraft}
+                      onChange={(e) => setBlockDateDraft(e.target.value)}
+                      className="rounded-lg border border-border px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <Button variant="secondary" className="!px-3 !py-1.5 !text-sm" onClick={addBlockDate}>
+                    הוספה לרשימה
+                  </Button>
+                </div>
+                {blockDates.length > 0 && (
+                  <ul className="flex flex-wrap gap-2">
+                    {blockDates.map((date) => (
+                      <li
+                        key={date}
+                        className="flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-xs text-card-foreground"
+                      >
+                        {formatHebrewDate(parseDateKey(date))}
+                        <button
+                          type="button"
+                          onClick={() => removeBlockDate(date)}
+                          className="text-muted-foreground hover:text-danger"
+                          aria-label={`הסרת ${date}`}
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <Button disabled={isBlockDatePending || blockDates.length === 0} onClick={handleSubmitBlockDates}>
+                  הגדרת {blockDates.length > 1 ? `${blockDates.length} תאריכים` : "תאריך"}
+                </Button>
+                {blockDateSummary && (
+                  <div className="rounded-lg bg-muted p-3 text-xs text-card-foreground">
+                    <p>נוצרו {blockDateSummary.createdCount} שיעורים</p>
+                    <p>דולגו {blockDateSummary.skippedExistingCount} שיעורים שכבר קיימים</p>
+                    {blockDateSummary.warnings.length > 0 && (
+                      <ul className="mt-1 list-inside list-disc text-warning">
+                        {blockDateSummary.warnings.map((w, i) => (
+                          <li key={i}>{w}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 )}
               </div>
             </Modal>
