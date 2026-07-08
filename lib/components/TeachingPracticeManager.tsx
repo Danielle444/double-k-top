@@ -34,6 +34,7 @@ import {
   generateTeachingPracticeLessonFromTrackAsInstructor,
   getTeachingPracticeLessonDetailForAdmin,
   getTeachingPracticeLessonDetailForInstructor,
+  getTeachingPracticeScheduleCheckForAdmin,
   listTeachingPracticeChildrenForAdmin,
   listTeachingPracticeChildrenForInstructor,
   listTeachingPracticeLessonsForAdmin,
@@ -62,6 +63,7 @@ import {
   type TeachingPracticeLessonDetail,
   type TeachingPracticeLessonInput,
   type TeachingPracticeLessonSummary,
+  type TeachingPracticeTraineeScheduleCheck,
   type TeachingPracticeTrackInput,
   type TeachingPracticeTrackSummary,
 } from "@/lib/actions/teaching-practice";
@@ -75,12 +77,18 @@ import {
 } from "@/lib/actions/teaching-practice-child-import";
 
 type Role = "admin" | "instructor";
-type Tab = "tracks" | "lessons" | "children";
+type Tab = "tracks" | "lessons" | "children" | "scheduleCheck";
 
 const TAB_LABELS: Record<Tab, string> = {
   tracks: "מבנה קבוע",
   lessons: "שיעורים שנוצרו",
   children: "ילדים",
+  scheduleCheck: "בדיקת שיבוץ",
+};
+
+const SCHEDULE_CHECK_WARNING_LABELS: Record<"overlap" | "short_gap", string> = {
+  overlap: "חפיפה בזמנים",
+  short_gap: "מרווח קצר מדי בין התנסויות",
 };
 
 const PRACTICE_TYPE_LABELS: Record<TeachingPracticeTypeValue, string> = {
@@ -499,6 +507,12 @@ export function TeachingPracticeManager({
   const [tracks, setTracks] = useState<TeachingPracticeTrackSummary[] | null>(null);
   const [lessons, setLessons] = useState<TeachingPracticeLessonSummary[] | null>(null);
   const [children, setChildren] = useState<TeachingPracticeChildRow[] | null>(null);
+  // Admin-only (getTeachingPracticeScheduleCheckForAdmin has no instructor
+  // variant yet, see report) - fetched lazily on first visit to the tab
+  // rather than in the initial Promise.all below, since it's a heavier
+  // cross-lesson query most sessions never open.
+  const [scheduleCheck, setScheduleCheck] = useState<TeachingPracticeTraineeScheduleCheck[] | null>(null);
+  const [scheduleCheckLoading, setScheduleCheckLoading] = useState(false);
 
   async function refreshTracks() {
     const fresh =
@@ -542,6 +556,35 @@ export function TeachingPracticeManager({
       cancelled = true;
     };
   }, [role, actorId]);
+
+  useEffect(() => {
+    if (tab !== "scheduleCheck" || role !== "admin" || scheduleCheck !== null) return;
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setScheduleCheckLoading(true);
+    getTeachingPracticeScheduleCheckForAdmin()
+      .then((data) => {
+        if (!cancelled) setScheduleCheck(data);
+      })
+      .finally(() => {
+        if (!cancelled) setScheduleCheckLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, role, scheduleCheck]);
+
+  // Trainees with at least one warning are surfaced first so the panel reads
+  // as a punch list rather than a full roster dump - Array#sort is stable, so
+  // trainees within each group keep the server's alphabetical order.
+  const scheduleCheckSorted = useMemo(() => {
+    if (!scheduleCheck) return null;
+    return [...scheduleCheck].sort((a, b) => {
+      const aHasWarnings = a.timeline.some((entry) => entry.warnings.length > 0) ? 0 : 1;
+      const bHasWarnings = b.timeline.some((entry) => entry.warnings.length > 0) ? 0 : 1;
+      return aHasWarnings - bHasWarnings;
+    });
+  }, [scheduleCheck]);
 
   // Grouped by date for display only (already sorted [date, startTime] by
   // the server) - parallel lessons at the same date/time are never merged,
@@ -1395,7 +1438,12 @@ export function TeachingPracticeManager({
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap gap-2">
-          {(Object.keys(TAB_LABELS) as Tab[]).map((t) => (
+          {(Object.keys(TAB_LABELS) as Tab[])
+            // scheduleCheck has no instructor-facing action yet (admin-only
+            // read, see getTeachingPracticeScheduleCheckForAdmin) - hidden
+            // rather than shown-but-erroring for instructors.
+            .filter((t) => t !== "scheduleCheck" || role === "admin")
+            .map((t) => (
             <button
               key={t}
               type="button"
@@ -3284,6 +3332,67 @@ export function TeachingPracticeManager({
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {tab === "scheduleCheck" && (
+        <div className="flex flex-col gap-4">
+          <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+            בדיקת שיבוץ לחניכים - איתור חפיפות ומרווחים קצרים מדי בין כל סוגי ההתנסות (לונג׳, שיעור פרטני, שיעור
+            קבוצתי) יחד, לפי כל השיעורים שנוצרו כולל טרם פורסמו. תצוגה בלבד - אינה חוסמת שמירה או פרסום.
+          </p>
+          {scheduleCheckLoading && <p className="text-sm text-muted-foreground">טוען...</p>}
+          {!scheduleCheckLoading && scheduleCheckSorted && scheduleCheckSorted.length === 0 && (
+            <p className="text-sm text-muted-foreground">אין עדיין שיבוצי חניכים להתנסויות מתחילים.</p>
+          )}
+          {!scheduleCheckLoading &&
+            scheduleCheckSorted &&
+            scheduleCheckSorted.map((trainee) => {
+              const hasWarnings = trainee.timeline.some((entry) => entry.warnings.length > 0);
+              return (
+                <div key={trainee.traineeId} className="rounded-xl border border-border bg-card p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-card-foreground">{trainee.traineeName}</h3>
+                    {hasWarnings ? (
+                      <span className="rounded-full bg-danger-muted px-2 py-0.5 text-xs font-medium text-danger">
+                        יש התראות
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">תקין</span>
+                    )}
+                  </div>
+                  <div className="mt-2 flex flex-col gap-1">
+                    {trainee.timeline.map((entry) => (
+                      <div
+                        key={entry.lessonId}
+                        className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-muted/50 px-2 py-1.5 text-xs"
+                      >
+                        <span className="font-medium text-card-foreground">
+                          {formatHebrewDate(parseDateKey(entry.date))}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {entry.startTime}-{entry.endTime}
+                        </span>
+                        <span className="text-muted-foreground">{PRACTICE_TYPE_LABELS[entry.practiceType]}</span>
+                        <span className="text-muted-foreground">{ROLE_LABELS[entry.role]}</span>
+                        {entry.warnings.map((warning, index) => (
+                          <span
+                            key={index}
+                            className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                              warning.kind === "overlap"
+                                ? "bg-danger-muted text-danger"
+                                : "bg-warning-muted text-warning"
+                            }`}
+                          >
+                            {SCHEDULE_CHECK_WARNING_LABELS[warning.kind]}
+                          </span>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
         </div>
       )}
     </div>

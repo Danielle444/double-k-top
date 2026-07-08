@@ -12,6 +12,10 @@ import {
   type TeachingPracticeRoleValue,
   type TeachingPracticeTypeValue,
 } from "@/lib/teaching-practice-rotation";
+import {
+  attachTeachingPracticeScheduleWarnings,
+  type TeachingPracticeScheduleWarning,
+} from "@/lib/teaching-practice-schedule-check";
 
 // Deliberately not re-exported from here: this is a "use server" module, and
 // Next.js's server-actions transform scans every export to build a client
@@ -1587,4 +1591,84 @@ export async function setTeachingPracticeLessonChildAssignmentsAsInstructor(
   }
 
   return setTeachingPracticeLessonChildAssignmentsInternal(lessonId, rows);
+}
+
+// ---------------------------------------------------------------------------
+// Schedule quality check ("בדיקת שיבוץ") - read-only, trainee timeline only
+// (Stage 1). Deliberately merges all three practiceType values into one
+// per-trainee timeline instead of checking each type separately, since the
+// actual risk is a lunge slot overlapping a beginner private/group slot, not
+// just conflicts within one type. Deliberately includes lessons regardless
+// of isPublished - this check exists specifically to catch problems before
+// publishing, so filtering out drafts would defeat the point. Advisory only:
+// never blocks any save/write action.
+// ---------------------------------------------------------------------------
+
+export interface TeachingPracticeScheduleCheckEntry {
+  lessonId: string;
+  date: string;
+  practiceType: TeachingPracticeTypeValue;
+  role: TeachingPracticeRoleValue;
+  startTime: string;
+  endTime: string;
+  warnings: TeachingPracticeScheduleWarning[];
+}
+
+export interface TeachingPracticeTraineeScheduleCheck {
+  traineeId: string;
+  traineeName: string;
+  timeline: TeachingPracticeScheduleCheckEntry[];
+}
+
+export async function getTeachingPracticeScheduleCheckForAdmin(): Promise<
+  TeachingPracticeTraineeScheduleCheck[]
+> {
+  await requireAdmin();
+
+  const participants = await prisma.teachingPracticeParticipant.findMany({
+    include: {
+      trainee: { select: { fullName: true } },
+      lesson: { select: { id: true, date: true, startTime: true, endTime: true, practiceType: true } },
+    },
+  });
+
+  const entriesByTrainee = new Map<
+    string,
+    {
+      traineeName: string;
+      entries: {
+        lessonId: string;
+        date: string;
+        startTime: string;
+        endTime: string;
+        practiceType: TeachingPracticeTypeValue;
+        role: TeachingPracticeRoleValue;
+      }[];
+    }
+  >();
+
+  for (const p of participants) {
+    const entry = {
+      lessonId: p.lesson.id,
+      date: dateKey(p.lesson.date),
+      startTime: p.lesson.startTime,
+      endTime: p.lesson.endTime,
+      practiceType: p.lesson.practiceType,
+      role: p.role,
+    };
+    const existing = entriesByTrainee.get(p.traineeId);
+    if (existing) {
+      existing.entries.push(entry);
+    } else {
+      entriesByTrainee.set(p.traineeId, { traineeName: p.trainee.fullName, entries: [entry] });
+    }
+  }
+
+  const result: TeachingPracticeTraineeScheduleCheck[] = [];
+  for (const [traineeId, { traineeName, entries }] of entriesByTrainee) {
+    result.push({ traineeId, traineeName, timeline: attachTeachingPracticeScheduleWarnings(entries) });
+  }
+
+  result.sort((a, b) => a.traineeName.localeCompare(b.traineeName, "he"));
+  return result;
 }
