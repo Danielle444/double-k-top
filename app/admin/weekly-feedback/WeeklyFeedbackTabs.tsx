@@ -415,14 +415,69 @@ export function WeeklyFeedbackTabs({
     });
   }
 
+  // Section names in display order (order of first appearance in
+  // draft.questions), matching the grouping used to render the question
+  // list below.
+  function sectionDisplayOrder(questions: WeeklyFeedbackDraftQuestion[]): string[] {
+    const order: string[] = [];
+    for (const q of questions) {
+      if (!order.includes(q.section)) order.push(q.section);
+    }
+    return order;
+  }
+
+  // Moving across section boundaries via the flat sortOrder list is risky
+  // (sections aren't guaranteed contiguous in sortOrder, so a naive adjacent
+  // swap in the full list could silently move a question into a different
+  // section's visual group). To avoid that, question up/down only swaps the
+  // question with its neighbor within the same section's displayed order -
+  // found by swapping those two ids' positions in the full id list (leaving
+  // every other id's position untouched), never touching other sections.
   function handleMoveQuestion(questionId: string, direction: "up" | "down") {
     if (!draft) return;
-    const ids = draft.questions.map((q) => q.id);
-    const index = ids.indexOf(questionId);
-    const swapWith = direction === "up" ? index - 1 : index + 1;
-    if (index === -1 || swapWith < 0 || swapWith >= ids.length) return;
-    const reordered = [...ids];
-    [reordered[index], reordered[swapWith]] = [reordered[swapWith], reordered[index]];
+    const question = draft.questions.find((q) => q.id === questionId);
+    if (!question) return;
+    const sectionIds = draft.questions.filter((q) => q.section === question.section).map((q) => q.id);
+    const sectionIndex = sectionIds.indexOf(questionId);
+    const swapWithIndex = direction === "up" ? sectionIndex - 1 : sectionIndex + 1;
+    if (sectionIndex === -1 || swapWithIndex < 0 || swapWithIndex >= sectionIds.length) return;
+    const targetId = sectionIds[swapWithIndex];
+
+    const fullIds = draft.questions.map((q) => q.id);
+    const posA = fullIds.indexOf(questionId);
+    const posB = fullIds.indexOf(targetId);
+    const reordered = [...fullIds];
+    [reordered[posA], reordered[posB]] = [reordered[posB], reordered[posA]];
+
+    setQuestionActionError(null);
+    startQuestionMutation(async () => {
+      const result = await reorderWeeklyFeedbackQuestions(draft.id, reordered);
+      if (!result.success) {
+        setQuestionActionError(result.error ?? "אירעה שגיאה");
+        return;
+      }
+      await refreshDraft();
+    });
+  }
+
+  // Moves an entire section's questions as one block, swapping it with the
+  // adjacent section in display order. Rebuilds the full id order by
+  // concatenating each section's current questions (in their existing
+  // relative order) block-by-block in the new section order - this also
+  // makes every section's questions contiguous in sortOrder going forward,
+  // which keeps this operation simple and stable to repeat.
+  function handleMoveSection(section: string, direction: "up" | "down") {
+    if (!draft) return;
+    const order = sectionDisplayOrder(draft.questions);
+    const index = order.indexOf(section);
+    const swapWithIndex = direction === "up" ? index - 1 : index + 1;
+    if (index === -1 || swapWithIndex < 0 || swapWithIndex >= order.length) return;
+
+    const newOrder = [...order];
+    [newOrder[index], newOrder[swapWithIndex]] = [newOrder[swapWithIndex], newOrder[index]];
+
+    const reordered = newOrder.flatMap((s) => draft.questions.filter((q) => q.section === s).map((q) => q.id));
+
     setQuestionActionError(null);
     startQuestionMutation(async () => {
       const result = await reorderWeeklyFeedbackQuestions(draft.id, reordered);
@@ -836,19 +891,46 @@ export function WeeklyFeedbackTabs({
               {questionActionError && <p className="text-sm text-danger">{questionActionError}</p>}
 
               <div className="flex flex-col gap-3">
-                {Object.entries(
-                  draft.questions.reduce<Record<string, typeof draft.questions>>((acc, q) => {
-                    (acc[q.section] ??= []).push(q);
-                    return acc;
-                  }, {})
-                ).map(([section, questions]) => (
+                {(() => {
+                  const sectionOrderList = sectionDisplayOrder(draft.questions);
+                  return Object.entries(
+                    draft.questions.reduce<Record<string, typeof draft.questions>>((acc, q) => {
+                      (acc[q.section] ??= []).push(q);
+                      return acc;
+                    }, {})
+                  ).map(([section, questions]) => {
+                    const sectionIndex = sectionOrderList.indexOf(section);
+                    const isFirstSection = sectionIndex === 0;
+                    const isLastSection = sectionIndex === sectionOrderList.length - 1;
+                    return (
                   <div key={section} className="rounded-xl border border-border bg-card p-4">
-                    <h3 className="mb-2 text-sm font-bold text-card-foreground">{section}</h3>
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-sm font-bold text-card-foreground">{section}</h3>
+                      {isQuestionsEditable(draft) && (
+                        <div className="flex gap-1">
+                          <Button
+                            variant="ghost"
+                            className="!px-2 !py-0.5 !text-xs"
+                            disabled={isQuestionMutating || isFirstSection}
+                            onClick={() => handleMoveSection(section, "up")}
+                          >
+                            הזז מקטע למעלה
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            className="!px-2 !py-0.5 !text-xs"
+                            disabled={isQuestionMutating || isLastSection}
+                            onClick={() => handleMoveSection(section, "down")}
+                          >
+                            הזז מקטע למטה
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                     <div className="flex flex-col gap-2">
-                      {questions.map((q) => {
-                        const globalIndex = draft.questions.findIndex((x) => x.id === q.id);
-                        const isFirst = globalIndex === 0;
-                        const isLast = globalIndex === draft.questions.length - 1;
+                      {questions.map((q, sectionQuestionIndex) => {
+                        const isFirst = sectionQuestionIndex === 0;
+                        const isLast = sectionQuestionIndex === questions.length - 1;
                         const isEditingThis = editingQuestionId === q.id;
 
                         if (!isQuestionsEditable(draft)) {
@@ -942,7 +1024,7 @@ export function WeeklyFeedbackTabs({
                                 disabled={isQuestionMutating || isFirst}
                                 onClick={() => handleMoveQuestion(q.id, "up")}
                               >
-                                ⬆
+                                למעלה
                               </Button>
                               <Button
                                 variant="ghost"
@@ -950,7 +1032,7 @@ export function WeeklyFeedbackTabs({
                                 disabled={isQuestionMutating || isLast}
                                 onClick={() => handleMoveQuestion(q.id, "down")}
                               >
-                                ⬇
+                                למטה
                               </Button>
                               <Button
                                 variant="ghost"
@@ -974,7 +1056,9 @@ export function WeeklyFeedbackTabs({
                       })}
                     </div>
                   </div>
-                ))}
+                    );
+                  });
+                })()}
               </div>
 
               {isQuestionsEditable(draft) && (
