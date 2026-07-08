@@ -92,6 +92,172 @@ const GROUP_OPTIONS: { value: string; label: string }[] = [
   { value: "ב", label: "קבוצה ב" },
 ];
 
+// Stage B (+ correction): column visibility for the LUNGE / Beginners-block /
+// unlinked-private tables in the "tracks" tab only - a pure client-side
+// display preference (localStorage), never sent to the server, never
+// affecting which data is fetched. Every column in every one of these three
+// tables is toggleable now, including the ones that used to be permanently
+// visible - a single key drives the identically-meaning column in every
+// table it appears in (e.g. "טלפון" hides everywhere at once), except the
+// three time columns, which get their own key each since "שעה"/"שעה
+// לקבוצתי"/"שעה לפרטני" are visually/positionally distinct per table (see
+// TABLE_COLUMN_KEYS below for exactly which keys apply to which table).
+type TrackColumnKey =
+  | "lungeTime"
+  | "groupTime"
+  | "privateTime"
+  | "leadTrainee"
+  | "assistantTrainee"
+  | "childFirstName"
+  | "childLastName"
+  | "age"
+  | "gender"
+  | "horse"
+  | "equipment"
+  | "parentName"
+  | "parentPhone";
+
+// "חניך מדריך" (LUNGE) and "חניך מתרגל" (Beginners/unlinked) share one key
+// (leadTrainee) per the product decision - same slot-0 concept, just a
+// different Hebrew word per practice type - so the panel shows both words
+// together for that one entry.
+const ALL_TRACK_COLUMNS: { key: TrackColumnKey; label: string }[] = [
+  { key: "lungeTime", label: "שעה (לונג׳)" },
+  { key: "groupTime", label: "שעה לקבוצתי" },
+  { key: "privateTime", label: "שעה לפרטני" },
+  { key: "leadTrainee", label: "חניך מדריך / חניך מתרגל" },
+  { key: "assistantTrainee", label: "עוזר מדריך" },
+  { key: "childFirstName", label: "שם הילד" },
+  { key: "childLastName", label: "שם משפחה" },
+  { key: "age", label: "גיל" },
+  { key: "gender", label: "מין" },
+  { key: "horse", label: "סוס" },
+  { key: "equipment", label: "ציוד" },
+  { key: "parentName", label: "שם ההורה" },
+  { key: "parentPhone", label: "טלפון" },
+];
+
+// Which columns actually appear in each table - used both for the "don't
+// let a table go fully empty" safety rule and for min-width/colSpan math.
+// Beginners' own "פרטני" side (everything except groupTime) is exposed
+// separately since the merged header/empty-block colSpan only ever needs to
+// span that side, not the group column too.
+const LUNGE_COLUMN_KEYS: TrackColumnKey[] = [
+  "lungeTime",
+  "leadTrainee",
+  "assistantTrainee",
+  "childFirstName",
+  "childLastName",
+  "age",
+  "gender",
+  "horse",
+  "equipment",
+  "parentName",
+  "parentPhone",
+];
+const BEGINNER_PRIVATE_SIDE_COLUMN_KEYS: TrackColumnKey[] = [
+  "privateTime",
+  "leadTrainee",
+  "assistantTrainee",
+  "childFirstName",
+  "childLastName",
+  "age",
+  "gender",
+  "horse",
+  "equipment",
+  "parentName",
+  "parentPhone",
+];
+const BEGINNER_BLOCK_COLUMN_KEYS: TrackColumnKey[] = ["groupTime", ...BEGINNER_PRIVATE_SIDE_COLUMN_KEYS];
+const UNLINKED_COLUMN_KEYS: TrackColumnKey[] = BEGINNER_PRIVATE_SIDE_COLUMN_KEYS;
+
+const TABLES_BY_COLUMN_KEYS: TrackColumnKey[][] = [
+  LUNGE_COLUMN_KEYS,
+  BEGINNER_BLOCK_COLUMN_KEYS,
+  UNLINKED_COLUMN_KEYS,
+];
+
+type TrackColumnVisibility = Record<TrackColumnKey, boolean>;
+
+// Nothing hidden until the user deliberately hides something - a first-time
+// visitor (or anyone whose stored preference fails to parse) always sees
+// every column.
+const DEFAULT_TRACK_COLUMN_VISIBILITY: TrackColumnVisibility = {
+  lungeTime: true,
+  groupTime: true,
+  privateTime: true,
+  leadTrainee: true,
+  assistantTrainee: true,
+  childFirstName: true,
+  childLastName: true,
+  age: true,
+  gender: true,
+  horse: true,
+  equipment: true,
+  parentName: true,
+  parentPhone: true,
+};
+
+// Bumped to v2 - the column set changed shape (every column is now part of
+// this map, not just the previously-optional ones), so an old v1 value
+// would otherwise be silently misread as "these newly-hideable columns are
+// hidden" for anyone who'd previously hidden something. A fresh key means
+// everyone simply starts over at all-visible, which matches "all columns
+// visible by default" regardless of any prior v1 preference.
+const TRACK_COLUMN_VISIBILITY_STORAGE_KEY = "duty-manager:teaching-practice-columns:v2";
+
+// Reads the stored preference defensively: missing key, malformed JSON, a
+// non-object value, or unknown/non-boolean fields all safely fall back to
+// "visible" for that column rather than throwing - a corrupt or foreign
+// localStorage value can never crash this screen or hide a column the user
+// never asked to hide. Only known keys are ever copied over, so a future
+// rename/removal of a column key just makes the stale stored value inert
+// instead of leaking unexpected keys into state.
+function loadTrackColumnVisibility(): TrackColumnVisibility {
+  if (typeof window === "undefined") return DEFAULT_TRACK_COLUMN_VISIBILITY;
+  try {
+    const raw = window.localStorage.getItem(TRACK_COLUMN_VISIBILITY_STORAGE_KEY);
+    if (!raw) return DEFAULT_TRACK_COLUMN_VISIBILITY;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return DEFAULT_TRACK_COLUMN_VISIBILITY;
+    const next = { ...DEFAULT_TRACK_COLUMN_VISIBILITY };
+    for (const col of ALL_TRACK_COLUMNS) {
+      const value = (parsed as Record<string, unknown>)[col.key];
+      if (typeof value === "boolean") next[col.key] = value;
+    }
+    return next;
+  } catch {
+    return DEFAULT_TRACK_COLUMN_VISIBILITY;
+  }
+}
+
+// Safety rule: a table may never end up with zero visible columns. Checked
+// against every table a given key belongs to (a shared key like "גיל"
+// affects three tables at once) - if hiding this key would leave ANY of
+// them empty, the toggle is refused outright rather than silently
+// re-showing something else to compensate.
+function wouldEmptyAnyTrackTable(next: TrackColumnVisibility): boolean {
+  return TABLES_BY_COLUMN_KEYS.some((keys) => !keys.some((key) => next[key]));
+}
+
+// Rough per-column width budget for table min-width - not pixel-exact, just
+// enough that hiding columns visibly gives back horizontal space instead of
+// leaving the table stretched to its old width. Sticky-column/RTL behavior
+// itself is untouched by this - only the number fed into min-width changes,
+// and if the sticky (first/time) column itself is hidden, the table simply
+// loses its pinned-while-scrolling column until it's shown again - it stays
+// fully usable either way, just without that one convenience.
+const COLUMN_MIN_WIDTH_PX = 75;
+const TABLE_MIN_WIDTH_BASE_PX = 160;
+
+function visibleColumnCount(keys: TrackColumnKey[], visibility: TrackColumnVisibility): number {
+  return keys.filter((key) => visibility[key]).length;
+}
+
+function trackTableMinWidthPx(keys: TrackColumnKey[], visibility: TrackColumnVisibility): number {
+  return TABLE_MIN_WIDTH_BASE_PX + visibleColumnCount(keys, visibility) * COLUMN_MIN_WIDTH_PX;
+}
+
 interface StudentOption {
   id: string;
   fullName: string;
@@ -353,6 +519,58 @@ export function TeachingPracticeManager({
   function sectionVisible(groupValue: string | null): boolean {
     if (tableGroupFilter === "all") return true;
     return groupValue === tableGroupFilter;
+  }
+
+  // Column visibility (Stage B) - starts at "everything visible" on every
+  // render (including the server-rendered first paint) and only switches to
+  // the user's stored preference after mount, in its own effect - loading
+  // localStorage directly in the initial useState would run during SSR too
+  // (no window there) and risks a hydration mismatch if the client's first
+  // render already reflected a "some columns hidden" preference. Same
+  // pattern already used for the instructor/student session read in
+  // InstructorClient/StudentClient.
+  const [columnVisibility, setColumnVisibility] = useState<TrackColumnVisibility>(
+    DEFAULT_TRACK_COLUMN_VISIBILITY
+  );
+  const [isColumnPanelOpen, setIsColumnPanelOpen] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setColumnVisibility(loadTrackColumnVisibility());
+  }, []);
+
+  function persistColumnVisibility(next: TrackColumnVisibility) {
+    setColumnVisibility(next);
+    try {
+      window.localStorage.setItem(TRACK_COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Storage unavailable/full (private browsing, quota, etc.) - the
+      // choice still applies for this session via state, it just won't
+      // survive a reload. Never lets a storage failure break the toggle.
+    }
+  }
+
+  // Turning a column ON can never empty a table, so the safety check only
+  // ever runs when turning one OFF - the toggle is simply ignored (state
+  // untouched) if doing so would leave some table with zero visible columns.
+  function toggleTrackColumn(key: TrackColumnKey) {
+    const next = { ...columnVisibility, [key]: !columnVisibility[key] };
+    if (!next[key] && wouldEmptyAnyTrackTable(next)) return;
+    persistColumnVisibility(next);
+  }
+
+  // Whether unchecking this column right now would empty some table - used
+  // to disable that checkbox in the panel instead of letting the user click
+  // it and see nothing happen with no explanation.
+  function isLastVisibleTrackColumn(key: TrackColumnKey): boolean {
+    if (!columnVisibility[key]) return false;
+    return TABLES_BY_COLUMN_KEYS.some(
+      (keys) => keys.includes(key) && visibleColumnCount(keys, columnVisibility) === 1
+    );
+  }
+
+  function showAllTrackColumns() {
+    persistColumnVisibility(DEFAULT_TRACK_COLUMN_VISIBILITY);
   }
 
   function joinAssignmentField(values: (string | number | null)[]): string {
@@ -1371,6 +1589,54 @@ export function TeachingPracticeManager({
                 ))}
               </div>
 
+              {/* Column visibility (Stage B) - a display preference only,
+                  available in both view and edit mode, and independent of
+                  canEdit/effectiveCanEdit entirely. Applies to the LUNGE,
+                  Beginners-block, and unlinked-private tables below; the
+                  lessons/children tabs are untouched. Every column - not
+                  just the previously-optional ones - is listed and
+                  toggleable here; a checkbox disables itself when it's the
+                  last visible column in some table, per the "never let a
+                  table go empty" safety rule. */}
+              <div className="rounded-xl border border-border bg-card p-3">
+                <button
+                  type="button"
+                  onClick={() => setIsColumnPanelOpen((prev) => !prev)}
+                  className="flex w-full items-center justify-between text-right text-sm font-semibold text-card-foreground"
+                >
+                  הצגת/הסתרת עמודות
+                  <span className="text-muted-foreground">{isColumnPanelOpen ? "▲" : "▼"}</span>
+                </button>
+                {isColumnPanelOpen && (
+                  <div className="mt-2 flex flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={showAllTrackColumns}
+                      className="self-start text-xs text-primary underline decoration-dotted"
+                    >
+                      הצג הכל
+                    </button>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs">
+                      {ALL_TRACK_COLUMNS.map((col) => {
+                        const locked = isLastVisibleTrackColumn(col.key);
+                        return (
+                          <label key={col.key} className="flex items-center gap-1.5">
+                            <input
+                              type="checkbox"
+                              checked={columnVisibility[col.key]}
+                              disabled={locked}
+                              onChange={() => toggleTrackColumn(col.key)}
+                              title={locked ? "לא ניתן להסתיר את העמודה האחרונה המוצגת בטבלה" : undefined}
+                            />
+                            {col.label}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {inlineAssignError && <p className="text-sm text-danger">{inlineAssignError}</p>}
 
               {(
@@ -1397,22 +1663,49 @@ export function TeachingPracticeManager({
                         // (never the page) - min-width keeps columns from
                         // being squeezed illegibly narrow on small screens.
                         <div className="-mx-1 overflow-x-auto px-1 pb-1">
-                          <table className="w-full min-w-[880px] border-collapse text-xs">
+                          <table
+                            className="w-full border-collapse text-xs"
+                            style={{
+                              minWidth: trackTableMinWidthPx(LUNGE_COLUMN_KEYS, columnVisibility),
+                            }}
+                          >
                             <thead>
                               <tr className="bg-muted text-muted-foreground">
-                                <th className="sticky right-0 z-10 bg-muted px-2 py-2 text-right font-bold">
-                                  שעה
-                                </th>
-                                <th className="px-2 py-2 text-right font-bold">חניך מדריך</th>
-                                <th className="px-2 py-2 text-right font-bold">עוזר מדריך</th>
-                                <th className="px-2 py-2 text-right font-bold">שם הילד</th>
-                                <th className="px-2 py-2 text-right font-bold">שם משפחה</th>
-                                <th className="px-2 py-2 text-right font-bold">גיל</th>
-                                <th className="px-2 py-2 text-right font-bold">מין</th>
-                                <th className="px-2 py-2 text-right font-bold">סוס</th>
-                                <th className="px-2 py-2 text-right font-bold">ציוד</th>
-                                <th className="px-2 py-2 text-right font-bold">שם ההורה</th>
-                                <th className="px-2 py-2 text-right font-bold">טלפון</th>
+                                {columnVisibility.lungeTime && (
+                                  <th className="sticky right-0 z-10 bg-muted px-2 py-2 text-right font-bold">
+                                    שעה
+                                  </th>
+                                )}
+                                {columnVisibility.leadTrainee && (
+                                  <th className="px-2 py-2 text-right font-bold">חניך מדריך</th>
+                                )}
+                                {columnVisibility.assistantTrainee && (
+                                  <th className="px-2 py-2 text-right font-bold">עוזר מדריך</th>
+                                )}
+                                {columnVisibility.childFirstName && (
+                                  <th className="px-2 py-2 text-right font-bold">שם הילד</th>
+                                )}
+                                {columnVisibility.childLastName && (
+                                  <th className="px-2 py-2 text-right font-bold">שם משפחה</th>
+                                )}
+                                {columnVisibility.age && (
+                                  <th className="px-2 py-2 text-right font-bold">גיל</th>
+                                )}
+                                {columnVisibility.gender && (
+                                  <th className="px-2 py-2 text-right font-bold">מין</th>
+                                )}
+                                {columnVisibility.horse && (
+                                  <th className="px-2 py-2 text-right font-bold">סוס</th>
+                                )}
+                                {columnVisibility.equipment && (
+                                  <th className="px-2 py-2 text-right font-bold">ציוד</th>
+                                )}
+                                {columnVisibility.parentName && (
+                                  <th className="px-2 py-2 text-right font-bold">שם ההורה</th>
+                                )}
+                                {columnVisibility.parentPhone && (
+                                  <th className="px-2 py-2 text-right font-bold">טלפון</th>
+                                )}
                               </tr>
                             </thead>
                             <tbody>
@@ -1433,36 +1726,52 @@ export function TeachingPracticeManager({
                                     row.track.isActive ? "" : "opacity-60"
                                   }`}
                                 >
-                                  <td className="sticky right-0 z-10 bg-card px-2 py-2 font-medium text-card-foreground">
-                                    {row.track.defaultStartTime}
-                                    {!row.track.isActive && (
-                                      <span className="mr-1 text-[10px] text-muted-foreground">(לא פעיל)</span>
-                                    )}
-                                  </td>
-                                  <TraineeAssignmentCell
-                                    value={row.traineeIdsBySlot[0] ?? ""}
-                                    label={row.traineeNamesBySlot[0] ?? "—"}
-                                    options={traineeSelectOptions(row.track, row.traineeIdsBySlot[0] ?? "")}
-                                    editable={effectiveCanEdit}
-                                    disabled={savingCellKey === `${row.track.id}-0`}
-                                    onAssign={(traineeId) => handleInlineAssignTrainee(row.track, 0, traineeId)}
-                                  />
-                                  <TraineeAssignmentCell
-                                    value={row.traineeIdsBySlot[1] ?? ""}
-                                    label={row.traineeNamesBySlot[1] ?? "—"}
-                                    options={traineeSelectOptions(row.track, row.traineeIdsBySlot[1] ?? "")}
-                                    editable={effectiveCanEdit}
-                                    disabled={savingCellKey === `${row.track.id}-1`}
-                                    onAssign={(traineeId) => handleInlineAssignTrainee(row.track, 1, traineeId)}
-                                  />
-                                  <td className="px-2 py-2">{row.childFirstName}</td>
-                                  <td className="px-2 py-2">{row.childLastName}</td>
-                                  <td className="px-2 py-2">{row.childAge}</td>
-                                  <td className="px-2 py-2">{row.childGender}</td>
-                                  <td className="px-2 py-2">{row.horseName}</td>
-                                  <td className="px-2 py-2">{row.equipmentNotes}</td>
-                                  <td className="px-2 py-2">{row.parentName}</td>
-                                  <td className="px-2 py-2">{row.parentPhone}</td>
+                                  {columnVisibility.lungeTime && (
+                                    <td className="sticky right-0 z-10 bg-card px-2 py-2 font-medium text-card-foreground">
+                                      {row.track.defaultStartTime}
+                                      {!row.track.isActive && (
+                                        <span className="mr-1 text-[10px] text-muted-foreground">(לא פעיל)</span>
+                                      )}
+                                    </td>
+                                  )}
+                                  {columnVisibility.leadTrainee && (
+                                    <TraineeAssignmentCell
+                                      value={row.traineeIdsBySlot[0] ?? ""}
+                                      label={row.traineeNamesBySlot[0] ?? "—"}
+                                      options={traineeSelectOptions(row.track, row.traineeIdsBySlot[0] ?? "")}
+                                      editable={effectiveCanEdit}
+                                      disabled={savingCellKey === `${row.track.id}-0`}
+                                      onAssign={(traineeId) => handleInlineAssignTrainee(row.track, 0, traineeId)}
+                                    />
+                                  )}
+                                  {columnVisibility.assistantTrainee && (
+                                    <TraineeAssignmentCell
+                                      value={row.traineeIdsBySlot[1] ?? ""}
+                                      label={row.traineeNamesBySlot[1] ?? "—"}
+                                      options={traineeSelectOptions(row.track, row.traineeIdsBySlot[1] ?? "")}
+                                      editable={effectiveCanEdit}
+                                      disabled={savingCellKey === `${row.track.id}-1`}
+                                      onAssign={(traineeId) => handleInlineAssignTrainee(row.track, 1, traineeId)}
+                                    />
+                                  )}
+                                  {columnVisibility.childFirstName && (
+                                    <td className="px-2 py-2">{row.childFirstName}</td>
+                                  )}
+                                  {columnVisibility.childLastName && (
+                                    <td className="px-2 py-2">{row.childLastName}</td>
+                                  )}
+                                  {columnVisibility.age && <td className="px-2 py-2">{row.childAge}</td>}
+                                  {columnVisibility.gender && <td className="px-2 py-2">{row.childGender}</td>}
+                                  {columnVisibility.horse && <td className="px-2 py-2">{row.horseName}</td>}
+                                  {columnVisibility.equipment && (
+                                    <td className="px-2 py-2">{row.equipmentNotes}</td>
+                                  )}
+                                  {columnVisibility.parentName && (
+                                    <td className="px-2 py-2">{row.parentName}</td>
+                                  )}
+                                  {columnVisibility.parentPhone && (
+                                    <td className="px-2 py-2">{row.parentPhone}</td>
+                                  )}
                                 </tr>
                               ))}
                             </tbody>
@@ -1502,34 +1811,71 @@ export function TeachingPracticeManager({
                         </p>
                       ) : (
                         <div className="-mx-1 overflow-x-auto px-1 pb-1">
-                          <table className="w-full min-w-[900px] border-collapse text-xs">
+                          <table
+                            className="w-full border-collapse text-xs"
+                            style={{
+                              minWidth: trackTableMinWidthPx(BEGINNER_BLOCK_COLUMN_KEYS, columnVisibility),
+                            }}
+                          >
                             <thead>
                               <tr className="bg-secondary text-secondary-foreground">
-                                <th colSpan={1} className="border-b border-border px-2 py-1.5 text-center font-bold">
-                                  קבוצתי
-                                </th>
+                                {columnVisibility.groupTime && (
+                                  <th
+                                    colSpan={1}
+                                    className="border-b border-border px-2 py-1.5 text-center font-bold"
+                                  >
+                                    קבוצתי
+                                  </th>
+                                )}
                                 <th
-                                  colSpan={11}
+                                  colSpan={Math.max(
+                                    1,
+                                    visibleColumnCount(BEGINNER_PRIVATE_SIDE_COLUMN_KEYS, columnVisibility)
+                                  )}
                                   className="border-b border-border px-2 py-1.5 text-center font-bold"
                                 >
                                   פרטני
                                 </th>
                               </tr>
                               <tr className="bg-muted text-muted-foreground">
-                                <th className="sticky right-0 z-10 bg-muted px-2 py-2 text-right font-bold">
-                                  שעה לקבוצתי
-                                </th>
-                                <th className="px-2 py-2 text-right font-bold">שעה לפרטני</th>
-                                <th className="px-2 py-2 text-right font-bold">חניך מתרגל</th>
-                                <th className="px-2 py-2 text-right font-bold">עוזר מדריך</th>
-                                <th className="px-2 py-2 text-right font-bold">שם הילד</th>
-                                <th className="px-2 py-2 text-right font-bold">שם משפחה</th>
-                                <th className="px-2 py-2 text-right font-bold">גיל</th>
-                                <th className="px-2 py-2 text-right font-bold">מין</th>
-                                <th className="px-2 py-2 text-right font-bold">סוס</th>
-                                <th className="px-2 py-2 text-right font-bold">ציוד</th>
-                                <th className="px-2 py-2 text-right font-bold">שם ההורה</th>
-                                <th className="px-2 py-2 text-right font-bold">טלפון</th>
+                                {columnVisibility.groupTime && (
+                                  <th className="sticky right-0 z-10 bg-muted px-2 py-2 text-right font-bold">
+                                    שעה לקבוצתי
+                                  </th>
+                                )}
+                                {columnVisibility.privateTime && (
+                                  <th className="px-2 py-2 text-right font-bold">שעה לפרטני</th>
+                                )}
+                                {columnVisibility.leadTrainee && (
+                                  <th className="px-2 py-2 text-right font-bold">חניך מתרגל</th>
+                                )}
+                                {columnVisibility.assistantTrainee && (
+                                  <th className="px-2 py-2 text-right font-bold">עוזר מדריך</th>
+                                )}
+                                {columnVisibility.childFirstName && (
+                                  <th className="px-2 py-2 text-right font-bold">שם הילד</th>
+                                )}
+                                {columnVisibility.childLastName && (
+                                  <th className="px-2 py-2 text-right font-bold">שם משפחה</th>
+                                )}
+                                {columnVisibility.age && (
+                                  <th className="px-2 py-2 text-right font-bold">גיל</th>
+                                )}
+                                {columnVisibility.gender && (
+                                  <th className="px-2 py-2 text-right font-bold">מין</th>
+                                )}
+                                {columnVisibility.horse && (
+                                  <th className="px-2 py-2 text-right font-bold">סוס</th>
+                                )}
+                                {columnVisibility.equipment && (
+                                  <th className="px-2 py-2 text-right font-bold">ציוד</th>
+                                )}
+                                {columnVisibility.parentName && (
+                                  <th className="px-2 py-2 text-right font-bold">שם ההורה</th>
+                                )}
+                                {columnVisibility.parentPhone && (
+                                  <th className="px-2 py-2 text-right font-bold">טלפון</th>
+                                )}
                               </tr>
                             </thead>
                             <tbody>
@@ -1544,7 +1890,7 @@ export function TeachingPracticeManager({
                                           key={privateRow?.key ?? `${block.key}-empty`}
                                           className={`border-border ${i === 0 ? "border-t-2" : "border-t"}`}
                                         >
-                                          {i === 0 && (
+                                          {i === 0 && columnVisibility.groupTime && (
                                             <ClickableCell
                                               rowSpan={rowCount}
                                               sticky
@@ -1561,98 +1907,126 @@ export function TeachingPracticeManager({
                                           )}
                                           {privateRow ? (
                                             <>
-                                              <ClickableCell
-                                                isActive={privateRow.track.isActive}
-                                                onOpen={() => openTrackManager(privateRow.track)}
-                                              >
-                                                {privateRow.track.defaultStartTime}
-                                                {!privateRow.track.isActive && (
-                                                  <span className="mr-1 text-[10px] text-muted-foreground">
-                                                    (לא פעיל)
-                                                  </span>
-                                                )}
-                                              </ClickableCell>
-                                              <TraineeAssignmentCell
-                                                value={privateRow.traineeIdsBySlot[0] ?? ""}
-                                                label={privateRow.traineeNamesBySlot[0] ?? "—"}
-                                                options={traineeSelectOptions(
-                                                  privateRow.track,
-                                                  privateRow.traineeIdsBySlot[0] ?? ""
-                                                )}
-                                                editable={effectiveCanEdit}
-                                                disabled={savingCellKey === `${privateRow.track.id}-0`}
-                                                onAssign={(traineeId) =>
-                                                  handleInlineAssignTrainee(privateRow.track, 0, traineeId)
-                                                }
-                                                onOpen={() => openTrackManager(privateRow.track)}
-                                                isActive={privateRow.track.isActive}
-                                              />
-                                              <TraineeAssignmentCell
-                                                value={privateRow.traineeIdsBySlot[1] ?? ""}
-                                                label={privateRow.traineeNamesBySlot[1] ?? "—"}
-                                                options={traineeSelectOptions(
-                                                  privateRow.track,
-                                                  privateRow.traineeIdsBySlot[1] ?? ""
-                                                )}
-                                                editable={effectiveCanEdit}
-                                                disabled={savingCellKey === `${privateRow.track.id}-1`}
-                                                onAssign={(traineeId) =>
-                                                  handleInlineAssignTrainee(privateRow.track, 1, traineeId)
-                                                }
-                                                onOpen={() => openTrackManager(privateRow.track)}
-                                                isActive={privateRow.track.isActive}
-                                              />
-                                              <ClickableCell
-                                                isActive={privateRow.track.isActive}
-                                                onOpen={() => openTrackManager(privateRow.track)}
-                                              >
-                                                {privateRow.childFirstName}
-                                              </ClickableCell>
-                                              <ClickableCell
-                                                isActive={privateRow.track.isActive}
-                                                onOpen={() => openTrackManager(privateRow.track)}
-                                              >
-                                                {privateRow.childLastName}
-                                              </ClickableCell>
-                                              <ClickableCell
-                                                isActive={privateRow.track.isActive}
-                                                onOpen={() => openTrackManager(privateRow.track)}
-                                              >
-                                                {privateRow.childAge}
-                                              </ClickableCell>
-                                              <ClickableCell
-                                                isActive={privateRow.track.isActive}
-                                                onOpen={() => openTrackManager(privateRow.track)}
-                                              >
-                                                {privateRow.childGender}
-                                              </ClickableCell>
-                                              <ClickableCell
-                                                isActive={privateRow.track.isActive}
-                                                onOpen={() => openTrackManager(privateRow.track)}
-                                              >
-                                                {privateRow.horseName}
-                                              </ClickableCell>
-                                              <ClickableCell
-                                                isActive={privateRow.track.isActive}
-                                                onOpen={() => openTrackManager(privateRow.track)}
-                                              >
-                                                {privateRow.equipmentNotes}
-                                              </ClickableCell>
-                                              <ClickableCell
-                                                isActive={privateRow.track.isActive}
-                                                onOpen={() => openTrackManager(privateRow.track)}
-                                              >
-                                                {privateRow.parentName}
-                                              </ClickableCell>
-                                              <ClickableCell
-                                                isActive={privateRow.track.isActive}
-                                                onOpen={() => openTrackManager(privateRow.track)}
-                                              >
-                                                {privateRow.parentPhone}
-                                              </ClickableCell>
+                                              {columnVisibility.privateTime && (
+                                                <ClickableCell
+                                                  isActive={privateRow.track.isActive}
+                                                  onOpen={() => openTrackManager(privateRow.track)}
+                                                >
+                                                  {privateRow.track.defaultStartTime}
+                                                  {!privateRow.track.isActive && (
+                                                    <span className="mr-1 text-[10px] text-muted-foreground">
+                                                      (לא פעיל)
+                                                    </span>
+                                                  )}
+                                                </ClickableCell>
+                                              )}
+                                              {columnVisibility.leadTrainee && (
+                                                <TraineeAssignmentCell
+                                                  value={privateRow.traineeIdsBySlot[0] ?? ""}
+                                                  label={privateRow.traineeNamesBySlot[0] ?? "—"}
+                                                  options={traineeSelectOptions(
+                                                    privateRow.track,
+                                                    privateRow.traineeIdsBySlot[0] ?? ""
+                                                  )}
+                                                  editable={effectiveCanEdit}
+                                                  disabled={savingCellKey === `${privateRow.track.id}-0`}
+                                                  onAssign={(traineeId) =>
+                                                    handleInlineAssignTrainee(privateRow.track, 0, traineeId)
+                                                  }
+                                                  onOpen={() => openTrackManager(privateRow.track)}
+                                                  isActive={privateRow.track.isActive}
+                                                />
+                                              )}
+                                              {columnVisibility.assistantTrainee && (
+                                                <TraineeAssignmentCell
+                                                  value={privateRow.traineeIdsBySlot[1] ?? ""}
+                                                  label={privateRow.traineeNamesBySlot[1] ?? "—"}
+                                                  options={traineeSelectOptions(
+                                                    privateRow.track,
+                                                    privateRow.traineeIdsBySlot[1] ?? ""
+                                                  )}
+                                                  editable={effectiveCanEdit}
+                                                  disabled={savingCellKey === `${privateRow.track.id}-1`}
+                                                  onAssign={(traineeId) =>
+                                                    handleInlineAssignTrainee(privateRow.track, 1, traineeId)
+                                                  }
+                                                  onOpen={() => openTrackManager(privateRow.track)}
+                                                  isActive={privateRow.track.isActive}
+                                                />
+                                              )}
+                                              {columnVisibility.childFirstName && (
+                                                <ClickableCell
+                                                  isActive={privateRow.track.isActive}
+                                                  onOpen={() => openTrackManager(privateRow.track)}
+                                                >
+                                                  {privateRow.childFirstName}
+                                                </ClickableCell>
+                                              )}
+                                              {columnVisibility.childLastName && (
+                                                <ClickableCell
+                                                  isActive={privateRow.track.isActive}
+                                                  onOpen={() => openTrackManager(privateRow.track)}
+                                                >
+                                                  {privateRow.childLastName}
+                                                </ClickableCell>
+                                              )}
+                                              {columnVisibility.age && (
+                                                <ClickableCell
+                                                  isActive={privateRow.track.isActive}
+                                                  onOpen={() => openTrackManager(privateRow.track)}
+                                                >
+                                                  {privateRow.childAge}
+                                                </ClickableCell>
+                                              )}
+                                              {columnVisibility.gender && (
+                                                <ClickableCell
+                                                  isActive={privateRow.track.isActive}
+                                                  onOpen={() => openTrackManager(privateRow.track)}
+                                                >
+                                                  {privateRow.childGender}
+                                                </ClickableCell>
+                                              )}
+                                              {columnVisibility.horse && (
+                                                <ClickableCell
+                                                  isActive={privateRow.track.isActive}
+                                                  onOpen={() => openTrackManager(privateRow.track)}
+                                                >
+                                                  {privateRow.horseName}
+                                                </ClickableCell>
+                                              )}
+                                              {columnVisibility.equipment && (
+                                                <ClickableCell
+                                                  isActive={privateRow.track.isActive}
+                                                  onOpen={() => openTrackManager(privateRow.track)}
+                                                >
+                                                  {privateRow.equipmentNotes}
+                                                </ClickableCell>
+                                              )}
+                                              {columnVisibility.parentName && (
+                                                <ClickableCell
+                                                  isActive={privateRow.track.isActive}
+                                                  onOpen={() => openTrackManager(privateRow.track)}
+                                                >
+                                                  {privateRow.parentName}
+                                                </ClickableCell>
+                                              )}
+                                              {columnVisibility.parentPhone && (
+                                                <ClickableCell
+                                                  isActive={privateRow.track.isActive}
+                                                  onOpen={() => openTrackManager(privateRow.track)}
+                                                >
+                                                  {privateRow.parentPhone}
+                                                </ClickableCell>
+                                              )}
                                             </>
                                           ) : (
-                                            <td colSpan={11} className="px-2 py-2 text-center text-muted-foreground">
+                                            <td
+                                              colSpan={Math.max(
+                                                1,
+                                                visibleColumnCount(BEGINNER_PRIVATE_SIDE_COLUMN_KEYS, columnVisibility)
+                                              )}
+                                              className="px-2 py-2 text-center text-muted-foreground"
+                                            >
                                               טרם שויכו שיעורים פרטניים לשיעור הקבוצתי הזה
                                             </td>
                                           )}
@@ -1673,81 +2047,130 @@ export function TeachingPracticeManager({
                             שיעורים פרטיים ללא שיוך
                           </h4>
                           <div className="-mx-1 overflow-x-auto px-1 pb-1">
-                            <table className="w-full min-w-[880px] border-collapse text-xs">
+                            <table
+                              className="w-full border-collapse text-xs"
+                              style={{
+                                minWidth: trackTableMinWidthPx(UNLINKED_COLUMN_KEYS, columnVisibility),
+                              }}
+                            >
                               <thead>
                                 <tr className="bg-muted text-muted-foreground">
-                                  <th className="sticky right-0 z-10 bg-muted px-2 py-2 text-right font-bold">
-                                    שעה לפרטני
-                                  </th>
-                                  <th className="px-2 py-2 text-right font-bold">חניך מתרגל</th>
-                                  <th className="px-2 py-2 text-right font-bold">עוזר מדריך</th>
-                                  <th className="px-2 py-2 text-right font-bold">שם הילד</th>
-                                  <th className="px-2 py-2 text-right font-bold">שם משפחה</th>
-                                  <th className="px-2 py-2 text-right font-bold">גיל</th>
-                                  <th className="px-2 py-2 text-right font-bold">מין</th>
-                                  <th className="px-2 py-2 text-right font-bold">סוס</th>
-                                  <th className="px-2 py-2 text-right font-bold">ציוד</th>
-                                  <th className="px-2 py-2 text-right font-bold">שם ההורה</th>
-                                  <th className="px-2 py-2 text-right font-bold">טלפון</th>
+                                  {columnVisibility.privateTime && (
+                                    <th className="sticky right-0 z-10 bg-muted px-2 py-2 text-right font-bold">
+                                      שעה לפרטני
+                                    </th>
+                                  )}
+                                  {columnVisibility.leadTrainee && (
+                                    <th className="px-2 py-2 text-right font-bold">חניך מתרגל</th>
+                                  )}
+                                  {columnVisibility.assistantTrainee && (
+                                    <th className="px-2 py-2 text-right font-bold">עוזר מדריך</th>
+                                  )}
+                                  {columnVisibility.childFirstName && (
+                                    <th className="px-2 py-2 text-right font-bold">שם הילד</th>
+                                  )}
+                                  {columnVisibility.childLastName && (
+                                    <th className="px-2 py-2 text-right font-bold">שם משפחה</th>
+                                  )}
+                                  {columnVisibility.age && (
+                                    <th className="px-2 py-2 text-right font-bold">גיל</th>
+                                  )}
+                                  {columnVisibility.gender && (
+                                    <th className="px-2 py-2 text-right font-bold">מין</th>
+                                  )}
+                                  {columnVisibility.horse && (
+                                    <th className="px-2 py-2 text-right font-bold">סוס</th>
+                                  )}
+                                  {columnVisibility.equipment && (
+                                    <th className="px-2 py-2 text-right font-bold">ציוד</th>
+                                  )}
+                                  {columnVisibility.parentName && (
+                                    <th className="px-2 py-2 text-right font-bold">שם ההורה</th>
+                                  )}
+                                  {columnVisibility.parentPhone && (
+                                    <th className="px-2 py-2 text-right font-bold">טלפון</th>
+                                  )}
                                 </tr>
                               </thead>
                               <tbody>
                                 {unlinkedPrivate.map((row) => (
                                   <tr key={row.key} className="border-t border-border">
-                                    <ClickableCell
-                                      sticky
-                                      isActive={row.track.isActive}
-                                      onOpen={() => openTrackManager(row.track)}
-                                    >
-                                      {row.track.defaultStartTime}
-                                      {!row.track.isActive && (
-                                        <span className="mr-1 text-[10px] text-muted-foreground">(לא פעיל)</span>
-                                      )}
-                                    </ClickableCell>
-                                    <TraineeAssignmentCell
-                                      value={row.traineeIdsBySlot[0] ?? ""}
-                                      label={row.traineeNamesBySlot[0] ?? "—"}
-                                      options={traineeSelectOptions(row.track, row.traineeIdsBySlot[0] ?? "")}
-                                      editable={effectiveCanEdit}
-                                      disabled={savingCellKey === `${row.track.id}-0`}
-                                      onAssign={(traineeId) => handleInlineAssignTrainee(row.track, 0, traineeId)}
-                                      onOpen={() => openTrackManager(row.track)}
-                                      isActive={row.track.isActive}
-                                    />
-                                    <TraineeAssignmentCell
-                                      value={row.traineeIdsBySlot[1] ?? ""}
-                                      label={row.traineeNamesBySlot[1] ?? "—"}
-                                      options={traineeSelectOptions(row.track, row.traineeIdsBySlot[1] ?? "")}
-                                      editable={effectiveCanEdit}
-                                      disabled={savingCellKey === `${row.track.id}-1`}
-                                      onAssign={(traineeId) => handleInlineAssignTrainee(row.track, 1, traineeId)}
-                                      onOpen={() => openTrackManager(row.track)}
-                                      isActive={row.track.isActive}
-                                    />
-                                    <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
-                                      {row.childFirstName}
-                                    </ClickableCell>
-                                    <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
-                                      {row.childLastName}
-                                    </ClickableCell>
-                                    <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
-                                      {row.childAge}
-                                    </ClickableCell>
-                                    <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
-                                      {row.childGender}
-                                    </ClickableCell>
-                                    <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
-                                      {row.horseName}
-                                    </ClickableCell>
-                                    <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
-                                      {row.equipmentNotes}
-                                    </ClickableCell>
-                                    <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
-                                      {row.parentName}
-                                    </ClickableCell>
-                                    <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
-                                      {row.parentPhone}
-                                    </ClickableCell>
+                                    {columnVisibility.privateTime && (
+                                      <ClickableCell
+                                        sticky
+                                        isActive={row.track.isActive}
+                                        onOpen={() => openTrackManager(row.track)}
+                                      >
+                                        {row.track.defaultStartTime}
+                                        {!row.track.isActive && (
+                                          <span className="mr-1 text-[10px] text-muted-foreground">(לא פעיל)</span>
+                                        )}
+                                      </ClickableCell>
+                                    )}
+                                    {columnVisibility.leadTrainee && (
+                                      <TraineeAssignmentCell
+                                        value={row.traineeIdsBySlot[0] ?? ""}
+                                        label={row.traineeNamesBySlot[0] ?? "—"}
+                                        options={traineeSelectOptions(row.track, row.traineeIdsBySlot[0] ?? "")}
+                                        editable={effectiveCanEdit}
+                                        disabled={savingCellKey === `${row.track.id}-0`}
+                                        onAssign={(traineeId) => handleInlineAssignTrainee(row.track, 0, traineeId)}
+                                        onOpen={() => openTrackManager(row.track)}
+                                        isActive={row.track.isActive}
+                                      />
+                                    )}
+                                    {columnVisibility.assistantTrainee && (
+                                      <TraineeAssignmentCell
+                                        value={row.traineeIdsBySlot[1] ?? ""}
+                                        label={row.traineeNamesBySlot[1] ?? "—"}
+                                        options={traineeSelectOptions(row.track, row.traineeIdsBySlot[1] ?? "")}
+                                        editable={effectiveCanEdit}
+                                        disabled={savingCellKey === `${row.track.id}-1`}
+                                        onAssign={(traineeId) => handleInlineAssignTrainee(row.track, 1, traineeId)}
+                                        onOpen={() => openTrackManager(row.track)}
+                                        isActive={row.track.isActive}
+                                      />
+                                    )}
+                                    {columnVisibility.childFirstName && (
+                                      <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
+                                        {row.childFirstName}
+                                      </ClickableCell>
+                                    )}
+                                    {columnVisibility.childLastName && (
+                                      <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
+                                        {row.childLastName}
+                                      </ClickableCell>
+                                    )}
+                                    {columnVisibility.age && (
+                                      <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
+                                        {row.childAge}
+                                      </ClickableCell>
+                                    )}
+                                    {columnVisibility.gender && (
+                                      <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
+                                        {row.childGender}
+                                      </ClickableCell>
+                                    )}
+                                    {columnVisibility.horse && (
+                                      <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
+                                        {row.horseName}
+                                      </ClickableCell>
+                                    )}
+                                    {columnVisibility.equipment && (
+                                      <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
+                                        {row.equipmentNotes}
+                                      </ClickableCell>
+                                    )}
+                                    {columnVisibility.parentName && (
+                                      <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
+                                        {row.parentName}
+                                      </ClickableCell>
+                                    )}
+                                    {columnVisibility.parentPhone && (
+                                      <ClickableCell isActive={row.track.isActive} onOpen={() => openTrackManager(row.track)}>
+                                        {row.parentPhone}
+                                      </ClickableCell>
+                                    )}
                                   </tr>
                                 ))}
                               </tbody>
