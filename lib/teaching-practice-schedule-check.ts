@@ -5,13 +5,15 @@
 
 export const MIN_TEACHING_PRACTICE_GAP_MINUTES = 15;
 
-export type TeachingPracticeScheduleWarningKind = "overlap" | "short_gap";
+export type TeachingPracticeScheduleWarningKind = "overlap" | "short_gap" | "dense";
 
 export interface TeachingPracticeScheduleWarning {
   kind: TeachingPracticeScheduleWarningKind;
   // Minutes between the previous entry's endTime and this entry's startTime.
-  // Negative means overlap (the two lessons share that many minutes).
-  gapMinutes: number;
+  // Negative means overlap (the two lessons share that many minutes). Null
+  // for "dense" - that warning describes a whole run of 3+ entries, not one
+  // pairwise gap, so no single gap value applies to it.
+  gapMinutes: number | null;
 }
 
 export interface TeachingPracticeTimelineEntryInput {
@@ -43,13 +45,16 @@ export function sortTeachingPracticeTimeline<T extends TeachingPracticeTimelineE
 // Sorts the given entries and attaches warnings to each entry by comparing it
 // against the immediately preceding entry - but only when both fall on the
 // same date; a gap between lessons on different dates is never meaningful
-// and is intentionally never compared.
+// and is intentionally never compared. After the pairwise pass, also marks
+// every entry inside a run of 3+ consecutive same-date entries whose
+// adjoining gaps are all overlap/short_gap with an additional "dense"
+// warning (see attachDenseWarnings).
 export function attachTeachingPracticeScheduleWarnings<T extends TeachingPracticeTimelineEntryInput>(
   entries: T[]
 ): (T & { warnings: TeachingPracticeScheduleWarning[] })[] {
   const sorted = sortTeachingPracticeTimeline(entries);
 
-  return sorted.map((entry, index) => {
+  const withPairwiseWarnings = sorted.map((entry, index) => {
     const warnings: TeachingPracticeScheduleWarning[] = [];
     const prev = index > 0 ? sorted[index - 1] : null;
 
@@ -68,4 +73,40 @@ export function attachTeachingPracticeScheduleWarnings<T extends TeachingPractic
 
     return { ...entry, warnings };
   });
+
+  attachDenseWarnings(withPairwiseWarnings);
+
+  return withPairwiseWarnings;
+}
+
+// A "tight edge" is a consecutive pair that already got an overlap/short_gap
+// warning above. A run of 2+ consecutive tight edges spans 3+ entries -
+// exactly the "3+ assignments in one day with tight consecutive gaps" rule -
+// so every entry in such a run gets a "dense" warning added on top of
+// whatever pairwise warning it already carries. Mutates the entries'
+// warnings arrays in place (they were just built fresh by the caller above,
+// so this is safe and avoids a second full array copy).
+function attachDenseWarnings(entries: { warnings: TeachingPracticeScheduleWarning[] }[]): void {
+  let runStart = 0;
+  let tightEdgeCount = 0;
+
+  const flushRun = (runEndExclusive: number) => {
+    if (tightEdgeCount >= 2) {
+      for (let i = runStart; i < runEndExclusive; i++) {
+        entries[i].warnings.push({ kind: "dense", gapMinutes: null });
+      }
+    }
+  };
+
+  for (let i = 1; i < entries.length; i++) {
+    const isTightEdge = entries[i].warnings.some((w) => w.kind === "overlap" || w.kind === "short_gap");
+    if (isTightEdge) {
+      tightEdgeCount++;
+    } else {
+      flushRun(i);
+      runStart = i;
+      tightEdgeCount = 0;
+    }
+  }
+  flushRun(entries.length);
 }

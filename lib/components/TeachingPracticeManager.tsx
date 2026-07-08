@@ -86,14 +86,16 @@ const TAB_LABELS: Record<Tab, string> = {
   scheduleCheck: "בדיקת שיבוץ",
 };
 
-const TRAINEE_SCHEDULE_CHECK_WARNING_LABELS: Record<"overlap" | "short_gap", string> = {
+const TRAINEE_SCHEDULE_CHECK_WARNING_LABELS: Record<"overlap" | "short_gap" | "dense", string> = {
   overlap: "חפיפה בזמנים",
   short_gap: "מרווח קצר מדי בין התנסויות",
+  dense: "אזהרה: רצף צפוף של התנסויות",
 };
 
-const HORSE_SCHEDULE_CHECK_WARNING_LABELS: Record<"overlap" | "short_gap", string> = {
+const HORSE_SCHEDULE_CHECK_WARNING_LABELS: Record<"overlap" | "short_gap" | "dense", string> = {
   overlap: "חפיפה בזמנים",
   short_gap: "מרווח קצר מדי בין שימושים בסוס",
+  dense: "אזהרה: רצף צפוף של שימושים בסוס",
 };
 
 type ScheduleCheckSubTab = "trainees" | "horses";
