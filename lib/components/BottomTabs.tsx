@@ -150,6 +150,11 @@ export function BottomTabs({
   onChange,
   tabs = MAIN_TABS,
   dotTabIds = [],
+  // Matches the page shell's own max-width so the fixed bottom nav never
+  // gets narrower/wider than the content above it. Defaults to today's
+  // max-w-lg so every existing caller (student) is visually unchanged
+  // unless it explicitly opts into a wider shell (instructor).
+  maxWidthClassName = "max-w-lg",
 }: {
   active: MainTabId;
   onChange: (id: MainTabId) => void;
@@ -157,10 +162,11 @@ export function BottomTabs({
   // Tab ids that should show a small unread dot on their icon - e.g. "more"
   // when something inside the "עוד" menu is unread.
   dotTabIds?: MainTabId[];
+  maxWidthClassName?: string;
 }) {
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-30 mx-auto w-full max-w-lg overflow-hidden border-t border-border bg-card pb-[env(safe-area-inset-bottom)]"
+      className={`fixed inset-x-0 bottom-0 z-30 mx-auto w-full ${maxWidthClassName} overflow-hidden border-t border-border bg-card pb-[env(safe-area-inset-bottom)]`}
       aria-label="ניווט ראשי"
     >
       <div className="grid" style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}>
