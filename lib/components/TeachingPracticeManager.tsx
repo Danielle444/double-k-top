@@ -114,6 +114,12 @@ import {
   syncTeachingPracticeFixedStructureToGeneratedLessonsAsAdmin,
   type TeachingPracticeFullSyncApplyResult,
 } from "@/lib/actions/teaching-practice-full-sync";
+// Stage D1/D2 - read-only fixed-structure assignment check ("בדוק שיבוץ").
+import { checkTeachingPracticeFixedStructureForAdmin } from "@/lib/actions/teaching-practice-fixed-structure-check";
+import type {
+  TeachingPracticeFixedStructureCheckResult,
+  TeachingPracticeFixedStructureIssue,
+} from "@/lib/teaching-practice-fixed-structure-check";
 import {
   TRAINEE_SUGGESTION_TARGET_PER_BUCKET,
   type ComputeTraineeSuggestionsResult,
@@ -1067,6 +1073,38 @@ export function TeachingPracticeManager({
         setSyncError(err instanceof Error ? err.message : "אירעה שגיאה בסנכרון המבנה הקבוע לתאריכים");
       })
       .finally(() => setSyncLoading(false));
+  }
+
+  // Stage D2 - read-only fixed-structure assignment check ("בדוק שיבוץ").
+  // No confirmation modal needed (read-only) - results render inline, right
+  // below the button row. fixedStructureCheckGroupName freezes which group
+  // the currently-shown result belongs to, so a group-filter change afterward
+  // can mark the result stale (see isFixedStructureCheckStale below) without
+  // needing to clear it outright - the מנהלת can still see the last result
+  // while being told it may no longer reflect the selected group.
+  const [fixedStructureCheckResult, setFixedStructureCheckResult] =
+    useState<TeachingPracticeFixedStructureCheckResult | null>(null);
+  const [fixedStructureCheckGroupName, setFixedStructureCheckGroupName] = useState<string | null>(null);
+  const [fixedStructureCheckLoading, setFixedStructureCheckLoading] = useState(false);
+  const [fixedStructureCheckError, setFixedStructureCheckError] = useState<string | null>(null);
+
+  const isFixedStructureCheckStale =
+    fixedStructureCheckResult !== null && fixedStructureCheckGroupName !== tableGroupFilter;
+
+  function handleRunFixedStructureCheck() {
+    if (tableGroupFilter === "all" || fixedStructureCheckLoading) return; // button is disabled in this case; defensive no-op
+    const groupName = tableGroupFilter;
+    setFixedStructureCheckLoading(true);
+    setFixedStructureCheckError(null);
+    checkTeachingPracticeFixedStructureForAdmin(groupName)
+      .then((result) => {
+        setFixedStructureCheckResult(result);
+        setFixedStructureCheckGroupName(groupName);
+      })
+      .catch((err: unknown) => {
+        setFixedStructureCheckError(err instanceof Error ? err.message : "אירעה שגיאה בבדיקת השיבוץ");
+      })
+      .finally(() => setFixedStructureCheckLoading(false));
   }
 
   // Column visibility (Stage B) - starts at "everything visible" on every
@@ -2558,6 +2596,43 @@ export function TeachingPracticeManager({
                     </span>
                   )}
                 </div>
+              )}
+
+              {/* Stage D1/D2 - read-only fixed-structure assignment check
+                  ("בדוק שיבוץ"). Same single-group-required convention as the
+                  suggestion/sync buttons above. No confirmation modal - this
+                  is read-only, so results render inline right below, and can
+                  be re-run freely. */}
+              {role === "admin" && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="!px-3 !py-1.5 !text-xs"
+                    disabled={tableGroupFilter === "all" || fixedStructureCheckLoading}
+                    onClick={handleRunFixedStructureCheck}
+                  >
+                    {fixedStructureCheckLoading ? "בודק..." : "בדוק שיבוץ"}
+                  </Button>
+                  {tableGroupFilter === "all" && (
+                    <span className="text-xs text-muted-foreground">
+                      יש לבחור קבוצה א או קבוצה ב כדי לבדוק שיבוץ
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {role === "admin" && fixedStructureCheckError && (
+                <p className="text-sm text-danger">{fixedStructureCheckError}</p>
+              )}
+
+              {role === "admin" && fixedStructureCheckResult && (
+                <TeachingPracticeFixedStructureCheckPanel
+                  result={fixedStructureCheckResult}
+                  isStale={isFixedStructureCheckStale}
+                  tracks={tracks}
+                  childrenList={children}
+                />
               )}
 
               {/* Column visibility (Stage B) - a display preference only,
@@ -4836,6 +4911,195 @@ export function TeachingPracticeManager({
           )}
         </div>
       </Modal>
+    </div>
+  );
+}
+
+// Stage D2 - read-only fixed-structure assignment check result panel.
+// Cross-references trackId/traineeId/childId back to already-loaded state
+// (tracks/childrenList) purely for friendlier labels - no extra fetch.
+function TeachingPracticeFixedStructureCheckPanel({
+  result,
+  isStale,
+  tracks,
+  childrenList,
+}: {
+  result: TeachingPracticeFixedStructureCheckResult;
+  isStale: boolean;
+  tracks: TeachingPracticeTrackSummary[] | null;
+  childrenList: TeachingPracticeChildRow[] | null;
+}) {
+  const trackLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const t of tracks ?? []) {
+      map.set(t.id, `${PRACTICE_TYPE_LABELS[t.practiceType]} ${t.defaultStartTime}-${t.defaultEndTime}`);
+    }
+    return map;
+  }, [tracks]);
+
+  const traineeNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const t of tracks ?? []) {
+      for (const tt of t.trainees) map.set(tt.traineeId, tt.fullName);
+    }
+    return map;
+  }, [tracks]);
+
+  const childNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of childrenList ?? []) map.set(c.id, c.fullName);
+    return map;
+  }, [childrenList]);
+
+  const hasAnyIssues = result.errors.length > 0 || result.warnings.length > 0 || result.info.length > 0;
+
+  return (
+    <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4">
+      {isStale && (
+        <p className="rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+          התוצאות הבאות הן מבדיקה קודמת עבור קבוצה {result.groupName} - הקבוצה הנבחרת השתנתה מאז. הריצו את הבדיקה
+          שוב לקבלת תוצאות עדכניות.
+        </p>
+      )}
+
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+        <FixedStructureCheckSummaryCard label="שגיאות" value={result.summary.errorCount} tone="danger" />
+        <FixedStructureCheckSummaryCard label="אזהרות" value={result.summary.warningCount} tone="warning" />
+        <FixedStructureCheckSummaryCard label="מידע" value={result.summary.infoCount} tone="muted" />
+        <FixedStructureCheckSummaryCard label="מסלולים שנבדקו" value={result.summary.tracksChecked} />
+        <FixedStructureCheckSummaryCard label="חניכים שנבדקו" value={result.summary.traineesChecked} />
+        <FixedStructureCheckSummaryCard label="ילדים שנבדקו" value={result.summary.childrenChecked} />
+      </div>
+
+      {!hasAnyIssues && (
+        <p className="text-sm text-muted-foreground">לא נמצאו בעיות במבנה הקבוע של קבוצה {result.groupName}.</p>
+      )}
+
+      {result.errors.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h4 className="text-sm font-semibold text-danger">שגיאות שחייבים לתקן ({result.errors.length})</h4>
+          <FixedStructureIssueList
+            issues={result.errors}
+            trackLabelById={trackLabelById}
+            traineeNameById={traineeNameById}
+            childNameById={childNameById}
+          />
+        </section>
+      )}
+
+      {result.warnings.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h4 className="text-sm font-semibold text-warning">אזהרות לבדיקה ({result.warnings.length})</h4>
+          <FixedStructureIssueList
+            issues={result.warnings}
+            trackLabelById={trackLabelById}
+            traineeNameById={traineeNameById}
+            childNameById={childNameById}
+          />
+        </section>
+      )}
+
+      {result.info.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h4 className="text-sm font-semibold text-muted-foreground">מידע נוסף ({result.info.length})</h4>
+          <FixedStructureIssueList
+            issues={result.info}
+            trackLabelById={trackLabelById}
+            traineeNameById={traineeNameById}
+            childNameById={childNameById}
+          />
+        </section>
+      )}
+    </div>
+  );
+}
+
+function FixedStructureCheckSummaryCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone?: "danger" | "warning" | "muted";
+}) {
+  const toneClass =
+    tone === "danger"
+      ? "text-danger"
+      : tone === "warning"
+        ? "text-warning"
+        : tone === "muted"
+          ? "text-muted-foreground"
+          : "text-card-foreground";
+  return (
+    <div className="rounded-lg border border-border bg-muted/30 p-2.5 text-center">
+      <p className={`text-lg font-semibold ${toneClass}`}>{value}</p>
+      <p className="text-xs text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+// Avoids flooding the page: shows the first 10 issues in this severity
+// section by default, with a "הצג עוד" toggle to reveal the rest - a group
+// with many overlap_informational warnings (or any other noisy kind) never
+// dumps 30+ long rows on-screen by default.
+function FixedStructureIssueList({
+  issues,
+  trackLabelById,
+  traineeNameById,
+  childNameById,
+}: {
+  issues: TeachingPracticeFixedStructureIssue[];
+  trackLabelById: Map<string, string>;
+  traineeNameById: Map<string, string>;
+  childNameById: Map<string, string>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const VISIBLE_LIMIT = 10;
+  const visibleIssues = expanded ? issues : issues.slice(0, VISIBLE_LIMIT);
+  const remaining = issues.length - visibleIssues.length;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {visibleIssues.map((issue, i) => (
+        <div key={i} className="rounded-lg border border-border bg-muted/20 p-2.5 text-sm">
+          <p className="text-card-foreground">{issue.message}</p>
+          {(issue.trackId ||
+            issue.traineeId ||
+            issue.childId ||
+            (issue.relatedTrackIds && issue.relatedTrackIds.length > 0)) && (
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+              {issue.trackId && <span>מסלול: {trackLabelById.get(issue.trackId) ?? issue.trackId}</span>}
+              {issue.traineeId && <span>חניך/ה: {traineeNameById.get(issue.traineeId) ?? issue.traineeId}</span>}
+              {issue.childId && <span>ילד/ה: {childNameById.get(issue.childId) ?? issue.childId}</span>}
+              {issue.relatedTrackIds && issue.relatedTrackIds.length > 0 && (
+                <span>
+                  מסלולים קשורים:{" "}
+                  {issue.relatedTrackIds.map((id) => trackLabelById.get(id) ?? id).join(", ")}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+      {remaining > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="self-start text-xs text-primary underline decoration-dotted"
+        >
+          הצג עוד ({remaining})
+        </button>
+      )}
+      {expanded && issues.length > VISIBLE_LIMIT && (
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          className="self-start text-xs text-muted-foreground underline decoration-dotted"
+        >
+          הצג פחות
+        </button>
+      )}
     </div>
   );
 }
