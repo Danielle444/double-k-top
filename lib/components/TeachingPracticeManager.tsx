@@ -94,10 +94,18 @@ import {
   type ChildImportRowAction,
   type TeachingPracticeChildImportCandidate,
 } from "@/lib/actions/teaching-practice-child-import";
-// Stage 1 - read-only trainee-assignment suggestion preview (no apply/save
-// path exists yet; see report). Admin-only for now, same as
-// getTeachingPracticeScheduleCheckForAdmin above.
-import { getTeachingPracticeTraineeSuggestionsForAdmin } from "@/lib/actions/teaching-practice-suggestions";
+// Stage 1 - read-only trainee-assignment suggestion preview. Admin-only for
+// now, same as getTeachingPracticeScheduleCheckForAdmin above.
+// Stage 2 (revised) - applyTeachingPracticeTrackTraineeSlotSuggestionsAsAdmin
+// writes each selected suggestion at its exact rotationOrder (no roster
+// compaction) - deliberately NOT setTeachingPracticeTrackTraineesAsAdmin,
+// which would shift a later slot down when an earlier one is still empty.
+// See lib/actions/teaching-practice-suggestions.ts for why.
+import {
+  applyTeachingPracticeTrackTraineeSlotSuggestionsAsAdmin,
+  getTeachingPracticeTraineeSuggestionsForAdmin,
+  type TeachingPracticeTrackTraineeSlotAssignment,
+} from "@/lib/actions/teaching-practice-suggestions";
 import {
   TRAINEE_SUGGESTION_TARGET_PER_BUCKET,
   type ComputeTraineeSuggestionsResult,
@@ -138,6 +146,37 @@ const TRAINEE_SUGGESTION_WARNING_STYLE: Record<TraineeSuggestionWarningKind, { l
   existing_overlap: { label: "חפיפת זמנים קיימת", className: "bg-danger-muted text-danger" },
   missing_or_invalid_time_data: { label: "נתוני זמן חסרים", className: "bg-muted text-muted-foreground" },
 };
+
+// Stage 2 - a slot is selectable for "apply" only when it is genuinely empty
+// (no current occupant) AND has a real suggested חניך - this single
+// predicate is the sole source of truth for whether a row gets a checkbox at
+// all, what "בחר הכל" selects, and what the apply loop is allowed to touch.
+// A filled slot never qualifies, by design - replacing an existing
+// assignment is out of scope for this stage.
+function isTraineeSuggestionSlotSelectable(slot: {
+  currentTraineeId: string | null;
+  suggestedTraineeId: string | null;
+}): boolean {
+  return slot.currentTraineeId == null && slot.suggestedTraineeId != null;
+}
+
+function traineeSuggestionSlotKey(trackId: string, rotationOrder: number): string {
+  return `${trackId}:${rotationOrder}`;
+}
+
+// Every selectable key across the whole result, in one Set - used both to
+// preselect on load and as the ceiling "בחר הכל" restores selection to.
+function allSelectableTraineeSuggestionKeys(result: ComputeTraineeSuggestionsResult): Set<string> {
+  const keys = new Set<string>();
+  for (const track of result.tracks) {
+    for (const slot of track.slots) {
+      if (isTraineeSuggestionSlotSelectable(slot)) {
+        keys.add(traineeSuggestionSlotKey(track.trackId, slot.rotationOrder));
+      }
+    }
+  }
+  return keys;
+}
 
 type ScheduleCheckSubTab = "trainees" | "horses";
 const SCHEDULE_CHECK_SUB_TAB_LABELS: Record<ScheduleCheckSubTab, string> = {
@@ -874,20 +913,109 @@ export function TeachingPracticeManager({
   const [suggestionResult, setSuggestionResult] = useState<ComputeTraineeSuggestionsResult | null>(null);
   const [suggestionGroupName, setSuggestionGroupName] = useState<string | null>(null);
 
+  // Stage 2 - which selectable slots (see isTraineeSuggestionSlotSelectable)
+  // are currently checked for "apply". Always recomputed from scratch (never
+  // merged) whenever a fresh result loads - see loadTraineeSuggestions -
+  // so a stale key can never survive into a newer result.
+  const [selectedSuggestionKeys, setSelectedSuggestionKeys] = useState<Set<string>>(new Set());
+  const [isApplyingSuggestions, startApplySuggestionsTransition] = useTransition();
+  const [applySuggestionsError, setApplySuggestionsError] = useState<string | null>(null);
+  const [applySuggestionsSuccess, setApplySuggestionsSuccess] = useState<string | null>(null);
+
+  // Shared by the initial open and the post-apply refetch (Stage 2) - always
+  // preselects every currently-safe-selectable slot (approved default:
+  // preselect, with נקה בחירה as the opt-out) and clears any apply
+  // error/success banner left over from a previous run, so a refetched
+  // result never shows a stale message from before it loaded.
+  function loadTraineeSuggestions(groupName: string) {
+    setSuggestionResult(null);
+    setSuggestionError(null);
+    setSuggestionLoading(true);
+    setSelectedSuggestionKeys(new Set());
+    setApplySuggestionsError(null);
+    setApplySuggestionsSuccess(null);
+    return getTeachingPracticeTraineeSuggestionsForAdmin(groupName)
+      .then((data) => {
+        setSuggestionResult(data);
+        setSelectedSuggestionKeys(allSelectableTraineeSuggestionKeys(data));
+      })
+      .catch((err: unknown) => {
+        setSuggestionError(err instanceof Error ? err.message : "אירעה שגיאה בטעינת הצעות השיבוץ");
+      })
+      .finally(() => setSuggestionLoading(false));
+  }
+
   function handleOpenTraineeSuggestions() {
     if (tableGroupFilter === "all") return; // button is disabled in this case; defensive no-op
     const groupName = tableGroupFilter;
     setSuggestionModalOpen(true);
     setSuggestionGroupName(groupName);
-    setSuggestionResult(null);
-    setSuggestionError(null);
-    setSuggestionLoading(true);
-    getTeachingPracticeTraineeSuggestionsForAdmin(groupName)
-      .then((data) => setSuggestionResult(data))
-      .catch((err: unknown) => {
-        setSuggestionError(err instanceof Error ? err.message : "אירעה שגיאה בטעינת הצעות השיבוץ");
-      })
-      .finally(() => setSuggestionLoading(false));
+    void loadTraineeSuggestions(groupName);
+  }
+
+  function handleSelectAllTraineeSuggestions() {
+    if (!suggestionResult) return;
+    setSelectedSuggestionKeys(allSelectableTraineeSuggestionKeys(suggestionResult));
+  }
+
+  function handleClearTraineeSuggestionSelection() {
+    setSelectedSuggestionKeys(new Set());
+  }
+
+  function toggleTraineeSuggestionSlot(trackId: string, rotationOrder: number, selectable: boolean) {
+    if (!selectable) return; // defensive - callers only ever wire this to a selectable row's checkbox
+    const key = traineeSuggestionSlotKey(trackId, rotationOrder);
+    setSelectedSuggestionKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  // Stage 2 (revised) - apply only the checked rows, sent as explicit
+  // {trackId, rotationOrder, traineeId} assignments in one call to
+  // applyTeachingPracticeTrackTraineeSlotSuggestionsAsAdmin - never a full
+  // roster array, so an empty earlier slot can never shift a later selected
+  // slot's rotationOrder. That action is all-or-nothing (validates every
+  // assignment before writing any of them), so there is no partial-success
+  // state to reconcile here: either every selected suggestion was applied,
+  // or none were and the inline error explains why.
+  function handleApplySelectedTraineeSuggestions() {
+    if (!suggestionResult || selectedSuggestionKeys.size === 0) return;
+    const groupNameForRefetch = suggestionGroupName;
+    setApplySuggestionsError(null);
+    setApplySuggestionsSuccess(null);
+
+    const assignments: TeachingPracticeTrackTraineeSlotAssignment[] = [];
+    for (const track of suggestionResult.tracks) {
+      for (const slot of track.slots) {
+        const key = traineeSuggestionSlotKey(track.trackId, slot.rotationOrder);
+        if (selectedSuggestionKeys.has(key) && slot.suggestedTraineeId) {
+          assignments.push({
+            trackId: track.trackId,
+            rotationOrder: slot.rotationOrder,
+            traineeId: slot.suggestedTraineeId,
+          });
+        }
+      }
+    }
+    if (assignments.length === 0) return;
+
+    startApplySuggestionsTransition(async () => {
+      const result = await applyTeachingPracticeTrackTraineeSlotSuggestionsAsAdmin(assignments);
+      if (!result.success) {
+        setApplySuggestionsError(result.error ?? "אירעה שגיאה בהחלת השיבוצים שנבחרו");
+        // Deliberately not touching suggestionResult/selectedSuggestionKeys
+        // here - nothing was written (all-or-nothing), so the מנהלת keeps
+        // seeing exactly what she selected alongside the inline error.
+        return;
+      }
+
+      setApplySuggestionsSuccess(`השיבוצים הנבחרים הוחלו (${result.appliedCount ?? assignments.length} סלוטים)`);
+      await refreshTracks();
+      if (groupNameForRefetch) await loadTraineeSuggestions(groupNameForRefetch);
+    });
   }
 
   // Column visibility (Stage B) - starts at "everything visible" on every
@@ -4470,11 +4598,12 @@ export function TeachingPracticeManager({
         );
       })()}
 
-      {/* Stage 1 - read-only trainee-assignment suggestion preview. Always
-          mounted (like the feedback modal above) rather than nested inside
-          the tracks-tab JSX, so its own open/close state is never tied to
-          which tab happens to be active. Strictly read-only: no apply/save
-          button, no calls into any create/update/delete write action. */}
+      {/* Stage 1 (preview) + Stage 2 (apply selected) trainee-assignment
+          suggestions. Always mounted (like the feedback modal above) rather
+          than nested inside the tracks-tab JSX, so its own open/close state
+          is never tied to which tab happens to be active. Applying only ever
+          goes through setTeachingPracticeTrackTraineesAsAdmin below - no
+          direct Prisma call, no new write action. */}
       <Modal
         open={suggestionModalOpen}
         size="large"
@@ -4483,17 +4612,67 @@ export function TeachingPracticeManager({
       >
         <div className="flex h-full min-h-0 flex-col gap-3">
           <p className="shrink-0 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-            תצוגה בלבד - ההצעות אינן נשמרות ואינן משנות שיבוץ קיים. יש לבדוק כל הצעה ולעדכן ידנית בטבלת המבנה
-            הקבוע במידת הצורך.
+            כל שורה עם הצעה זמינה מסומנת מראש. שום שינוי לא נשמר עד לחיצה על &quot;החל שיבוצים שנבחרו&quot; - ניתן
+            לבטל סימון שורות לפני כן. שיבוצים קיימים אינם ניתנים להחלפה בשלב זה.
           </p>
 
           {suggestionLoading && <p className="shrink-0 text-sm text-muted-foreground">טוען הצעות שיבוץ...</p>}
           {suggestionError && <p className="shrink-0 text-sm text-danger">{suggestionError}</p>}
 
           {suggestionResult && !suggestionLoading && (
-            <div className="min-h-0 flex-1 overflow-y-auto pl-1">
-              <TeachingPracticeTraineeSuggestionsPreview result={suggestionResult} />
-            </div>
+            <>
+              <div className="min-h-0 flex-1 overflow-y-auto pl-1">
+                <TeachingPracticeTraineeSuggestionsPreview
+                  result={suggestionResult}
+                  selectedKeys={selectedSuggestionKeys}
+                  onToggleSlot={toggleTraineeSuggestionSlot}
+                  disabled={isApplyingSuggestions}
+                />
+              </div>
+
+              {(() => {
+                const selectableCount = allSelectableTraineeSuggestionKeys(suggestionResult).size;
+                const selectedCount = selectedSuggestionKeys.size;
+                return (
+                  <div className="shrink-0 flex flex-col gap-2 border-t border-border pt-3">
+                    {applySuggestionsError && <p className="text-sm text-danger">{applySuggestionsError}</p>}
+                    {applySuggestionsSuccess && <p className="text-sm text-success">{applySuggestionsSuccess}</p>}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="!px-3 !py-1.5 !text-xs"
+                          disabled={isApplyingSuggestions || selectableCount === 0}
+                          onClick={handleSelectAllTraineeSuggestions}
+                        >
+                          בחר הכל
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="!px-3 !py-1.5 !text-xs"
+                          disabled={isApplyingSuggestions || selectedCount === 0}
+                          onClick={handleClearTraineeSuggestionSelection}
+                        >
+                          נקה בחירה
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                          נבחרו {selectedCount} שיבוצים מתוך {selectableCount} הצעות אפשריות
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        disabled={isApplyingSuggestions || selectedCount === 0}
+                        onClick={handleApplySelectedTraineeSuggestions}
+                      >
+                        {isApplyingSuggestions ? "מחיל שיבוצים..." : "החל שיבוצים שנבחרו"}
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </>
           )}
         </div>
       </Modal>
@@ -4501,12 +4680,23 @@ export function TeachingPracticeManager({
   );
 }
 
-// Stage 1 - full read-only content of the trainee-assignment suggestion
-// preview modal. Pure display component: takes the already-fetched Stage 0
-// result and renders it, no state of its own beyond the summary-section
-// collapse toggle below, no server calls, no callbacks in - there is nothing
-// here that could write anything.
-function TeachingPracticeTraineeSuggestionsPreview({ result }: { result: ComputeTraineeSuggestionsResult }) {
+// Stage 1 (preview) + Stage 2 (selection). Displays the already-fetched
+// Stage 0 result; the only interactive behavior it owns directly is the
+// summary-section collapse toggle below - actual selection state lives in
+// the parent (selectedKeys/onToggleSlot), so this stays a thin, easily
+// re-checked pass-through for the checkbox wiring rather than a second
+// source of truth for what's selected.
+function TeachingPracticeTraineeSuggestionsPreview({
+  result,
+  selectedKeys,
+  onToggleSlot,
+  disabled,
+}: {
+  result: ComputeTraineeSuggestionsResult;
+  selectedKeys: Set<string>;
+  onToggleSlot: (trackId: string, rotationOrder: number, selectable: boolean) => void;
+  disabled: boolean;
+}) {
   return (
     <div className="flex flex-col gap-4">
       {result.warnings.length > 0 && (
@@ -4526,7 +4716,13 @@ function TeachingPracticeTraineeSuggestionsPreview({ result }: { result: Compute
           <p className="text-sm text-muted-foreground">אין סלוטים קבועים פעילים בקבוצה זו.</p>
         )}
         {result.tracks.map((track) => (
-          <TeachingPracticeSuggestionTrackCard key={track.trackId} track={track} />
+          <TeachingPracticeSuggestionTrackCard
+            key={track.trackId}
+            track={track}
+            selectedKeys={selectedKeys}
+            onToggleSlot={onToggleSlot}
+            disabled={disabled}
+          />
         ))}
       </div>
     </div>
@@ -4578,17 +4774,14 @@ function TeachingPracticeSuggestionSummarySection({ summaries }: { summaries: Co
                   gap={summary.targetGaps.lungeAny}
                 />
                 <TeachingPracticeSuggestionBucketPill
-                  label="מוביל/ה בפרטני/קבוצתי"
-                  count={summary.counts.privateGroupLead}
-                  gap={summary.targetGaps.privateGroupLead}
-                />
-                <TeachingPracticeSuggestionBucketPill
-                  label="עוזר/ת בפרטני"
-                  count={summary.counts.privateGroupAssistant}
-                  gap={summary.targetGaps.privateGroupAssistant}
+                  label="פרטני/קבוצתי"
+                  count={summary.counts.privateGroupAny}
+                  gap={summary.targetGaps.privateGroupAny}
                 />
               </div>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+                <span>עוזר/ת בפרטני (מידע בלבד): {summary.informational.privateAssistant}</span>
+                <span>מוביל/ה בקבוצתי (מידע בלבד): {summary.informational.beginnerGroupLead}</span>
                 <span>מדריך שני (מידע בלבד): {summary.informational.beginnerGroupSecond}</span>
                 <span>ממשב (מידע בלבד): {summary.informational.evaluator}</span>
               </div>
@@ -4611,8 +4804,14 @@ function TeachingPracticeSuggestionBucketPill({ label, count, gap }: { label: st
 
 function TeachingPracticeSuggestionTrackCard({
   track,
+  selectedKeys,
+  onToggleSlot,
+  disabled,
 }: {
   track: ComputeTraineeSuggestionsResult["tracks"][number];
+  selectedKeys: Set<string>;
+  onToggleSlot: (trackId: string, rotationOrder: number, selectable: boolean) => void;
+  disabled: boolean;
 }) {
   const weekdayLabel = track.weekday != null && track.weekday >= 0 && track.weekday <= 6 ? WEEKDAY_LABELS[track.weekday] : "לא ידוע";
   return (
@@ -4623,7 +4822,14 @@ function TeachingPracticeSuggestionTrackCard({
       </h4>
       <div className="mt-2 flex flex-col gap-2">
         {track.slots.map((slot) => (
-          <TeachingPracticeSuggestionSlotRow key={slot.rotationOrder} slot={slot} />
+          <TeachingPracticeSuggestionSlotRow
+            key={slot.rotationOrder}
+            trackId={track.trackId}
+            slot={slot}
+            selected={selectedKeys.has(traineeSuggestionSlotKey(track.trackId, slot.rotationOrder))}
+            onToggle={onToggleSlot}
+            disabled={disabled}
+          />
         ))}
       </div>
     </div>
@@ -4631,10 +4837,23 @@ function TeachingPracticeSuggestionTrackCard({
 }
 
 function TeachingPracticeSuggestionSlotRow({
+  trackId,
   slot,
+  selected,
+  onToggle,
+  disabled,
 }: {
+  trackId: string;
   slot: ComputeTraineeSuggestionsResult["tracks"][number]["slots"][number];
+  selected: boolean;
+  onToggle: (trackId: string, rotationOrder: number, selectable: boolean) => void;
+  disabled: boolean;
 }) {
+  // Single source of truth for "can this row ever have a checkbox" - a
+  // filled slot never qualifies (replacing an existing assignment is out of
+  // scope for this stage), matching the same predicate used to build
+  // allSelectableTraineeSuggestionKeys/preselect on load.
+  const selectable = isTraineeSuggestionSlotSelectable(slot);
   const status = slot.currentTraineeId
     ? { label: "משובץ/ת כבר", className: "bg-muted text-muted-foreground" }
     : slot.suggestedTraineeId
@@ -4642,11 +4861,29 @@ function TeachingPracticeSuggestionSlotRow({
       : { label: "אין הצעה מתאימה", className: "bg-danger-muted text-danger" };
 
   return (
-    <div className="rounded-lg bg-muted/50 p-2 text-xs">
+    <div
+      className={`rounded-lg p-2 text-xs ${
+        selectable && selected ? "bg-primary/10 ring-1 ring-primary" : "bg-muted/50"
+      }`}
+    >
       <div className="flex flex-wrap items-center gap-2">
+        {selectable && (
+          <input
+            type="checkbox"
+            checked={selected}
+            disabled={disabled}
+            onChange={() => onToggle(trackId, slot.rotationOrder, selectable)}
+            aria-label={`בחירת הצעת שיבוץ עבור מס' ${slot.rotationOrder + 1}`}
+          />
+        )}
         <span className="font-medium text-card-foreground">מס&apos; {slot.rotationOrder + 1}</span>
         <span className="text-muted-foreground">תפקיד צפוי: {ROLE_LABELS[slot.projectedRole]}</span>
         <span className={`rounded-full px-2 py-0.5 font-medium ${status.className}`}>{status.label}</span>
+        {selectable && selected && (
+          <span className="rounded-full bg-primary px-2 py-0.5 font-medium text-primary-foreground">
+            נבחר לשיבוץ
+          </span>
+        )}
       </div>
       <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
         <span>

@@ -1,14 +1,26 @@
 "use server";
 
 // Stage 0 - read-only data-fetch + calculation wrapper around the pure
-// engine in lib/teaching-practice-trainee-suggestions.ts. This file never
-// writes to the database: no create/update/delete/upsert Prisma calls, no
-// calls into any existing set*/create*/update*/delete* Teaching Practice
-// write action, and no revalidatePath. There is no apply step yet - Stage 0
-// is preview-only, matching the approved design.
+// engine in lib/teaching-practice-trainee-suggestions.ts.
+//
+// Stage 2 (revised) additionally adds one small, dedicated write action -
+// applyTeachingPracticeTrackTraineeSlotSuggestionsAsAdmin - for applying
+// selected suggestions at their exact rotationOrder without compacting/
+// shifting any other slot. This is a deliberate departure from reusing
+// setTeachingPracticeTrackTraineesAsAdmin (lib/actions/teaching-practice.ts):
+// that action always replaces a track's entire roster from a plain array
+// (array index == rotationOrder), so a hole before the target slot silently
+// shifts everything after it. TeachingPracticeTrackTrainee has no schema
+// constraint requiring contiguous rotationOrder values (only
+// @@unique([trackId, traineeId]) and @@unique([trackId, rotationOrder]) -
+// see prisma/schema.prisma), so a single explicit create at the exact
+// rotationOrder is both valid and the correct fix. That existing action
+// itself is NOT modified here, and nothing else in this file calls it.
 
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import type { ActionResult } from "@/lib/actions/students";
+import { TEACHING_PRACTICE_TEAM_SIZE } from "@/lib/teaching-practice-rotation";
 import {
   computeTeachingPracticeTraineeSuggestions,
   TEACHING_PRACTICE_SUGGESTION_GROUP_NAMES,
@@ -123,4 +135,128 @@ export async function getTeachingPracticeTraineeSuggestionsForAdmin(
 ): Promise<ComputeTraineeSuggestionsResult> {
   await requireAdmin();
   return computeTeachingPracticeTraineeSuggestionsForGroupInternal(groupName);
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2 (revised) - apply selected suggestions at their exact rotationOrder
+// ---------------------------------------------------------------------------
+
+const SLOT_NOT_FOUND_TRACK = "מסלול ההתנסות לא נמצא";
+
+export interface TeachingPracticeTrackTraineeSlotAssignment {
+  trackId: string;
+  rotationOrder: number;
+  traineeId: string;
+}
+
+export interface ApplyTeachingPracticeTrackTraineeSlotSuggestionsResult extends ActionResult {
+  appliedCount?: number;
+}
+
+// All-or-nothing: every assignment is validated against a fresh DB read
+// before anything is written, and only if every single one passes are they
+// all created together inside one prisma.$transaction. If any assignment
+// fails validation, nothing in the batch is written - this is a stricter,
+// simpler guarantee than "stop at the first failure, keep whatever already
+// committed" (the old per-track roster-replace approach), and is possible
+// here specifically because every assignment in a batch is an independent
+// single-row create, not a whole-track replace depending on the others.
+//
+// Preserves holes by construction: this only ever creates the exact rows
+// passed in, at their exact rotationOrder - it never reads "the whole
+// roster" and never deletes/recreates anything, so a track with rotationOrder
+// 0 empty and rotationOrder 1 newly assigned ends with exactly one row
+// (rotationOrder: 1) and nothing at rotationOrder 0, exactly as intended.
+async function applyTeachingPracticeTrackTraineeSlotSuggestionsInternal(
+  assignments: TeachingPracticeTrackTraineeSlotAssignment[]
+): Promise<ApplyTeachingPracticeTrackTraineeSlotSuggestionsResult> {
+  if (assignments.length === 0) return { success: true, appliedCount: 0 };
+
+  // Reject internally-contradictory input before any DB read - two
+  // assignments can never target the same (trackId, rotationOrder), and the
+  // same trainee can never be asked for two different slots on the same
+  // track in one call (mirrors the two @@unique constraints on
+  // TeachingPracticeTrackTrainee this write must respect).
+  const slotSeen = new Set<string>();
+  const traineeTrackSeen = new Set<string>();
+  for (const a of assignments) {
+    const slotSeenKey = `${a.trackId}:${a.rotationOrder}`;
+    const traineeTrackKey = `${a.trackId}:${a.traineeId}`;
+    if (slotSeen.has(slotSeenKey)) {
+      return { success: false, error: "לא ניתן לשבץ פעמיים לאותו סלוט באותה קריאה" };
+    }
+    if (traineeTrackSeen.has(traineeTrackKey)) {
+      return { success: false, error: "לא ניתן לשבץ אותו חניך/ה ליותר מתפקיד אחד באותו מסלול באותה קריאה" };
+    }
+    slotSeen.add(slotSeenKey);
+    traineeTrackSeen.add(traineeTrackKey);
+  }
+
+  const trackIds = Array.from(new Set(assignments.map((a) => a.trackId)));
+  const traineeIds = Array.from(new Set(assignments.map((a) => a.traineeId)));
+
+  const [tracks, trainees, existingRows] = await Promise.all([
+    prisma.teachingPracticeTrack.findMany({ where: { id: { in: trackIds } } }),
+    prisma.student.findMany({ where: { id: { in: traineeIds } } }),
+    prisma.teachingPracticeTrackTrainee.findMany({ where: { trackId: { in: trackIds } } }),
+  ]);
+  const trackById = new Map(tracks.map((t) => [t.id, t]));
+  const traineeById = new Map(trainees.map((t) => [t.id, t]));
+  const existingByTrackId = new Map<string, typeof existingRows>();
+  for (const row of existingRows) {
+    const list = existingByTrackId.get(row.trackId) ?? [];
+    list.push(row);
+    existingByTrackId.set(row.trackId, list);
+  }
+
+  for (const a of assignments) {
+    const track = trackById.get(a.trackId);
+    if (!track) return { success: false, error: SLOT_NOT_FOUND_TRACK };
+
+    const trainee = traineeById.get(a.traineeId);
+    if (!trainee) return { success: false, error: "אחד או יותר מהחניכים שנבחרו לא נמצאו" };
+    if (!trainee.isActive) return { success: false, error: `לא ניתן לשבץ את ${trainee.fullName} - אינו/ה פעיל/ה` };
+    if ((trainee.groupName ?? null) !== (track.groupName ?? null)) {
+      return { success: false, error: `${trainee.fullName} אינו/ה שייך/ת לקבוצת הסלוט המבוקש` };
+    }
+
+    const expectedSize = TEACHING_PRACTICE_TEAM_SIZE[track.practiceType];
+    if (!Number.isInteger(a.rotationOrder) || a.rotationOrder < 0 || a.rotationOrder >= expectedSize) {
+      return { success: false, error: "מספר תפקיד לא תקין עבור סוג ההתנסות" };
+    }
+
+    const existingForTrack = existingByTrackId.get(a.trackId) ?? [];
+    if (existingForTrack.some((row) => row.rotationOrder === a.rotationOrder)) {
+      return {
+        success: false,
+        error: "הסלוט המבוקש כבר משובץ - החלפת שיבוץ קיים אינה נתמכת בשלב זה",
+      };
+    }
+    if (existingForTrack.some((row) => row.traineeId === a.traineeId)) {
+      return { success: false, error: `${trainee.fullName} כבר משובץ/ת בתפקיד אחר במסלול זה` };
+    }
+  }
+
+  // createMany (not $transaction([...create()])) - matches the exact write
+  // primitive setTeachingPracticeTrackTraineesInternal already uses for this
+  // same model (lib/actions/teaching-practice.ts), and its input type has
+  // only the scalar-FK shape (trackId/traineeId), no relation-connect
+  // variant to resolve at all. A single multi-row INSERT is also already
+  // atomic at the DB level, so no extra $transaction wrapper is needed here.
+  await prisma.teachingPracticeTrackTrainee.createMany({
+    data: assignments.map((a) => ({
+      trackId: a.trackId,
+      traineeId: a.traineeId,
+      rotationOrder: a.rotationOrder,
+    })),
+  });
+
+  return { success: true, appliedCount: assignments.length };
+}
+
+export async function applyTeachingPracticeTrackTraineeSlotSuggestionsAsAdmin(
+  assignments: TeachingPracticeTrackTraineeSlotAssignment[]
+): Promise<ApplyTeachingPracticeTrackTraineeSlotSuggestionsResult> {
+  await requireAdmin();
+  return applyTeachingPracticeTrackTraineeSlotSuggestionsInternal(assignments);
 }
