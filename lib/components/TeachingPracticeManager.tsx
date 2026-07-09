@@ -3,12 +3,14 @@
 import {
   Fragment,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
   useTransition,
   type FormEvent,
   type ReactNode,
+  type Ref,
 } from "react";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
@@ -64,15 +66,21 @@ import {
   updateTeachingPracticeLessonAsInstructor,
   updateTeachingPracticeTrackAsAdmin,
   updateTeachingPracticeTrackAsInstructor,
+  upsertTeachingPracticeFeedbackAsAdmin,
+  upsertTeachingPracticeFeedbackAsInstructor,
   type TeachingPracticeChildAssignmentInput,
+  type TeachingPracticeChildAssignmentRow,
   type TeachingPracticeChildInput,
   type TeachingPracticeChildRow,
   type TeachingPracticeDateBlockType,
+  type TeachingPracticeFeedbackInput,
   type TeachingPracticeGroupBlockInput,
   type TeachingPracticeLessonDetail,
   type TeachingPracticeLessonInput,
   type TeachingPracticeLessonSummary,
+  type TeachingPracticeParticipantFeedbackData,
   type TeachingPracticeParticipantInput,
+  type TeachingPracticeParticipantRow,
   type TeachingPracticeScheduleCheckResult,
   type TeachingPracticeTrackChildInput,
   type TeachingPracticeTrackInput,
@@ -121,6 +129,10 @@ const PRACTICE_TYPE_LABELS: Record<TeachingPracticeTypeValue, string> = {
   BEGINNER_GROUP: "שיעור קבוצתי מתחילים",
 };
 const PRACTICE_TYPES: TeachingPracticeTypeValue[] = ["LUNGE", "BEGINNER_PRIVATE", "BEGINNER_GROUP"];
+
+// 1.0-5.0 in 0.5 steps, stored as ratingHalfPoints 2-10 - same convention as
+// RidingLessonNote.ratingHalfPoints/RATING_OPTIONS in the riding feedback UI.
+const FEEDBACK_RATING_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 // The fixed role columns shown per practiceType in the scheduled-lessons
 // table (Stage A) - mirrors the 2-role LUNGE/BEGINNER_PRIVATE rotation and
@@ -358,6 +370,19 @@ interface InstructorOption {
   fullName: string;
 }
 
+// One real TeachingPracticeParticipant, resolved with its lesson and
+// (per pairLessonParticipantsWithChildren) its paired child - the shape both
+// the trainee-name click target and the feedback modal's switcher/context
+// are built from. See TeachingPracticeManager's feedbackEntries memo.
+interface TeachingPracticeFeedbackEntry {
+  participantId: string;
+  traineeName: string;
+  role: TeachingPracticeRoleValue;
+  lesson: TeachingPracticeLessonDetail;
+  child: TeachingPracticeChildAssignmentRow | null;
+  feedback: TeachingPracticeParticipantFeedbackData | null;
+}
+
 interface TrackFormState {
   practiceType: TeachingPracticeTypeValue;
   groupName: string;
@@ -514,7 +539,6 @@ export function TeachingPracticeManager({
   actorId,
   canManageAssignments,
   canManageHorses,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Stage B: threaded through, read starting in Stage C's feedback modal.
   canEditTeachingPracticeFeedback = false,
   students,
   instructors,
@@ -524,8 +548,6 @@ export function TeachingPracticeManager({
   actorId: string | null;
   canManageAssignments: boolean;
   canManageHorses: boolean;
-  // Stage B: threaded through and type-ready for the Stage C feedback modal;
-  // not read by any UI yet.
   canEditTeachingPracticeFeedback?: boolean;
   students: StudentOption[];
   instructors: InstructorOption[];
@@ -535,6 +557,13 @@ export function TeachingPracticeManager({
   // (see report) - horse-specific inputs are only ever enabled when canEdit
   // is already true, so this flag alone never unlocks editing on its own.
   const canEditHorseFields = role === "admin" || canManageHorses;
+  // Separate permission from canEdit/canEditHorseFields on purpose - entering
+  // Teaching Practice feedback is a distinct trust level from managing
+  // tracks/lessons/participants/children/horses, and is never gated behind
+  // the isEditMode toggle below (effectiveCanEdit) either, since feedback
+  // entry has nothing to do with that toggle's "editing lesson structure"
+  // concern.
+  const canEditFeedback = role === "admin" || canEditTeachingPracticeFeedback;
 
   // Stage A: view/edit mode. canEdit/canEditHorseFields above stay exactly
   // what they always meant ("is this user allowed to edit at all") - they
@@ -573,6 +602,60 @@ export function TeachingPracticeManager({
   const [scheduleCheck, setScheduleCheck] = useState<TeachingPracticeScheduleCheckResult | null>(null);
   const [scheduleCheckLoading, setScheduleCheckLoading] = useState(false);
   const [scheduleCheckSubTab, setScheduleCheckSubTab] = useState<ScheduleCheckSubTab>("trainees");
+
+  // Stage C: which participant's feedback modal is open, if any - null means
+  // closed. Feedback content itself is never held here; the modal always
+  // reads it fresh from feedbackEntries (derived from lessonDateDetail)
+  // below, so it can never go stale relative to what the table shows.
+  const [feedbackModalParticipantId, setFeedbackModalParticipantId] = useState<string | null>(null);
+  // X/backdrop-close on the wrapping <Modal> below must save first (same
+  // requestClose delegation pattern as the riding feedback modal's
+  // studentEditorRef) - the modal component alone holds the current draft.
+  const feedbackModalRef = useRef<TeachingPracticeFeedbackModalHandle>(null);
+
+  // Every real participant across the whole selected date (not just one
+  // lesson), each paired with its lesson/child context via the exact same
+  // pairLessonParticipantsWithChildren helper the generated-lessons table
+  // itself uses - this is both the switcher's option list and the source the
+  // modal reads its currently-displayed participant's context from, so the
+  // two surfaces can never disagree.
+  const feedbackEntries = useMemo<TeachingPracticeFeedbackEntry[]>(() => {
+    const entries: TeachingPracticeFeedbackEntry[] = [];
+    for (const lesson of lessonDateDetail ?? []) {
+      const roleSlots = ROLE_SLOTS_BY_PRACTICE_TYPE[lesson.practiceType];
+      for (const row of pairLessonParticipantsWithChildren(lesson, roleSlots)) {
+        if (!row.participant) continue;
+        entries.push({
+          participantId: row.participant.participantId,
+          traineeName: row.participant.traineeName,
+          role: row.participant.role,
+          lesson,
+          child: row.child,
+          feedback: row.participant.feedback,
+        });
+      }
+    }
+    return entries;
+  }, [lessonDateDetail]);
+
+  async function handleSaveTeachingPracticeFeedback(
+    participantId: string,
+    input: TeachingPracticeFeedbackInput
+  ): Promise<ActionResult> {
+    const result =
+      role === "admin"
+        ? await upsertTeachingPracticeFeedbackAsAdmin(participantId, input)
+        : await upsertTeachingPracticeFeedbackAsInstructor(actorId!, participantId, input);
+    // Same "refetch this date's detail after a successful mutation" pattern
+    // already used by handleToggleLessonPublished/handleUpdateLesson below -
+    // keeps the table's own feedback-derived state (feedbackEntries) and the
+    // modal in sync without a full page reload, at the cost of one extra
+    // round trip per save.
+    if (result.success && selectedLessonDate) {
+      await refreshLessonDateDetail(selectedLessonDate);
+    }
+    return result;
+  }
 
   async function refreshTracks() {
     const fresh =
@@ -3616,12 +3699,14 @@ export function TeachingPracticeManager({
                                   groupName={groupName}
                                   lessons={groupLessons}
                                   canEdit={effectiveCanEdit}
+                                  canEditFeedback={canEditFeedback}
                                   isPending={isLessonActionPending}
                                   instructors={instructors}
                                   trainees={students}
                                   childRegistry={children ?? []}
                                   onTogglePublished={handleToggleLessonPublished}
                                   onSave={handleUpdateLesson}
+                                  onOpenFeedback={setFeedbackModalParticipantId}
                                 />
                               ))}
                             </div>
@@ -3638,12 +3723,14 @@ export function TeachingPracticeManager({
                                   groupName={groupName}
                                   lessons={groupLessons}
                                   canEdit={effectiveCanEdit}
+                                  canEditFeedback={canEditFeedback}
                                   isPending={isLessonActionPending}
                                   instructors={instructors}
                                   trainees={students}
                                   childRegistry={children ?? []}
                                   onTogglePublished={handleToggleLessonPublished}
                                   onSave={handleUpdateLesson}
+                                  onOpenFeedback={setFeedbackModalParticipantId}
                                 />
                               ))}
                             </div>
@@ -3660,12 +3747,14 @@ export function TeachingPracticeManager({
                                   groupName={groupName}
                                   lessons={groupLessons}
                                   canEdit={effectiveCanEdit}
+                                  canEditFeedback={canEditFeedback}
                                   isPending={isLessonActionPending}
                                   instructors={instructors}
                                   trainees={students}
                                   childRegistry={children ?? []}
                                   onTogglePublished={handleToggleLessonPublished}
                                   onSave={handleUpdateLesson}
+                                  onOpenFeedback={setFeedbackModalParticipantId}
                                 />
                               ))}
                             </div>
@@ -4275,6 +4364,35 @@ export function TeachingPracticeManager({
           )}
         </div>
       )}
+
+      {(() => {
+        const activeFeedbackEntry =
+          feedbackModalParticipantId !== null
+            ? (feedbackEntries.find((e) => e.participantId === feedbackModalParticipantId) ?? null)
+            : null;
+        return (
+          <Modal
+            open={activeFeedbackEntry !== null}
+            title="משוב התנסות מתחילים"
+            onClose={() => feedbackModalRef.current?.requestClose()}
+          >
+            {activeFeedbackEntry && (
+              <TeachingPracticeFeedbackModal
+                key={activeFeedbackEntry.participantId}
+                ref={feedbackModalRef}
+                entry={activeFeedbackEntry}
+                switchOptions={feedbackEntries.map((e) => ({
+                  value: e.participantId,
+                  label: `${e.traineeName} · ${PRACTICE_TYPE_LABELS[e.lesson.practiceType]}`,
+                }))}
+                onSave={handleSaveTeachingPracticeFeedback}
+                onClose={() => setFeedbackModalParticipantId(null)}
+                onSwitchTo={setFeedbackModalParticipantId}
+              />
+            )}
+          </Modal>
+        );
+      })()}
     </div>
   );
 }
@@ -4660,16 +4778,19 @@ function LessonGroupTable({
   groupName,
   lessons,
   canEdit,
+  canEditFeedback,
   isPending,
   instructors,
   trainees,
   childRegistry,
   onTogglePublished,
   onSave,
+  onOpenFeedback,
 }: {
   groupName: string | null;
   lessons: TeachingPracticeLessonDetail[];
   canEdit: boolean;
+  canEditFeedback: boolean;
   isPending: boolean;
   instructors: InstructorOption[];
   trainees: StudentOption[];
@@ -4681,6 +4802,7 @@ function LessonGroupTable({
     participantRows: TeachingPracticeParticipantInput[],
     childAssignmentRows: TeachingPracticeChildAssignmentInput[]
   ) => Promise<ActionResult>;
+  onOpenFeedback: (participantId: string) => void;
 }) {
   if (lessons.length === 0) return null;
   const roleSlots = ROLE_SLOTS_BY_PRACTICE_TYPE[lessons[0].practiceType];
@@ -4723,6 +4845,7 @@ function LessonGroupTable({
                 lesson={lesson}
                 roleSlots={roleSlots}
                 canEdit={canEdit}
+                canEditFeedback={canEditFeedback}
                 isPending={isPending}
                 instructors={instructors}
                 trainees={trainees}
@@ -4731,6 +4854,7 @@ function LessonGroupTable({
                 onSave={(input, participantRows, childAssignmentRows) =>
                   onSave(lesson.id, input, participantRows, childAssignmentRows)
                 }
+                onOpenFeedback={onOpenFeedback}
               />
             ))}
           </tbody>
@@ -4746,6 +4870,11 @@ function LessonGroupTable({
 // loaded for the whole selected date (see refreshLessonDateDetail), so
 // unlike the old card this never needs its own lazy detail fetch/toggle.
 //
+interface LessonParticipantChildPairing {
+  participant: TeachingPracticeParticipantRow | null;
+  child: TeachingPracticeChildAssignmentRow | null;
+}
+
 // Trainee/role and child are shown as row-based pairs (חניך + תפקיד columns,
 // not one column per role slot) - built by index-pairing
 // participants[i]/childAssignments[i] after sorting participants into
@@ -4753,23 +4882,61 @@ function LessonGroupTable({
 // childAssignments.length, 1). A BEGINNER_GROUP lesson's 3
 // trainees/roles/children line up 1:1 into 3 rows; LUNGE/BEGINNER_PRIVATE's
 // 2 trainees against a single child produce 2 rows so neither trainee is
-// ever hidden, with the second row's child columns as "—". The shared
-// per-lesson cells (time, status, actions) get rowSpan across every row in
+// ever hidden, with the second row's child columns as "—".
+//
+// Extracted as its own function (rather than left inline in LessonTableRow)
+// so the feedback modal's read-only context (see
+// TeachingPracticeFeedbackModal) resolves "which child did this participant
+// work with" using this exact same pairing, never a second copy of the
+// algorithm - the table and the modal can then never show contradictory
+// child/horse attribution for the same participant. Unlike the table's own
+// display (which renders the shared child once via rowSpan and never reads
+// a per-row `child` for that case), this always resolves `child` to the
+// single shared child when sharedChildColumn applies, since the modal has
+// no rowSpan to lean on and needs a concrete value per participant.
+function pairLessonParticipantsWithChildren(
+  lesson: TeachingPracticeLessonDetail,
+  roleSlots: TeachingPracticeRoleValue[]
+): LessonParticipantChildPairing[] {
+  const roleIndex = new Map(roleSlots.map((role, i) => [role, i]));
+  const sortedParticipants = [...lesson.participants].sort(
+    (a, b) => (roleIndex.get(a.role) ?? roleSlots.length) - (roleIndex.get(b.role) ?? roleSlots.length)
+  );
+  const expectedRows = TEACHING_PRACTICE_TEAM_SIZE[lesson.practiceType];
+  const sharedChildColumn = lesson.practiceType !== "BEGINNER_GROUP" && lesson.childAssignments.length <= 1;
+  const rowCount = sharedChildColumn
+    ? Math.max(sortedParticipants.length, expectedRows)
+    : Math.max(sortedParticipants.length, lesson.childAssignments.length, expectedRows);
+  const soleChild = lesson.childAssignments[0] ?? null;
+  return Array.from({ length: rowCount }, (_, i) => ({
+    participant: sortedParticipants[i] ?? null,
+    child: sharedChildColumn ? soleChild : (lesson.childAssignments[i] ?? null),
+  }));
+}
+
+// The shared cells (time, status, actions) get rowSpan across every row in
 // the group and are only rendered once, on the first one.
 function LessonTableRow({
   lesson,
   roleSlots,
   canEdit,
+  canEditFeedback,
   isPending,
   instructors,
   trainees,
   childRegistry,
   onTogglePublished,
   onSave,
+  onOpenFeedback,
 }: {
   lesson: TeachingPracticeLessonDetail;
   roleSlots: TeachingPracticeRoleValue[];
   canEdit: boolean;
+  // Separate from canEdit - gates only the trainee-name click target that
+  // opens the feedback modal, never the existing עריכה/פרסום actions or
+  // participant/child/horse editing (see TeachingPracticeManager's
+  // canEditFeedback comment for why this must stay its own permission).
+  canEditFeedback: boolean;
   isPending: boolean;
   instructors: InstructorOption[];
   trainees: StudentOption[];
@@ -4780,6 +4947,7 @@ function LessonTableRow({
     participantRows: TeachingPracticeParticipantInput[],
     childAssignmentRows: TeachingPracticeChildAssignmentInput[]
   ) => Promise<ActionResult>;
+  onOpenFeedback: (participantId: string) => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<LessonEditFormState>(() => lessonToEditForm(lesson, roleSlots));
@@ -4852,16 +5020,6 @@ function LessonTableRow({
   }
 
   const colSpan = 13;
-  // Sort participants into roleSlots order (LEAD before SECOND/ASSISTANT
-  // before EVALUATOR) so "row 0" is always the lead, matching the child
-  // list's own order - then index-pair the two lists rather than keying off
-  // role, so a trainee with no matching child (or vice versa) still gets its
-  // own row instead of being dropped.
-  const roleIndex = new Map(roleSlots.map((role, i) => [role, i]));
-  const sortedParticipants = [...lesson.participants].sort(
-    (a, b) => (roleIndex.get(a.role) ?? roleSlots.length) - (roleIndex.get(b.role) ?? roleSlots.length)
-  );
-  const expectedRows = TEACHING_PRACTICE_TEAM_SIZE[lesson.practiceType];
   // BEGINNER_GROUP always index-pairs one child per trainee/role row (3+3).
   // LUNGE/BEGINNER_PRIVATE normally have one child shared by both trainee
   // rows, so its columns are shown once with rowSpan instead of repeated
@@ -4869,13 +5027,12 @@ function LessonTableRow({
   // in which case this falls back to the same per-row pairing as the group
   // table so nothing is silently hidden.
   const sharedChildColumn = lesson.practiceType !== "BEGINNER_GROUP" && lesson.childAssignments.length <= 1;
-  const rowCount = sharedChildColumn
-    ? Math.max(sortedParticipants.length, expectedRows)
-    : Math.max(sortedParticipants.length, lesson.childAssignments.length, expectedRows);
-  const displayRows = Array.from({ length: rowCount }, (_, i) => ({
-    participant: sortedParticipants[i] ?? null,
-    child: sharedChildColumn ? null : (lesson.childAssignments[i] ?? null),
-  }));
+  // displayRows.child is intentionally not read below when sharedChildColumn
+  // is true (the table renders soleChild once via rowSpan instead) - see
+  // pairLessonParticipantsWithChildren's own comment for why it still
+  // resolves a concrete value there (the feedback modal needs one).
+  const displayRows = pairLessonParticipantsWithChildren(lesson, roleSlots);
+  const rowCount = displayRows.length;
   const soleChild = lesson.childAssignments[0] ?? null;
 
   return (
@@ -4893,7 +5050,19 @@ function LessonTableRow({
               {lesson.startTime}-{lesson.endTime}
             </td>
           )}
-          <td className="px-2 py-2">{row.participant?.traineeName ?? "—"}</td>
+          <td className="px-2 py-2">
+            {row.participant && canEditFeedback ? (
+              <button
+                type="button"
+                onClick={() => onOpenFeedback(row.participant!.participantId)}
+                className="text-primary underline decoration-dotted underline-offset-2 hover:opacity-80"
+              >
+                {row.participant.traineeName}
+              </button>
+            ) : (
+              (row.participant?.traineeName ?? "—")
+            )}
+          </td>
           <td className="px-2 py-2">
             {row.participant
               ? (lesson.roleLabelOverrides?.[row.participant.role] ?? ROLE_LABELS[row.participant.role])
@@ -5210,5 +5379,173 @@ function LessonTableRow({
         </tr>
       )}
     </Fragment>
+  );
+}
+
+export interface TeachingPracticeFeedbackModalHandle {
+  requestClose: () => void;
+}
+
+// Feedback entry form for one TeachingPracticeParticipant - rendered by
+// TeachingPracticeManager inside a <Modal>, keyed by entry.participantId so
+// switching trainees (see the switcher below) always mounts a fresh copy
+// with correctly-seeded fields, rather than needing a manual reseed effect
+// that could race with in-flight typing. Mirrors the riding feedback
+// StudentEditor's save/switch/close mechanics (see
+// app/instructor/InstructorRidingSlotsSection.tsx) but simpler: only two
+// fields (rating, free text), no per-field autosave-on-blur (nothing here
+// feeds a shared suggestion pool the way session-horse/lesson-topic do for
+// riding) - every save is either the explicit button, a switch, or a close.
+function TeachingPracticeFeedbackModal({
+  entry,
+  switchOptions,
+  onSave,
+  onClose,
+  onSwitchTo,
+  ref,
+}: {
+  entry: TeachingPracticeFeedbackEntry;
+  // Every participant on the currently selected date (see feedbackEntries),
+  // including this entry itself so it shows as selected.
+  switchOptions: SearchableSelectOption[];
+  onSave: (participantId: string, input: TeachingPracticeFeedbackInput) => Promise<ActionResult>;
+  // Called only after a successful save-then-close.
+  onClose: () => void;
+  // Called only after a successful save-then-switch.
+  onSwitchTo: (participantId: string) => void;
+  ref?: Ref<TeachingPracticeFeedbackModalHandle>;
+}) {
+  const [ratingHalfPoints, setRatingHalfPoints] = useState<number | null>(entry.feedback?.ratingHalfPoints ?? null);
+  const [feedbackText, setFeedbackText] = useState(entry.feedback?.feedback ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [isSaving, startSaveTransition] = useTransition();
+  // Synchronous guard (isSaving from useTransition only updates on the next
+  // render) - a duplicate save request that arrives while one is already in
+  // flight is simply dropped. requestClose and switching trainees are the
+  // two exceptions (pendingCloseRef/pendingSwitchToRef below) - neither may
+  // be silently dropped just because a save happened to already be running.
+  const isSavingRef = useRef(false);
+  const pendingCloseRef = useRef(false);
+  const pendingSwitchToRef = useRef<string | null>(null);
+
+  function performSave(options?: { switchToParticipantId?: string; shouldClose?: boolean }) {
+    if (isSavingRef.current) return;
+    isSavingRef.current = true;
+    setError(null);
+    startSaveTransition(async () => {
+      const result = await onSave(entry.participantId, {
+        ratingHalfPoints,
+        feedback: feedbackText,
+      });
+      isSavingRef.current = false;
+      // A close or switch requested while THIS save was already in flight
+      // must still be honored once this save finishes. A switch takes
+      // priority over a plain close if somehow both were queued.
+      const switchTarget = options?.switchToParticipantId ?? pendingSwitchToRef.current;
+      const shouldClose = options?.shouldClose || pendingCloseRef.current;
+      pendingSwitchToRef.current = null;
+      pendingCloseRef.current = false;
+      if (!result.success) {
+        setError(result.error ?? "אירעה שגיאה");
+        return;
+      }
+      if (switchTarget) {
+        onSwitchTo(switchTarget);
+      } else if (shouldClose) {
+        onClose();
+      }
+    });
+  }
+
+  function handleSave() {
+    performSave();
+  }
+
+  function handleSwitchTo(participantId: string) {
+    if (!participantId || participantId === entry.participantId) return;
+    if (isSavingRef.current) {
+      pendingSwitchToRef.current = participantId;
+      return;
+    }
+    performSave({ switchToParticipantId: participantId });
+  }
+
+  useImperativeHandle(ref, () => ({
+    requestClose: () => {
+      if (isSavingRef.current) {
+        pendingCloseRef.current = true;
+        return;
+      }
+      performSave({ shouldClose: true });
+    },
+  }));
+
+  const roleLabel = entry.lesson.roleLabelOverrides?.[entry.role] ?? ROLE_LABELS[entry.role];
+
+  return (
+    <div className="flex flex-col gap-3">
+      {switchOptions.length > 1 && (
+        <label className="flex flex-col gap-1 text-sm">
+          מעבר לחניך/ה אחר/ת
+          <SearchableSelect
+            value={entry.participantId}
+            options={switchOptions}
+            onChange={handleSwitchTo}
+            placeholder="בחרו חניך/ה"
+          />
+        </label>
+      )}
+
+      {/* Read-only context - never editable from here (child/horse/equipment/
+          participant/lesson details all stay owned by the existing עריכה
+          flow above). */}
+      <div className="flex flex-col gap-0.5 rounded-lg border border-border bg-muted/40 p-3 text-sm">
+        <p className="font-semibold text-card-foreground">{entry.traineeName}</p>
+        <p className="text-muted-foreground">
+          {PRACTICE_TYPE_LABELS[entry.lesson.practiceType]} · {roleLabel}
+        </p>
+        <p className="text-muted-foreground">
+          {entry.lesson.startTime}-{entry.lesson.endTime}
+        </p>
+        <p className="text-muted-foreground">
+          ילד/ה: {entry.child ? `${entry.child.childFullName}${entry.child.isAbsent ? " (נעדר/ת)" : ""}` : "—"}
+        </p>
+        <p className="text-muted-foreground">סוס: {entry.child?.horseName ?? "—"}</p>
+      </div>
+
+      <label className="flex flex-col gap-1 text-sm">
+        דירוג
+        <select
+          value={ratingHalfPoints ?? ""}
+          onChange={(e) => setRatingHalfPoints(e.target.value ? Number(e.target.value) : null)}
+          className="w-32 rounded-lg border border-border px-3 py-2 text-sm"
+        >
+          <option value="">ללא</option>
+          {FEEDBACK_RATING_OPTIONS.map((v) => (
+            <option key={v} value={v}>
+              {v / 2}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm">
+        משוב
+        <textarea
+          value={feedbackText}
+          onChange={(e) => setFeedbackText(e.target.value)}
+          rows={4}
+          className="rounded-lg border border-border px-3 py-2 text-sm"
+        />
+      </label>
+
+      {error && <p className="text-sm text-danger">{error}</p>}
+
+      <div className="flex justify-end">
+        <Button disabled={isSaving} onClick={handleSave}>
+          {isSaving ? "שומר..." : "שמירה"}
+        </Button>
+      </div>
+    </div>
   );
 }
