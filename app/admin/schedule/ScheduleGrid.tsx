@@ -148,23 +148,36 @@ export function ScheduleGrid({
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-border bg-card">
+    // Bounded self-contained scroll box (same max-h-[70vh] overflow-auto
+    // pattern as DayPlanGrid.tsx/AvailabilityGrid.tsx) - the header row's
+    // sticky top-0 below sticks to the top of *this* box, never the page
+    // viewport, so it can never collide with the admin layout's own sticky
+    // header.
+    <div className="max-h-[70vh] overflow-auto rounded-xl border border-border bg-card">
       <table className="w-full border-collapse text-sm">
         <thead>
+          {/* Only this first row (the actual column identity - name/group/
+              subgroup/date) is pinned. The second row below (coverage
+              counts) is intentionally left non-sticky - it's supplementary,
+              and stacking two sticky rows would need a hardcoded pixel
+              top-offset for the second row (its rendered height isn't
+              known statically), which is exactly the kind of fragile guess
+              this change avoids. It scrolls out of view normally once
+              past, same as any other row. */}
           <tr>
-            <th className="sticky right-0 z-10 min-w-[170px] border-b border-border bg-muted px-3 py-2 text-right font-medium text-muted-foreground">
+            <th className="sticky top-0 right-0 z-20 min-w-[170px] border-b border-border bg-muted px-3 py-2 text-right font-medium text-muted-foreground">
               שם מלא
             </th>
-            <th className="min-w-[64px] border-b border-border bg-muted px-2 py-2 text-center font-medium text-muted-foreground">
+            <th className="sticky top-0 z-10 min-w-[64px] border-b border-border bg-muted px-2 py-2 text-center font-medium text-muted-foreground">
               קבוצה
             </th>
-            <th className="min-w-[80px] border-b border-border bg-muted px-2 py-2 text-center font-medium text-muted-foreground">
+            <th className="sticky top-0 z-10 min-w-[80px] border-b border-border bg-muted px-2 py-2 text-center font-medium text-muted-foreground">
               תת-קבוצה
             </th>
             {dateKeys.map((dk) => (
               <th
                 key={dk}
-                className="min-w-[140px] border-b border-border bg-muted px-2 py-2 text-center font-medium text-muted-foreground"
+                className="sticky top-0 z-10 min-w-[140px] border-b border-border bg-muted px-2 py-2 text-center font-medium text-muted-foreground"
               >
                 {formatHebrewWeekday(parseDateKey(dk))}
                 <br />
