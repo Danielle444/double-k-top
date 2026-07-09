@@ -94,6 +94,16 @@ import {
   type ChildImportRowAction,
   type TeachingPracticeChildImportCandidate,
 } from "@/lib/actions/teaching-practice-child-import";
+// Stage 1 - read-only trainee-assignment suggestion preview (no apply/save
+// path exists yet; see report). Admin-only for now, same as
+// getTeachingPracticeScheduleCheckForAdmin above.
+import { getTeachingPracticeTraineeSuggestionsForAdmin } from "@/lib/actions/teaching-practice-suggestions";
+import {
+  TRAINEE_SUGGESTION_TARGET_PER_BUCKET,
+  type ComputeTraineeSuggestionsResult,
+  type TraineeSuggestionWarning,
+  type TraineeSuggestionWarningKind,
+} from "@/lib/teaching-practice-trainee-suggestions";
 
 type Role = "admin" | "instructor";
 type Tab = "tracks" | "lessons" | "children" | "scheduleCheck";
@@ -115,6 +125,18 @@ const HORSE_SCHEDULE_CHECK_WARNING_LABELS: Record<"overlap" | "short_gap" | "den
   overlap: "חפיפה בזמנים",
   short_gap: "מרווח קצר מדי בין שימושים בסוס",
   dense: "אזהרה: רצף צפוף של שימושים בסוס",
+};
+
+// Stage 1 - short scannable tag + color per warning kind returned by the
+// Stage 0 suggestion engine; the engine's own `message` string is always
+// shown too (see TraineeSuggestionWarningRow), this is just a quick visual
+// grouping on top of it.
+const TRAINEE_SUGGESTION_WARNING_STYLE: Record<TraineeSuggestionWarningKind, { label: string; className: string }> = {
+  supply_below_demand: { label: "אספקת מקומות נמוכה", className: "bg-warning-muted text-warning" },
+  no_suitable_candidate: { label: "אין הצעה מתאימה", className: "bg-warning-muted text-warning" },
+  existing_group_mismatch: { label: "חוסר התאמת קבוצה קיים", className: "bg-danger-muted text-danger" },
+  existing_overlap: { label: "חפיפת זמנים קיימת", className: "bg-danger-muted text-danger" },
+  missing_or_invalid_time_data: { label: "נתוני זמן חסרים", className: "bg-muted text-muted-foreground" },
 };
 
 type ScheduleCheckSubTab = "trainees" | "horses";
@@ -837,6 +859,35 @@ export function TeachingPracticeManager({
   function sectionVisible(groupValue: string | null): boolean {
     if (tableGroupFilter === "all") return true;
     return groupValue === tableGroupFilter;
+  }
+
+  // Stage 1 - read-only trainee-assignment suggestion preview. Admin-only
+  // (role check on the button itself, below); scoped to whichever real group
+  // (א/ב) is currently selected via tableGroupFilter above - "all" is
+  // rejected before any fetch happens, since a suggestion run must always be
+  // scoped to exactly one group (Stage 0 design). suggestionGroupName freezes
+  // which group the currently-shown result belongs to, independent of
+  // tableGroupFilter possibly changing afterward while the modal stays open.
+  const [suggestionModalOpen, setSuggestionModalOpen] = useState(false);
+  const [suggestionLoading, setSuggestionLoading] = useState(false);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const [suggestionResult, setSuggestionResult] = useState<ComputeTraineeSuggestionsResult | null>(null);
+  const [suggestionGroupName, setSuggestionGroupName] = useState<string | null>(null);
+
+  function handleOpenTraineeSuggestions() {
+    if (tableGroupFilter === "all") return; // button is disabled in this case; defensive no-op
+    const groupName = tableGroupFilter;
+    setSuggestionModalOpen(true);
+    setSuggestionGroupName(groupName);
+    setSuggestionResult(null);
+    setSuggestionError(null);
+    setSuggestionLoading(true);
+    getTeachingPracticeTraineeSuggestionsForAdmin(groupName)
+      .then((data) => setSuggestionResult(data))
+      .catch((err: unknown) => {
+        setSuggestionError(err instanceof Error ? err.message : "אירעה שגיאה בטעינת הצעות השיבוץ");
+      })
+      .finally(() => setSuggestionLoading(false));
   }
 
   // Column visibility (Stage B) - starts at "everything visible" on every
@@ -2280,6 +2331,31 @@ export function TeachingPracticeManager({
                   </button>
                 ))}
               </div>
+
+              {/* Stage 1 - read-only suggestion preview entry point,
+                  admin-only. Scoped to whichever real group is currently
+                  selected above; "all" has no single group to score
+                  fairness against (Stage 0 design requires exactly one
+                  group per run), so the button stays disabled with an
+                  explanatory hint instead of silently defaulting to one. */}
+              {role === "admin" && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="!px-3 !py-1.5 !text-xs"
+                    disabled={tableGroupFilter === "all"}
+                    onClick={handleOpenTraineeSuggestions}
+                  >
+                    הצע שיבוץ לקבוצה
+                  </Button>
+                  {tableGroupFilter === "all" && (
+                    <span className="text-xs text-muted-foreground">
+                      יש לבחור קבוצה א או קבוצה ב כדי לקבל הצעות שיבוץ
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* Column visibility (Stage B) - a display preference only,
                   available in both view and edit mode, and independent of
@@ -4393,6 +4469,202 @@ export function TeachingPracticeManager({
           </Modal>
         );
       })()}
+
+      {/* Stage 1 - read-only trainee-assignment suggestion preview. Always
+          mounted (like the feedback modal above) rather than nested inside
+          the tracks-tab JSX, so its own open/close state is never tied to
+          which tab happens to be active. Strictly read-only: no apply/save
+          button, no calls into any create/update/delete write action. */}
+      <Modal
+        open={suggestionModalOpen}
+        size="large"
+        onClose={() => setSuggestionModalOpen(false)}
+        title={`הצעת שיבוץ חניכים למבנה הקבוע - קבוצה ${suggestionGroupName ?? ""}`}
+      >
+        <div className="flex h-full min-h-0 flex-col gap-3">
+          <p className="shrink-0 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+            תצוגה בלבד - ההצעות אינן נשמרות ואינן משנות שיבוץ קיים. יש לבדוק כל הצעה ולעדכן ידנית בטבלת המבנה
+            הקבוע במידת הצורך.
+          </p>
+
+          {suggestionLoading && <p className="shrink-0 text-sm text-muted-foreground">טוען הצעות שיבוץ...</p>}
+          {suggestionError && <p className="shrink-0 text-sm text-danger">{suggestionError}</p>}
+
+          {suggestionResult && !suggestionLoading && (
+            <div className="min-h-0 flex-1 overflow-y-auto pl-1">
+              <TeachingPracticeTraineeSuggestionsPreview result={suggestionResult} />
+            </div>
+          )}
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// Stage 1 - full read-only content of the trainee-assignment suggestion
+// preview modal. Pure display component: takes the already-fetched Stage 0
+// result and renders it, no state of its own beyond the summary-section
+// collapse toggle below, no server calls, no callbacks in - there is nothing
+// here that could write anything.
+function TeachingPracticeTraineeSuggestionsPreview({ result }: { result: ComputeTraineeSuggestionsResult }) {
+  return (
+    <div className="flex flex-col gap-4">
+      {result.warnings.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <h3 className="text-sm font-bold text-card-foreground">התראות</h3>
+          {result.warnings.map((warning, index) => (
+            <TeachingPracticeSuggestionWarningRow key={index} warning={warning} />
+          ))}
+        </div>
+      )}
+
+      <TeachingPracticeSuggestionSummarySection summaries={result.traineeSummaries} />
+
+      <div className="flex flex-col gap-3">
+        <h3 className="text-sm font-bold text-card-foreground">הצעות שיבוץ למבנה הקבוע</h3>
+        {result.tracks.length === 0 && (
+          <p className="text-sm text-muted-foreground">אין סלוטים קבועים פעילים בקבוצה זו.</p>
+        )}
+        {result.tracks.map((track) => (
+          <TeachingPracticeSuggestionTrackCard key={track.trackId} track={track} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TeachingPracticeSuggestionWarningRow({ warning }: { warning: TraineeSuggestionWarning }) {
+  const style = TRAINEE_SUGGESTION_WARNING_STYLE[warning.kind];
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted/50 px-2 py-1.5 text-xs">
+      <span className={`shrink-0 rounded-full px-2 py-0.5 font-medium ${style.className}`}>{style.label}</span>
+      <span className="text-card-foreground">{warning.message}</span>
+    </div>
+  );
+}
+
+// Collapsible per-חניך bucket-count summary - collapsible per the spec
+// ("this can be a second table or collapsible section"), defaulting to
+// expanded since it's core information, not a secondary detail.
+function TeachingPracticeSuggestionSummarySection({ summaries }: { summaries: ComputeTraineeSuggestionsResult["traineeSummaries"] }) {
+  const [expanded, setExpanded] = useState(true);
+  return (
+    <div className="rounded-xl border border-border bg-card p-3">
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        className="flex w-full items-center justify-between text-right text-sm font-bold text-card-foreground"
+      >
+        סיכום יעדים לפי חניך/ה
+        <span className="text-muted-foreground">{expanded ? "▲" : "▼"}</span>
+      </button>
+      {expanded && (
+        <div className="mt-2 flex flex-col gap-2">
+          {summaries.length === 0 && (
+            <p className="text-sm text-muted-foreground">אין חניכים פעילים בקבוצה זו.</p>
+          )}
+          {summaries.map((summary) => (
+            <div key={summary.traineeId} className="rounded-lg bg-muted/50 p-2 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold text-card-foreground">{summary.traineeName}</span>
+                <span className="text-muted-foreground">
+                  סה&quot;כ שיבוצים קבועים נוכחיים: {summary.totalCurrentFixedStructureAssignments}
+                </span>
+              </div>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                <TeachingPracticeSuggestionBucketPill
+                  label="לונג׳"
+                  count={summary.counts.lungeAny}
+                  gap={summary.targetGaps.lungeAny}
+                />
+                <TeachingPracticeSuggestionBucketPill
+                  label="מוביל/ה בפרטני/קבוצתי"
+                  count={summary.counts.privateGroupLead}
+                  gap={summary.targetGaps.privateGroupLead}
+                />
+                <TeachingPracticeSuggestionBucketPill
+                  label="עוזר/ת בפרטני"
+                  count={summary.counts.privateGroupAssistant}
+                  gap={summary.targetGaps.privateGroupAssistant}
+                />
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+                <span>מדריך שני (מידע בלבד): {summary.informational.beginnerGroupSecond}</span>
+                <span>ממשב (מידע בלבד): {summary.informational.evaluator}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TeachingPracticeSuggestionBucketPill({ label, count, gap }: { label: string; count: number; gap: number }) {
+  const className = gap > 0 ? "bg-warning-muted text-warning" : "bg-success-muted text-success";
+  return (
+    <span className={`rounded-full px-2 py-0.5 font-medium ${className}`}>
+      {label}: {count}/{TRAINEE_SUGGESTION_TARGET_PER_BUCKET}
+    </span>
+  );
+}
+
+function TeachingPracticeSuggestionTrackCard({
+  track,
+}: {
+  track: ComputeTraineeSuggestionsResult["tracks"][number];
+}) {
+  const weekdayLabel = track.weekday != null && track.weekday >= 0 && track.weekday <= 6 ? WEEKDAY_LABELS[track.weekday] : "לא ידוע";
+  return (
+    <div className="rounded-xl border border-border bg-card p-3">
+      <h4 className="text-sm font-semibold text-card-foreground">
+        {PRACTICE_TYPE_LABELS[track.practiceType]} · יום {weekdayLabel} · {track.defaultStartTime}-
+        {track.defaultEndTime}
+      </h4>
+      <div className="mt-2 flex flex-col gap-2">
+        {track.slots.map((slot) => (
+          <TeachingPracticeSuggestionSlotRow key={slot.rotationOrder} slot={slot} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TeachingPracticeSuggestionSlotRow({
+  slot,
+}: {
+  slot: ComputeTraineeSuggestionsResult["tracks"][number]["slots"][number];
+}) {
+  const status = slot.currentTraineeId
+    ? { label: "משובץ/ת כבר", className: "bg-muted text-muted-foreground" }
+    : slot.suggestedTraineeId
+      ? { label: "הצעה זמינה", className: "bg-success-muted text-success" }
+      : { label: "אין הצעה מתאימה", className: "bg-danger-muted text-danger" };
+
+  return (
+    <div className="rounded-lg bg-muted/50 p-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-card-foreground">מס&apos; {slot.rotationOrder + 1}</span>
+        <span className="text-muted-foreground">תפקיד צפוי: {ROLE_LABELS[slot.projectedRole]}</span>
+        <span className={`rounded-full px-2 py-0.5 font-medium ${status.className}`}>{status.label}</span>
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+        <span>
+          <span className="text-muted-foreground">נוכחי: </span>
+          {slot.currentTraineeName ?? "—"}
+        </span>
+        <span>
+          <span className="text-muted-foreground">מוצע: </span>
+          {slot.suggestedTraineeName ?? "—"}
+        </span>
+      </div>
+      <p className="mt-1 text-muted-foreground">{slot.reason}</p>
+      {slot.bucketNote && <p className="mt-0.5 italic text-muted-foreground">{slot.bucketNote}</p>}
+      {slot.excludedCandidates.length > 0 && (
+        <p className="mt-0.5 text-muted-foreground">
+          מועמדים שנפסלו: {slot.excludedCandidates.map((c) => `${c.traineeName} (${c.reason})`).join("; ")}
+        </p>
+      )}
     </div>
   );
 }
