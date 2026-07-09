@@ -696,12 +696,15 @@ async function syncTeachingPracticeTrackParticipants(trackId: string): Promise<v
   const lessons = await prisma.teachingPracticeLesson.findMany({
     where: { trackId },
     orderBy: [{ date: "asc" }, { startTime: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-    include: { participants: true },
+    include: { participants: { include: { feedback: true } } },
   });
 
   for (let occurrenceIndex = 0; occurrenceIndex < lessons.length; occurrenceIndex++) {
     const lesson = lessons[occurrenceIndex];
     if (lesson.participants.some((p) => p.isManualOverride)) continue;
+    // Same safety rule as the manual participant-edit path: never delete/recreate
+    // participants that already have feedback recorded against them.
+    if (lesson.participants.some((p) => p.feedback)) continue;
 
     let roleAssignments: { traineeId: string; role: TeachingPracticeRoleValue }[];
     try {
