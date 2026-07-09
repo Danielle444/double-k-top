@@ -106,6 +106,14 @@ import {
   getTeachingPracticeTraineeSuggestionsForAdmin,
   type TeachingPracticeTrackTraineeSlotAssignment,
 } from "@/lib/actions/teaching-practice-suggestions";
+// Stage C2 - real, group-scoped fixed-structure -> generated-lessons sync
+// ("סנכרן מבנה קבוע לתאריכים"). Admin-only, replaces the never-shipped
+// trainee-only resync button; there is only ever one sync entry point in
+// this UI.
+import {
+  syncTeachingPracticeFixedStructureToGeneratedLessonsAsAdmin,
+  type TeachingPracticeFullSyncApplyResult,
+} from "@/lib/actions/teaching-practice-full-sync";
 import {
   TRAINEE_SUGGESTION_TARGET_PER_BUCKET,
   type ComputeTraineeSuggestionsResult,
@@ -1016,6 +1024,49 @@ export function TeachingPracticeManager({
       await refreshTracks();
       if (groupNameForRefetch) await loadTraineeSuggestions(groupNameForRefetch);
     });
+  }
+
+  // Stage C2 - real, group-scoped fixed-structure -> generated-lessons sync.
+  // Same "freeze the group the open modal is about" pattern as
+  // suggestionGroupName above, so the confirmation text and the eventual
+  // apply call always target the group that was selected when the modal was
+  // opened, even if tableGroupFilter changes while it's still open.
+  // syncResult double as "have we already run this" - once set, the modal
+  // shows the summary instead of the confirmation prompt; reopening always
+  // resets it, so a stale summary can never be mistaken for a fresh one.
+  const [syncModalOpen, setSyncModalOpen] = useState(false);
+  const [syncGroupName, setSyncGroupName] = useState<string | null>(null);
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncResult, setSyncResult] = useState<TeachingPracticeFullSyncApplyResult | null>(null);
+
+  function handleOpenSyncModal() {
+    if (tableGroupFilter === "all") return; // button is disabled in this case; defensive no-op
+    setSyncGroupName(tableGroupFilter);
+    setSyncError(null);
+    setSyncResult(null);
+    setSyncModalOpen(true);
+  }
+
+  function handleCloseSyncModal() {
+    if (syncLoading) return; // never let the backdrop/X close mid-request
+    setSyncModalOpen(false);
+  }
+
+  function handleConfirmSync() {
+    if (syncLoading || !syncGroupName) return; // prevents double-click submission
+    setSyncLoading(true);
+    setSyncError(null);
+    syncTeachingPracticeFixedStructureToGeneratedLessonsAsAdmin(syncGroupName)
+      .then(async (result) => {
+        setSyncResult(result);
+        await refreshLessons();
+        if (selectedLessonDate) await refreshLessonDateDetail(selectedLessonDate);
+      })
+      .catch((err: unknown) => {
+        setSyncError(err instanceof Error ? err.message : "אירעה שגיאה בסנכרון המבנה הקבוע לתאריכים");
+      })
+      .finally(() => setSyncLoading(false));
   }
 
   // Column visibility (Stage B) - starts at "everything visible" on every
@@ -2480,6 +2531,30 @@ export function TeachingPracticeManager({
                   {tableGroupFilter === "all" && (
                     <span className="text-xs text-muted-foreground">
                       יש לבחור קבוצה א או קבוצה ב כדי לקבל הצעות שיבוץ
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Stage C2 - real fixed-structure -> generated-lessons sync.
+                  Same single-group-required convention as the suggestion
+                  button above (Stage C1 design requires exactly one group
+                  per run - no system-wide sync). This is the only sync
+                  entry point in this UI. */}
+              {role === "admin" && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="!px-3 !py-1.5 !text-xs"
+                    disabled={tableGroupFilter === "all"}
+                    onClick={handleOpenSyncModal}
+                  >
+                    סנכרן מבנה קבוע לתאריכים
+                  </Button>
+                  {tableGroupFilter === "all" && (
+                    <span className="text-xs text-muted-foreground">
+                      יש לבחור קבוצה א או קבוצה ב כדי לסנכרן מבנה קבוע לתאריכים
                     </span>
                   )}
                 </div>
@@ -4672,6 +4747,91 @@ export function TeachingPracticeManager({
                   </div>
                 );
               })()}
+            </>
+          )}
+        </div>
+      </Modal>
+
+      {/* Stage C2 - real fixed-structure -> generated-lessons sync
+          confirmation + result. Always mounted (same convention as the
+          suggestion Modal above), so its open/close state never depends on
+          which tab is active. syncResult present => show the summary;
+          otherwise show the confirmation prompt (or the loading state while
+          the request is in flight). */}
+      <Modal
+        open={syncModalOpen}
+        onClose={handleCloseSyncModal}
+        title={`סנכרון מבנה קבוע לתאריכים - קבוצה ${syncGroupName ?? ""}`}
+      >
+        <div className="flex flex-col gap-3">
+          {!syncResult && !syncLoading && (
+            <>
+              <ul className="flex flex-col gap-1.5 text-sm text-card-foreground">
+                <li>הפעולה תעדכן את השיעורים שנוצרו לפי המבנה הקבוע הנוכחי.</li>
+                <li>הפעולה עשויה לדרוס שינויים ידניים שנעשו בתאריכים ספציפיים.</li>
+                <li>הפעולה תסנכרן חניכים, ילדים, סוסים/ציוד אם קיימים, שעות, מיקום ומדריך אחראי.</li>
+                <li>הפעולה לא תמחק משוב.</li>
+                <li>הפעולה לא תיצור ולא תמחק שיעורים.</li>
+                <li>הפעולה לא תייצר תאריכים חדשים.</li>
+                <li>הפעולה תרוץ רק על הקבוצה שנבחרה עכשיו.</li>
+              </ul>
+              {syncError && <p className="text-sm text-danger">{syncError}</p>}
+              <div className="flex justify-end gap-2 border-t border-border pt-3">
+                <Button type="button" variant="ghost" onClick={handleCloseSyncModal}>
+                  ביטול
+                </Button>
+                <Button type="button" variant="danger" onClick={handleConfirmSync}>
+                  אישור וסנכרון
+                </Button>
+              </div>
+            </>
+          )}
+
+          {syncLoading && <p className="text-sm text-muted-foreground">מסנכרן...</p>}
+
+          {syncResult && !syncLoading && (
+            <>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm text-card-foreground sm:grid-cols-3">
+                <span>מסלולים נבדקו: {syncResult.tracksChecked}</span>
+                <span>ללא שיעורים שנוצרו: {syncResult.tracksSkippedNoLessons}</span>
+                <span>מבנה קבוע לא שלם: {syncResult.tracksSkippedIncompleteFixedStructure}</span>
+                <span>צוות קבוצתי נגזר: {syncResult.beginnerGroupRostersDerived}</span>
+                <span>צוות קבוצתי לא נגזר: {syncResult.beginnerGroupRostersSkipped}</span>
+                <span>שיעורים נבדקו: {syncResult.lessonsChecked}</span>
+                <span>שיעורים סונכרנו: {syncResult.lessonsSynced}</span>
+                <span>שיעורים ללא שינוי: {syncResult.lessonsUnchanged}</span>
+                <span>דולגו - יש משוב: {syncResult.lessonsSkippedFeedback}</span>
+                <span>דולגו - תאריך עבר: {syncResult.lessonsSkippedPastDate}</span>
+                <span>
+                  חניכים: {syncResult.participants.created} נוצרו, {syncResult.participants.deleted} נמחקו,{" "}
+                  {syncResult.participants.unchanged} ללא שינוי
+                </span>
+                <span>
+                  ילדים: {syncResult.childAssignments.created} נוצרו, {syncResult.childAssignments.deleted} נמחקו,{" "}
+                  {syncResult.childAssignments.unchanged} ללא שינוי
+                </span>
+                <span>
+                  שדות שיעור: {syncResult.lessonFields.updated} עודכנו, {syncResult.lessonFields.unchanged} ללא שינוי
+                </span>
+              </div>
+              {syncResult.errors.length > 0 && (
+                <div className="rounded-lg bg-danger/10 p-3 text-xs text-danger">
+                  <p className="font-semibold">שגיאות ({syncResult.errors.length}):</p>
+                  <ul className="mt-1 flex flex-col gap-0.5">
+                    {syncResult.errors.map((e, i) => (
+                      <li key={i}>
+                        {e.trackId}
+                        {e.lessonId ? ` / ${e.lessonId}` : ""}: {e.message}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="flex justify-end border-t border-border pt-3">
+                <Button type="button" onClick={handleCloseSyncModal}>
+                  סגירה
+                </Button>
+              </div>
             </>
           )}
         </div>
