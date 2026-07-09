@@ -530,11 +530,22 @@ export function StudentClient() {
                 onSelectDay={setDayFilter}
               />
             )}
-            <ScheduleSection
-              studentId={session.id}
-              weeklyScheduleId={selectedWeekId}
-              dayFilter={dayFilter}
-            />
+            {/* Bounded internal scroll (unlike the unbounded "today" preview
+                above, this is the primary full-week view) - the day-group
+                labels inside ScheduleSection are already `sticky top-0`;
+                without this bounded box they'd resolve against the page's
+                own scroll and collide with/hide behind the shell header's
+                own `sticky top-0 z-20` above. Wrapping just this call (not
+                the WeekDayPicker) gives the sticky day labels their own
+                isolated scroll container, same fix shape already used for
+                the instructor "לו"ז" tab. */}
+            <div className="max-h-[calc(100vh-180px)] overflow-y-auto">
+              <ScheduleSection
+                studentId={session.id}
+                weeklyScheduleId={selectedWeekId}
+                dayFilter={dayFilter}
+              />
+            </div>
           </div>
         )}
 

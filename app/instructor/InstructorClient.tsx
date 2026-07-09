@@ -563,11 +563,23 @@ export function InstructorClient({
                 onSelectDay={setDayFilter}
               />
             )}
-            <InstructorScheduleSection
-              instructorId={session.id}
-              weeklyScheduleId={selectedWeekId}
-              dayFilter={dayFilter}
-            />
+            {/* Bounded internal scroll (unlike the unbounded "today" preview
+                above, this is the primary full-week view) - the day-group
+                labels inside InstructorScheduleSection are already
+                `sticky top-0`; without this bounded box they'd resolve
+                against the page's own scroll and collide with/hide behind
+                the shell header's own `sticky top-0 z-20` above. Wrapping
+                just this call (not the WeekDayPicker) gives the sticky day
+                labels their own isolated scroll container, same fix shape
+                already used for the "today" tab and for ScheduleGrid.tsx/
+                TeachingPracticeManager.tsx. */}
+            <div className="max-h-[calc(100vh-180px)] overflow-y-auto">
+              <InstructorScheduleSection
+                instructorId={session.id}
+                weeklyScheduleId={selectedWeekId}
+                dayFilter={dayFilter}
+              />
+            </div>
           </div>
         )}
 
