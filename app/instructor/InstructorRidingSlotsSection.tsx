@@ -4,7 +4,6 @@ import { useEffect, useImperativeHandle, useMemo, useRef, useState, useTransitio
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
 import { RidingHistoryList } from "@/lib/components/RidingHistoryList";
-import { SearchableSelect } from "@/lib/components/SearchableSelect";
 import { SuggestInput } from "@/lib/components/SuggestInput";
 import {
   formatHebrewDate,
@@ -138,6 +137,30 @@ function sortFlatSectionsForInstructor<T>(
   const group = withTier.filter((s) => s.tier === "group");
   const none = withTier.filter((s) => s.tier === "none");
   return [...exact, ...group, ...none];
+}
+
+// Scopes the trainee tab switcher to the same subgroup as the currently
+// opened trainee: matches groupName and subgroupNumber when the current
+// trainee has both, so tabs only ever show its own subgroup (e.g. א1, not
+// all of קבוצה א). If the current trainee has no subgroupNumber recorded,
+// falls back to matching groupName alone rather than crashing or silently
+// showing every trainee in the activity. Always true for the current
+// trainee against itself, so it's never filtered out of its own tab list.
+function isSameSwitchScope(current: RidingSlotStudentRow, candidate: RidingSlotStudentRow): boolean {
+  if (current.groupName !== candidate.groupName) return false;
+  if (current.subgroupNumber == null) return true;
+  return candidate.subgroupNumber === current.subgroupNumber;
+}
+
+// Tab label format: first name + first letter of last name (e.g. "דניאל ק׳").
+// Falls back to the bare name for a single-token name or anything unparsable,
+// so an unusual fullName never throws - it just shows as-is.
+function formatTraineeTabLabel(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return parts[0] ?? fullName;
+  const firstName = parts[0];
+  const lastInitial = parts[parts.length - 1].charAt(0);
+  return lastInitial ? `${firstName} ${lastInitial}׳` : firstName;
 }
 
 function timeToMinutes(time: string): number {
@@ -385,10 +408,11 @@ function StudentEditor({
   instructorId: string;
   canEdit: boolean;
   students: RidingStudentOption[];
-  // Every trainee in the current riding activity context (the same
-  // slotStudents list the grouped list view already renders), including the
-  // current row itself so it shows as selected. Compact label already
-  // includes group/subgroup where available.
+  // Trainees from the same subgroup as the currently opened row only (see
+  // isSameSwitchScope in the parent, which filters the activity's full
+  // slotStudents list down to this scope), including the current row itself
+  // so it shows as selected. Rendered as tabs; label is first name + first
+  // letter of last name (see formatTraineeTabLabel).
   switchOptions: { studentId: string; label: string }[];
   knownLessonTopics: string[];
   knownHorseNames: string[];
@@ -567,15 +591,31 @@ function StudentEditor({
       </button>
 
       {switchOptions.length > 1 && (
-        <label className="flex flex-col gap-1 text-sm">
-          מעבר לחניך/ה אחר/ת
-          <SearchableSelect
-            value={row.studentId}
-            options={switchOptions.map((o) => ({ value: o.studentId, label: o.label }))}
-            onChange={handleSwitchTo}
-            placeholder="בחרו חניך/ה"
-          />
-        </label>
+        <div
+          role="tablist"
+          aria-label="מעבר בין חניכים"
+          className="flex max-w-full flex-wrap gap-1.5"
+        >
+          {switchOptions.map((o) => {
+            const isActive = o.studentId === row.studentId;
+            return (
+              <button
+                key={o.studentId}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => handleSwitchTo(o.studentId)}
+                className={`max-w-full truncate rounded-full px-3 py-1.5 text-sm font-medium ${
+                  isActive
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
       )}
 
       <div>
@@ -1184,21 +1224,25 @@ export function InstructorRidingSlotsSection({
         <div className="flex max-h-[70vh] flex-col overflow-y-auto ps-1">
           {studentsError && <p className="mb-2 text-sm text-danger">{studentsError}</p>}
           {editingStudent ? (
+            // Keyed by studentId so switching trainees remounts StudentEditor
+            // instead of reusing the same instance - without this, its
+            // useState-initialized fields (note, rating, ...) would keep the
+            // previous trainee's in-progress edits after the row prop changes,
+            // showing/leaking them under the newly-selected trainee.
             <StudentEditor
+              key={editingStudent.studentId}
               ref={studentEditorRef}
               row={editingStudent}
               ridingSlotId={openActivity!.ridingSlot!.id}
               instructorId={instructorId}
               canEdit={canEdit}
               students={students}
-              switchOptions={(slotStudents ?? []).map((s) => ({
-                studentId: s.studentId,
-                label: `${s.studentName}${
-                  s.groupName
-                    ? ` (קבוצה ${s.groupName}${s.subgroupNumber != null ? ` / תת-קבוצה ${s.subgroupNumber}` : ""})`
-                    : ""
-                }`,
-              }))}
+              switchOptions={(slotStudents ?? [])
+                .filter((s) => isSameSwitchScope(editingStudent, s))
+                .map((s) => ({
+                  studentId: s.studentId,
+                  label: formatTraineeTabLabel(s.studentName),
+                }))}
               knownLessonTopics={knownLessonTopics}
               knownHorseNames={knownHorseNames}
               onBack={() => setEditingStudent(null)}
