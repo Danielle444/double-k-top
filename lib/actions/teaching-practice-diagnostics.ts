@@ -7,17 +7,26 @@
 // TeachingPracticeChildAssignment), to show the מנהלת exactly where and why
 // a generated lesson doesn't reflect the current fixed-structure data.
 //
-// Strictly read-only: every Prisma call in this file is a find/count. There
-// is no create/update/delete/upsert anywhere here, and no revalidatePath -
-// this file cannot write to the database even by accident, since it never
-// imports a mutating Prisma method at all.
+// Stage A (getTeachingPracticeSyncDiagnosticsForAdmin) is strictly read-only:
+// every Prisma call in it is a find/count, no create/update/delete/upsert,
+// no revalidatePath.
+//
+// Stage B1 (resyncTeachingPracticeParticipantsFromFixedStructureAsAdmin,
+// added below) is this file's first WRITE action - trainees only, never
+// children. It does not implement any write logic of its own: it only calls
+// the existing, already-safe syncTeachingPracticeTrackParticipants (exported
+// from lib/actions/teaching-practice.ts for exactly this reuse, its own
+// rotation/skip behavior left byte-for-byte unchanged) once per selected
+// track, and aggregates the stats it returns. No generation, no lesson
+// create/delete, no schema/migration, no child-assignment writes.
 //
 // This is a new, separate file rather than an addition to
 // lib/actions/teaching-practice.ts, matching the same convention already
-// established for lib/actions/teaching-practice-suggestions.ts: a read-only
-// diagnostic/preview concern is kept out of the main CRUD/write-action
-// module so that file's own "do not touch" scope (generation, sync, manual-
-// override handling) stays undisturbed and easy to audit in isolation.
+// established for lib/actions/teaching-practice-suggestions.ts: this
+// diagnostic/resync concern is kept out of the main CRUD/write-action module
+// so that file's own generation/manual-override handling stays undisturbed
+// and easy to audit in isolation - this file only ever calls into it, never
+// duplicates its logic.
 //
 // Context (see prior audit report): most fixed-structure fields are
 // deliberately materialized once, at generation time, and never resynced -
@@ -36,6 +45,10 @@
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { TEACHING_PRACTICE_TEAM_SIZE, type TeachingPracticeTypeValue } from "@/lib/teaching-practice-rotation";
+// Stage B1 - the one existing, already-safe trainee sync primitive, reused
+// as-is (see file header). Nothing about its rotation/manual-override/
+// feedback logic is duplicated or reimplemented here.
+import { syncTeachingPracticeTrackParticipants } from "@/lib/actions/teaching-practice";
 
 export interface TeachingPracticeBeginnerGroupDiagnostic {
   // Trainees
@@ -282,4 +295,123 @@ async function getTeachingPracticeSyncDiagnosticsInternal(): Promise<TeachingPra
 export async function getTeachingPracticeSyncDiagnosticsForAdmin(): Promise<TeachingPracticeSyncDiagnosticsResult> {
   await requireAdmin();
   return getTeachingPracticeSyncDiagnosticsInternal();
+}
+
+// ---------------------------------------------------------------------------
+// Stage B1 - manual resync of generated lesson TRAINEES from the fixed
+// structure. Children are never touched by this stage (see file header).
+// ---------------------------------------------------------------------------
+
+export interface TeachingPracticeParticipantResyncTrackResult {
+  trackId: string;
+  practiceType: TeachingPracticeTypeValue;
+  groupName: string | null;
+  skippedIncompleteRoster: boolean;
+  lessonsChecked: number;
+  lessonsSynced: number;
+  lessonsSkippedManualOverride: number;
+  lessonsSkippedFeedback: number;
+  error: string | null;
+}
+
+export interface TeachingPracticeParticipantResyncResult {
+  tracksChecked: number;
+  tracksSkippedIncompleteRoster: number;
+  lessonsChecked: number;
+  lessonsSynced: number;
+  lessonsSkippedManualOverride: number;
+  lessonsSkippedFeedback: number;
+  errors: { trackId: string; message: string }[];
+  perTrack: TeachingPracticeParticipantResyncTrackResult[];
+}
+
+// Sequential, never Promise.all - each track's sync is an independent write,
+// but processing one at a time keeps error attribution unambiguous (a
+// failure on one track's transaction can never be confused with another's)
+// and matches this codebase's existing convention for any loop that issues
+// several real writes in a row (e.g. handleGenerateLessons in
+// TeachingPracticeManager.tsx).
+async function resyncTeachingPracticeParticipantsFromFixedStructureInternal(
+  trackIds?: string[]
+): Promise<TeachingPracticeParticipantResyncResult> {
+  const tracks = await prisma.teachingPracticeTrack.findMany({
+    where: {
+      isActive: true,
+      ...(trackIds && trackIds.length > 0 ? { id: { in: trackIds } } : {}),
+    },
+    select: { id: true, practiceType: true, groupName: true },
+  });
+
+  const perTrack: TeachingPracticeParticipantResyncTrackResult[] = [];
+  const errors: { trackId: string; message: string }[] = [];
+
+  let tracksSkippedIncompleteRoster = 0;
+  let lessonsChecked = 0;
+  let lessonsSynced = 0;
+  let lessonsSkippedManualOverride = 0;
+  let lessonsSkippedFeedback = 0;
+
+  for (const track of tracks) {
+    try {
+      // The only write in this whole file - delegates entirely to the
+      // existing, unmodified-in-behavior sync primitive (see import above).
+      const stats = await syncTeachingPracticeTrackParticipants(track.id);
+
+      if (!stats.rosterComplete) tracksSkippedIncompleteRoster += 1;
+      lessonsChecked += stats.lessonsChecked;
+      lessonsSynced += stats.lessonsSynced;
+      lessonsSkippedManualOverride += stats.lessonsSkippedManualOverride;
+      lessonsSkippedFeedback += stats.lessonsSkippedFeedback;
+
+      perTrack.push({
+        trackId: track.id,
+        practiceType: track.practiceType,
+        groupName: track.groupName,
+        skippedIncompleteRoster: !stats.rosterComplete,
+        lessonsChecked: stats.lessonsChecked,
+        lessonsSynced: stats.lessonsSynced,
+        lessonsSkippedManualOverride: stats.lessonsSkippedManualOverride,
+        lessonsSkippedFeedback: stats.lessonsSkippedFeedback,
+        error: null,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "אירעה שגיאה בסנכרון המסלול";
+      errors.push({ trackId: track.id, message });
+      perTrack.push({
+        trackId: track.id,
+        practiceType: track.practiceType,
+        groupName: track.groupName,
+        skippedIncompleteRoster: false,
+        lessonsChecked: 0,
+        lessonsSynced: 0,
+        lessonsSkippedManualOverride: 0,
+        lessonsSkippedFeedback: 0,
+        error: message,
+      });
+    }
+  }
+
+  return {
+    tracksChecked: tracks.length,
+    tracksSkippedIncompleteRoster,
+    lessonsChecked,
+    lessonsSynced,
+    lessonsSkippedManualOverride,
+    lessonsSkippedFeedback,
+    errors,
+    perTrack,
+  };
+}
+
+// trackIds omitted (or empty) -> every active track is checked (each one
+// individually still safe/cheap: syncTeachingPracticeTrackParticipants
+// itself returns immediately for a track with no lessons or an incomplete
+// roster). trackIds provided -> only those ids, filtered to currently-active
+// tracks (an id that doesn't exist or belongs to an inactive track is simply
+// absent from the result, never an error).
+export async function resyncTeachingPracticeParticipantsFromFixedStructureAsAdmin(
+  trackIds?: string[]
+): Promise<TeachingPracticeParticipantResyncResult> {
+  await requireAdmin();
+  return resyncTeachingPracticeParticipantsFromFixedStructureInternal(trackIds);
 }

@@ -672,6 +672,29 @@ async function setTeachingPracticeTrackTraineesInternal(
   return { success: true };
 }
 
+// Stage B1 - stats shape added so a caller (e.g. the new admin resync
+// action in lib/actions/teaching-practice-diagnostics.ts) can report exactly
+// what happened, without changing any of this function's actual behavior -
+// every condition/order/transaction below is byte-for-byte the same as
+// before this was exported; only the return type changed from void to this.
+export interface TeachingPracticeTrackParticipantSyncStats {
+  trackFound: boolean;
+  rosterComplete: boolean;
+  lessonsChecked: number;
+  lessonsSynced: number;
+  lessonsSkippedManualOverride: number;
+  lessonsSkippedFeedback: number;
+}
+
+const EMPTY_SYNC_STATS = (trackFound: boolean, rosterComplete: boolean): TeachingPracticeTrackParticipantSyncStats => ({
+  trackFound,
+  rosterComplete,
+  lessonsChecked: 0,
+  lessonsSynced: 0,
+  lessonsSkippedManualOverride: 0,
+  lessonsSkippedFeedback: 0,
+});
+
 // Fills in participants for lessons that were generated before the track's
 // team was complete (or before a prior roster change), now that the team is
 // exactly expectedSize. Only called once the roster reaches full size -
@@ -685,15 +708,23 @@ async function setTeachingPracticeTrackTraineesInternal(
 // than creation order, since dates can be generated/added out of order and
 // the rotation must follow the actual schedule, not the order they were
 // entered in.
-async function syncTeachingPracticeTrackParticipants(trackId: string): Promise<void> {
+//
+// Exported (Stage B1) so the new admin resync action can call this exact,
+// already-safe sync path directly instead of duplicating its rotation/skip
+// logic - the automatic call site below (setTeachingPracticeTrackTraineesInternal)
+// is unaffected, since it already only awaited this for its side effects and
+// never used the (previously void) return value.
+export async function syncTeachingPracticeTrackParticipants(
+  trackId: string
+): Promise<TeachingPracticeTrackParticipantSyncStats> {
   const track = await prisma.teachingPracticeTrack.findUnique({
     where: { id: trackId },
     include: { trainees: { orderBy: { rotationOrder: "asc" } } },
   });
-  if (!track) return;
+  if (!track) return EMPTY_SYNC_STATS(false, false);
 
   const expectedSize = TEACHING_PRACTICE_TEAM_SIZE[track.practiceType];
-  if (track.trainees.length !== expectedSize) return;
+  if (track.trainees.length !== expectedSize) return EMPTY_SYNC_STATS(true, false);
 
   const traineeInput = track.trainees.map((t) => ({ traineeId: t.traineeId, rotationOrder: t.rotationOrder }));
 
@@ -703,12 +734,22 @@ async function syncTeachingPracticeTrackParticipants(trackId: string): Promise<v
     include: { participants: { include: { feedback: true } } },
   });
 
+  let lessonsSynced = 0;
+  let lessonsSkippedManualOverride = 0;
+  let lessonsSkippedFeedback = 0;
+
   for (let occurrenceIndex = 0; occurrenceIndex < lessons.length; occurrenceIndex++) {
     const lesson = lessons[occurrenceIndex];
-    if (lesson.participants.some((p) => p.isManualOverride)) continue;
+    if (lesson.participants.some((p) => p.isManualOverride)) {
+      lessonsSkippedManualOverride += 1;
+      continue;
+    }
     // Same safety rule as the manual participant-edit path: never delete/recreate
     // participants that already have feedback recorded against them.
-    if (lesson.participants.some((p) => p.feedback)) continue;
+    if (lesson.participants.some((p) => p.feedback)) {
+      lessonsSkippedFeedback += 1;
+      continue;
+    }
 
     let roleAssignments: { traineeId: string; role: TeachingPracticeRoleValue }[];
     try {
@@ -728,7 +769,17 @@ async function syncTeachingPracticeTrackParticipants(trackId: string): Promise<v
         })),
       }),
     ]);
+    lessonsSynced += 1;
   }
+
+  return {
+    trackFound: true,
+    rosterComplete: true,
+    lessonsChecked: lessons.length,
+    lessonsSynced,
+    lessonsSkippedManualOverride,
+    lessonsSkippedFeedback,
+  };
 }
 
 export async function setTeachingPracticeTrackTraineesAsAdmin(
