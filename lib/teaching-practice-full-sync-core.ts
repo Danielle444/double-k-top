@@ -606,3 +606,125 @@ export async function syncTeachingPracticeFixedStructureTracksToGeneratedLessons
   const resultGroupName = tracks[0]?.groupName ?? "";
   return syncTracksInternal(tracks, resultGroupName);
 }
+
+// Stage E4 fix - narrow, opt-in cleanup for exactly one scenario: a
+// BEGINNER_PRIVATE track was just moved off of (or unlinked from) this
+// BEGINNER_GROUP track, and the group now has fewer than the expected 3
+// linked BEGINNER_PRIVATE tracks. processTrackForSync's normal BEGINNER_GROUP
+// derivation above correctly declines to guess a replacement roster when the
+// linked count isn't exactly 3 ("do not guess when incomplete") - but that
+// also means the group's own TeachingPracticeTrackTrainee/TeachingPracticeTrackChild
+// rows, and any of its future generated lessons that already matched them,
+// are never revisited - so the departed private track's trainee/child keeps
+// silently appearing on the group's future lessons even though the fixed
+// structure no longer includes it. That's the actual bug this fixes.
+//
+// This function never invents a replacement for the vacated slot(s): it
+// only ever REMOVES whatever no longer belongs (derived from however many
+// linked private tracks currently exist, 0..2), both on the fixed structure
+// and on eligible generated lessons - it never creates a participant/child
+// row, never fills a slot, never assigns/recomputes roles (there is no valid
+// rotation formula for an incomplete team - computing one would itself be
+// guessing), never creates/deletes a lesson, never touches practiceType,
+// and applies the exact same per-lesson eligibility rules as the normal sync
+// above (future dated lessons only, skips any lesson with MEANINGFUL
+// feedback on any participant - see lib/teaching-practice-feedback.ts).
+//
+// Deliberately kept separate from processTrackForSync/syncTracksInternal
+// rather than folded into them - this only ever needs to run once, right
+// after a relink is detected, from updateTeachingPracticeTrackInternal in
+// lib/actions/teaching-practice.ts. The normal group-scoped and track-scoped
+// sync entry points above are completely unchanged: a BEGINNER_GROUP track
+// with fewer than 3 linked privates still gets skipped by them exactly as
+// before - this function is the only place a less-than-3 linked count is
+// ever acted on, and only to remove, never to derive/guess.
+//
+// Returns null if trackId isn't an existing, active BEGINNER_GROUP track, or
+// if it currently has 3+ linked private tracks again (nothing to clean up -
+// the normal sync above already handles a complete roster correctly).
+export async function cleanupDepartedLinkedPrivateFromGroupInternal(
+  groupTrackId: string
+): Promise<{ traineesRemoved: number; childrenRemoved: number; lessonsUpdated: number } | null> {
+  const group = await prisma.teachingPracticeTrack.findUnique({
+    where: { id: groupTrackId },
+    select: {
+      id: true,
+      practiceType: true,
+      isActive: true,
+      trainees: { select: { traineeId: true } },
+      children: { select: { childId: true } },
+    },
+  });
+  if (!group || !group.isActive || group.practiceType !== "BEGINNER_GROUP") return null;
+
+  // Same query processTrackForSync/syncTracksInternal uses to find a
+  // group's linked private tracks - deliberately not isActive-filtered, to
+  // match that existing behavior exactly (an inactive-but-still-linked
+  // private track counts the same way here as it does there).
+  const linked = await prisma.teachingPracticeTrack.findMany({
+    where: { practiceType: "BEGINNER_PRIVATE", groupTrackId },
+    select: LINKED_PRIVATE_SELECT,
+  });
+  if (linked.length >= TEACHING_PRACTICE_TEAM_SIZE.BEGINNER_GROUP) {
+    return { traineesRemoved: 0, childrenRemoved: 0, lessonsUpdated: 0 };
+  }
+
+  const sortedLinked = linked.slice().sort(compareLinkedPrivateTracks);
+  const validTraineeIds = new Set(
+    sortedLinked
+      .map((p) => p.trainees.find((t) => t.rotationOrder === 0)?.traineeId)
+      .filter((id): id is string => !!id)
+  );
+  const validChildIds = new Set(
+    sortedLinked.flatMap((p) => p.children.map((c) => c.childId)).filter((id): id is string => !!id)
+  );
+
+  const staleTraineeIds = group.trainees.map((t) => t.traineeId).filter((id) => !validTraineeIds.has(id));
+  const staleChildIds = group.children.map((c) => c.childId).filter((id): id is string => !!id && !validChildIds.has(id));
+
+  if (staleTraineeIds.length) {
+    await prisma.teachingPracticeTrackTrainee.deleteMany({
+      where: { trackId: groupTrackId, traineeId: { in: staleTraineeIds } },
+    });
+  }
+  if (staleChildIds.length) {
+    await prisma.teachingPracticeTrackChild.deleteMany({
+      where: { trackId: groupTrackId, childId: { in: staleChildIds } },
+    });
+  }
+
+  const todayUtc = parseDateKey(todayDateKey());
+  const lessons = await prisma.teachingPracticeLesson.findMany({
+    where: { trackId: groupTrackId, date: { gte: todayUtc } },
+    select: {
+      id: true,
+      participants: {
+        select: { id: true, traineeId: true, feedback: { select: { feedback: true, ratingHalfPoints: true } } },
+      },
+      childAssignments: { select: { id: true, childId: true } },
+    },
+  });
+
+  let lessonsUpdated = 0;
+  for (const lesson of lessons) {
+    if (lesson.participants.some((p) => hasMeaningfulTeachingPracticeFeedback(p.feedback))) continue;
+
+    const staleParticipantIds = lesson.participants.filter((p) => !validTraineeIds.has(p.traineeId)).map((p) => p.id);
+    const staleChildAssignmentIds = lesson.childAssignments
+      .filter((c) => !validChildIds.has(c.childId))
+      .map((c) => c.id);
+    if (!staleParticipantIds.length && !staleChildAssignmentIds.length) continue;
+
+    await prisma.$transaction([
+      ...(staleParticipantIds.length
+        ? [prisma.teachingPracticeParticipant.deleteMany({ where: { id: { in: staleParticipantIds } } })]
+        : []),
+      ...(staleChildAssignmentIds.length
+        ? [prisma.teachingPracticeChildAssignment.deleteMany({ where: { id: { in: staleChildAssignmentIds } } })]
+        : []),
+    ]);
+    lessonsUpdated += 1;
+  }
+
+  return { traineesRemoved: staleTraineeIds.length, childrenRemoved: staleChildIds.length, lessonsUpdated };
+}

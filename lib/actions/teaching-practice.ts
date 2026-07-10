@@ -29,7 +29,19 @@ import { hasMeaningfulTeachingPracticeFeedback } from "@/lib/teaching-practice-f
 // auth check (requireAdmin() for the admin path, the
 // canManageTeachingPracticeAssignments check for the instructor path)
 // before reaching this point.
-import { syncTeachingPracticeFixedStructureTracksToGeneratedLessonsInternal } from "@/lib/teaching-practice-full-sync-core";
+// Stage E4 fix - narrow, opt-in cleanup used only when a BEGINNER_PRIVATE
+// track's groupTrackId actually changes (see updateTeachingPracticeTrackInternal
+// below) - removes a departed private track's trainee/child from its old
+// group's fixed structure and future generated lessons when that old group
+// now has fewer than 3 linked private tracks (the normal sync above
+// correctly declines to derive/guess in that case, which used to leave the
+// departed trainee/child stranded). See its own header in
+// lib/teaching-practice-full-sync-core.ts for exactly what it does and does
+// not touch.
+import {
+  syncTeachingPracticeFixedStructureTracksToGeneratedLessonsInternal,
+  cleanupDepartedLinkedPrivateFromGroupInternal,
+} from "@/lib/teaching-practice-full-sync-core";
 
 // Deliberately not re-exported from here: this is a "use server" module, and
 // Next.js's server-actions transform scans every export to build a client
@@ -389,10 +401,24 @@ export async function createTeachingPracticeTrackAsInstructor(
   return createTeachingPracticeTrackInternal(input);
 }
 
+// Stage E4 - widens ActionResult with an optional, best-effort summary of
+// the auto-sync that runs after a successful fixed-structure track-field
+// save (time/location/instructor/groupName/groupTrackId). Same shape as
+// TeachingPracticeTrackChildrenSaveResult (E2) / TeachingPracticeTrackTraineeSaveResult
+// (E3) - purely additive, no existing caller that only reads .success/.error
+// breaks.
+export interface TeachingPracticeTrackUpdateResult extends ActionResult {
+  syncSummary?: {
+    lessonsSynced: number;
+    lessonsSkippedFeedback: number;
+    lessonsSkippedPastDate: number;
+  };
+}
+
 async function updateTeachingPracticeTrackInternal(
   trackId: string,
   input: TeachingPracticeTrackInput
-): Promise<ActionResult> {
+): Promise<TeachingPracticeTrackUpdateResult> {
   const track = await prisma.teachingPracticeTrack.findUnique({ where: { id: trackId } });
   if (!track) return { success: false, error: NOT_FOUND_TRACK };
 
@@ -405,6 +431,12 @@ async function updateTeachingPracticeTrackInternal(
   const groupTrackLink = await validateGroupTrackLink(input.practiceType, input.groupTrackId, trackId);
   if ("error" in groupTrackLink) return { success: false, error: groupTrackLink.error };
 
+  // Captured from the pre-update row above (track.groupTrackId) - needed so
+  // a re-link (group A -> group B) can sync BOTH the old and new linked
+  // group tracks, not just whichever one the track points at after this
+  // update commits.
+  const oldGroupTrackId = track.groupTrackId;
+
   await prisma.teachingPracticeTrack.update({
     where: { id: trackId },
     data: {
@@ -414,13 +446,55 @@ async function updateTeachingPracticeTrackInternal(
     },
   });
 
-  return { success: true };
+  // Stage E4 - sync this track's own future generated lessons, plus (for a
+  // BEGINNER_PRIVATE track) whichever BEGINNER_GROUP track(s) are actually
+  // affected: the old link (so it re-derives without this track, if it was
+  // unlinked or re-linked elsewhere) and the new link (so it re-derives with
+  // this track's updated fields). Deduped - oldGroupTrackId and
+  // groupTrackLink.id are usually the same id (no re-link), and a
+  // BEGINNER_GROUP/LUNGE track never has either set. Never syncs the whole
+  // group א/ב, never touches any other unrelated track. A sync failure here
+  // never fails the save itself - the fixed-structure edit already
+  // succeeded and is the source of truth; syncSummary simply stays
+  // undefined ("unknown") if the follow-up sync couldn't be completed.
+  const syncTrackIds = Array.from(
+    new Set([trackId, oldGroupTrackId, groupTrackLink.id].filter((id): id is string => !!id))
+  );
+  let syncSummary: TeachingPracticeTrackUpdateResult["syncSummary"];
+  try {
+    const syncResult = await syncTeachingPracticeFixedStructureTracksToGeneratedLessonsInternal(syncTrackIds);
+    let lessonsSynced = syncResult.lessonsSynced;
+
+    // Stage E4 fix - a relink/unlink away from oldGroupTrackId can leave that
+    // old group with fewer than 3 linked private tracks, which makes the
+    // sync above correctly decline to derive its roster ("do not guess when
+    // incomplete") - but that also means it never revisits the old group's
+    // stale fixed-structure rows or any future lesson that already matched
+    // them, silently keeping this track's departed trainee/child there. Only
+    // runs when an actual relink/unlink just happened (oldGroupTrackId set
+    // and different from the new value) - never on a same-group save, and
+    // never as part of the normal full sync above.
+    if (oldGroupTrackId && oldGroupTrackId !== groupTrackLink.id) {
+      const cleanup = await cleanupDepartedLinkedPrivateFromGroupInternal(oldGroupTrackId);
+      if (cleanup) lessonsSynced += cleanup.lessonsUpdated;
+    }
+
+    syncSummary = {
+      lessonsSynced,
+      lessonsSkippedFeedback: syncResult.lessonsSkippedFeedback,
+      lessonsSkippedPastDate: syncResult.lessonsSkippedPastDate,
+    };
+  } catch {
+    syncSummary = undefined;
+  }
+
+  return { success: true, syncSummary };
 }
 
 export async function updateTeachingPracticeTrackAsAdmin(
   trackId: string,
   input: TeachingPracticeTrackInput
-): Promise<ActionResult> {
+): Promise<TeachingPracticeTrackUpdateResult> {
   await requireAdmin();
   return updateTeachingPracticeTrackInternal(trackId, input);
 }
@@ -429,7 +503,7 @@ export async function updateTeachingPracticeTrackAsInstructor(
   instructorId: string,
   trackId: string,
   input: TeachingPracticeTrackInput
-): Promise<ActionResult> {
+): Promise<TeachingPracticeTrackUpdateResult> {
   const instructor = await getInstructorForAssignmentWrite(instructorId);
   if (!instructor) return { success: false, error: NO_ASSIGNMENT_PERMISSION };
   return updateTeachingPracticeTrackInternal(trackId, input);
