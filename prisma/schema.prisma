@@ -37,6 +37,7 @@ model Student {
   ridingLessonNotes       RidingLessonNote[]
   ridingLessonNotesTaught RidingLessonNoteTaughtStudent[]
   weeklyFeedbackResponses WeeklyFeedbackResponse[]
+  ridingProgressFeedback  StudentRidingProgressFeedback[]
 
   teachingPracticeTrackMemberships TeachingPracticeTrackTrainee[]
   teachingPracticeParticipations   TeachingPracticeParticipant[]
@@ -502,6 +503,35 @@ model RidingLessonNoteTaughtStudent {
 
   @@unique([ridingLessonNoteId, studentId])
   @@map("riding_lesson_note_taught_students")
+}
+
+// Manager-entered riding progress feedback, separate from RidingLessonNote,
+// which is tied to scheduled advanced-instruction sessions. This model is
+// NOT per-session and has no relation to ScheduleItem/RidingSlot - the
+// manager adds an entry for a trainee's own riding progress whenever she
+// wants, not after every riding session. Multiple rows accumulate over time
+// per trainee (unlike RidingLessonNote's one-row-per-slot upsert-in-place
+// convention), which is why this carries both createdByName and
+// updatedByName - a row written by one admin may later be edited by
+// another, and each historical entry should still show who originally wrote
+// it even after a later edit.
+model StudentRidingProgressFeedback {
+  id               String   @id @default(cuid())
+  studentId        String
+  date             DateTime @db.Date
+  ratingHalfPoints Int?
+  feedback         String?
+  horseName        String?
+  topic            String?
+  createdByName    String?
+  updatedByName    String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([studentId])
+  @@map("student_riding_progress_feedback")
 }
 
 enum MessageTaskType {
