@@ -19,6 +19,17 @@ import {
   type TeachingPracticeScheduleWarning,
 } from "@/lib/teaching-practice-schedule-check";
 import { hasMeaningfulTeachingPracticeFeedback } from "@/lib/teaching-practice-feedback";
+// Stage E2 - track-scoped auto-sync after a fixed-structure child/horse/
+// equipment save. Imported from lib/teaching-practice-full-sync-core.ts (a
+// plain, non-"use server" module - see its own header) rather than from
+// lib/actions/teaching-practice-full-sync.ts, so this write-capable helper
+// is never exported from a Server Action module. Not requireAdmin()-gated
+// itself - safe to call here because every caller of
+// setTeachingPracticeTrackChildrenInternal below has already passed its own
+// auth check (requireAdmin() for the admin path, the
+// canManageTeachingPracticeAssignments check for the instructor path)
+// before reaching this point.
+import { syncTeachingPracticeFixedStructureTracksToGeneratedLessonsInternal } from "@/lib/teaching-practice-full-sync-core";
 
 // Deliberately not re-exported from here: this is a "use server" module, and
 // Next.js's server-actions transform scans every export to build a client
@@ -881,10 +892,25 @@ export interface TeachingPracticeTrackChildInput {
   equipmentNotes?: string | null;
 }
 
+// Stage E2 - widens ActionResult with an optional, best-effort summary of
+// the auto-sync that runs after a successful save (see
+// setTeachingPracticeTrackChildrenInternal below). Purely additive: any
+// existing caller that only reads .success/.error keeps working unchanged;
+// no UI currently reads syncSummary (kept undisplayed per this stage's
+// scope), but it's here now so a later stage can surface
+// lessonsSkippedFeedback without another return-type change.
+export interface TeachingPracticeTrackChildrenSaveResult extends ActionResult {
+  syncSummary?: {
+    lessonsSynced: number;
+    lessonsSkippedFeedback: number;
+    lessonsSkippedPastDate: number;
+  };
+}
+
 async function setTeachingPracticeTrackChildrenInternal(
   trackId: string,
   childrenInput: TeachingPracticeTrackChildInput[]
-): Promise<ActionResult> {
+): Promise<TeachingPracticeTrackChildrenSaveResult> {
   const track = await prisma.teachingPracticeTrack.findUnique({ where: { id: trackId } });
   if (!track) return { success: false, error: NOT_FOUND_TRACK };
 
@@ -937,13 +963,38 @@ async function setTeachingPracticeTrackChildrenInternal(
     }),
   ]);
 
-  return { success: true };
+  // Stage E2 - auto-sync this track's future generated lessons (and, if this
+  // is a BEGINNER_PRIVATE track linked to a BEGINNER_GROUP, that group
+  // track's future lessons too, since its own roster/children are derived
+  // from linked private rows like this one) so they reflect the
+  // just-saved child/horse/equipment data. Never syncs the whole group,
+  // never touches unrelated tracks - see
+  // lib/actions/teaching-practice-full-sync.ts for exactly what this does
+  // and does not touch (future-only, skips meaningful feedback, no lesson
+  // create/delete, no practiceType changes). A sync failure here never
+  // fails the save itself - the fixed-structure edit above already
+  // succeeded and is the source of truth; syncSummary simply stays
+  // undefined ("unknown") if the follow-up sync couldn't be completed.
+  const syncTrackIds = track.groupTrackId ? [trackId, track.groupTrackId] : [trackId];
+  let syncSummary: TeachingPracticeTrackChildrenSaveResult["syncSummary"];
+  try {
+    const syncResult = await syncTeachingPracticeFixedStructureTracksToGeneratedLessonsInternal(syncTrackIds);
+    syncSummary = {
+      lessonsSynced: syncResult.lessonsSynced,
+      lessonsSkippedFeedback: syncResult.lessonsSkippedFeedback,
+      lessonsSkippedPastDate: syncResult.lessonsSkippedPastDate,
+    };
+  } catch {
+    // Intentionally swallowed - see comment above.
+  }
+
+  return { success: true, syncSummary };
 }
 
 export async function setTeachingPracticeTrackChildrenAsAdmin(
   trackId: string,
   children: TeachingPracticeTrackChildInput[]
-): Promise<ActionResult> {
+): Promise<TeachingPracticeTrackChildrenSaveResult> {
   await requireAdmin();
   return setTeachingPracticeTrackChildrenInternal(trackId, children);
 }
@@ -958,7 +1009,7 @@ export async function setTeachingPracticeTrackChildrenAsInstructor(
   instructorId: string,
   trackId: string,
   children: TeachingPracticeTrackChildInput[]
-): Promise<ActionResult> {
+): Promise<TeachingPracticeTrackChildrenSaveResult> {
   const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
   if (!instructor || !instructor.isActive || !instructor.canManageTeachingPracticeAssignments) {
     return { success: false, error: NO_ASSIGNMENT_PERMISSION };

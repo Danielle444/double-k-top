@@ -112,10 +112,10 @@ import {
 // ("סנכרן מבנה קבוע לתאריכים"). Admin-only, replaces the never-shipped
 // trainee-only resync button; there is only ever one sync entry point in
 // this UI.
-import {
-  syncTeachingPracticeFixedStructureToGeneratedLessonsAsAdmin,
-  type TeachingPracticeFullSyncApplyResult,
-} from "@/lib/actions/teaching-practice-full-sync";
+import { syncTeachingPracticeFixedStructureToGeneratedLessonsAsAdmin } from "@/lib/actions/teaching-practice-full-sync";
+// Result type now lives in the (non-"use server") core module - see that
+// file's header for why it moved out of the action file.
+import type { TeachingPracticeFullSyncApplyResult } from "@/lib/teaching-practice-full-sync-core";
 // Stage D1/D2 - read-only fixed-structure assignment check ("בדוק שיבוץ").
 import { checkTeachingPracticeFixedStructureForAdmin } from "@/lib/actions/teaching-practice-fixed-structure-check";
 import type {
