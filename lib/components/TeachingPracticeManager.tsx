@@ -1194,6 +1194,11 @@ export function TeachingPracticeManager({
   const isFixedStructureCheckStale =
     fixedStructureCheckResult !== null && fixedStructureCheckGroupName !== tableGroupFilter;
 
+  // Purely cosmetic "generating..." state for the fixed-structure Excel
+  // export link below - see its own comment for why this is a timeout, not
+  // a real completion signal.
+  const [isExportingFixedStructure, setIsExportingFixedStructure] = useState(false);
+
   function handleRunFixedStructureCheck() {
     if (tableGroupFilter === "all" || fixedStructureCheckLoading) return; // button is disabled in this case; defensive no-op
     const groupName = tableGroupFilter;
@@ -2779,6 +2784,32 @@ export function TeachingPracticeManager({
                       יש לבחור קבוצה א או קבוצה ב כדי לבדוק שיבוץ
                     </span>
                   )}
+                </div>
+              )}
+
+              {/* Fixed-structure Excel export - both groups, one file, two
+                  sheets ("קבוצה א"/"קבוצה ב"). No group-filter requirement
+                  (always exports both), no confirmation (read-only). Plain
+                  link + native browser download, same pattern as every
+                  other export in this app (e.g. the day-export link below,
+                  ScheduleClient.tsx). isExportingFixedStructure is a purely
+                  cosmetic "generating..." affordance - the download itself
+                  is a normal navigation, not a fetch, so there is no real
+                  completion event to key off; the timeout just gives brief
+                  visible feedback since export routes elsewhere in this app
+                  show none. */}
+              {role === "admin" && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <a
+                    href="/api/admin/teaching-practice/fixed-structure-export"
+                    onClick={() => {
+                      setIsExportingFixedStructure(true);
+                      window.setTimeout(() => setIsExportingFixedStructure(false), 2000);
+                    }}
+                    className="rounded-lg bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground transition-colors hover:opacity-80"
+                  >
+                    {isExportingFixedStructure ? "מייצא..." : "ייצוא מבנה קבוע לאקסל"}
+                  </a>
                 </div>
               )}
 
