@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/app/generated/prisma/client";
 import { requireAdmin } from "@/lib/auth/require-admin";
-import { dateKey, parseDateKey } from "@/lib/dates";
+import { dateKey, parseDateKey, todayDateKey } from "@/lib/dates";
 import type { ActionResult } from "@/lib/actions/students";
 import {
   addMinutesToTimeString,
@@ -2132,6 +2132,63 @@ export async function setTeachingPracticeLessonPublishedAsInstructor(
   const instructor = await getInstructorForAssignmentWrite(instructorId);
   if (!instructor) return { success: false, error: NO_ASSIGNMENT_PERMISSION };
   return setTeachingPracticeLessonPublishedInternal(lessonId, isPublished);
+}
+
+// ---------------------------------------------------------------------------
+// Bulk publish/unpublish - future lessons only, admin-only (no instructor
+// wrapper - a system-wide bulk visibility change is a bigger blast radius
+// than the single-lesson toggle above, which instructors may already do).
+// "Future" uses the exact same date >= today convention as the fixed-
+// structure sync's own eligibility rule (lib/teaching-practice-full-sync-core.ts) -
+// inclusive of today, never touches a strictly-past lesson. Only ever
+// writes isPublished - never participants, children, horse/equipment,
+// feedback, fixed structure, sync-derived data, times, or practiceType, and
+// never creates/deletes a lesson (updateMany on an existing WHERE clause
+// only).
+// ---------------------------------------------------------------------------
+
+export interface TeachingPracticeBulkPublishResult extends ActionResult {
+  changedCount: number;
+  alreadyCount: number;
+  totalFutureCount: number;
+  isPublished: boolean;
+}
+
+async function bulkSetFutureTeachingPracticeLessonsPublishedInternal(
+  isPublished: boolean
+): Promise<TeachingPracticeBulkPublishResult> {
+  const todayUtc = parseDateKey(todayDateKey());
+
+  // alreadyCount (already at the target value) and the updateMany below
+  // (only rows at the OPPOSITE value) are disjoint subsets of the same
+  // future-lesson set, so running all three together is safe - the update
+  // can never affect a row alreadyCount is also counting.
+  const [totalFutureCount, alreadyCount, updateResult] = await Promise.all([
+    prisma.teachingPracticeLesson.count({ where: { date: { gte: todayUtc } } }),
+    prisma.teachingPracticeLesson.count({ where: { date: { gte: todayUtc }, isPublished } }),
+    prisma.teachingPracticeLesson.updateMany({
+      where: { date: { gte: todayUtc }, isPublished: !isPublished },
+      data: { isPublished },
+    }),
+  ]);
+
+  return {
+    success: true,
+    changedCount: updateResult.count,
+    alreadyCount,
+    totalFutureCount,
+    isPublished,
+  };
+}
+
+export async function bulkPublishFutureTeachingPracticeLessonsAsAdmin(): Promise<TeachingPracticeBulkPublishResult> {
+  await requireAdmin();
+  return bulkSetFutureTeachingPracticeLessonsPublishedInternal(true);
+}
+
+export async function bulkUnpublishFutureTeachingPracticeLessonsAsAdmin(): Promise<TeachingPracticeBulkPublishResult> {
+  await requireAdmin();
+  return bulkSetFutureTeachingPracticeLessonsPublishedInternal(false);
 }
 
 // ---------------------------------------------------------------------------

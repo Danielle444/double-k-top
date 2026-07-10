@@ -31,6 +31,8 @@ import {
   type SameParentChildInput,
 } from "@/lib/teaching-practice-same-parent";
 import {
+  bulkPublishFutureTeachingPracticeLessonsAsAdmin,
+  bulkUnpublishFutureTeachingPracticeLessonsAsAdmin,
   createTeachingPracticeChildAsAdmin,
   createTeachingPracticeChildAsInstructor,
   createTeachingPracticeGroupBlockAsAdmin,
@@ -76,6 +78,7 @@ import {
   updateTeachingPracticeTrackAsInstructor,
   upsertTeachingPracticeFeedbackAsAdmin,
   upsertTeachingPracticeFeedbackAsInstructor,
+  type TeachingPracticeBulkPublishResult,
   type TeachingPracticeChildAssignmentInput,
   type TeachingPracticeChildAssignmentRow,
   type TeachingPracticeChildInput,
@@ -1295,6 +1298,48 @@ export function TeachingPracticeManager({
         setSyncError(err instanceof Error ? err.message : "אירעה שגיאה בסנכרון המבנה הקבוע לתאריכים");
       })
       .finally(() => setSyncLoading(false));
+  }
+
+  // Bulk publish/unpublish - admin-only (button itself only rendered for
+  // role === "admin", see the lessons-tab JSX), future lessons only (date >=
+  // today), never touches a strictly-past lesson. Same confirm-then-summary
+  // modal pattern as the sync modal above. bulkPublishTarget freezes which
+  // action ("publish" vs "unpublish") the open modal is currently about, so
+  // the confirmation text and the eventual call always match whichever
+  // button opened it - null means closed.
+  const [bulkPublishTarget, setBulkPublishTarget] = useState<boolean | null>(null);
+  const [bulkPublishLoading, setBulkPublishLoading] = useState(false);
+  const [bulkPublishError, setBulkPublishError] = useState<string | null>(null);
+  const [bulkPublishResult, setBulkPublishResult] = useState<TeachingPracticeBulkPublishResult | null>(null);
+
+  function handleOpenBulkPublishModal(target: boolean) {
+    setBulkPublishTarget(target);
+    setBulkPublishError(null);
+    setBulkPublishResult(null);
+  }
+
+  function handleCloseBulkPublishModal() {
+    if (bulkPublishLoading) return; // never let the backdrop/X close mid-request
+    setBulkPublishTarget(null);
+  }
+
+  function handleConfirmBulkPublish() {
+    if (bulkPublishLoading || bulkPublishTarget === null) return; // prevents double-click submission
+    setBulkPublishLoading(true);
+    setBulkPublishError(null);
+    const action = bulkPublishTarget
+      ? bulkPublishFutureTeachingPracticeLessonsAsAdmin
+      : bulkUnpublishFutureTeachingPracticeLessonsAsAdmin;
+    action()
+      .then(async (result) => {
+        setBulkPublishResult(result);
+        await refreshLessons();
+        if (selectedLessonDate) await refreshLessonDateDetail(selectedLessonDate);
+      })
+      .catch((err: unknown) => {
+        setBulkPublishError(err instanceof Error ? err.message : "אירעה שגיאה בעדכון הפרסום");
+      })
+      .finally(() => setBulkPublishLoading(false));
   }
 
   // Stage D2 - read-only fixed-structure assignment check ("בדוק שיבוץ").
@@ -4433,6 +4478,31 @@ export function TeachingPracticeManager({
           return (
             <div className="flex min-w-0 flex-col gap-4">
               {lessonActionError && <p className="text-sm text-danger">{lessonActionError}</p>}
+              {/* Bulk publish/unpublish - admin-only, affects ALL future
+                  generated lessons (every date, every group), not just the
+                  currently-selected date - placed above the date tabs so
+                  it's clearly a dated-lessons-wide action, not a fixed-
+                  structure one. */}
+              {role === "admin" && (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="!px-3 !py-1.5 !text-xs"
+                    onClick={() => handleOpenBulkPublishModal(true)}
+                  >
+                    פרסם שיבוץ לחניכים
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="!px-3 !py-1.5 !text-xs"
+                    onClick={() => handleOpenBulkPublishModal(false)}
+                  >
+                    בטל פרסום שיבוץ עתידי
+                  </Button>
+                </div>
+              )}
               {lessons === null ? (
                 <p className="text-sm text-muted-foreground">טוען...</p>
               ) : lessons.length === 0 ? (
@@ -5380,6 +5450,68 @@ export function TeachingPracticeManager({
               )}
               <div className="flex justify-end border-t border-border pt-3">
                 <Button type="button" onClick={handleCloseSyncModal}>
+                  סגירה
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </Modal>
+
+      {/* Bulk publish/unpublish confirm + result - always mounted (same
+          convention as the sync modal above), admin-only (the buttons that
+          open it are themselves admin-only). bulkPublishResult doubles as
+          "have we already run this" - once set, the modal shows the
+          summary instead of the confirmation prompt; reopening (a fresh
+          handleOpenBulkPublishModal call) always resets it first. */}
+      <Modal
+        open={bulkPublishTarget !== null}
+        onClose={handleCloseBulkPublishModal}
+        title={bulkPublishTarget ? "פרסום שיבוץ עתידי לחניכים" : "ביטול פרסום שיבוץ עתידי"}
+      >
+        <div className="flex flex-col gap-3">
+          {!bulkPublishResult && !bulkPublishLoading && (
+            <>
+              <ul className="flex flex-col gap-1.5 text-sm text-card-foreground">
+                <li>
+                  הפעולה תשפיע על כל השיעורים העתידיים (כולל היום) שכבר נוצרו במסגרת התנסויות מתחילים - בכל
+                  הקבוצות ובכל התאריכים, לא רק התאריך הנבחר כרגע.
+                </li>
+                <li>שיעורים מהעבר לא ישתנו.</li>
+                <li>
+                  הפעולה משנה רק את מצב הפרסום (האם החניכים רואים את השיבוץ) - היא לא משנה חניכים, ילדים,
+                  סוסים, ציוד, שעות, סוג התנסות או משוב.
+                </li>
+                <li>הפעולה לא יוצרת ולא מוחקת שיעורים.</li>
+              </ul>
+              {bulkPublishError && <p className="text-sm text-danger">{bulkPublishError}</p>}
+              <div className="flex justify-end gap-2 border-t border-border pt-3">
+                <Button type="button" variant="ghost" onClick={handleCloseBulkPublishModal}>
+                  ביטול
+                </Button>
+                <Button type="button" variant="danger" onClick={handleConfirmBulkPublish}>
+                  {bulkPublishTarget ? "אישור ופרסום" : "אישור וביטול פרסום"}
+                </Button>
+              </div>
+            </>
+          )}
+
+          {bulkPublishLoading && <p className="text-sm text-muted-foreground">מעדכן...</p>}
+
+          {bulkPublishResult && !bulkPublishLoading && (
+            <>
+              <div className="flex flex-col gap-1.5 text-sm text-card-foreground">
+                <span>
+                  {bulkPublishResult.isPublished ? "פורסמו" : "בוטל פרסום עבור"}: {bulkPublishResult.changedCount}
+                </span>
+                <span>
+                  כבר היו {bulkPublishResult.isPublished ? "מפורסמים" : "לא מפורסמים"} קודם לכן:{" "}
+                  {bulkPublishResult.alreadyCount}
+                </span>
+                <span>סה&quot;כ שיעורים עתידיים שנבדקו: {bulkPublishResult.totalFutureCount}</span>
+              </div>
+              <div className="flex justify-end border-t border-border pt-3">
+                <Button type="button" onClick={handleCloseBulkPublishModal}>
                   סגירה
                 </Button>
               </div>
