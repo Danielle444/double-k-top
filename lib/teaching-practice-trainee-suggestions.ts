@@ -153,10 +153,12 @@ export interface TraineeSuggestionInputTrack {
   defaultStartTime: string;
   defaultEndTime: string;
   // Set only on a BEGINNER_PRIVATE track - the id of the BEGINNER_GROUP
-  // track it feeds. Used only by isExpectedLinkedPrivateGroupPair below (an
-  // existing_overlap exemption), mirroring TeachingPracticeTrack.groupTrackId
-  // in the schema and the same-named field already used for this exact
-  // purpose in lib/teaching-practice-fixed-structure-check.ts.
+  // track it feeds. Mirrors TeachingPracticeTrack.groupTrackId in the
+  // schema. Not read by shouldIgnoreFixedStructureTimeConflict below (that
+  // check is deliberately linkage-independent - see its own comment for
+  // why), but kept on this input shape for schema-mirroring completeness
+  // and any future feature that does need real linkage (e.g. a "linked
+  // track" display badge).
   groupTrackId: string | null;
 }
 
@@ -493,28 +495,38 @@ function hasUsableTimeData(track: TraineeSuggestionInputTrack): boolean {
   return parseTimeToMinutes(track.defaultStartTime) != null && parseTimeToMinutes(track.defaultEndTime) != null;
 }
 
-// Reporting-only fix - a trainee's own BEGINNER_PRIVATE track and its OWN
-// linked BEGINNER_GROUP track (via groupTrackId) sharing a time window is
-// expected/intentional - the private lesson and its linked group lesson are
-// part of the same Teaching Practice flow, not a real conflict. Any other
-// BEGINNER_PRIVATE/BEGINNER_GROUP pairing that is NOT actually linked to
-// each other (or any other practiceType combination) is still a genuine
-// potential conflict. Used ONLY by the existing_overlap warning below - a
-// pre-existing-data report, entirely separate from (and never read by) the
-// candidate hard-exclusion/scoring logic in processSlot further down, which
-// is intentionally left untouched here. Mirrors isExpectedLinkedBeginnerPair
-// in lib/teaching-practice-fixed-structure-check.ts - not imported, since
+// Product rule (revised - broadened beyond linkage): fixed structure is
+// time-of-day only (no real date field - weekday is only ever an unenforced
+// display hint, see TraineeSuggestionInputTrack's own comment), but
+// BEGINNER_PRIVATE and BEGINNER_GROUP represent different ACTUAL DATE
+// BLOCKS in the real schedule - private lessons and the group lesson never
+// happen on the same day, even when their recorded clock times happen to
+// overlap. So a BEGINNER_PRIVATE <-> BEGINNER_GROUP pair is NEVER treated as
+// a real time conflict, regardless of whether the two specific tracks are
+// linked to each other via groupTrackId - practiceType alone is sufficient.
+// LUNGE and same-type (private/private, group/group) pairs are unaffected -
+// only a BEGINNER_PRIVATE <-> BEGINNER_GROUP pair is ever ignored here.
+//
+// Used consistently everywhere a time relationship between two of a
+// trainee's fixed-structure tracks is evaluated: the existing_overlap
+// warning below, the candidate hard-overlap exclusion AND the spacing
+// (nearestGapMinutes) scoring in processSlot further down, and the trainee
+// schedule overview's own pairwise overlap/gap computation - so a private/
+// group pair is never flagged as "חפיפה", never hard-excludes a candidate,
+// and never shrinks a candidate's spacing score or a trainee's minimum-gap
+// summary. Mirrors shouldIgnoreFixedStructureTimeConflict in
+// lib/teaching-practice-fixed-structure-check.ts - not imported, since
 // that's a separate standalone pure-check module (same small, deliberate
 // duplication convention already used elsewhere between these two files,
 // e.g. VALID_GROUP_NAMES/tracksMayOverlap-style helpers).
-function isExpectedLinkedPrivateGroupPair(a: TraineeSuggestionInputTrack, b: TraineeSuggestionInputTrack): boolean {
-  const isPrivateGroupPair =
+function shouldIgnoreFixedStructureTimeConflict(
+  a: TraineeSuggestionInputTrack,
+  b: TraineeSuggestionInputTrack
+): boolean {
+  return (
     (a.practiceType === "BEGINNER_PRIVATE" && b.practiceType === "BEGINNER_GROUP") ||
-    (a.practiceType === "BEGINNER_GROUP" && b.practiceType === "BEGINNER_PRIVATE");
-  if (!isPrivateGroupPair) return false;
-  const privateSide = a.practiceType === "BEGINNER_PRIVATE" ? a : b;
-  const groupSide = a.practiceType === "BEGINNER_GROUP" ? a : b;
-  return privateSide.groupTrackId === groupSide.id;
+    (a.practiceType === "BEGINNER_GROUP" && b.practiceType === "BEGINNER_PRIVATE")
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -780,9 +792,10 @@ export function computeTeachingPracticeTraineeSuggestions(
 
   // ---- existing_overlap: two of this group's tracks share a real trainee
   // and their time windows already overlap - pre-existing data, not
-  // something this run created. Exempts a trainee's own linked
-  // BEGINNER_PRIVATE/BEGINNER_GROUP pair (see isExpectedLinkedPrivateGroupPair) -
-  // that overlap is intentional by design, not a real conflict.
+  // something this run created. Exempts any BEGINNER_PRIVATE/BEGINNER_GROUP
+  // pair, linked or not (see shouldIgnoreFixedStructureTimeConflict) -
+  // private and group lessons happen on different actual dates, so their
+  // clock-time overlap is never a real conflict.
   const membershipsByTrainee = new Map<string, TraineeSuggestionInputTrackTrainee[]>();
   for (const m of input.trackTrainees) {
     if (!trackByIdForMismatch.has(m.trackId)) continue;
@@ -801,7 +814,7 @@ export function computeTeachingPracticeTraineeSuggestions(
           // summary warning above - never re-reported per pair here.
           continue;
         }
-        if (check.overlaps && !isExpectedLinkedPrivateGroupPair(trackA, trackB)) {
+        if (check.overlaps && !shouldIgnoreFixedStructureTimeConflict(trackA, trackB)) {
           warnings.push({
             kind: "existing_overlap",
             message: `${traineeName(traineeId)} משובץ/ת בשני סלוטים קבועים חופפים בזמן (${describeTrackTime(trackA)} / ${describeTrackTime(trackB)}) - נתון קיים שלא שונה`,
@@ -978,6 +991,11 @@ export function computeTeachingPracticeTraineeSuggestions(
       const otherWindows = (provisionalWindows.get(candidate.id) ?? []).filter((t) => t.id !== track.id);
       let overlapFound = false;
       for (const otherTrack of otherWindows) {
+        // Product rule: a BEGINNER_PRIVATE/BEGINNER_GROUP pair never
+        // hard-excludes a candidate here, linked or not - see
+        // shouldIgnoreFixedStructureTimeConflict's own comment. LUNGE and
+        // same-type pairs are unaffected.
+        if (shouldIgnoreFixedStructureTimeConflict(track, otherTrack)) continue;
         const check = tracksMayOverlap(track, otherTrack);
         if (check.unknown) continue;
         if (check.overlaps) {
@@ -1027,7 +1045,14 @@ export function computeTeachingPracticeTraineeSuggestions(
         const state = provisionalBuckets.get(c.id);
         const categoryCount = rankingCategory ? (state?.[rankingCategory] ?? 0) : 0;
         const totalAssignments = state?.totalAssignments ?? 0;
-        const otherWindows = (provisionalWindows.get(c.id) ?? []).filter((t) => t.id !== track.id);
+        // Product rule: a BEGINNER_PRIVATE/BEGINNER_GROUP pair is never
+        // "comparable" for spacing purposes either (see
+        // shouldIgnoreFixedStructureTimeConflict) - filtered out here so it
+        // can never shrink a candidate's gapMinutes or make them look
+        // artificially "צמוד" against a slot that isn't a real conflict.
+        const otherWindows = (provisionalWindows.get(c.id) ?? []).filter(
+          (t) => t.id !== track.id && !shouldIgnoreFixedStructureTimeConflict(track, t)
+        );
         const gapMinutes = nearestGapMinutes(track, otherWindows);
         return { candidate: c, categoryCount, totalAssignments, gapMinutes };
       })
@@ -1209,7 +1234,7 @@ export function computeTeachingPracticeTraineeSuggestions(
 // Stage B - trainee schedule overview ("לו״ז חניכים"). Read-only, fixed-
 // structure only, same day-blind time-of-day model as the suggestion engine
 // above - reuses tracksMayOverlap, minutesBetweenTracks,
-// isExpectedLinkedPrivateGroupPair, hasUsableTimeData and
+// shouldIgnoreFixedStructureTimeConflict, hasUsableTimeData and
 // projectRoleForRotationOrder directly (all already pure, already in this
 // file) rather than duplicating any time-gap logic. This is purely a
 // different PRESENTATION of largely the same underlying facts the
@@ -1242,10 +1267,10 @@ export interface TraineeScheduleAssignment {
   // schedule context, per product rule.
   isDerived: boolean;
   // Minutes to this trainee's nearest OTHER assignment, excluding both a
-  // genuinely overlapping pair (see overlapsWithTrackIds instead) and an
-  // expected linked BEGINNER_PRIVATE/BEGINNER_GROUP pair (never a real gap
-  // or a real conflict - see isExpectedLinkedPrivateGroupPair). Null when no
-  // such comparable other assignment exists (missing/invalid time data on
+  // genuinely overlapping pair (see overlapsWithTrackIds instead) and any
+  // BEGINNER_PRIVATE/BEGINNER_GROUP pair, linked or not (never a real gap or
+  // a real conflict - see shouldIgnoreFixedStructureTimeConflict). Null when
+  // no such comparable other assignment exists (missing/invalid time data on
   // every other side, or genuinely no other assignments at all).
   nearestGapMinutes: number | null;
   // Non-empty only for a genuine (non-linked-pair) time overlap with another
@@ -1323,16 +1348,19 @@ export function computeTeachingPracticeTraineeSchedule(
       }
 
       // Pairwise against every OTHER assignment this same trainee has (not
-      // just chronological neighbors) - a linked private/group pair is
-      // skipped entirely (neither an overlap nor a gap contributor, per
-      // product rule); a genuine overlap contributes to overlapsWithTrackIds
-      // and never to the gap; everything else contributes its
-      // minutesBetweenTracks value as a gap candidate.
+      // just chronological neighbors) - any BEGINNER_PRIVATE/BEGINNER_GROUP
+      // pair, linked or not, is skipped entirely (neither an overlap nor a
+      // gap contributor - see shouldIgnoreFixedStructureTimeConflict: fixed
+      // structure is time-of-day only, but private and group lessons happen
+      // on different actual dates, so their clock-time overlap is never a
+      // real conflict or a real spacing signal); a genuine overlap
+      // contributes to overlapsWithTrackIds and never to the gap; everything
+      // else contributes its minutesBetweenTracks value as a gap candidate.
       const overlapsWithTrackIds: string[] = [];
       let nearestGap: number | null = null;
       for (const { track: other } of tracksForTrainee) {
         if (other.id === track.id) continue;
-        if (isExpectedLinkedPrivateGroupPair(track, other)) continue;
+        if (shouldIgnoreFixedStructureTimeConflict(track, other)) continue;
         const check = tracksMayOverlap(track, other);
         if (check.unknown) continue; // already covered by the upfront missing_or_invalid_time_data warning
         if (check.overlaps) {
