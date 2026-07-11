@@ -18,6 +18,7 @@ export type MainTabId =
   | "notifications"
   | "weeklyFeedback"
   | "teachingPractice"
+  | "childSignatures"
   | "more";
 
 export const MAIN_TABS: { id: MainTabId; label: string }[] = [
@@ -114,6 +115,13 @@ const TAB_ICON_PATHS: Record<MainTabId, ReactNode> = {
       <circle cx="6" cy="17" r="2.5" />
       <circle cx="18" cy="17" r="2.5" />
       <path d="M12 11v3M9.5 15.5 12 14M14.5 15.5 12 14" />
+    </>
+  ),
+  childSignatures: (
+    <>
+      <path d="M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+      <path d="M8 15c1.2-1 2-1 3 0s1.8 1 3 0" />
+      <path d="M9 10h6M9 7h3" />
     </>
   ),
   more: (

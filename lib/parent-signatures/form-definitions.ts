@@ -188,6 +188,18 @@ export const SAFETY_INSTRUCTIONS_CONTENT_V1: ParentSignatureFormContent = {
   dateLabel: "תאריך",
 };
 
+// Short, distinct UI label per form type - separate from `title` above (the
+// full document title/subtitle exactly as it appears in the source
+// document). `title` is intentionally identical for LUNGE_CONSENT and
+// BEGINNER_LESSON_CONSENT (the two source templates share the same title
+// text - see the module header), so a status list showing multiple form
+// chips for one child needs this instead to tell them apart at a glance.
+export const FORM_TYPE_SHORT_LABEL: Record<ParentSignatureFormTypeValue, string> = {
+  SAFETY_INSTRUCTIONS: "הוראות בטיחות",
+  LUNGE_CONSENT: "הסכמת הורים - לונג'",
+  BEGINNER_LESSON_CONSENT: "הסכמת הורים - התנסויות מתחילים",
+};
+
 export const FORM_CONTENT_REGISTRY: Record<ParentSignatureFormTypeValue, Record<string, ParentSignatureFormContent>> = {
   SAFETY_INSTRUCTIONS: { v1: SAFETY_INSTRUCTIONS_CONTENT_V1 },
   LUNGE_CONSENT: { v1: LUNGE_CONSENT_CONTENT_V1 },

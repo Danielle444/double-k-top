@@ -24,6 +24,7 @@ import { InstructorMessagesSection } from "@/app/instructor/InstructorMessagesSe
 import { InstructorAttendanceSection } from "@/app/instructor/InstructorAttendanceSection";
 import { InstructorRidingSlotsSection } from "@/app/instructor/InstructorRidingSlotsSection";
 import { InstructorTeachingPracticeSection } from "@/app/instructor/InstructorTeachingPracticeSection";
+import { InstructorChildSignaturesSection } from "@/app/instructor/InstructorChildSignaturesSection";
 import { ContactsSection } from "@/lib/components/ContactsSection";
 import { HelpContent } from "@/lib/components/HelpContent";
 import { NotificationsList } from "@/lib/components/NotificationsList";
@@ -76,8 +77,6 @@ const INSTRUCTOR_MORE_ITEMS: { id: MainTabId; label: string }[] = [
   { id: "help", label: "עזרה" },
 ];
 
-const INSTRUCTOR_ALL_TABS = [...INSTRUCTOR_MAIN_TABS, ...INSTRUCTOR_MORE_ITEMS];
-
 // Shortcut grid shown on the "today" home screen - covers every instructor
 // section except "today" itself (navigating to the screen you're already on
 // would be a dead click) and "more" (that's a menu, not a destination).
@@ -119,6 +118,7 @@ interface StoredSession {
   canManageTeachingPracticeAssignments: boolean;
   canManageTeachingPracticeHorses: boolean;
   canEditTeachingPracticeFeedback: boolean;
+  canManageChildSignatures: boolean;
 }
 
 interface StudentOption {
@@ -440,8 +440,26 @@ export function InstructorClient({
   const todayKey = getLocalDateKey(now);
   const todayWeek = weeks?.find((w) => w.startDate <= todayKey && todayKey <= w.endDate) ?? null;
 
-  const activeTabLabel = INSTRUCTOR_ALL_TABS.find((t) => t.id === activeTab)?.label ?? "";
-  const isMoreItem = INSTRUCTOR_MORE_ITEMS.some((item) => item.id === activeTab);
+  // "חתימות ילדים" is only inserted into the "עוד" menu (and thus into
+  // instructorAllTabs below) for instructors with canManageChildSignatures -
+  // unlike every other section on this screen, its status list exposes
+  // parent contact details (and, once signing lands, medical notes), so the
+  // nav entry itself is hidden rather than just gating the actions inside
+  // it. This is a UX convenience only: the underlying server action
+  // re-checks the flag fresh from the DB regardless of how this list was
+  // built (see getParentSignatureStatusForInstructor).
+  const instructorMoreItems: { id: MainTabId; label: string }[] = session.canManageChildSignatures
+    ? (() => {
+        const items = [...INSTRUCTOR_MORE_ITEMS];
+        const helpIndex = items.findIndex((item) => item.id === "help");
+        items.splice(helpIndex, 0, { id: "childSignatures", label: "חתימות ילדים" });
+        return items;
+      })()
+    : INSTRUCTOR_MORE_ITEMS;
+  const instructorAllTabs = [...INSTRUCTOR_MAIN_TABS, ...instructorMoreItems];
+
+  const activeTabLabel = instructorAllTabs.find((t) => t.id === activeTab)?.label ?? "";
+  const isMoreItem = instructorMoreItems.some((item) => item.id === activeTab);
   const bottomActiveTab: MainTabId = isMoreItem ? "more" : activeTab;
 
   // One flat, compact quick-nav grid instead of two labeled groups. Sending a
@@ -620,7 +638,7 @@ export function InstructorClient({
 
         {activeTab === "more" && (
           <div className="flex flex-col gap-3">
-            {INSTRUCTOR_ALL_TABS.filter((item) => item.id !== "more").map((item) => (
+            {instructorAllTabs.filter((item) => item.id !== "more").map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -698,6 +716,10 @@ export function InstructorClient({
             students={students}
             instructors={instructors}
           />
+        )}
+
+        {activeTab === "childSignatures" && session.canManageChildSignatures && (
+          <InstructorChildSignaturesSection instructorId={session.id} />
         )}
 
         {activeTab === "help" && <HelpContent role="instructor" />}
