@@ -119,6 +119,7 @@ import {
 import {
   applyTeachingPracticeTrackTraineeSlotSuggestionsAsAdmin,
   getTeachingPracticeTraineeSuggestionsForAdmin,
+  getTeachingPracticeFixedStructureTraineeScheduleForAdmin,
   type TeachingPracticeTrackTraineeSlotAssignment,
 } from "@/lib/actions/teaching-practice-suggestions";
 // Stage C2 - real, group-scoped fixed-structure -> generated-lessons sync
@@ -137,7 +138,11 @@ import type {
 } from "@/lib/teaching-practice-fixed-structure-check";
 import {
   TRAINEE_SUGGESTION_TARGET_PER_BUCKET,
+  TRAINEE_SUGGESTION_GOOD_GAP_MINUTES,
   type ComputeTraineeSuggestionsResult,
+  type ComputeTraineeScheduleResult,
+  type TraineeScheduleRow,
+  type TraineeScheduleAssignment,
   type TraineeSuggestionWarning,
   type TraineeSuggestionWarningKind,
 } from "@/lib/teaching-practice-trainee-suggestions";
@@ -1231,6 +1236,35 @@ export function TeachingPracticeManager({
       await refreshTracks();
       if (groupNameForRefetch) await loadTraineeSuggestions(groupNameForRefetch);
     });
+  }
+
+  // Stage B - read-only trainee schedule overview ("לו״ז חניכים"). Same
+  // single-group-required convention as the suggestion modal above (no
+  // write path at all here, unlike the suggestion modal - this view never
+  // calls anything beyond the one read-only fetch below). scheduleGroupName
+  // freezes which group the currently-shown result belongs to, independent
+  // of tableGroupFilter possibly changing afterward while the modal stays
+  // open - same reasoning as suggestionGroupName.
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [scheduleResult, setScheduleResult] = useState<ComputeTraineeScheduleResult | null>(null);
+  const [scheduleGroupName, setScheduleGroupName] = useState<string | null>(null);
+
+  function handleOpenTraineeSchedule() {
+    if (tableGroupFilter === "all") return; // button is disabled in this case; defensive no-op
+    const groupName = tableGroupFilter;
+    setScheduleModalOpen(true);
+    setScheduleGroupName(groupName);
+    setScheduleResult(null);
+    setScheduleError(null);
+    setScheduleLoading(true);
+    getTeachingPracticeFixedStructureTraineeScheduleForAdmin(groupName)
+      .then((data) => setScheduleResult(data))
+      .catch((err: unknown) => {
+        setScheduleError(err instanceof Error ? err.message : "אירעה שגיאה בטעינת לו״ז החניכים");
+      })
+      .finally(() => setScheduleLoading(false));
   }
 
   // Stage C2 - real, group-scoped fixed-structure -> generated-lessons sync.
@@ -3125,9 +3159,22 @@ export function TeachingPracticeManager({
                   >
                     הצע שיבוץ לקבוצה
                   </Button>
+                  {/* Stage B - read-only trainee schedule overview, same
+                      single-group-required convention as the suggestion
+                      button. No write path at all - purely for visual
+                      inspection of spacing/load. */}
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="!px-3 !py-1.5 !text-xs"
+                    disabled={tableGroupFilter === "all"}
+                    onClick={handleOpenTraineeSchedule}
+                  >
+                    לו״ז חניכים
+                  </Button>
                   {tableGroupFilter === "all" && (
                     <span className="text-xs text-muted-foreground">
-                      יש לבחור קבוצה א או קבוצה ב כדי לקבל הצעות שיבוץ
+                      יש לבחור קבוצה א או קבוצה ב כדי לקבל הצעות שיבוץ / לו״ז חניכים
                     </span>
                   )}
                 </div>
@@ -5642,6 +5689,36 @@ export function TeachingPracticeManager({
         </div>
       </Modal>
 
+      {/* Stage B - read-only trainee schedule overview ("לו״ז חניכים").
+          Always mounted (same convention as the suggestion Modal above), so
+          its open/close state never depends on which tab is active. Purely
+          a different view of largely the same underlying facts the
+          suggestion modal already reasons about - no write path, no
+          apply/select controls. */}
+      <Modal
+        open={scheduleModalOpen}
+        size="large"
+        onClose={() => setScheduleModalOpen(false)}
+        title={`לו״ז חניכים - מבנה קבוע - קבוצה ${scheduleGroupName ?? ""}`}
+      >
+        <div className="flex h-full min-h-0 flex-col gap-3">
+          <p className="shrink-0 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+            תצוגה בלבד - מציגה את שיבוצי המבנה הקבוע (לא שיעורים שנוצרו לתאריכים) לפי שעת התחלה/סיום
+            ברירת המחדל של כל מסלול, בלי התייחסות ליום בשבוע. שיעור קבוצתי מתחילים מסומן כנגזר -
+            הצוות שלו נקבע במסלולים הפרטניים המקושרים, לא כאן.
+          </p>
+
+          {scheduleLoading && <p className="shrink-0 text-sm text-muted-foreground">טוען לו״ז חניכים...</p>}
+          {scheduleError && <p className="shrink-0 text-sm text-danger">{scheduleError}</p>}
+
+          {scheduleResult && !scheduleLoading && (
+            <div className="min-h-0 flex-1 overflow-y-auto pl-1">
+              <TeachingPracticeTraineeSchedulePreview result={scheduleResult} />
+            </div>
+          )}
+        </div>
+      </Modal>
+
       {/* Stage C2 - real fixed-structure -> generated-lessons sync
           confirmation + result. Always mounted (same convention as the
           suggestion Modal above), so its open/close state never depends on
@@ -6181,6 +6258,105 @@ function TeachingPracticeSuggestionBucketPill({ label, count, gap }: { label: st
     <span className={`rounded-full px-2 py-0.5 font-medium ${className}`}>
       {label}: {count}/{TRAINEE_SUGGESTION_TARGET_PER_BUCKET}
     </span>
+  );
+}
+
+// Stage B - trainee schedule overview ("לו״ז חניכים"). Purely a different,
+// read-only rendering of ComputeTraineeScheduleResult - no selection/apply
+// state at all, unlike the suggestion preview above. Reuses
+// TeachingPracticeSuggestionWarningRow (same TraineeSuggestionWarning shape)
+// for the one warning kind this view ever produces
+// (missing_or_invalid_time_data).
+function TeachingPracticeTraineeSchedulePreview({ result }: { result: ComputeTraineeScheduleResult }) {
+  return (
+    <div className="flex flex-col gap-4">
+      {result.warnings.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <h3 className="text-sm font-bold text-card-foreground">התראות</h3>
+          {result.warnings.map((warning, index) => (
+            <TeachingPracticeSuggestionWarningRow key={index} warning={warning} />
+          ))}
+        </div>
+      )}
+      {result.trainees.length === 0 ? (
+        <p className="text-sm text-muted-foreground">אין חניכים פעילים בקבוצה זו.</p>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {result.trainees.map((row) => (
+            <TeachingPracticeTraineeScheduleCard key={row.traineeId} row={row} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TeachingPracticeTraineeScheduleCard({ row }: { row: TraineeScheduleRow }) {
+  const gapSummary = row.hasOverlap
+    ? { label: "יש חפיפה", className: "bg-danger-muted text-danger" }
+    : row.minGapMinutes != null
+      ? {
+          label: `מרווח מינימלי: ${row.minGapMinutes} דק'`,
+          className:
+            row.minGapMinutes >= TRAINEE_SUGGESTION_GOOD_GAP_MINUTES
+              ? "bg-success-muted text-success"
+              : "bg-warning-muted text-warning",
+        }
+      : { label: "אין מספיק שיבוצים לחישוב מרווח", className: "bg-muted text-muted-foreground" };
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-3 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm font-semibold text-card-foreground">{row.traineeName}</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="rounded-full bg-muted px-2 py-0.5 font-medium text-muted-foreground">
+            סה&quot;כ: {row.totalAssignments}
+          </span>
+          <span className={`rounded-full px-2 py-0.5 font-medium ${gapSummary.className}`}>{gapSummary.label}</span>
+        </div>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1.5 text-muted-foreground">
+        <span className="rounded-full bg-muted px-2 py-0.5">לונג&apos;: {row.countByCategory.lungeAny}</span>
+        <span className="rounded-full bg-muted px-2 py-0.5">פרטני מוביל/ה: {row.countByCategory.privateLead}</span>
+        <span className="rounded-full bg-muted px-2 py-0.5">עוזר/ת בפרטני: {row.countByCategory.privateAssistant}</span>
+        <span className="rounded-full bg-muted px-2 py-0.5">קבוצתי (נגזר): {row.countByCategory.beginnerGroup}</span>
+      </div>
+      {row.assignments.length === 0 ? (
+        <p className="mt-2 text-muted-foreground">אין שיבוצים במבנה הקבוע.</p>
+      ) : (
+        <div className="mt-2 flex flex-col gap-1">
+          {row.assignments.map((a) => (
+            <TeachingPracticeTraineeScheduleAssignmentRow key={a.trackId} assignment={a} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TeachingPracticeTraineeScheduleAssignmentRow({ assignment }: { assignment: TraineeScheduleAssignment }) {
+  const isOverlap = assignment.overlapsWithTrackIds.length > 0;
+  const isTight =
+    !isOverlap &&
+    assignment.nearestGapMinutes != null &&
+    assignment.nearestGapMinutes < TRAINEE_SUGGESTION_GOOD_GAP_MINUTES;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-muted/50 px-2 py-1">
+      <span className="font-medium text-card-foreground">
+        {assignment.defaultStartTime}-{assignment.defaultEndTime}
+      </span>
+      <span className="text-muted-foreground">{PRACTICE_TYPE_LABELS[assignment.practiceType]}</span>
+      <span className="text-muted-foreground">{ROLE_LABELS[assignment.projectedRole]}</span>
+      {assignment.isDerived && (
+        <span className="rounded-full bg-secondary px-2 py-0.5 font-medium text-secondary-foreground">נגזר</span>
+      )}
+      {isOverlap && <span className="rounded-full bg-danger-muted px-2 py-0.5 font-medium text-danger">חפיפה</span>}
+      {isTight && (
+        <span className="rounded-full bg-warning-muted px-2 py-0.5 font-medium text-warning">
+          צמוד ({assignment.nearestGapMinutes} דק&apos;)
+        </span>
+      )}
+    </div>
   );
 }
 

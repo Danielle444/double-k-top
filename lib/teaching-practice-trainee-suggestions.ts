@@ -581,7 +581,10 @@ function nearestGapMinutes(target: TraineeSuggestionInputTrack, otherWindows: Tr
 // simple, adjustable threshold, not a hard rule - same convention as
 // SAME_DUTY_REPEAT_THRESHOLD/TOTAL_DEVIATION_THRESHOLD in
 // lib/schedule-fairness.ts.
-const TRAINEE_SUGGESTION_GOOD_GAP_MINUTES = 60;
+// Exported (Stage B) so the trainee schedule overview can use the exact
+// same "good gap" threshold for its own spacing chips, rather than
+// duplicating the number.
+export const TRAINEE_SUGGESTION_GOOD_GAP_MINUTES = 60;
 
 // ---------------------------------------------------------------------------
 // Bucket-count computation
@@ -1200,4 +1203,178 @@ export function computeTeachingPracticeTraineeSuggestions(
   }
 
   return { groupName: input.groupName, tracks: trackGroups, traineeSummaries, warnings };
+}
+
+// ---------------------------------------------------------------------------
+// Stage B - trainee schedule overview ("לו״ז חניכים"). Read-only, fixed-
+// structure only, same day-blind time-of-day model as the suggestion engine
+// above - reuses tracksMayOverlap, minutesBetweenTracks,
+// isExpectedLinkedPrivateGroupPair, hasUsableTimeData and
+// projectRoleForRotationOrder directly (all already pure, already in this
+// file) rather than duplicating any time-gap logic. This is purely a
+// different PRESENTATION of largely the same underlying facts the
+// suggestion engine already reasons about - no scoring, no candidate
+// filtering, no write path of any kind.
+// ---------------------------------------------------------------------------
+
+// Deliberately narrower than ComputeTraineeSuggestionsInput - this view
+// never needs participantHistory (fixed-structure only, no generated-lesson
+// history involved).
+export interface ComputeTraineeScheduleInput {
+  groupName: string;
+  trainees: TraineeSuggestionInputTrainee[];
+  tracks: TraineeSuggestionInputTrack[];
+  trackTrainees: TraineeSuggestionInputTrackTrainee[];
+}
+
+export interface TraineeScheduleAssignment {
+  trackId: string;
+  practiceType: TeachingPracticeTypeValue;
+  rotationOrder: number;
+  projectedRole: TeachingPracticeRoleValue;
+  weekday: number | null;
+  defaultStartTime: string;
+  defaultEndTime: string;
+  // True only for BEGINNER_GROUP - that track's roster is derived from its
+  // linked BEGINNER_PRIVATE tracks, never directly assignable (see
+  // isTraineeSuggestionSlotSelectable in TeachingPracticeManager.tsx) - this
+  // flag lets the UI badge it as such while still showing it for load/
+  // schedule context, per product rule.
+  isDerived: boolean;
+  // Minutes to this trainee's nearest OTHER assignment, excluding both a
+  // genuinely overlapping pair (see overlapsWithTrackIds instead) and an
+  // expected linked BEGINNER_PRIVATE/BEGINNER_GROUP pair (never a real gap
+  // or a real conflict - see isExpectedLinkedPrivateGroupPair). Null when no
+  // such comparable other assignment exists (missing/invalid time data on
+  // every other side, or genuinely no other assignments at all).
+  nearestGapMinutes: number | null;
+  // Non-empty only for a genuine (non-linked-pair) time overlap with another
+  // of this trainee's own assignments.
+  overlapsWithTrackIds: string[];
+}
+
+export interface TraineeScheduleRow {
+  traineeId: string;
+  traineeName: string;
+  totalAssignments: number;
+  countByCategory: {
+    lungeAny: number;
+    privateLead: number;
+    privateAssistant: number;
+    // Informational/derived - see TraineeScheduleAssignment.isDerived.
+    beginnerGroup: number;
+  };
+  // Sorted by defaultStartTime.
+  assignments: TraineeScheduleAssignment[];
+  // The smallest nearestGapMinutes across all of this trainee's assignments -
+  // null when fewer than 2 comparable assignments exist (0 or 1 assignment,
+  // or every pair is either linked-exempt or has unusable time data).
+  minGapMinutes: number | null;
+  hasOverlap: boolean;
+}
+
+export interface ComputeTraineeScheduleResult {
+  groupName: string;
+  trainees: TraineeScheduleRow[];
+  warnings: TraineeSuggestionWarning[];
+}
+
+export function computeTeachingPracticeTraineeSchedule(
+  input: ComputeTraineeScheduleInput
+): ComputeTraineeScheduleResult {
+  const warnings: TraineeSuggestionWarning[] = [];
+
+  // Defensive re-scoping, same convention as computeTeachingPracticeTraineeSuggestions.
+  const tracks = input.tracks.filter((t) => t.groupName === input.groupName);
+  const trackById = new Map(tracks.map((t) => [t.id, t]));
+  const eligibleTrainees = input.trainees.filter((t) => t.isActive && t.groupName === input.groupName);
+
+  const tracksWithIncompleteTimeData = tracks.filter((t) => !hasUsableTimeData(t));
+  if (tracksWithIncompleteTimeData.length > 0) {
+    warnings.push({
+      kind: "missing_or_invalid_time_data",
+      message: `ל-${tracksWithIncompleteTimeData.length} מסלולים קבועים בקבוצה אין שעת התחלה/סיום תקינה - לא ניתן לחשב עבורם מרווחים/חפיפות. שאר הלו״ז אינו מושפע.`,
+    });
+  }
+
+  const membershipsByTrainee = new Map<string, TraineeSuggestionInputTrackTrainee[]>();
+  for (const m of input.trackTrainees) {
+    if (!trackById.has(m.trackId)) continue;
+    const list = membershipsByTrainee.get(m.traineeId) ?? [];
+    list.push(m);
+    membershipsByTrainee.set(m.traineeId, list);
+  }
+
+  const rows: TraineeScheduleRow[] = eligibleTrainees.map((trainee) => {
+    const tracksForTrainee = (membershipsByTrainee.get(trainee.id) ?? [])
+      .map((m) => ({ m, track: trackById.get(m.trackId) }))
+      .filter((x): x is { m: TraineeSuggestionInputTrackTrainee; track: TraineeSuggestionInputTrack } => !!x.track)
+      .sort((a, b) => a.track.defaultStartTime.localeCompare(b.track.defaultStartTime));
+
+    const countByCategory = { lungeAny: 0, privateLead: 0, privateAssistant: 0, beginnerGroup: 0 };
+
+    const assignments: TraineeScheduleAssignment[] = tracksForTrainee.map(({ m, track }) => {
+      if (track.practiceType === "LUNGE") countByCategory.lungeAny += 1;
+      else if (track.practiceType === "BEGINNER_PRIVATE") {
+        if (m.rotationOrder === 0) countByCategory.privateLead += 1;
+        else countByCategory.privateAssistant += 1;
+      } else {
+        countByCategory.beginnerGroup += 1;
+      }
+
+      // Pairwise against every OTHER assignment this same trainee has (not
+      // just chronological neighbors) - a linked private/group pair is
+      // skipped entirely (neither an overlap nor a gap contributor, per
+      // product rule); a genuine overlap contributes to overlapsWithTrackIds
+      // and never to the gap; everything else contributes its
+      // minutesBetweenTracks value as a gap candidate.
+      const overlapsWithTrackIds: string[] = [];
+      let nearestGap: number | null = null;
+      for (const { track: other } of tracksForTrainee) {
+        if (other.id === track.id) continue;
+        if (isExpectedLinkedPrivateGroupPair(track, other)) continue;
+        const check = tracksMayOverlap(track, other);
+        if (check.unknown) continue; // already covered by the upfront missing_or_invalid_time_data warning
+        if (check.overlaps) {
+          overlapsWithTrackIds.push(other.id);
+          continue;
+        }
+        const gap = minutesBetweenTracks(track, other);
+        if (gap != null && (nearestGap === null || gap < nearestGap)) nearestGap = gap;
+      }
+
+      return {
+        trackId: track.id,
+        practiceType: track.practiceType,
+        rotationOrder: m.rotationOrder,
+        projectedRole: projectRoleForRotationOrder(track.practiceType, m.rotationOrder),
+        weekday: track.weekday,
+        defaultStartTime: track.defaultStartTime,
+        defaultEndTime: track.defaultEndTime,
+        isDerived: track.practiceType === "BEGINNER_GROUP",
+        nearestGapMinutes: nearestGap,
+        overlapsWithTrackIds,
+      };
+    });
+
+    const hasOverlap = assignments.some((a) => a.overlapsWithTrackIds.length > 0);
+    const knownGaps = assignments
+      .map((a) => a.nearestGapMinutes)
+      .filter((g): g is number => g != null);
+    const minGapMinutes = knownGaps.length > 0 ? Math.min(...knownGaps) : null;
+
+    return {
+      traineeId: trainee.id,
+      traineeName: trainee.fullName,
+      totalAssignments: assignments.length,
+      countByCategory,
+      assignments,
+      minGapMinutes,
+      hasOverlap,
+    };
+  });
+
+  rows.sort((a, b) => a.traineeName.localeCompare(b.traineeName, "he"));
+
+  return { groupName: input.groupName, trainees: rows, warnings };
 }

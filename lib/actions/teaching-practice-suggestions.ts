@@ -23,9 +23,12 @@ import type { ActionResult } from "@/lib/actions/students";
 import { TEACHING_PRACTICE_TEAM_SIZE } from "@/lib/teaching-practice-rotation";
 import {
   computeTeachingPracticeTraineeSuggestions,
+  computeTeachingPracticeTraineeSchedule,
   TEACHING_PRACTICE_SUGGESTION_GROUP_NAMES,
   type ComputeTraineeSuggestionsInput,
   type ComputeTraineeSuggestionsResult,
+  type ComputeTraineeScheduleInput,
+  type ComputeTraineeScheduleResult,
   type TraineeSuggestionInputParticipantHistory,
   type TraineeSuggestionInputTrackTrainee,
   type TraineeSuggestionInputTrainee,
@@ -137,6 +140,80 @@ export async function getTeachingPracticeTraineeSuggestionsForAdmin(
 ): Promise<ComputeTraineeSuggestionsResult> {
   await requireAdmin();
   return computeTeachingPracticeTraineeSuggestionsForGroupInternal(groupName);
+}
+
+// ---------------------------------------------------------------------------
+// Stage B - trainee schedule overview ("לו״ז חניכים"). Read-only, fixed-
+// structure only. Deliberately a narrower fetch than the suggestions one
+// above: no participantHistory (this view has no notion of realized
+// generated-lesson history at all - see ComputeTraineeScheduleInput's own
+// comment), and no cross-group trainee-directory merge (unlike the
+// suggestions fetch, this view only ever displays this group's own active
+// trainees - a trainee mismatched into this group's fixed structure from
+// another group is already surfaced elsewhere, by "בדוק שיבוץ"'s
+// group_mismatch check, and is out of scope for this read-only overview).
+async function computeTeachingPracticeTraineeScheduleForGroupInternal(
+  groupName: string
+): Promise<ComputeTraineeScheduleResult> {
+  if (!TEACHING_PRACTICE_SUGGESTION_GROUP_NAMES.includes(groupName as "א" | "ב")) {
+    throw new Error("קבוצה לא תקינה - יש לבחור קבוצה א או קבוצה ב");
+  }
+
+  const tracks = await prisma.teachingPracticeTrack.findMany({
+    where: { groupName, isActive: true },
+    select: {
+      id: true,
+      practiceType: true,
+      groupName: true,
+      weekday: true,
+      defaultStartTime: true,
+      defaultEndTime: true,
+      groupTrackId: true,
+    },
+  });
+  const trackIds = tracks.map((t) => t.id);
+
+  const trackTraineeRows = trackIds.length
+    ? await prisma.teachingPracticeTrackTrainee.findMany({
+        where: { trackId: { in: trackIds } },
+        select: { trackId: true, traineeId: true, rotationOrder: true },
+      })
+    : [];
+
+  const activeGroupTrainees = await prisma.student.findMany({
+    where: { groupName, isActive: true },
+    select: { id: true, fullName: true, groupName: true, isActive: true },
+  });
+
+  const trackTrainees: TraineeSuggestionInputTrackTrainee[] = trackTraineeRows.map((r) => ({
+    trackId: r.trackId,
+    traineeId: r.traineeId,
+    rotationOrder: r.rotationOrder,
+  }));
+
+  const input: ComputeTraineeScheduleInput = {
+    groupName,
+    trainees: activeGroupTrainees,
+    tracks: tracks.map((t) => ({
+      id: t.id,
+      practiceType: t.practiceType,
+      groupName: t.groupName,
+      weekday: t.weekday,
+      defaultStartTime: t.defaultStartTime,
+      defaultEndTime: t.defaultEndTime,
+      groupTrackId: t.groupTrackId,
+    })),
+    trackTrainees,
+  };
+
+  return computeTeachingPracticeTraineeSchedule(input);
+}
+
+export async function getTeachingPracticeFixedStructureTraineeScheduleForAdmin(
+  groupName: string
+): Promise<ComputeTraineeScheduleResult> {
+  await requireAdmin();
+  return computeTeachingPracticeTraineeScheduleForGroupInternal(groupName);
 }
 
 // ---------------------------------------------------------------------------
