@@ -22,8 +22,18 @@ export const metadata: Metadata = {
 };
 
 // Next 16 requires theme-color in the separate viewport export, not metadata.
+//
+// viewportFit: "cover" is required for env(safe-area-inset-*) to resolve to
+// real (non-zero) values instead of 0px - without it, BottomTabs' own
+// `pb-[env(safe-area-inset-bottom)]` (lib/components/BottomTabs.tsx) is
+// silently a no-op. This matters specifically because the app is
+// installable as a standalone PWA (see app/manifest.ts's display:
+// "standalone" and appleWebApp.capable above): once installed and launched
+// without Safari's browser chrome, the fixed bottom nav must account for
+// the iPhone home-indicator's safe area itself, which this opt-in enables.
 export const viewport: Viewport = {
   themeColor: "#1e4a6d",
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

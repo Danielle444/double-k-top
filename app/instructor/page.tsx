@@ -35,7 +35,14 @@ export default async function InstructorPage() {
     // grow unreasonably long. BottomTabs gets the same ladder via its
     // maxWidthClassName prop below, so the fixed bottom nav never
     // mismatches this shell's width.
-    <div className="mx-auto flex min-h-screen w-full max-w-lg flex-col bg-background sm:max-w-[640px] md:max-w-[768px] lg:max-w-[1024px] xl:max-w-[1280px]">
+    //
+    // min-h-dvh (100dvh), not min-h-screen (100vh): on mobile Safari/Chrome,
+    // 100vh is computed against the layout viewport with the address bar
+    // collapsed, so it's taller than what's actually visible whenever the
+    // bar is showing - that mismatch is what made the fixed BottomTabs
+    // appear to float/detach from the true bottom edge as the bar
+    // animates in/out. 100dvh tracks the real visible viewport instead.
+    <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col bg-background sm:max-w-[640px] md:max-w-[768px] lg:max-w-[1024px] xl:max-w-[1280px]">
       <InstructorClient students={students} dutyTypes={dutyTypes} instructors={instructors} />
     </div>
   );
