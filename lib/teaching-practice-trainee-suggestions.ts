@@ -118,6 +118,12 @@ export interface TraineeSuggestionInputTrack {
   weekday: number | null;
   defaultStartTime: string;
   defaultEndTime: string;
+  // Set only on a BEGINNER_PRIVATE track - the id of the BEGINNER_GROUP
+  // track it feeds. Used only by isExpectedLinkedPrivateGroupPair below (an
+  // existing_overlap exemption), mirroring TeachingPracticeTrack.groupTrackId
+  // in the schema and the same-named field already used for this exact
+  // purpose in lib/teaching-practice-fixed-structure-check.ts.
+  groupTrackId: string | null;
 }
 
 // One row per current track membership (TeachingPracticeTrackTrainee).
@@ -399,6 +405,30 @@ function hasUsableTimeData(track: TraineeSuggestionInputTrack): boolean {
   return parseTimeToMinutes(track.defaultStartTime) != null && parseTimeToMinutes(track.defaultEndTime) != null;
 }
 
+// Reporting-only fix - a trainee's own BEGINNER_PRIVATE track and its OWN
+// linked BEGINNER_GROUP track (via groupTrackId) sharing a time window is
+// expected/intentional - the private lesson and its linked group lesson are
+// part of the same Teaching Practice flow, not a real conflict. Any other
+// BEGINNER_PRIVATE/BEGINNER_GROUP pairing that is NOT actually linked to
+// each other (or any other practiceType combination) is still a genuine
+// potential conflict. Used ONLY by the existing_overlap warning below - a
+// pre-existing-data report, entirely separate from (and never read by) the
+// candidate hard-exclusion/scoring logic in processSlot further down, which
+// is intentionally left untouched here. Mirrors isExpectedLinkedBeginnerPair
+// in lib/teaching-practice-fixed-structure-check.ts - not imported, since
+// that's a separate standalone pure-check module (same small, deliberate
+// duplication convention already used elsewhere between these two files,
+// e.g. VALID_GROUP_NAMES/tracksMayOverlap-style helpers).
+function isExpectedLinkedPrivateGroupPair(a: TraineeSuggestionInputTrack, b: TraineeSuggestionInputTrack): boolean {
+  const isPrivateGroupPair =
+    (a.practiceType === "BEGINNER_PRIVATE" && b.practiceType === "BEGINNER_GROUP") ||
+    (a.practiceType === "BEGINNER_GROUP" && b.practiceType === "BEGINNER_PRIVATE");
+  if (!isPrivateGroupPair) return false;
+  const privateSide = a.practiceType === "BEGINNER_PRIVATE" ? a : b;
+  const groupSide = a.practiceType === "BEGINNER_GROUP" ? a : b;
+  return privateSide.groupTrackId === groupSide.id;
+}
+
 // ---------------------------------------------------------------------------
 // Stage A - spacing ("gap") scoring. Ranks candidates for an empty slot by
 // how crowded the new assignment would be relative to their OTHER current
@@ -649,7 +679,9 @@ export function computeTeachingPracticeTraineeSuggestions(
 
   // ---- existing_overlap: two of this group's tracks share a real trainee
   // and their time windows already overlap - pre-existing data, not
-  // something this run created.
+  // something this run created. Exempts a trainee's own linked
+  // BEGINNER_PRIVATE/BEGINNER_GROUP pair (see isExpectedLinkedPrivateGroupPair) -
+  // that overlap is intentional by design, not a real conflict.
   const membershipsByTrainee = new Map<string, TraineeSuggestionInputTrackTrainee[]>();
   for (const m of input.trackTrainees) {
     if (!trackByIdForMismatch.has(m.trackId)) continue;
@@ -668,7 +700,7 @@ export function computeTeachingPracticeTraineeSuggestions(
           // summary warning above - never re-reported per pair here.
           continue;
         }
-        if (check.overlaps) {
+        if (check.overlaps && !isExpectedLinkedPrivateGroupPair(trackA, trackB)) {
           warnings.push({
             kind: "existing_overlap",
             message: `${traineeName(traineeId)} משובץ/ת בשני סלוטים קבועים חופפים בזמן (${describeTrackTime(trackA)} / ${describeTrackTime(trackB)}) - נתון קיים שלא שונה`,

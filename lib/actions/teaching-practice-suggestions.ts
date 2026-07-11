@@ -47,6 +47,7 @@ async function computeTeachingPracticeTraineeSuggestionsForGroupInternal(
       weekday: true,
       defaultStartTime: true,
       defaultEndTime: true,
+      groupTrackId: true,
     },
   });
   const trackIds = tracks.map((t) => t.id);
@@ -116,6 +117,7 @@ async function computeTeachingPracticeTraineeSuggestionsForGroupInternal(
       weekday: t.weekday,
       defaultStartTime: t.defaultStartTime,
       defaultEndTime: t.defaultEndTime,
+      groupTrackId: t.groupTrackId,
     })),
     trackTrainees,
     participantHistory,

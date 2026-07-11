@@ -102,16 +102,11 @@ function timeWindowsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: 
   return aStart < bEnd && bStart < aEnd;
 }
 
-// Business rule (broadened): a trainee appearing in BOTH a BEGINNER_PRIVATE
-// slot and a BEGINNER_GROUP slot within the same group is always expected/
-// allowed, even when the two tracks are not directly linked via
-// groupTrackId - the beginner private/group flow is understood to run
-// alongside itself by design. Used ONLY for trainee-overlap suppression
-// (see the overlap loop below) - practiceType combination is the only thing
-// that matters here, unlike the stricter, groupTrackId-checked
-// isExpectedLinkedBeginnerPair below (still used for the child-duplicate
-// check, where the exemption must stay scoped to the actual linked pair,
-// not any private/group pair in the group).
+// Whether two tracks are a BEGINNER_PRIVATE/BEGINNER_GROUP pair by
+// practiceType alone - a fast pre-check only, never sufficient on its own to
+// exempt anything from a warning. Used exclusively as the first half of
+// isExpectedLinkedBeginnerPair below, which additionally requires the actual
+// groupTrackId link before treating a pair as expected/intentional.
 function isBeginnerPrivateGroupPair(
   a: { practiceType: TeachingPracticeTypeValue },
   b: { practiceType: TeachingPracticeTypeValue }
@@ -123,14 +118,18 @@ function isBeginnerPrivateGroupPair(
 }
 
 // Business rule: a BEGINNER_PRIVATE track and its OWN linked BEGINNER_GROUP
-// track are expected to share children (the group's own children rows are
-// derived from its linked private tracks) - this is normal, not a
-// duplicate, and must never be flagged. Any other pairing (two unrelated
-// tracks, two LUNGE tracks, a private/group pair that are NOT linked to
-// each other, etc.) is still a genuine potential duplicate. Used ONLY for
-// the child-duplicate-across-group check below - deliberately stricter
-// than isBeginnerPrivateGroupPair above (which is used for trainee-overlap
-// suppression and does not require an actual groupTrackId link).
+// track (via groupTrackId) are expected to share both children (the group's
+// own children rows are derived from its linked private tracks) AND a
+// trainee's time window (the private lesson and its linked group lesson are
+// part of the same Teaching Practice flow, not a real conflict) - neither is
+// a genuine duplicate/overlap and neither should ever be flagged. Any OTHER
+// pairing - two unrelated tracks, two LUNGE tracks, or a BEGINNER_PRIVATE/
+// BEGINNER_GROUP pair that is NOT actually linked to each other via
+// groupTrackId - is still a genuine potential duplicate/conflict. Used for
+// both the child-duplicate-across-group check AND the trainee-overlap check
+// below - deliberately requires the real groupTrackId link, not just a
+// practiceType match (see isBeginnerPrivateGroupPair above), so an unlinked
+// private/group pair for the same trainee still warns as a real overlap.
 function isExpectedLinkedBeginnerPair(
   a: { trackId: string; practiceType: TeachingPracticeTypeValue; groupTrackId: string | null },
   b: { trackId: string; practiceType: TeachingPracticeTypeValue; groupTrackId: string | null }
@@ -337,14 +336,16 @@ export function checkTeachingPracticeFixedStructure(
   //    rotationOrder 0. Informational appearances: BEGINNER_PRIVATE
   //    rotationOrder 1, every BEGINNER_GROUP slot - matches the stated
   //    business rule that these never create noisy required-seat issues.
-  //    ANY BEGINNER_PRIVATE <-> BEGINNER_GROUP pair for the same trainee is
-  //    EXPECTED (see isBeginnerPrivateGroupPair) - skipped entirely, never
-  //    reported at any severity, even when the two tracks aren't directly
-  //    linked via groupTrackId (broadened business rule).
+  //    A BEGINNER_PRIVATE <-> BEGINNER_GROUP pair for the same trainee is
+  //    EXPECTED only when the two tracks are actually linked via
+  //    groupTrackId (see isExpectedLinkedBeginnerPair) - an unlinked
+  //    private/group pair, like any other unrelated pairing, still warns as
+  //    a real overlap.
   // -------------------------------------------------------------------
   interface Appearance {
     trackId: string;
     practiceType: TeachingPracticeTypeValue;
+    groupTrackId: string | null;
     startTime: string;
     endTime: string;
     required: boolean;
@@ -366,6 +367,7 @@ export function checkTeachingPracticeFixedStructure(
       list.push({
         trackId: track.trackId,
         practiceType: track.practiceType,
+        groupTrackId: track.groupTrackId,
         startTime: track.defaultStartTime,
         endTime: track.defaultEndTime,
         required,
@@ -394,10 +396,12 @@ export function checkTeachingPracticeFixedStructure(
         const bEnd = parseTimeToMinutes(b.endTime);
         if (aStart == null || aEnd == null || bStart == null || bEnd == null) continue; // already covered above
         if (!timeWindowsOverlap(aStart, aEnd, bStart, bEnd)) continue;
-        // Expected: any BEGINNER_PRIVATE <-> BEGINNER_GROUP overlap for the
-        // same trainee is normal, not a conflict - even when the two tracks
-        // aren't directly linked via groupTrackId (broadened business rule).
-        if (isBeginnerPrivateGroupPair(a, b)) continue;
+        // Expected: a trainee's own BEGINNER_PRIVATE track overlapping with
+        // its OWN linked BEGINNER_GROUP track (via groupTrackId) is normal,
+        // not a conflict - the private lesson and its linked group lesson
+        // are part of the same Teaching Practice flow. Any other pairing
+        // (including an unlinked private/group pair) still warns below.
+        if (isExpectedLinkedBeginnerPair(a, b)) continue;
 
         const bothRequired = a.required && b.required;
         addIssue({
