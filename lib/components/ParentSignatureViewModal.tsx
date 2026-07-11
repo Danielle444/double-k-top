@@ -12,6 +12,13 @@ import type { ParentSignatureViewerData } from "@/lib/actions/parent-signatures"
 // (lib/parent-signatures/form-definitions.ts) - no PDF anywhere. Shared by
 // both the instructor/tablet and admin entry points via the `fetchData`
 // prop, same DI pattern as ParentSignatureSignModal's `submit` prop.
+//
+// size="xl": a document-viewer-sized modal (see Modal.tsx), not the small
+// "wide" popup this used before - readable at a glance on a ranch tablet
+// without pinch-zooming. Modal hands us the full remaining height as a
+// flex-1 wrapper for this size, which is why the JSX below is its own
+// fixed-header/scrollable-middle/fixed-footer column rather than relying on
+// Modal's own body scroll.
 export function ParentSignatureViewModal({
   open,
   onClose,
@@ -44,56 +51,76 @@ export function ParentSignatureViewModal({
       open={open}
       title={data ? FORM_TYPE_SHORT_LABEL[data.formType] : "טופס חתום"}
       onClose={onClose}
-      size="wide"
+      size="xl"
+      titleClassName="text-xl md:text-2xl"
     >
       {data === undefined ? (
-        <p className="text-base text-muted-foreground">טוען...</p>
+        <p className="text-lg text-muted-foreground">טוען...</p>
       ) : data === null ? (
-        <p className="text-sm text-danger">הטופס אינו זמין לצפייה (ייתכן שבוטל).</p>
+        <p className="text-base text-danger">הטופס אינו זמין לצפייה (ייתכן שבוטל).</p>
       ) : (
-        <div className="flex flex-col gap-4 text-sm">
-          {/* Print-only override, scoped to this one element's subtree:
-              forces black-on-white regardless of the site's (possibly dark)
-              theme, since the individual text/background utility classes
-              below (text-muted-foreground, bg-card, etc.) are per-element
-              and wouldn't otherwise be overridden by a color set on an
-              ancestor. The signature <img> itself is unaffected - `color`
-              doesn't touch image pixels, and `background: transparent` only
-              strips a plain background box, not the image content. */}
+        <div className="flex h-full min-h-0 flex-col gap-4">
+          {/* Print isolation: hides everything else in the page (the status
+              list/cards behind this modal, the app's bottom nav, etc.) and
+              re-shows only this element's subtree - a `visibility` toggle,
+              not `display`, so a `visibility: visible` on a descendant can
+              override a `visibility: hidden` ancestor. Relying on Modal's
+              own print-safe classes alone was not enough (see history):
+              those only style the modal's chrome, they don't hide the rest
+              of the page, which stayed fully visible/printable behind it.
+              Also forces black-on-white regardless of the site's (possibly
+              dark) theme, since the individual text/background utility
+              classes below (text-muted-foreground, bg-card, etc.) are
+              per-element and wouldn't otherwise be overridden by a color set
+              on an ancestor. The signature <img> is unaffected by either
+              rule - `color`/`background` don't touch image pixels. */}
           <style>{`
             @media print {
+              body * {
+                visibility: hidden !important;
+              }
               #parent-signature-print-area,
               #parent-signature-print-area * {
+                visibility: visible !important;
                 color: #000 !important;
                 background: transparent !important;
                 border-color: #999 !important;
               }
               #parent-signature-print-area {
+                position: absolute;
+                inset: 0;
+                width: 100%;
+                max-width: none;
                 background: #fff !important;
+                padding: 24px;
+                direction: rtl;
+              }
+              #parent-signature-print-area .print-avoid-break {
+                break-inside: avoid;
               }
             }
           `}</style>
           <div
             id="parent-signature-print-area"
-            className="flex max-h-[70vh] flex-col gap-4 overflow-y-auto pr-1 print:max-h-none print:w-full print:max-w-none print:overflow-visible print:bg-white print:p-8"
+            className="min-h-0 flex-1 overflow-y-auto pr-1 text-base leading-relaxed md:text-lg"
           >
-            <div className="rounded-xl border border-border bg-muted/40 p-3">
-              <p className="font-bold text-card-foreground">
+            <div className="print-avoid-break rounded-xl border border-border bg-muted/40 p-4">
+              <p className="text-lg font-bold text-card-foreground md:text-xl">
                 {data.childNameSnapshot}
                 {data.childAgeSnapshot != null && (
                   <span className="font-normal text-muted-foreground"> · גיל {data.childAgeSnapshot}</span>
                 )}
               </p>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-sm text-muted-foreground md:text-base">
                 {data.parentNameSnapshot ?? "אין שם הורה"}
                 {data.parentPhoneSnapshot ? ` · ${data.parentPhoneSnapshot}` : ""}
               </p>
             </div>
 
-            <div className="flex flex-col gap-2 text-card-foreground">
-              <h3 className="text-base font-bold">{data.content.title}</h3>
+            <div className="mt-4 flex flex-col gap-3 text-card-foreground">
+              <h3 className="text-xl font-extrabold md:text-2xl">{data.content.title}</h3>
               {data.content.introSections.map((section, idx) => (
-                <div key={idx} className="flex flex-col gap-1">
+                <div key={idx} className="flex flex-col gap-2">
                   {section.paragraphs?.map((p, pIdx) => (
                     <p key={pIdx} className="leading-relaxed text-muted-foreground">
                       {p}
@@ -110,7 +137,7 @@ export function ParentSignatureViewModal({
               ))}
             </div>
 
-            <div className="flex flex-col gap-2 rounded-xl border border-border p-3">
+            <div className="print-avoid-break mt-4 flex flex-col gap-2 rounded-xl border border-border p-4">
               {data.address && (
                 <p>
                   <span className="font-semibold text-card-foreground">כתובת: </span>
@@ -137,13 +164,15 @@ export function ParentSignatureViewModal({
               )}
             </div>
 
-            {data.content.consentStatements.map((statement) => (
-              <p key={statement.key} className="text-card-foreground">
-                {statement.text}
-              </p>
-            ))}
+            <div className="mt-4 flex flex-col gap-2">
+              {data.content.consentStatements.map((statement) => (
+                <p key={statement.key} className="text-card-foreground">
+                  {statement.text}
+                </p>
+              ))}
+            </div>
 
-            <div className="rounded-xl border border-border p-3">
+            <div className="print-avoid-break mt-4 rounded-xl border border-border p-4">
               <p>
                 <span className="font-semibold text-card-foreground">שם החותם/ת: </span>
                 {data.signerName}
@@ -160,31 +189,36 @@ export function ParentSignatureViewModal({
               </p>
             </div>
 
-            <div className="flex flex-col gap-2">
-              <p className="font-semibold text-card-foreground">חתימה</p>
+            <div className="print-avoid-break mt-4 flex flex-col gap-2">
+              <p className="text-lg font-semibold text-card-foreground">חתימה</p>
               {data.signatureUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element -- signed URL from Supabase Storage, not a local/optimizable asset
                 <img
                   src={data.signatureUrl}
                   alt={`חתימת ${data.signerName}`}
-                  className="h-40 w-full max-w-md rounded-xl border border-border bg-white object-contain"
+                  className="h-56 w-full max-w-xl rounded-xl border border-border bg-white object-contain md:h-64"
                 />
               ) : (
-                <p className="text-xs text-muted-foreground">תמונת החתימה אינה זמינה כרגע.</p>
+                <p className="text-sm text-muted-foreground">תמונת החתימה אינה זמינה כרגע.</p>
               )}
             </div>
 
-            <p className="text-[10px] text-muted-foreground">
+            <p className="mt-4 text-xs text-muted-foreground">
               גרסת טופס: {data.formVersion} · מחזור: {data.courseCycle}
             </p>
           </div>
 
-          <div className="flex justify-end gap-2 border-t border-border pt-3 print:hidden">
-            <Button type="button" variant="secondary" onClick={onClose}>
+          <div className="flex shrink-0 flex-wrap justify-end gap-3 border-t border-border pt-4 print:hidden">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={onClose}
+              className="!px-5 !py-3 !text-base"
+            >
               סגירה
             </Button>
-            <Button type="button" onClick={() => window.print()}>
-              הדפסה / שמירה כ-PDF
+            <Button type="button" onClick={() => window.print()} className="!px-5 !py-3 !text-base">
+              הדפסת הטופס / שמירה כ-PDF
             </Button>
           </div>
         </div>
