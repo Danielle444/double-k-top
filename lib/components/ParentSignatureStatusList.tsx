@@ -10,6 +10,7 @@ import type {
 import { ParentSignatureSignModal } from "@/lib/components/ParentSignatureSignModal";
 import { ParentSignatureViewModal } from "@/lib/components/ParentSignatureViewModal";
 import type { ParentSignatureFormTypeValue } from "@/lib/parent-signatures/types";
+import type { ParentSignatureTeachingPracticeContext } from "@/lib/parent-signatures/status";
 
 interface SigningTarget {
   childId: string;
@@ -18,6 +19,25 @@ interface SigningTarget {
   parentName: string | null;
   parentPhone: string | null;
   formType: ParentSignatureFormTypeValue;
+}
+
+// Compact "label · d.m · HH:MM · חניכים: ..." navigation hint - status-list
+// display only, entirely separate from the signed form/printed form (which
+// never read this). Any piece missing (no lesson time yet, no participants
+// assigned yet) is just dropped from the line rather than shown as blank.
+function formatTeachingPracticeContext(ctx: ParentSignatureTeachingPracticeContext): string {
+  const parts = [ctx.label];
+  if (ctx.firstLessonDate) {
+    const [, month, day] = ctx.firstLessonDate.split("-");
+    parts.push(`${Number(day)}.${Number(month)}`);
+  }
+  if (ctx.firstLessonStartTime) {
+    parts.push(ctx.firstLessonStartTime);
+  }
+  if (ctx.traineeNames.length > 0) {
+    parts.push(`חניכים: ${ctx.traineeNames.join(", ")}`);
+  }
+  return parts.join(" · ");
 }
 
 // Shared, read+sign+view presentation for the parent-signature status view -
@@ -101,6 +121,15 @@ export function ParentSignatureStatusList({
                     {child.parentName ?? "אין שם הורה"}
                     {child.parentPhone ? ` · ${child.parentPhone}` : ""}
                   </p>
+                  {child.teachingPracticeContexts.length > 0 && (
+                    <div className="mt-1 flex flex-col gap-0.5">
+                      {child.teachingPracticeContexts.map((ctx) => (
+                        <p key={ctx.practiceType} className="truncate text-xs text-muted-foreground">
+                          {formatTeachingPracticeContext(ctx)}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <span
                   className={`shrink-0 rounded-full px-3 py-1.5 text-sm font-bold ${

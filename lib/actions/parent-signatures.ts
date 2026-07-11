@@ -60,7 +60,22 @@ async function loadParentSignatureStatusInternal(): Promise<ParentSignatureStatu
         select: { fullName: true, age: true, parentName: true, parentPhone: true },
       },
       lesson: {
-        select: { id: true, date: true, practiceType: true, groupName: true },
+        select: {
+          id: true,
+          date: true,
+          startTime: true,
+          practiceType: true,
+          groupName: true,
+          // Display-only, for the status list's "which trainees/lesson"
+          // navigation context (see buildTeachingPracticeContexts in
+          // lib/parent-signatures/status.ts) - never shown in the signed
+          // form viewer/printed form, which only ever reads
+          // TeachingPracticeSignedForm's own stored snapshot fields.
+          participants: {
+            select: { trainee: { select: { fullName: true } } },
+            orderBy: { createdAt: "asc" },
+          },
+        },
       },
     },
     orderBy: [{ lesson: { date: "asc" } }],
@@ -101,8 +116,10 @@ async function loadParentSignatureStatusInternal(): Promise<ParentSignatureStatu
     const assignmentContext: ParentSignatureAssignmentContext = {
       lessonId: a.lesson.id,
       date: dateKey(a.lesson.date),
+      startTime: a.lesson.startTime,
       practiceType: a.lesson.practiceType,
       groupName: a.lesson.groupName,
+      traineeNames: a.lesson.participants.map((p) => p.trainee.fullName),
     };
     const existing = byChild.get(a.childId);
     if (existing) {

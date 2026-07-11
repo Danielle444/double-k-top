@@ -14,8 +14,14 @@ import type { TeachingPracticeTypeValue } from "@/lib/teaching-practice-rotation
 export interface ParentSignatureAssignmentContext {
   lessonId: string;
   date: string; // "YYYY-MM-DD"
+  startTime: string; // "HH:MM"
   practiceType: TeachingPracticeTypeValue;
   groupName: string | null;
+  // The generated lesson's TeachingPracticeParticipant trainee names, in
+  // participant-row creation order - display-only navigation context (see
+  // buildTeachingPracticeContexts below), never part of the signed form
+  // itself.
+  traineeNames: string[];
 }
 
 // One ACTIVE TeachingPracticeSignedForm row, narrowed to just what's needed
@@ -45,6 +51,18 @@ export interface ParentSignatureRequiredFormStatus {
   signedFormId: string | null;
 }
 
+// One compact "which lesson/trainees" navigation hint for the status list
+// (see buildTeachingPracticeContexts below) - display-only, never read by
+// the signed form viewer or printed form, which only ever reconstruct from
+// TeachingPracticeSignedForm's own stored snapshot fields.
+export interface ParentSignatureTeachingPracticeContext {
+  label: string;
+  practiceType: TeachingPracticeTypeValue;
+  firstLessonDate?: string;
+  firstLessonStartTime?: string;
+  traineeNames: string[];
+}
+
 export interface ParentSignatureChildStatusRow {
   childId: string;
   childName: string;
@@ -56,6 +74,71 @@ export interface ParentSignatureChildStatusRow {
   requiredForms: ParentSignatureRequiredFormStatus[];
   isCleared: boolean;
   missingCount: number;
+  teachingPracticeContexts: ParentSignatureTeachingPracticeContext[];
+}
+
+// Compact display labels for this one navigation-context string - shorter
+// on purpose than TeachingPracticeManager.tsx's own PRACTICE_TYPE_LABELS
+// (e.g. "שיעור פרטי מתחילים"), since "מתחילים" is already implied by this
+// being the parent-signatures screen and the label sits inline in a dense
+// "label · date · time · חניכים: ..." line.
+const TEACHING_PRACTICE_CONTEXT_LABELS: Record<TeachingPracticeTypeValue, string> = {
+  LUNGE: "לונג׳",
+  BEGINNER_PRIVATE: "שיעור פרטני",
+  BEGINNER_GROUP: "שיעור קבוצתי",
+};
+
+function pickEarliestAssignment(
+  assignments: ParentSignatureAssignmentContext[]
+): ParentSignatureAssignmentContext {
+  return assignments.reduce((earliest, a) =>
+    a.date < earliest.date || (a.date === earliest.date && a.startTime < earliest.startTime)
+      ? a
+      : earliest
+  );
+}
+
+// Builds up to two compact context entries for the status list (never for
+// the signed form itself - see the interface doc comment above): one for
+// the child's earliest LUNGE lesson (if any LUNGE assignment exists), one
+// for the child's earliest BEGINNER_PRIVATE/BEGINNER_GROUP lesson (if
+// either exists) - a child enrolled in both gets both entries, one enrolled
+// in neither type present (shouldn't happen - every assignment is one of
+// the three) gets none. The beginner entry's label/practiceType reflect
+// whichever of BEGINNER_PRIVATE/BEGINNER_GROUP that earliest lesson
+// actually was, not a generic "beginner" label.
+function buildTeachingPracticeContexts(
+  assignments: ParentSignatureAssignmentContext[]
+): ParentSignatureTeachingPracticeContext[] {
+  const contexts: ParentSignatureTeachingPracticeContext[] = [];
+
+  const lungeAssignments = assignments.filter((a) => a.practiceType === "LUNGE");
+  if (lungeAssignments.length > 0) {
+    const earliest = pickEarliestAssignment(lungeAssignments);
+    contexts.push({
+      label: TEACHING_PRACTICE_CONTEXT_LABELS.LUNGE,
+      practiceType: "LUNGE",
+      firstLessonDate: earliest.date,
+      firstLessonStartTime: earliest.startTime,
+      traineeNames: earliest.traineeNames,
+    });
+  }
+
+  const beginnerAssignments = assignments.filter(
+    (a) => a.practiceType === "BEGINNER_PRIVATE" || a.practiceType === "BEGINNER_GROUP"
+  );
+  if (beginnerAssignments.length > 0) {
+    const earliest = pickEarliestAssignment(beginnerAssignments);
+    contexts.push({
+      label: TEACHING_PRACTICE_CONTEXT_LABELS[earliest.practiceType],
+      practiceType: earliest.practiceType,
+      firstLessonDate: earliest.date,
+      firstLessonStartTime: earliest.startTime,
+      traineeNames: earliest.traineeNames,
+    });
+  }
+
+  return contexts;
 }
 
 // Merges required forms across every one of a child's assignments (e.g. a
@@ -95,5 +178,6 @@ export function buildParentSignatureChildStatus(
     requiredForms,
     isCleared: missingCount === 0,
     missingCount,
+    teachingPracticeContexts: buildTeachingPracticeContexts(input.assignments),
   };
 }
