@@ -453,10 +453,19 @@ async function loadSignedFormViewerDataInternal(
   if (form.signatureDataPath) {
     const supabase = getSupabaseClient();
     if (supabase) {
-      const { data } = await supabase.storage
-        .from(PARENT_SIGNATURES_BUCKET)
-        .createSignedUrl(form.signatureDataPath, SIGNATURE_VIEW_URL_TTL_SECONDS);
-      signatureUrl = data?.signedUrl ?? null;
+      // Swallow a thrown error (not just a `{ error }` response) the same
+      // way a missing/unreachable Storage object already degrades - a
+      // network hiccup generating one signature's signed URL must not take
+      // down the whole viewer (or, for the bulk export below, the entire
+      // batch) with it.
+      try {
+        const { data } = await supabase.storage
+          .from(PARENT_SIGNATURES_BUCKET)
+          .createSignedUrl(form.signatureDataPath, SIGNATURE_VIEW_URL_TTL_SECONDS);
+        signatureUrl = data?.signedUrl ?? null;
+      } catch {
+        signatureUrl = null;
+      }
     }
   }
 
@@ -495,4 +504,50 @@ export async function getTeachingPracticeSignedFormForInstructor(
   const instructor = await getInstructorForSignatureRead(instructorId);
   if (!instructor) return null;
   return loadSignedFormViewerDataInternal(signedFormId);
+}
+
+// ---------------------------------------------------------------------------
+// Bulk view/print all signed forms (admin only) - read, no PDF
+// ---------------------------------------------------------------------------
+
+// Print/display order for a course-cycle batch: SAFETY_INSTRUCTIONS first
+// (it applies to every child regardless of practice type), then the two
+// consent forms - matches the order a manager would expect to find them in
+// when flipping through a printed stack for one child.
+const FORM_TYPE_PRINT_ORDER: Record<ParentSignatureFormTypeValue, number> = {
+  SAFETY_INSTRUCTIONS: 0,
+  LUNGE_CONSENT: 1,
+  BEGINNER_LESSON_CONSENT: 2,
+};
+
+// Admin-only bulk read for the print/export view (ParentSignatureBulkPrintModal) -
+// every ACTIVE TeachingPracticeSignedForm for the current course cycle,
+// each resolved through the same loadSignedFormViewerDataInternal used by
+// the single-form viewer above (full form content + a short-lived signature
+// signed URL), so the bulk print document is guaranteed to render identically
+// to what the single viewer would show for any one of these forms. A form
+// whose content/version can no longer be resolved is dropped (same "not
+// available" outcome the single viewer treats as null); a form whose
+// signature URL fails to generate is still included, just with
+// signatureUrl: null, so the caller can render a placeholder for that one
+// form without losing the rest of the batch.
+export async function getAllActiveTeachingPracticeSignedFormsForAdmin(): Promise<ParentSignatureViewerData[]> {
+  await requireAdmin();
+
+  const courseCycle = CURRENT_TEACHING_PRACTICE_COURSE_CYCLE;
+  const forms = await prisma.teachingPracticeSignedForm.findMany({
+    where: { courseCycle, status: "ACTIVE" },
+    select: { id: true, childNameSnapshot: true, formType: true, signedAt: true },
+  });
+
+  const ordered = [...forms].sort((a, b) => {
+    const nameCompare = a.childNameSnapshot.localeCompare(b.childNameSnapshot, "he");
+    if (nameCompare !== 0) return nameCompare;
+    const typeCompare = FORM_TYPE_PRINT_ORDER[a.formType] - FORM_TYPE_PRINT_ORDER[b.formType];
+    if (typeCompare !== 0) return typeCompare;
+    return a.signedAt.getTime() - b.signedAt.getTime();
+  });
+
+  const results = await Promise.all(ordered.map((f) => loadSignedFormViewerDataInternal(f.id)));
+  return results.filter((r): r is ParentSignatureViewerData => r !== null);
 }
