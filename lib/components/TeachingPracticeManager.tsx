@@ -2305,6 +2305,10 @@ export function TeachingPracticeManager({
 
   const [lessonActionError, setLessonActionError] = useState<string | null>(null);
   const [isLessonActionPending, startLessonActionTransition] = useTransition();
+  // Stage 1 (generated-lessons inline editing) - which single inline cell is
+  // currently saving, so only that one cell disables while a save is in
+  // flight (same convention as the fixed-structure tables' savingCellKey).
+  const [savingLessonCellKey, setSavingLessonCellKey] = useState<string | null>(null);
 
   function handleToggleLessonPublished(lesson: TeachingPracticeLessonSummary) {
     setLessonActionError(null);
@@ -2377,6 +2381,154 @@ export function TeachingPracticeManager({
       };
     }
     return { success: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // Lessons: inline (Excel-like) editing, straight from the generated-lessons
+  // table - Stage 1. Same reasoning as the fixed-structure inline cells
+  // above (handleInlineAssignTrainee etc.): each handler rebuilds the full
+  // array/object the underlying replace-all action expects, changing only
+  // the one field/row being edited, and reuses the exact same actions the
+  // existing "עריכה" expanded form already calls - no new server logic, no
+  // new protections to reason about (feedback-drop refusal, duplicate-trainee
+  // rejection, meaningful-feedback sync protection are all inherited as-is).
+  // -------------------------------------------------------------------------
+
+  // "שעה"/"מיקום" cells. Rebuilds the full TeachingPracticeLessonInput from
+  // the lesson's own already-loaded fields (same full-object-rebuild idiom as
+  // handleInlineEditTrackNotes for tracks), changing only startTime or
+  // location. date/responsibleInstructorId/notes are always resent
+  // unchanged; roleLabelOverrides is deliberately omitted from this input so
+  // it's left completely untouched - updateTeachingPracticeLessonInternal
+  // only touches that key when it's present in the input at all (see its own
+  // comment). endTime is never sent - it stays server-derived exactly as
+  // today.
+  function handleInlineUpdateLessonField(
+    lesson: TeachingPracticeLessonSummary,
+    field: "startTime" | "location",
+    value: string
+  ) {
+    const cellKey = `lesson-${lesson.id}-${field}`;
+    const input: TeachingPracticeLessonInput = {
+      date: lesson.date,
+      startTime: field === "startTime" ? value : lesson.startTime,
+      responsibleInstructorId: lesson.responsibleInstructorId,
+      location: field === "location" ? value || null : lesson.location,
+      notes: lesson.notes,
+    };
+
+    setLessonActionError(null);
+    setSavingLessonCellKey(cellKey);
+    startLessonActionTransition(async () => {
+      const result =
+        role === "admin"
+          ? await updateTeachingPracticeLessonAsAdmin(lesson.id, input)
+          : await updateTeachingPracticeLessonAsInstructor(actorId!, lesson.id, input);
+      setSavingLessonCellKey(null);
+      if (!result.success) {
+        setLessonActionError(result.error ?? "אירעה שגיאה בעדכון פרטי השיעור");
+        return;
+      }
+      await refreshLessons();
+      if (selectedLessonDate) await refreshLessonDateDetail(selectedLessonDate);
+    });
+  }
+
+  // "חניך"/"תפקיד" cells. Rebuilds one row per expected role slot (the exact
+  // same shape lessonToEditForm already builds for the expanded form),
+  // changing only the one row at changedIndex, then drops any still-empty
+  // slots before saving - byte-for-byte the same construction/filter
+  // handleSaveEdit already does, just triggered per-cell instead of via one
+  // combined "שמירה" button. Reuses setTeachingPracticeLessonParticipantsAs*
+  // as-is, so its existing meaningful-feedback drop refusal and duplicate-
+  // trainee validation both still apply unchanged.
+  function handleInlineUpdateLessonParticipant(
+    lesson: TeachingPracticeLessonDetail,
+    roleSlots: TeachingPracticeRoleValue[],
+    changedIndex: number,
+    patch: Partial<LessonParticipantFormRow>
+  ) {
+    const cellKey = `lesson-${lesson.id}-participant-${changedIndex}`;
+    const roleIndex = new Map(roleSlots.map((role, i) => [role, i]));
+    const sorted = [...lesson.participants].sort(
+      (a, b) => (roleIndex.get(a.role) ?? roleSlots.length) - (roleIndex.get(b.role) ?? roleSlots.length)
+    );
+    const rows: LessonParticipantFormRow[] = roleSlots.map((role, i) => ({
+      traineeId: sorted[i]?.traineeId ?? "",
+      role: sorted[i]?.role ?? role,
+    }));
+    if (changedIndex < 0 || changedIndex >= rows.length) return; // defensive - see callers' own i < roleSlots.length guard
+    rows[changedIndex] = { ...rows[changedIndex], ...patch };
+    const participantRows: TeachingPracticeParticipantInput[] = rows
+      .filter((r) => r.traineeId !== "")
+      .map((r) => ({ traineeId: r.traineeId, role: r.role }));
+
+    setLessonActionError(null);
+    setSavingLessonCellKey(cellKey);
+    startLessonActionTransition(async () => {
+      const result =
+        role === "admin"
+          ? await setTeachingPracticeLessonParticipantsAsAdmin(lesson.id, participantRows)
+          : await setTeachingPracticeLessonParticipantsAsInstructor(actorId!, lesson.id, participantRows);
+      setSavingLessonCellKey(null);
+      if (!result.success) {
+        setLessonActionError(result.error ?? "אירעה שגיאה בשיבוץ החניך/ה או התפקיד");
+        return;
+      }
+      await refreshLessons();
+      if (selectedLessonDate) await refreshLessonDateDetail(selectedLessonDate);
+    });
+  }
+
+  // Child/horse/equipment cells. Rebuilds one row per expected child slot
+  // (same shape/order lessonToEditForm already uses), changing only the one
+  // field on the row at changedIndex and preserving isAbsent for every row
+  // exactly as it already was - captured per-row before the empty-slot
+  // filter runs, so a later row's isAbsent can never be misattributed after
+  // filtering shifts array positions. isAbsent is carried through
+  // deliberately: the shared replace-all action defaults a missing isAbsent
+  // to false (see setTeachingPracticeLessonChildAssignmentsInternal), which
+  // would otherwise silently un-mark an already-absent child on every inline
+  // edit - this stage never edits absence itself.
+  function handleInlineUpdateLessonChild(
+    lesson: TeachingPracticeLessonDetail,
+    changedIndex: number,
+    patch: { childId?: string; horseName?: string; equipmentNotes?: string }
+  ) {
+    const cellKey = `lesson-${lesson.id}-child-${changedIndex}`;
+    const expectedChildSlots = EXPECTED_CHILD_SLOTS_BY_PRACTICE_TYPE[lesson.practiceType];
+    const rows = Array.from({ length: expectedChildSlots }, (_, i) => ({
+      childId: lesson.childAssignments[i]?.childId ?? "",
+      horseName: lesson.childAssignments[i]?.horseName ?? "",
+      equipmentNotes: lesson.childAssignments[i]?.equipmentNotes ?? "",
+      isAbsent: lesson.childAssignments[i]?.isAbsent ?? false,
+    }));
+    if (changedIndex < 0 || changedIndex >= rows.length) return; // defensive - see callers' own i < expectedChildSlots guard
+    rows[changedIndex] = { ...rows[changedIndex], ...patch };
+    const childAssignmentRows: TeachingPracticeChildAssignmentInput[] = rows
+      .filter((r) => r.childId !== "")
+      .map((r) => ({
+        childId: r.childId,
+        horseName: r.horseName.trim() || null,
+        equipmentNotes: r.equipmentNotes.trim() || null,
+        isAbsent: r.isAbsent,
+      }));
+
+    setLessonActionError(null);
+    setSavingLessonCellKey(cellKey);
+    startLessonActionTransition(async () => {
+      const result =
+        role === "admin"
+          ? await setTeachingPracticeLessonChildAssignmentsAsAdmin(lesson.id, childAssignmentRows)
+          : await setTeachingPracticeLessonChildAssignmentsAsInstructor(actorId!, lesson.id, childAssignmentRows);
+      setSavingLessonCellKey(null);
+      if (!result.success) {
+        setLessonActionError(result.error ?? "אירעה שגיאה בשיבוץ הילד/ה או פרטי הסוס/ציוד");
+        return;
+      }
+      await refreshLessons();
+      if (selectedLessonDate) await refreshLessonDateDetail(selectedLessonDate);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -4550,6 +4702,18 @@ export function TeachingPracticeManager({
           return (
             <div className="flex min-w-0 flex-col gap-4">
               {lessonActionError && <p className="text-sm text-danger">{lessonActionError}</p>}
+              {/* Stage 1 - compact, always-visible reminder that inline
+                  edits here are per-date, not fixed-structure: sync
+                  behavior itself is unchanged by this stage, this is copy
+                  only. Shown only when inline editing is actually possible
+                  (effectiveCanEdit), so a view-only user never sees a hint
+                  about an action they can't take. */}
+              {effectiveCanEdit && (
+                <p className="text-xs text-muted-foreground">
+                  שינויים בתאריכים הם נקודתיים לשיעור הזה. סנכרון מהמבנה הקבוע עשוי לעדכן מחדש שיעורים
+                  עתידיים ללא משוב משמעותי.
+                </p>
+              )}
               {/* Bulk publish/unpublish - admin-only, affects ALL future
                   generated lessons (every date, every group), not just the
                   currently-selected date - placed above the date tabs so
@@ -4668,8 +4832,10 @@ export function TeachingPracticeManager({
                                   groupName={groupName}
                                   lessons={groupLessons}
                                   canEdit={effectiveCanEdit}
+                                  canEditHorseFields={effectiveCanEditHorseFields}
                                   canEditFeedback={canEditFeedback}
                                   isPending={isLessonActionPending}
+                                  savingCellKey={savingLessonCellKey}
                                   instructors={instructors}
                                   trainees={students}
                                   childRegistry={children ?? []}
@@ -4677,6 +4843,9 @@ export function TeachingPracticeManager({
                                   onSave={handleUpdateLesson}
                                   onOpenFeedback={setFeedbackModalParticipantId}
                                   onOpenSameParentPopup={handleOpenSameParentPopup}
+                                  onInlineUpdateField={handleInlineUpdateLessonField}
+                                  onInlineUpdateParticipant={handleInlineUpdateLessonParticipant}
+                                  onInlineUpdateChild={handleInlineUpdateLessonChild}
                                 />
                               ))}
                             </div>
@@ -4693,8 +4862,10 @@ export function TeachingPracticeManager({
                                   groupName={groupName}
                                   lessons={groupLessons}
                                   canEdit={effectiveCanEdit}
+                                  canEditHorseFields={effectiveCanEditHorseFields}
                                   canEditFeedback={canEditFeedback}
                                   isPending={isLessonActionPending}
+                                  savingCellKey={savingLessonCellKey}
                                   instructors={instructors}
                                   trainees={students}
                                   childRegistry={children ?? []}
@@ -4702,6 +4873,9 @@ export function TeachingPracticeManager({
                                   onSave={handleUpdateLesson}
                                   onOpenFeedback={setFeedbackModalParticipantId}
                                   onOpenSameParentPopup={handleOpenSameParentPopup}
+                                  onInlineUpdateField={handleInlineUpdateLessonField}
+                                  onInlineUpdateParticipant={handleInlineUpdateLessonParticipant}
+                                  onInlineUpdateChild={handleInlineUpdateLessonChild}
                                 />
                               ))}
                             </div>
@@ -4718,8 +4892,10 @@ export function TeachingPracticeManager({
                                   groupName={groupName}
                                   lessons={groupLessons}
                                   canEdit={effectiveCanEdit}
+                                  canEditHorseFields={effectiveCanEditHorseFields}
                                   canEditFeedback={canEditFeedback}
                                   isPending={isLessonActionPending}
+                                  savingCellKey={savingLessonCellKey}
                                   instructors={instructors}
                                   trainees={students}
                                   childRegistry={children ?? []}
@@ -4727,6 +4903,9 @@ export function TeachingPracticeManager({
                                   onSave={handleUpdateLesson}
                                   onOpenFeedback={setFeedbackModalParticipantId}
                                   onOpenSameParentPopup={handleOpenSameParentPopup}
+                                  onInlineUpdateField={handleInlineUpdateLessonField}
+                                  onInlineUpdateParticipant={handleInlineUpdateLessonParticipant}
+                                  onInlineUpdateChild={handleInlineUpdateLessonChild}
                                 />
                               ))}
                             </div>
@@ -6228,6 +6407,7 @@ function ChildAssignmentCell({
   onToggleHighlight,
   otherSameParentNames,
   onOpenSameParentPopup,
+  rowSpan,
 }: {
   value: string;
   label: string;
@@ -6252,6 +6432,11 @@ function ChildAssignmentCell({
   // Opens the row-details popup for this exact child (value) when the
   // badge is clicked - see handleOpenSameParentPopup.
   onOpenSameParentPopup?: (childId: string) => void;
+  // Set only by callers rendering this as a shared (rowSpan'd) cell across
+  // several table rows (e.g. the generated-lessons table's shared child
+  // column) - undefined everywhere else, same no-op default as
+  // TraineeAssignmentCell's own rowSpan prop.
+  rowSpan?: number;
 }) {
   if (!editable) {
     // Only a real, assigned child (non-empty value) is clickable - "—" (no
@@ -6288,14 +6473,14 @@ function ChildAssignmentCell({
 
     if (onOpen) {
       return (
-        <ClickableCell isActive={isActive} onOpen={onOpen} sticky={sticky}>
+        <ClickableCell rowSpan={rowSpan} isActive={isActive} onOpen={onOpen} sticky={sticky}>
           {nameContent}
           {badge}
         </ClickableCell>
       );
     }
     return (
-      <td className={`px-2 py-2 ${sticky ? "sticky right-0 z-10 bg-card" : ""}`}>
+      <td rowSpan={rowSpan} className={`px-2 py-2 ${sticky ? "sticky right-0 z-10 bg-card" : ""}`}>
         {nameContent}
         {badge}
       </td>
@@ -6303,6 +6488,7 @@ function ChildAssignmentCell({
   }
   return (
     <td
+      rowSpan={rowSpan}
       className={`max-w-[150px] px-2 py-2 ${sticky ? "sticky right-0 z-10 bg-card" : ""}`}
       onClick={(e) => e.stopPropagation()}
     >
@@ -6338,6 +6524,7 @@ function InlineTextEditCell({
   sticky,
   truncateClassName,
   title,
+  rowSpan,
 }: {
   value: string;
   label: string;
@@ -6352,6 +6539,11 @@ function InlineTextEditCell({
   // horse/equipment, which never truncated in the read-only view either.
   truncateClassName?: string;
   title?: string;
+  // Set only by callers rendering a lesson-level (not per-row) field shared
+  // across several table rows (e.g. the generated-lessons table's shared
+  // horse/equipment cell) - undefined everywhere else, same no-op default as
+  // TraineeAssignmentCell's own rowSpan prop.
+  rowSpan?: number;
 }) {
   const [draft, setDraft] = useState(value);
   const skipCommitRef = useRef(false);
@@ -6371,12 +6563,16 @@ function InlineTextEditCell({
     );
     if (onOpen) {
       return (
-        <ClickableCell isActive={isActive} onOpen={onOpen} sticky={sticky}>
+        <ClickableCell rowSpan={rowSpan} isActive={isActive} onOpen={onOpen} sticky={sticky}>
           {content}
         </ClickableCell>
       );
     }
-    return <td className={`px-2 py-2 ${sticky ? "sticky right-0 z-10 bg-card" : ""}`}>{content}</td>;
+    return (
+      <td rowSpan={rowSpan} className={`px-2 py-2 ${sticky ? "sticky right-0 z-10 bg-card" : ""}`}>
+        {content}
+      </td>
+    );
   }
 
   function commit() {
@@ -6387,6 +6583,7 @@ function InlineTextEditCell({
 
   return (
     <td
+      rowSpan={rowSpan}
       className={`px-2 py-2 ${sticky ? "sticky right-0 z-10 bg-card" : ""}`}
       onClick={(e) => e.stopPropagation()}
     >
@@ -6556,8 +6753,10 @@ function LessonGroupTable({
   groupName,
   lessons,
   canEdit,
+  canEditHorseFields,
   canEditFeedback,
   isPending,
+  savingCellKey,
   instructors,
   trainees,
   childRegistry,
@@ -6565,12 +6764,22 @@ function LessonGroupTable({
   onSave,
   onOpenFeedback,
   onOpenSameParentPopup,
+  onInlineUpdateField,
+  onInlineUpdateParticipant,
+  onInlineUpdateChild,
 }: {
   groupName: string | null;
   lessons: TeachingPracticeLessonDetail[];
   canEdit: boolean;
+  // Stage 1 inline editing - gates horseName/equipmentNotes cells only,
+  // same split as the fixed-structure tables' effectiveCanEditHorseFields
+  // (an instructor can have assignment permission without horse permission).
+  canEditHorseFields: boolean;
   canEditFeedback: boolean;
   isPending: boolean;
+  // Which single inline cell (if any) is currently saving - see
+  // savingLessonCellKey in TeachingPracticeManager.
+  savingCellKey: string | null;
   instructors: InstructorOption[];
   trainees: StudentOption[];
   childRegistry: TeachingPracticeChildRow[];
@@ -6583,6 +6792,22 @@ function LessonGroupTable({
   ) => Promise<ActionResult>;
   onOpenFeedback: (participantId: string) => void;
   onOpenSameParentPopup: (childId: string) => void;
+  onInlineUpdateField: (
+    lesson: TeachingPracticeLessonSummary,
+    field: "startTime" | "location",
+    value: string
+  ) => void;
+  onInlineUpdateParticipant: (
+    lesson: TeachingPracticeLessonDetail,
+    roleSlots: TeachingPracticeRoleValue[],
+    changedIndex: number,
+    patch: Partial<LessonParticipantFormRow>
+  ) => void;
+  onInlineUpdateChild: (
+    lesson: TeachingPracticeLessonDetail,
+    changedIndex: number,
+    patch: { childId?: string; horseName?: string; equipmentNotes?: string }
+  ) => void;
 }) {
   if (lessons.length === 0) return null;
   const roleSlots = ROLE_SLOTS_BY_PRACTICE_TYPE[lessons[0].practiceType];
@@ -6620,6 +6845,7 @@ function LessonGroupTable({
           <thead>
             <tr className="bg-muted text-muted-foreground">
               <th className="sticky top-0 right-0 z-20 bg-muted px-2 py-2 text-right font-bold">שעה</th>
+              <th className="sticky top-0 z-10 bg-muted px-2 py-2 text-right font-bold">מיקום</th>
               <th className="sticky top-0 z-10 bg-muted px-2 py-2 text-right font-bold">חניך</th>
               <th className="sticky top-0 z-10 bg-muted px-2 py-2 text-right font-bold">תפקיד</th>
               <th className="sticky top-0 z-10 bg-muted px-2 py-2 text-right font-bold">שם הילד</th>
@@ -6641,8 +6867,10 @@ function LessonGroupTable({
                 lesson={lesson}
                 roleSlots={roleSlots}
                 canEdit={canEdit}
+                canEditHorseFields={canEditHorseFields}
                 canEditFeedback={canEditFeedback}
                 isPending={isPending}
+                savingCellKey={savingCellKey}
                 instructors={instructors}
                 trainees={trainees}
                 childRegistry={childRegistry}
@@ -6654,6 +6882,9 @@ function LessonGroupTable({
                   onSave(lesson.id, input, participantRows, childAssignmentRows)
                 }
                 onOpenFeedback={onOpenFeedback}
+                onInlineUpdateField={onInlineUpdateField}
+                onInlineUpdateParticipant={onInlineUpdateParticipant}
+                onInlineUpdateChild={onInlineUpdateChild}
               />
             ))}
           </tbody>
@@ -6713,14 +6944,101 @@ function pairLessonParticipantsWithChildren(
   }));
 }
 
+// Stage 1 (generated-lessons inline editing) - the "שעה" cell's inline
+// editor: same draft/commit-on-blur/Escape-revert idiom as InlineTextEditCell
+// above, but for the lesson's own startTime specifically. endTime is always
+// server-derived (see updateTeachingPracticeLessonInternal) and is only ever
+// displayed here, never sent - this component has no way to edit it at all.
+// Read-only mode renders the exact "HH:MM-HH:MM" text the table already
+// showed before this stage, so the displayed format is unchanged once a
+// commit round-trips through a refresh.
+function LessonTimeEditCell({
+  startTime,
+  endTime,
+  editable,
+  disabled,
+  onCommit,
+  rowSpan,
+}: {
+  startTime: string;
+  endTime: string;
+  editable: boolean;
+  disabled: boolean;
+  onCommit: (startTime: string) => void;
+  rowSpan?: number;
+}) {
+  const [draft, setDraft] = useState(startTime);
+  const skipCommitRef = useRef(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDraft(startTime);
+  }, [startTime]);
+
+  if (!editable) {
+    return (
+      <td
+        rowSpan={rowSpan}
+        className="sticky right-0 z-10 bg-card px-2 py-2 align-top font-medium text-card-foreground"
+      >
+        {startTime}-{endTime}
+      </td>
+    );
+  }
+
+  function commit() {
+    if (!draft || draft === startTime) return;
+    onCommit(draft);
+  }
+
+  return (
+    <td
+      rowSpan={rowSpan}
+      className="sticky right-0 z-10 bg-card px-2 py-2 align-top"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex flex-col gap-1">
+        <input
+          type="time"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => {
+            if (skipCommitRef.current) {
+              skipCommitRef.current = false;
+              return;
+            }
+            commit();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              e.currentTarget.blur();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              skipCommitRef.current = true;
+              setDraft(startTime);
+              e.currentTarget.blur();
+            }
+          }}
+          disabled={disabled}
+          className="w-full min-w-[90px] rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50"
+        />
+        <span className="text-[10px] text-muted-foreground">עד {endTime}</span>
+      </div>
+    </td>
+  );
+}
+
 // The shared cells (time, status, actions) get rowSpan across every row in
 // the group and are only rendered once, on the first one.
 function LessonTableRow({
   lesson,
   roleSlots,
   canEdit,
+  canEditHorseFields,
   canEditFeedback,
   isPending,
+  savingCellKey,
   instructors,
   trainees,
   childRegistry,
@@ -6730,16 +7048,23 @@ function LessonTableRow({
   onTogglePublished,
   onSave,
   onOpenFeedback,
+  onInlineUpdateField,
+  onInlineUpdateParticipant,
+  onInlineUpdateChild,
 }: {
   lesson: TeachingPracticeLessonDetail;
   roleSlots: TeachingPracticeRoleValue[];
   canEdit: boolean;
+  // Stage 1 inline editing - gates horseName/equipmentNotes cells only (see
+  // LessonGroupTable's own comment).
+  canEditHorseFields: boolean;
   // Separate from canEdit - gates only the trainee-name click target that
   // opens the feedback modal, never the existing עריכה/פרסום actions or
   // participant/child/horse editing (see TeachingPracticeManager's
   // canEditFeedback comment for why this must stay its own permission).
   canEditFeedback: boolean;
   isPending: boolean;
+  savingCellKey: string | null;
   instructors: InstructorOption[];
   trainees: StudentOption[];
   childRegistry: TeachingPracticeChildRow[];
@@ -6759,6 +7084,22 @@ function LessonTableRow({
     childAssignmentRows: TeachingPracticeChildAssignmentInput[]
   ) => Promise<ActionResult>;
   onOpenFeedback: (participantId: string) => void;
+  onInlineUpdateField: (
+    lesson: TeachingPracticeLessonSummary,
+    field: "startTime" | "location",
+    value: string
+  ) => void;
+  onInlineUpdateParticipant: (
+    lesson: TeachingPracticeLessonDetail,
+    roleSlots: TeachingPracticeRoleValue[],
+    changedIndex: number,
+    patch: Partial<LessonParticipantFormRow>
+  ) => void;
+  onInlineUpdateChild: (
+    lesson: TeachingPracticeLessonDetail,
+    changedIndex: number,
+    patch: { childId?: string; horseName?: string; equipmentNotes?: string }
+  ) => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<LessonEditFormState>(() => lessonToEditForm(lesson, roleSlots));
@@ -6830,7 +7171,41 @@ function LessonTableRow({
     return filtered;
   }
 
-  const colSpan = 13;
+  // Stage 1 (inline "חניך" cell) - same options as traineeOptionsFor above,
+  // reshaped for TraineeAssignmentCell's SearchableSelect. Duplicate-trainee
+  // rejection stays entirely server-side (setTeachingPracticeLessonParticipantsInternal's
+  // existing check) - same as the expanded form's own plain <select>, which
+  // has never filtered other rows' picks out of its own options either.
+  function traineeSelectOptionsFor(selectedId: string): SearchableSelectOption[] {
+    return traineeOptionsFor(selectedId).map((s) => ({
+      value: s.id,
+      label: `${s.fullName}${s.groupName ? ` (קבוצה ${s.groupName})` : ""}`,
+    }));
+  }
+
+  // Stage 1 (inline child cell) - same registry/shape the expanded form's
+  // own child <select> already reads (childRegistry, unfiltered by
+  // isActive - matching that existing convention exactly), reshaped for
+  // ChildAssignmentCell's SearchableSelect.
+  function childOptionsFor(selectedId: string): SearchableSelectOption[] {
+    const clearOption: SearchableSelectOption = { value: "", label: "ללא ילד/ה" };
+    const options = childRegistry.map((c) => ({ value: c.id, label: c.fullName }));
+    if (selectedId && !options.some((o) => o.value === selectedId)) {
+      const selected = childRegistry.find((c) => c.id === selectedId);
+      if (selected) return [clearOption, { value: selected.id, label: selected.fullName }, ...options];
+    }
+    return [clearOption, ...options];
+  }
+
+  const colSpan = 14;
+  // Stage 1 - how many TeachingPracticeChildAssignment slots this
+  // practiceType expects (see EXPECTED_CHILD_SLOTS_BY_PRACTICE_TYPE's own
+  // comment) - used to bound which rows get an inline child/horse/equipment
+  // editor, so an unexpected overflow row (more children than the
+  // practiceType normally has) safely falls back to read-only text instead
+  // of indexing past what handleInlineUpdateLessonChild's own rebuild
+  // expects.
+  const expectedChildSlots = EXPECTED_CHILD_SLOTS_BY_PRACTICE_TYPE[lesson.practiceType];
   // BEGINNER_GROUP always index-pairs one child per trainee/role row (3+3).
   // LUNGE/BEGINNER_PRIVATE normally have one child shared by both trainee
   // rows, so its columns are shown once with rowSpan instead of repeated
@@ -6856,55 +7231,138 @@ function LessonTableRow({
           className={`border-t border-border hover:bg-muted/60 ${!isEditing ? rowColorClass : ""}`}
         >
           {i === 0 && (
-            <td
+            <LessonTimeEditCell
+              startTime={lesson.startTime}
+              endTime={lesson.endTime}
+              editable={canEdit}
+              disabled={savingCellKey === `lesson-${lesson.id}-startTime`}
+              onCommit={(startTime) => onInlineUpdateField(lesson, "startTime", startTime)}
               rowSpan={rowCount}
-              className="sticky right-0 z-10 bg-card px-2 py-2 align-top font-medium text-card-foreground"
-            >
-              {lesson.startTime}-{lesson.endTime}
+            />
+          )}
+          {i === 0 &&
+            (canEdit ? (
+              <InlineTextEditCell
+                value={lesson.location ?? ""}
+                label={lesson.location ?? "—"}
+                editable
+                disabled={savingCellKey === `lesson-${lesson.id}-location`}
+                onCommit={(value) => onInlineUpdateField(lesson, "location", value)}
+                rowSpan={rowCount}
+              />
+            ) : (
+              <td rowSpan={rowCount} className="px-2 py-2 align-top">
+                {lesson.location || "—"}
+              </td>
+            ))}
+          {canEdit && i < roleSlots.length ? (
+            <TraineeAssignmentCell
+              value={row.participant?.traineeId ?? ""}
+              label={row.participant?.traineeName ?? "—"}
+              options={traineeSelectOptionsFor(row.participant?.traineeId ?? "")}
+              editable
+              disabled={savingCellKey === `lesson-${lesson.id}-participant-${i}`}
+              onAssign={(traineeId) => onInlineUpdateParticipant(lesson, roleSlots, i, { traineeId })}
+            />
+          ) : (
+            <td className="px-2 py-2">
+              {row.participant && canEditFeedback ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenFeedback(row.participant!.participantId)}
+                  className="text-primary underline decoration-dotted underline-offset-2 hover:opacity-80"
+                >
+                  {row.participant.traineeName}
+                </button>
+              ) : (
+                (row.participant?.traineeName ?? "—")
+              )}
             </td>
           )}
-          <td className="px-2 py-2">
-            {row.participant && canEditFeedback ? (
-              <button
-                type="button"
-                onClick={() => onOpenFeedback(row.participant!.participantId)}
-                className="text-primary underline decoration-dotted underline-offset-2 hover:opacity-80"
+          {canEdit && i < roleSlots.length ? (
+            <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
+              <select
+                value={row.participant?.role ?? roleSlots[i]}
+                onChange={(e) =>
+                  onInlineUpdateParticipant(lesson, roleSlots, i, {
+                    role: e.target.value as TeachingPracticeRoleValue,
+                  })
+                }
+                disabled={savingCellKey === `lesson-${lesson.id}-participant-${i}`}
+                className="w-full min-w-[90px] rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50"
               >
-                {row.participant.traineeName}
-              </button>
-            ) : (
-              (row.participant?.traineeName ?? "—")
-            )}
-          </td>
-          <td className="px-2 py-2">
-            {row.participant
-              ? (lesson.roleLabelOverrides?.[row.participant.role] ?? ROLE_LABELS[row.participant.role])
-              : "—"}
-          </td>
+                {roleSlots.map((r) => (
+                  <option key={r} value={r}>
+                    {ROLE_LABELS[r]}
+                  </option>
+                ))}
+              </select>
+            </td>
+          ) : (
+            <td className="px-2 py-2">
+              {row.participant
+                ? (lesson.roleLabelOverrides?.[row.participant.role] ?? ROLE_LABELS[row.participant.role])
+                : "—"}
+            </td>
+          )}
           {sharedChildColumn ? (
             i === 0 && (
               <>
-                <td rowSpan={rowCount} className="px-2 py-2 align-top">
-                  {soleChild ? `${soleChild.childFullName}${soleChild.isAbsent ? " (נעדר/ת)" : ""}` : "—"}
-                  {soleChild && (
-                    <SameParentBadge
-                      otherNames={sameParentOtherNamesByChildId.get(soleChild.childId) ?? []}
-                      onClick={() => onOpenSameParentPopup(soleChild.childId)}
-                    />
-                  )}
-                </td>
+                {canEdit ? (
+                  <ChildAssignmentCell
+                    value={soleChild?.childId ?? ""}
+                    label={soleChild ? `${soleChild.childFullName}${soleChild.isAbsent ? " (נעדר/ת)" : ""}` : "—"}
+                    options={childOptionsFor(soleChild?.childId ?? "")}
+                    editable
+                    disabled={savingCellKey === `lesson-${lesson.id}-child-0`}
+                    onAssign={(childId) => onInlineUpdateChild(lesson, 0, { childId })}
+                    rowSpan={rowCount}
+                  />
+                ) : (
+                  <td rowSpan={rowCount} className="px-2 py-2 align-top">
+                    {soleChild ? `${soleChild.childFullName}${soleChild.isAbsent ? " (נעדר/ת)" : ""}` : "—"}
+                    {soleChild && (
+                      <SameParentBadge
+                        otherNames={sameParentOtherNamesByChildId.get(soleChild.childId) ?? []}
+                        onClick={() => onOpenSameParentPopup(soleChild.childId)}
+                      />
+                    )}
+                  </td>
+                )}
                 <td rowSpan={rowCount} className="px-2 py-2 align-top">
                   {soleChild?.childAge ?? "—"}
                 </td>
                 <td rowSpan={rowCount} className="px-2 py-2 align-top">
                   {soleChild?.childGender ?? "—"}
                 </td>
-                <td rowSpan={rowCount} className="px-2 py-2 align-top">
-                  {soleChild?.horseName ?? "—"}
-                </td>
-                <td rowSpan={rowCount} className="px-2 py-2 align-top">
-                  {soleChild?.equipmentNotes ?? "—"}
-                </td>
+                {canEditHorseFields ? (
+                  <InlineTextEditCell
+                    value={soleChild?.horseName ?? ""}
+                    label={soleChild?.horseName ?? "—"}
+                    editable
+                    disabled={savingCellKey === `lesson-${lesson.id}-child-0-horseName`}
+                    onCommit={(value) => onInlineUpdateChild(lesson, 0, { horseName: value })}
+                    rowSpan={rowCount}
+                  />
+                ) : (
+                  <td rowSpan={rowCount} className="px-2 py-2 align-top">
+                    {soleChild?.horseName ?? "—"}
+                  </td>
+                )}
+                {canEditHorseFields ? (
+                  <InlineTextEditCell
+                    value={soleChild?.equipmentNotes ?? ""}
+                    label={soleChild?.equipmentNotes ?? "—"}
+                    editable
+                    disabled={savingCellKey === `lesson-${lesson.id}-child-0-equipmentNotes`}
+                    onCommit={(value) => onInlineUpdateChild(lesson, 0, { equipmentNotes: value })}
+                    rowSpan={rowCount}
+                  />
+                ) : (
+                  <td rowSpan={rowCount} className="px-2 py-2 align-top">
+                    {soleChild?.equipmentNotes ?? "—"}
+                  </td>
+                )}
                 <td rowSpan={rowCount} className="px-2 py-2 align-top">
                   {soleChild?.parentName ?? "—"}
                 </td>
@@ -6915,19 +7373,50 @@ function LessonTableRow({
             )
           ) : (
             <>
-              <td className="px-2 py-2">
-                {row.child ? `${row.child.childFullName}${row.child.isAbsent ? " (נעדר/ת)" : ""}` : "—"}
-                {row.child && (
-                  <SameParentBadge
-                    otherNames={sameParentOtherNamesByChildId.get(row.child.childId) ?? []}
-                    onClick={() => onOpenSameParentPopup(row.child!.childId)}
-                  />
-                )}
-              </td>
+              {canEdit && i < expectedChildSlots ? (
+                <ChildAssignmentCell
+                  value={row.child?.childId ?? ""}
+                  label={row.child ? `${row.child.childFullName}${row.child.isAbsent ? " (נעדר/ת)" : ""}` : "—"}
+                  options={childOptionsFor(row.child?.childId ?? "")}
+                  editable
+                  disabled={savingCellKey === `lesson-${lesson.id}-child-${i}`}
+                  onAssign={(childId) => onInlineUpdateChild(lesson, i, { childId })}
+                />
+              ) : (
+                <td className="px-2 py-2">
+                  {row.child ? `${row.child.childFullName}${row.child.isAbsent ? " (נעדר/ת)" : ""}` : "—"}
+                  {row.child && (
+                    <SameParentBadge
+                      otherNames={sameParentOtherNamesByChildId.get(row.child.childId) ?? []}
+                      onClick={() => onOpenSameParentPopup(row.child!.childId)}
+                    />
+                  )}
+                </td>
+              )}
               <td className="px-2 py-2">{row.child?.childAge ?? "—"}</td>
               <td className="px-2 py-2">{row.child?.childGender ?? "—"}</td>
-              <td className="px-2 py-2">{row.child?.horseName ?? "—"}</td>
-              <td className="px-2 py-2">{row.child?.equipmentNotes ?? "—"}</td>
+              {canEditHorseFields && i < expectedChildSlots ? (
+                <InlineTextEditCell
+                  value={row.child?.horseName ?? ""}
+                  label={row.child?.horseName ?? "—"}
+                  editable
+                  disabled={savingCellKey === `lesson-${lesson.id}-child-${i}-horseName`}
+                  onCommit={(value) => onInlineUpdateChild(lesson, i, { horseName: value })}
+                />
+              ) : (
+                <td className="px-2 py-2">{row.child?.horseName ?? "—"}</td>
+              )}
+              {canEditHorseFields && i < expectedChildSlots ? (
+                <InlineTextEditCell
+                  value={row.child?.equipmentNotes ?? ""}
+                  label={row.child?.equipmentNotes ?? "—"}
+                  editable
+                  disabled={savingCellKey === `lesson-${lesson.id}-child-${i}-equipmentNotes`}
+                  onCommit={(value) => onInlineUpdateChild(lesson, i, { equipmentNotes: value })}
+                />
+              ) : (
+                <td className="px-2 py-2">{row.child?.equipmentNotes ?? "—"}</td>
+              )}
               <td className="px-2 py-2">{row.child?.parentName ?? "—"}</td>
               <td className="px-2 py-2">{row.child?.parentPhone ?? "—"}</td>
             </>
