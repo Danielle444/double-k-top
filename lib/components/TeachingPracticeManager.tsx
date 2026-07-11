@@ -6152,13 +6152,17 @@ function TeachingPracticeSuggestionSummarySection({ summaries }: { summaries: Co
                   gap={summary.targetGaps.lungeAny}
                 />
                 <TeachingPracticeSuggestionBucketPill
-                  label="פרטני/קבוצתי"
-                  count={summary.counts.privateGroupAny}
-                  gap={summary.targetGaps.privateGroupAny}
+                  label="פרטני (מוביל/ה)"
+                  count={summary.counts.privateLead}
+                  gap={summary.targetGaps.privateLead}
                 />
               </div>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
-                <span>עוזר/ת בפרטני (מידע בלבד): {summary.informational.privateAssistant}</span>
+                {/* Stage A - no longer "מידע בלבד" (info only): privateAssistant
+                    is now a ranked category (see categoryCount in the pure
+                    engine) that actively affects suggestion ordering, just
+                    never a required-hole target. */}
+                <span>עוזר/ת בפרטני (מאוזן, לא חובה): {summary.informational.privateAssistant}</span>
                 <span>מוביל/ה בקבוצתי (מידע בלבד): {summary.informational.beginnerGroupLead}</span>
                 <span>מדריך שני (מידע בלבד): {summary.informational.beginnerGroupSecond}</span>
                 <span>ממשב (מידע בלבד): {summary.informational.evaluator}</span>

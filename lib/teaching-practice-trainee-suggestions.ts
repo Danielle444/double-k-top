@@ -16,60 +16,80 @@
 // never reasons about which lessons exist on which dates, and never
 // suggests anything for a generated lesson directly.
 //
-// Bucket design (corrected, evidence-validated against real business
-// capacity - see report):
-//   lungeAny       - target 1 - fed by ANY LUNGE slot/role (both rotation
-//                    positions count - a lunge track's 2 seats are both real,
-//                    independently required assignment places).
-//   privateGroupAny - target 1 - fed ONLY by BEGINNER_PRIVATE rotationOrder 0
-//                    (the "lead"/"חניך מתרגל" slot). This is the sole
-//                    business-required "private/group" assignment place.
+// Bucket/category design (Stage A revision - second-round ranking, see
+// report):
+//   lungeAny         - required capacity, target 1 - fed by ANY LUNGE
+//                       slot/role (both rotation positions count - a lunge
+//                       track's 2 seats are both real, independently
+//                       required assignment places).
+//   privateLead       - required capacity, target 1 - fed ONLY by
+//                       BEGINNER_PRIVATE rotationOrder 0 (the "lead"/"חניך
+//                       מתרגל" slot). This is the sole business-required
+//                       "private" assignment place. (Renamed from
+//                       privateGroupAny now that assistant is a distinct
+//                       tracked category too - see privateAssistant below.)
+//   privateAssistant  - RANKED but NOT required capacity, no target - fed by
+//                       BEGINNER_PRIVATE rotationOrder 1. Previously
+//                       informational-only (never read by scoring); Stage A
+//                       promotes it to a real ranked category (see
+//                       categoryCount below) because leaving it unranked
+//                       produced a real bad pattern: the same trainee kept
+//                       winning every assistant slot on spacing/load alone
+//                       while another trainee was never suggested as
+//                       assistant at all. It still never creates a
+//                       "required hole" warning (see requiredBucket below) -
+//                       only lungeAny/privateLead do that.
+//   (BEGINNER_GROUP rotations) - informational/derived only, never ranked,
+//                       never required. That track's own roster is derived
+//                       read-only from its linked BEGINNER_PRIVATE tracks'
+//                       own rotationOrder-0 trainees (see
+//                       TeachingPracticeManager.tsx's buildBeginnerBlocks and
+//                       isTraineeSuggestionSlotSelectable) - a suggestion is
+//                       still computed and shown for visibility/load
+//                       context, but is never selectable/applyable and never
+//                       affects any category count.
 //
-// Why privateGroupAny is scoped this narrowly (not every BEGINNER_PRIVATE/
-// BEGINNER_GROUP slot): empirically, a group's real business capacity for
-// lunge (tracks x 2) closely matches its real trainee count (yielding
-// exactly the expected small number of holes), but the *technical* slot
-// count across BEGINNER_PRIVATE (tracks x 2) + BEGINNER_GROUP (tracks x 3)
-// vastly overshoots real demand (e.g. 63 technical slots for ~21 trainees in
-// one real group). The existing UI's own Beginners-block code
-// (TeachingPracticeManager.tsx, buildBeginnerBlocks) confirms why: a
-// BEGINNER_GROUP track's displayed roster is deliberately NOT assigned via
-// its own team slots - it is derived read-only from each linked
-// BEGINNER_PRIVATE track's own rotationOrder-0 trainee ("trainee assignment
-// happens on the private rows"). So the one genuinely-independent,
-// business-required "private/group place" is BEGINNER_PRIVATE rotationOrder
-// 0 - confirmed by simulating this exact model against real group data and
-// getting precisely the expected hole counts (1 total hole per group).
-//
-// BEGINNER_PRIVATE rotationOrder 1 (assistant) and every BEGINNER_GROUP
-// rotationOrder are still shown and still receive a suggestion attempt
-// (general-load-balance only, freely reusing already-satisfied trainees -
-// nothing here is a hard target), but never create a required-hole warning
-// and never affect the expected hole totals above.
+// Two related but distinct concepts, both computed per slot by
+// categorizeSlot below:
+//   - rankingCategory ("lungeAny" | "privateLead" | "privateAssistant" |
+//     null) - which count the NEW categoryCount scoring tier reads/updates
+//     for this slot. Drives ranking, never drives a warning by itself.
+//   - requiredBucket (a narrower "lungeAny" | "privateLead" | null) - which
+//     of the two categories represents real, business-required capacity.
+//     Drives supplyByBucket tallying and the no_suitable_candidate /
+//     supply_below_demand warnings. privateAssistant and BEGINNER_GROUP
+//     always have requiredBucket === null, by design (see privateAssistant
+//     above) - an unfilled assistant slot is never reported as a "hole."
 //
 // Counting unit: a single TRACK MEMBERSHIP, not a single generated lesson.
 // A fixed-structure "assignment" is one track membership - if a track later
 // generates many lesson dates, the same membership still counts once per
-// bucket it has ever realized (deduplicated per track), never once per
-// lesson. This is what makes "target 1" meaningful: a lunge track that has
-// generated 10 lessons for the same pair should read as "1 lungeAny
-// assignment fulfilled", not "10".
+// category it has ever realized (deduplicated per track), never once per
+// lesson. This now applies to all three ranked categories, including
+// privateAssistant (a Stage A correctness fix - previously privateAssistant
+// was counted as a raw, undeduplicated participant-row tally, which would
+// have massively overcounted a trainee's assistant load once that count
+// started driving real ranking: BEGINNER_PRIVATE roles never rotate across
+// a track's generated lessons - see lib/teaching-practice-rotation.ts - so
+// one assistant track with 10 generated lessons produced 10 raw participant
+// rows for the same single membership).
+//
+// Second-round ranking (Stage A - replaces the old hard "bucket_satisfied"
+// exclusion): once every eligible trainee already holds one assignment in a
+// category, the category no longer excludes anyone - it becomes purely a
+// soft ranking signal (categoryCount ascending, see processSlot below),
+// letting a well-spaced second assignment happen instead of leaving the slot
+// as a permanent hole. This is a deliberate reversal of the previous design
+// (which intentionally left a hard "surplus seat" hole once every real
+// bucket target was met, to make real capacity-vs-demand mismatches
+// visible) - the product goal has changed from "show me the exact surplus"
+// to "fill it well when everyone's already had a fair first turn."
 //
 // Hard exclusions (the complete list - nothing else ever hard-blocks a
 // candidate): inactive trainee; group mismatch; already on this same track
 // in another slot; a genuine (fully-known) overlapping fixed-structure time
-// conflict; and, ONLY for a slot whose targetBucket is non-null (a LUNGE
-// slot, or a BEGINNER_PRIVATE rotationOrder-0 slot), already having reached
-// that specific bucket's target - this last rule is what turns a real
-// numeric surplus (e.g. 22 lunge seats for 21 trainees) into exactly the
-// expected number of holes instead of either flooding with holes (if this
-// exclusion were missing entirely) or silently over-assigning everyone via
-// unlimited reuse (if it were softened to a mere tiebreak - verified
-// empirically: a soft/tiebreak-only version of this rule produces 0 holes,
-// not the expected 1, because the surplus seat gets filled via reuse instead
-// of staying empty). Generated-lesson history is NEVER a hard blocker - it
-// only feeds the same buckets as current track membership, both real facts
-// about a real bucket, both subject to the exact same rule above.
+// conflict. That's it - category/bucket satisfaction is no longer a hard
+// exclusion for anything, real or informational.
 
 import {
   computeTeachingPracticeRotation,
@@ -86,12 +106,26 @@ import { parseTimeToMinutes } from "@/lib/teaching-practice-schedule-check";
 export const TEACHING_PRACTICE_SUGGESTION_GROUP_NAMES = ["א", "ב"] as const;
 
 export const TRAINEE_SUGGESTION_TARGET_PER_BUCKET = 1;
-// Total target across both buckets (1 lungeAny + 1 privateGroupAny) - used
-// only for documentation/summary purposes, not read anywhere in this file's
-// own logic (each bucket is checked independently, never as a combined sum).
+// Total target across both REQUIRED buckets (1 lungeAny + 1 privateLead) -
+// used only for documentation/summary purposes, not read anywhere in this
+// file's own logic (each bucket is checked independently, never as a
+// combined sum). privateAssistant is intentionally excluded - it's ranked
+// (see TraineeSuggestionRankingCategory below) but not required capacity, so
+// it has no target of its own.
 export const TRAINEE_SUGGESTION_TOTAL_TARGET = 2;
 
-export type TraineeSuggestionBucket = "lungeAny" | "privateGroupAny";
+// Required-capacity buckets only - these two drive supplyByBucket tallying
+// and the no_suitable_candidate/supply_below_demand warnings. See
+// TraineeSuggestionRankingCategory below for the broader set of categories
+// that affect ranking but never warn.
+export type TraineeSuggestionBucket = "lungeAny" | "privateLead";
+
+// Every category the new categoryCount scoring tier (Stage A) reads/updates
+// - a strict superset of TraineeSuggestionBucket, adding privateAssistant
+// (ranked, but never required - see file header). BEGINNER_GROUP rotations
+// have no ranking category at all (null) - they're informational/derived
+// only.
+export type TraineeSuggestionRankingCategory = TraineeSuggestionBucket | "privateAssistant";
 
 // ---------------------------------------------------------------------------
 // Input shapes - already-fetched, plain data. No Prisma types leak in here.
@@ -168,7 +202,12 @@ export interface ComputeTraineeSuggestionsInput {
 // Typed exclusion reason category, alongside the human-readable `reason`
 // string - lets the engine (and, if useful later, a UI) summarize *why* a
 // hole happened without fragile string matching against `reason` text.
-export type TraineeSuggestionExclusionCategory = "already_on_track" | "bucket_satisfied" | "overlap";
+//
+// Stage A - "bucket_satisfied" is removed: category/bucket satisfaction is
+// no longer a hard exclusion for anyone (see file header) - it's now a soft
+// ranking tier (categoryCount) instead, so it never appears in
+// excludedCandidates at all anymore.
+export type TraineeSuggestionExclusionCategory = "already_on_track" | "overlap";
 
 export interface TraineeSuggestionExcludedCandidate {
   traineeId: string;
@@ -189,12 +228,25 @@ export interface TraineeSuggestionRotationSlot {
   // has no generated lessons yet, an approximation otherwise (see
   // projectRoleForRotationOrder doc comment).
   projectedRole: TeachingPracticeRoleValue;
-  // Which real target bucket this slot counts toward - null for
-  // BEGINNER_PRIVATE rotationOrder 1 and every BEGINNER_GROUP rotationOrder,
-  // which are informational/general-load-balance-only (see bucketNote).
+  // Which REQUIRED-capacity bucket this slot counts toward - null for
+  // BEGINNER_PRIVATE rotationOrder 1 (privateAssistant - ranked, but not
+  // required, see rankingCategory below) and every BEGINNER_GROUP
+  // rotationOrder (fully informational). Drives supplyByBucket tallying and
+  // the no_suitable_candidate/supply_below_demand warnings only.
   targetBucket: TraineeSuggestionBucket | null;
-  // Set only when targetBucket is null, explaining why, so a future UI can
-  // show this to the מנהלת instead of silently treating the slot as unscored.
+  // Stage A - which category the new categoryCount scoring tier used for
+  // this slot - null only for BEGINNER_GROUP rotations. Equal to
+  // targetBucket whenever targetBucket is non-null; additionally
+  // "privateAssistant" for BEGINNER_PRIVATE rotationOrder 1, where
+  // targetBucket is null but ranking still happens.
+  rankingCategory: TraineeSuggestionRankingCategory | null;
+  // Set only when targetBucket is null (BEGINNER_PRIVATE rotationOrder 1, or
+  // any BEGINNER_GROUP rotation), explaining why this slot has no required-
+  // capacity target, so a future UI can show this to the מנהלת instead of
+  // silently treating the slot as unscored. Still set for a
+  // rotationOrder-1/privateAssistant slot even though that slot IS ranked -
+  // the note explains it's ranked separately from the lead target, not that
+  // it's unranked.
   bucketNote: string | null;
   currentTraineeId: string | null;
   currentTraineeName: string | null;
@@ -216,26 +268,33 @@ export interface TraineeSuggestionTrackGroup {
 export interface TraineeBucketSummary {
   traineeId: string;
   traineeName: string;
+  // Required-capacity categories only (lungeAny, privateLead - renamed from
+  // privateGroupAny now that privateAssistant is a separate tracked
+  // category, see file header).
   counts: {
     lungeAny: number;
-    privateGroupAny: number;
+    privateLead: number;
   };
-  // Realized-history counts for roles/slots that never count toward a real
-  // bucket target - always reported so a UI can still show them to the
-  // מנהלת, never used for scoring/exclusion.
+  // Realized-history counts for roles/slots that never count toward a
+  // required-capacity target - always reported so a UI can still show them
+  // to the מנהלת. privateAssistant is the one exception worth calling out:
+  // it lives here for output-shape stability, but (Stage A) IS now used for
+  // scoring/ranking internally - see InternalBucketState's own comment. The
+  // three BEGINNER_GROUP roles remain purely informational/unused by
+  // scoring, as before.
   informational: {
-    // BEGINNER_PRIVATE ASSISTANT_INSTRUCTOR (rotationOrder 1) history.
+    // BEGINNER_PRIVATE ASSISTANT_INSTRUCTOR (rotationOrder 1) history/current
+    // membership - ranked (Stage A), not required capacity.
     privateAssistant: number;
-    // BEGINNER_GROUP LEAD_INSTRUCTOR history - no longer counts toward
-    // privateGroupAny (corrected model), so it moved from a real bucket to
-    // purely informational.
+    // BEGINNER_GROUP LEAD_INSTRUCTOR history - never counts toward any
+    // required or ranked category, purely informational.
     beginnerGroupLead: number;
     beginnerGroupSecond: number;
     evaluator: number;
   };
   targetGaps: {
     lungeAny: number;
-    privateGroupAny: number;
+    privateLead: number;
   };
   // Current fixed-structure track memberships (TeachingPracticeTrackTrainee
   // rows), not lifetime history - distinct from `counts`, which does include
@@ -265,10 +324,14 @@ export interface ComputeTraineeSuggestionsResult {
 }
 
 // ---------------------------------------------------------------------------
-// Role -> bucket/informational mapping (corrected design)
+// Role -> category/informational mapping
 // ---------------------------------------------------------------------------
 
-type BucketOrInformational = TraineeSuggestionBucket | "privateAssistant" | "beginnerGroupLead" | "beginnerGroupSecond" | "evaluator";
+// Stage A - the "real" (ranked) side now includes privateAssistant, not just
+// the two required buckets - see TraineeSuggestionRankingCategory. Only
+// BEGINNER_GROUP's three roles remain purely informational/raw-counted
+// (INFORMATIONAL_KEYS below).
+type BucketOrInformational = TraineeSuggestionRankingCategory | "beginnerGroupLead" | "beginnerGroupSecond" | "evaluator";
 
 const ROLE_TO_BUCKET: Record<
   TeachingPracticeTypeValue,
@@ -279,7 +342,7 @@ const ROLE_TO_BUCKET: Record<
     ASSISTANT_INSTRUCTOR: "lungeAny",
   },
   BEGINNER_PRIVATE: {
-    LEAD_INSTRUCTOR: "privateGroupAny",
+    LEAD_INSTRUCTOR: "privateLead",
     ASSISTANT_INSTRUCTOR: "privateAssistant",
   },
   BEGINNER_GROUP: {
@@ -289,22 +352,35 @@ const ROLE_TO_BUCKET: Record<
   },
 };
 
-const INFORMATIONAL_KEYS = ["privateAssistant", "beginnerGroupLead", "beginnerGroupSecond", "evaluator"] as const;
+// Stage A - privateAssistant moved OUT of this set (was previously raw/
+// undeduplicated, like these three still are) into the same dedup-per-track-
+// membership path as lungeAny/privateLead (see buildBucketStates below) -
+// necessary now that its count drives real ranking: BEGINNER_PRIVATE roles
+// never rotate across a track's generated lessons (see
+// lib/teaching-practice-rotation.ts), so a raw/undeduplicated count would
+// have massively overcounted a single assistant track membership that
+// generated many lesson dates. Only these three BEGINNER_GROUP roles remain
+// purely informational/raw-counted - they never feed ranking at all.
+const INFORMATIONAL_KEYS = ["beginnerGroupLead", "beginnerGroupSecond", "evaluator"] as const;
 type InformationalKey = (typeof INFORMATIONAL_KEYS)[number];
 
 function isInformationalKey(value: BucketOrInformational): value is InformationalKey {
   return (INFORMATIONAL_KEYS as readonly string[]).includes(value);
 }
 
+// Stage A - assistant is now ranked (see categoryCount in processSlot), not
+// purely informational - note text updated accordingly. Still never a
+// required-capacity target (requiredBucket stays null for this slot), so it
+// never creates a "hole" warning.
 const PRIVATE_ASSISTANT_NOTE =
-  "תפקיד עוזר/ת בשיעור פרטני - אינו נספר ליעד privateGroupAny (הנספר רק דרך תפקיד המוביל/ה, רוטציה 0) - שיבוץ לפי איזון עומס כללי בלבד";
+  "תפקיד עוזר/ת בשיעור פרטני - מאוזן בפני עצמו (לא נספר ליעד המוביל/ה, רוטציה 0) - אינו יוצר התרעת \"סלוט חסר\" גם אם לא נמצא/ה מועמד/ת";
 // Stage B - explicitly states the group roster is derived, not directly
 // assignable here (see isTraineeSuggestionSlotSelectable in
 // TeachingPracticeManager.tsx, which now excludes BEGINNER_GROUP slots from
 // the checkbox/apply flow entirely) - this note is the one place that
 // explanation reaches the UI, via slot.bucketNote.
 const BEGINNER_GROUP_NOTE =
-  "שיעור קבוצתי מתחילים - כל תפקידיו הם משניים ואינם נספרים ליעד privateGroupAny (הנספר רק דרך תפקיד המוביל/ה בשיעור פרטני) - שיבוץ לפי איזון עומס כללי בלבד. הצוות בפועל נגזר מהמסלולים הפרטניים המקושרים - לא ניתן להחיל הצעה ישירות כאן, יש לשבץ במסלול הפרטני המתאים";
+  "שיעור קבוצתי מתחילים - כל תפקידיו הם משניים ואינם נספרים לאף יעד (לא ללונג׳, לא לפרטני) - שיבוץ לפי איזון עומס כללי בלבד. הצוות בפועל נגזר מהמסלולים הפרטניים המקושרים - לא ניתן להחיל הצעה ישירות כאן, יש לשבץ במסלול הפרטני המתאים";
 
 // What rotationOrder position `n` would receive on a track's first-ever
 // generated lesson (occurrenceIndex 0). Reuses the real, exported
@@ -331,23 +407,35 @@ function projectRoleForRotationOrder(
   return roles[rotationOrder]?.role ?? roles[roles.length - 1].role;
 }
 
-// Corrected business-capacity model (see file header): LUNGE - every
-// rotation position is a real required place. BEGINNER_PRIVATE - only
-// rotationOrder 0 (lead) is a real required place; rotationOrder 1
-// (assistant) is informational/general-load-only. BEGINNER_GROUP - no
-// rotation position counts toward a real target at all.
-function targetBucketForSlot(
+// Stage A - business-capacity/ranking model (see file header): LUNGE - every
+// rotation position is a real required place, ranked as lungeAny.
+// BEGINNER_PRIVATE - rotationOrder 0 (lead) is a real required place,
+// ranked as privateLead; rotationOrder 1 (assistant) is ranked separately as
+// privateAssistant but never required. BEGINNER_GROUP - no rotation
+// position is ranked or required at all (fully informational/derived).
+//
+// requiredBucket is always either equal to rankingCategory or null - never
+// a category rankingCategory doesn't also cover - so
+// "requiredBucket !== null" is exactly "this slot's category also drives
+// the no_suitable_candidate/supply_below_demand warnings."
+function categorizeSlot(
   practiceType: TeachingPracticeTypeValue,
   rotationOrder: number
-): { bucket: TraineeSuggestionBucket | null; note: string | null } {
-  if (practiceType === "LUNGE") return { bucket: "lungeAny", note: null };
+): {
+  rankingCategory: TraineeSuggestionRankingCategory | null;
+  requiredBucket: TraineeSuggestionBucket | null;
+  note: string | null;
+} {
+  if (practiceType === "LUNGE") {
+    return { rankingCategory: "lungeAny", requiredBucket: "lungeAny", note: null };
+  }
   if (practiceType === "BEGINNER_PRIVATE") {
     return rotationOrder === 0
-      ? { bucket: "privateGroupAny", note: null }
-      : { bucket: null, note: PRIVATE_ASSISTANT_NOTE };
+      ? { rankingCategory: "privateLead", requiredBucket: "privateLead", note: null }
+      : { rankingCategory: "privateAssistant", requiredBucket: null, note: PRIVATE_ASSISTANT_NOTE };
   }
-  // BEGINNER_GROUP - never a required place under the corrected model.
-  return { bucket: null, note: BEGINNER_GROUP_NOTE };
+  // BEGINNER_GROUP - never ranked, never required, under this model.
+  return { rankingCategory: null, requiredBucket: null, note: BEGINNER_GROUP_NOTE };
 }
 
 // ---------------------------------------------------------------------------
@@ -501,8 +589,14 @@ const TRAINEE_SUGGESTION_GOOD_GAP_MINUTES = 60;
 
 interface InternalBucketState {
   lungeAny: number;
-  privateGroupAny: number;
-  privateAssistant: number; // informational, raw realized-row count
+  privateLead: number;
+  // Stage A - now dedup-per-track-membership counted, same as lungeAny/
+  // privateLead (see buildBucketStates below) - despite still being exposed
+  // under TraineeBucketSummary.informational for display, this count is now
+  // ALSO read live by processSlot's categoryCount scoring tier. Not purely
+  // informational/decorative any more, just never a required-capacity
+  // target (see file header).
+  privateAssistant: number;
   beginnerGroupLead: number; // informational, raw realized-row count
   beginnerGroupSecond: number; // informational, raw realized-row count
   evaluator: number; // informational, raw realized-row count
@@ -512,7 +606,7 @@ interface InternalBucketState {
 function newBucketState(): InternalBucketState {
   return {
     lungeAny: 0,
-    privateGroupAny: 0,
+    privateLead: 0,
     privateAssistant: 0,
     beginnerGroupLead: 0,
     beginnerGroupSecond: 0,
@@ -532,14 +626,15 @@ function buildBucketStates(input: ComputeTraineeSuggestionsInput): Map<string, I
     return state;
   };
 
-  // Realized history, deduplicated per (traineeId, trackId) for the 2 real
-  // buckets (one track membership = at most one contribution per bucket,
-  // regardless of how many lessons that track has generated) - see file
-  // header for why this counting unit is the correct one. Ad-hoc lessons
+  // Realized history, deduplicated per (traineeId, trackId) for the 3
+  // ranked categories (one track membership = at most one contribution per
+  // category, regardless of how many lessons that track has generated) -
+  // see file header for why this counting unit is the correct one, and why
+  // privateAssistant needs this too now that it's ranked. Ad-hoc lessons
   // (trackId null) have nothing to deduplicate against, so each contributes
-  // independently. Informational counts are intentionally raw row counts,
-  // never deduplicated - see their field doc.
-  const realizedBucketsByTraineeTrack = new Map<string, Set<TraineeSuggestionBucket>>();
+  // independently. Informational counts (the 3 BEGINNER_GROUP roles) are
+  // intentionally raw row counts, never deduplicated - see their field doc.
+  const realizedBucketsByTraineeTrack = new Map<string, Set<TraineeSuggestionRankingCategory>>();
 
   for (const row of input.participantHistory) {
     const mapped = ROLE_TO_BUCKET[row.practiceType]?.[row.role];
@@ -601,9 +696,12 @@ function toBucketSummary(
     traineeName: trainee.fullName,
     counts: {
       lungeAny: s.lungeAny,
-      privateGroupAny: s.privateGroupAny,
+      privateLead: s.privateLead,
     },
     informational: {
+      // Stage A - privateAssistant lives here for backward-compatible output
+      // shape, but is no longer purely informational internally - see its
+      // own field comment on InternalBucketState above.
       privateAssistant: s.privateAssistant,
       beginnerGroupLead: s.beginnerGroupLead,
       beginnerGroupSecond: s.beginnerGroupSecond,
@@ -611,7 +709,7 @@ function toBucketSummary(
     },
     targetGaps: {
       lungeAny: gap(s.lungeAny),
-      privateGroupAny: gap(s.privateGroupAny),
+      privateLead: gap(s.privateLead),
     },
     totalCurrentFixedStructureAssignments: s.currentTrackIds.size,
   };
@@ -720,9 +818,14 @@ export function computeTeachingPracticeTraineeSuggestions(
   // (bucketStates) and provisionalWindows starts as a mutable copy of real
   // current memberships; both are updated in place immediately after each
   // accepted suggestion, before the next slot is scored.
+  // Stage A - now carries privateAssistant too (indexable by
+  // TraineeSuggestionRankingCategory), not just the two required buckets -
+  // it's read by processSlot's categoryCount tier for any ranked slot,
+  // required or not.
   interface ProvisionalTraineeState {
     lungeAny: number;
-    privateGroupAny: number;
+    privateLead: number;
+    privateAssistant: number;
     totalAssignments: number;
   }
   const provisionalBuckets = new Map<string, ProvisionalTraineeState>();
@@ -730,7 +833,8 @@ export function computeTeachingPracticeTraineeSuggestions(
     const s = bucketStates.get(t.id);
     provisionalBuckets.set(t.id, {
       lungeAny: s?.lungeAny ?? 0,
-      privateGroupAny: s?.privateGroupAny ?? 0,
+      privateLead: s?.privateLead ?? 0,
+      privateAssistant: s?.privateAssistant ?? 0,
       totalAssignments: s?.currentTrackIds.size ?? 0,
     });
   }
@@ -751,25 +855,31 @@ export function computeTeachingPracticeTraineeSuggestions(
   // ---- Build per-track slot rows + suggestions.
   //
   // Two-pass processing (the fix for a real bug found while validating the
-  // corrected model against real data): a targetBucket===null slot
-  // (BEGINNER_PRIVATE rotationOrder 1, any BEGINNER_GROUP rotationOrder)
-  // must NEVER be filled before every real-target slot (LUNGE, BEGINNER_
-  // PRIVATE rotationOrder 0) across the WHOLE group has already had its
-  // chance - otherwise, filling an informational slot early can occupy a
+  // corrected model against real data): a requiredBucket===null slot
+  // (BEGINNER_PRIVATE rotationOrder 1/privateAssistant, any BEGINNER_GROUP
+  // rotationOrder) must NEVER be filled before every required slot (LUNGE,
+  // BEGINNER_PRIVATE rotationOrder 0) across the WHOLE group has already had
+  // its chance - otherwise, filling a non-required slot early can occupy a
   // candidate's time-window and then, via the overlap hard-exclusion, block
   // that same candidate from later winning their genuinely-required
-  // lungeAny/privateGroupAny slot elsewhere, turning a real seat into an
+  // lungeAny/privateLead slot elsewhere, turning a real seat into an
   // artificial hole purely because of processing order. Verified against
   // real group data: without this two-pass split, group א showed 3 required
-  // holes instead of the expected 1 - re-ordering into "all real targets
-  // first, informational slots second" was required to reach the correct
-  // count. Filled (already-assigned) slots are recorded during pass 1
-  // regardless of bucket, since they don't consume a new candidate at all.
+  // holes instead of the expected 1 - re-ordering into "all required slots
+  // first, everything else second" was required to reach the correct count.
+  // Filled (already-assigned) slots are recorded during pass 1 regardless of
+  // category, since they don't consume a new candidate at all. Stage A -
+  // this pass split is keyed on requiredBucket specifically (not
+  // rankingCategory), so privateAssistant slots still run in pass 2, exactly
+  // like before it was promoted to a ranked category - only whether a slot
+  // creates required-hole warnings changed, not this processing order.
   const trackGroups: TraineeSuggestionTrackGroup[] = [];
-  // supply/demand tally per real bucket, group-wide.
+  // supply/demand tally per required bucket, group-wide. privateAssistant is
+  // deliberately never tallied here - it's ranked but not required capacity
+  // (see file header), so it never contributes to supply_below_demand.
   const supplyByBucket: Record<TraineeSuggestionBucket, number> = {
     lungeAny: 0,
-    privateGroupAny: 0,
+    privateLead: 0,
   };
 
   interface TrackMeta {
@@ -804,7 +914,7 @@ export function computeTeachingPracticeTraineeSuggestions(
   function processSlot(meta: TrackMeta, rotationOrder: number): void {
     const { track, traineeIdsOnThisTrack } = meta;
     const projectedRole = projectRoleForRotationOrder(track.practiceType, rotationOrder);
-    const { bucket: targetBucket, note: bucketNote } = targetBucketForSlot(track.practiceType, rotationOrder);
+    const { rankingCategory, requiredBucket, note: bucketNote } = categorizeSlot(track.practiceType, rotationOrder);
     const currentTraineeId = meta.membershipByRotationOrder.get(rotationOrder) ?? null;
 
     if (currentTraineeId) {
@@ -816,7 +926,8 @@ export function computeTeachingPracticeTraineeSuggestions(
         defaultEndTime: track.defaultEndTime,
         rotationOrder,
         projectedRole,
-        targetBucket,
+        targetBucket: requiredBucket,
+        rankingCategory,
         bucketNote,
         currentTraineeId,
         currentTraineeName: traineeName(currentTraineeId),
@@ -828,7 +939,7 @@ export function computeTeachingPracticeTraineeSuggestions(
       return;
     }
 
-    if (targetBucket) supplyByBucket[targetBucket] += 1;
+    if (requiredBucket) supplyByBucket[requiredBucket] += 1;
 
     // ---- Candidate filtering (hard constraints - the complete list) ----
     const excludedCandidates: TraineeSuggestionExcludedCandidate[] = [];
@@ -845,23 +956,13 @@ export function computeTeachingPracticeTraineeSuggestions(
         continue;
       }
 
-      // Only applies to a slot with a real targetBucket (LUNGE, or
-      // BEGINNER_PRIVATE rotationOrder 0) - a BEGINNER_PRIVATE
-      // rotationOrder-1 or BEGINNER_GROUP slot has targetBucket===null and
-      // never hard-excludes on this rule, matching "may still get
-      // general-load-balance suggestions" for those slots.
-      if (targetBucket) {
-        const provisionalState = provisionalBuckets.get(candidate.id);
-        if (provisionalState && provisionalState[targetBucket] >= TRAINEE_SUGGESTION_TARGET_PER_BUCKET) {
-          excludedCandidates.push({
-            traineeId: candidate.id,
-            traineeName: candidate.fullName,
-            reason: `כבר עמד/ה ביעד ${targetBucket} - לא יוצע/תוצע שוב לסלוט מסוג זה`,
-            category: "bucket_satisfied",
-          });
-          continue;
-        }
-      }
+      // Stage A - category/bucket satisfaction is no longer a hard exclusion
+      // for anyone (see file header) - a candidate who already holds one (or
+      // more) assignments in this slot's rankingCategory is still a valid
+      // candidate, just ranked behind anyone with fewer (see the categoryCount
+      // scoring tier below). This is what allows a well-spaced second-round
+      // assignment once everyone has had a fair first turn, instead of
+      // leaving the slot as a permanent hole.
 
       // Checked against provisionalWindows (real memberships + anything
       // already suggested earlier in this run), not just real memberships -
@@ -893,40 +994,44 @@ export function computeTeachingPracticeTraineeSuggestions(
     }
 
     // ---- Scoring - against PROVISIONAL state, not the static starting
-    // summary, so a candidate's deficit/load/spacing already reflects every
-    // suggestion accepted earlier in this run (including every real-target
-    // slot from pass 1, by the time pass 2 runs). For a slot with
-    // targetBucket===null, bucketDeficit is always 0 for everyone - scoring
-    // falls straight through to spacing (then total-load, then name),
-    // exactly the "general-load-balance suggestions" behavior required for
-    // BEGINNER_PRIVATE rotationOrder 1 / BEGINNER_GROUP slots.
+    // summary, so a candidate's category load/spacing/total-load already
+    // reflects every suggestion accepted earlier in this run (including
+    // every required slot from pass 1, by the time pass 2 runs). For a slot
+    // with rankingCategory===null (BEGINNER_GROUP), categoryCount is always
+    // 0 for everyone - scoring falls straight through to spacing (then
+    // total-load, then name).
     //
-    // Stage A (spacing/gap ranking) - bucketDeficit stays the primary tier
-    // (it's what keeps a real required hole from being filled by reuse
-    // before every under-target candidate has had first claim - see the
-    // file header's "surplus seat" verification). Below that, ordering now
-    // prefers the most SPACIOUS candidate (largest nearestGapMinutes) over
-    // the previous same-weekday-clustering signal, which is retired here as
-    // redundant with - and less precise than - the new minute-level gap
-    // score (both existed to answer the same "how crowded would this make
-    // their schedule" question). gapMinutes is computed against
-    // otherWindows (provisionalWindows minus this exact track - never
-    // meaningfully present yet at this point, since the candidate hasn't
-    // been assigned to it, but filtered defensively the same way the
-    // overlap-exclusion loop above does).
+    // Stage A - categoryCount ascending is now the PRIMARY tier (replaces
+    // the old bucketDeficit tier and the hard "bucket_satisfied" exclusion
+    // together): a candidate with fewer existing assignments in this exact
+    // category (lungeAny / privateLead / privateAssistant) always ranks
+    // above one with more, whether that's "0 vs 1" (prefer never-assigned)
+    // or "1 vs 2" (prefer fewer, once everyone has at least one) - a single
+    // ascending sort on the raw count covers both cases in one tier, unlike
+    // the old clamped-at-1 bucketDeficit, which could never distinguish "1
+    // assignment" from "2 assignments" (both clamped to deficit 0). This
+    // directly fixes the reported bad pattern (one trainee suggested as
+    // assistant twice while another was never suggested as assistant at
+    // all) - category fairness now strictly outranks spacing, exactly as
+    // required. Below that, ordering prefers the most SPACIOUS candidate
+    // (largest nearestGapMinutes), then fewer total assignments, then name.
+    // gapMinutes is computed against otherWindows (provisionalWindows minus
+    // this exact track - never meaningfully present yet at this point,
+    // since the candidate hasn't been assigned to it, but filtered
+    // defensively the same way the overlap-exclusion loop above does).
     const scored = candidates
       .map((c) => {
         const state = provisionalBuckets.get(c.id);
-        const bucketDeficit = targetBucket
-          ? Math.max(0, TRAINEE_SUGGESTION_TARGET_PER_BUCKET - (state?.[targetBucket] ?? 0))
-          : 0;
+        const categoryCount = rankingCategory ? (state?.[rankingCategory] ?? 0) : 0;
         const totalAssignments = state?.totalAssignments ?? 0;
         const otherWindows = (provisionalWindows.get(c.id) ?? []).filter((t) => t.id !== track.id);
         const gapMinutes = nearestGapMinutes(track, otherWindows);
-        return { candidate: c, bucketDeficit, totalAssignments, gapMinutes };
+        return { candidate: c, categoryCount, totalAssignments, gapMinutes };
       })
       .sort((a, b) => {
-        if (b.bucketDeficit !== a.bucketDeficit) return b.bucketDeficit - a.bucketDeficit;
+        // Fewer existing assignments in this category = better, so a
+        // smaller a.categoryCount sorts first (negative result).
+        if (a.categoryCount !== b.categoryCount) return a.categoryCount - b.categoryCount;
         // Larger gap = more spacious = better, so a larger b.gapMinutes
         // sorts first (positive result). Guarded by the equality check
         // first so two Infinity gaps (both "no other assignments at all")
@@ -943,35 +1048,31 @@ export function computeTeachingPracticeTraineeSuggestions(
     let suggestedTraineeName: string | null = null;
 
     if (!best) {
-      // Summarize WHY, from the actual exclusion categories tallied above.
-      // For a bucket-counted slot, "bucket_satisfied" holes are the
-      // expected, correct outcome once real business capacity for that
-      // bucket is exhausted (e.g. the one surplus lunge seat) - not a
-      // data problem. For a targetBucket===null slot, a hole here only
-      // ever comes from overlap/already-on-track, never bucket_satisfied
-      // (that exclusion never applies to these slots).
+      // Stage A - summarize WHY, from the actual exclusion categories
+      // tallied above. Now that "bucket_satisfied" no longer exists (see
+      // file header), a hole here can only ever come from overlap and/or
+      // already-on-track exhausting the entire eligible pool - a rarer,
+      // more genuinely "no one is actually available" situation than
+      // before.
       if (eligibleTrainees.length === 0) {
         reason = "אין חניכים פעילים בקבוצה זו";
       } else {
         const categoriesPresent = new Set(excludedCandidates.map((e) => e.category));
-        const onlyBucketSatisfied = categoriesPresent.size === 1 && categoriesPresent.has("bucket_satisfied");
         const onlyOverlap = categoriesPresent.size === 1 && categoriesPresent.has("overlap");
-        if (onlyBucketSatisfied && targetBucket) {
-          reason = `אין הצעה מתאימה - כל החניכים הפעילים בקבוצה כבר עמדו ביעד ${targetBucket} (עודף מקומות אמיתי מעבר להיקף החניכים הפעילים)`;
-        } else if (onlyOverlap) {
+        if (onlyOverlap) {
           reason = "אין הצעה מתאימה - כל החניכים הזמינים חופפים בזמן לסלוט זה";
         } else {
           reason =
-            "אין הצעה מתאימה - כל החניכים הפעילים בקבוצה נפסלו (שילוב של: עמידה ביעד, חפיפת זמנים, ו/או שיבוץ קיים באותו מסלול - ראו פירוט למטה)";
+            "אין הצעה מתאימה - כל החניכים הפעילים בקבוצה נפסלו (חפיפת זמנים ו/או שיבוץ קיים באותו מסלול - ראו פירוט למטה)";
         }
       }
-      // Only a required (bucket-counted) slot's absence of a suggestion is
-      // warning-worthy - an informational/general-load-only slot (targetBucket
-      // null) having no suggestion is expected/acceptable (see file header)
-      // and must not create a required-hole-style warning; its own `reason`
-      // text on the slot itself already explains why, without adding noise to
-      // the warnings list.
-      if (targetBucket) {
+      // Only a required-bucket slot's absence of a suggestion is
+      // warning-worthy - privateAssistant and BEGINNER_GROUP slots
+      // (requiredBucket null) never create a required-hole-style warning,
+      // per the explicit product rule, even when nobody could be suggested;
+      // their own `reason` text on the slot itself already explains why,
+      // without adding noise to the warnings list.
+      if (requiredBucket) {
         warnings.push({
           kind: "no_suitable_candidate",
           message: `אין הצעה מתאימה לסלוט ${describeTrackTime(track)} (${track.practiceType}, מס' ${rotationOrder + 1})`,
@@ -985,11 +1086,11 @@ export function computeTeachingPracticeTraineeSuggestions(
 
       // Fold this suggestion into the provisional state immediately,
       // before the next slot is scored - without this, the same
-      // under-target candidate(s) would keep winning every subsequent
+      // under-count candidate(s) would keep winning every subsequent
       // slot in the run.
       const provisionalState = provisionalBuckets.get(best.candidate.id);
       if (provisionalState) {
-        if (targetBucket) provisionalState[targetBucket] += 1;
+        if (rankingCategory) provisionalState[rankingCategory] += 1;
         provisionalState.totalAssignments += 1;
       }
       const windows = provisionalWindows.get(best.candidate.id) ?? [];
@@ -997,19 +1098,24 @@ export function computeTeachingPracticeTraineeSuggestions(
       provisionalWindows.set(best.candidate.id, windows);
 
       const reasonParts: string[] = [];
-      if (targetBucket) {
-        reasonParts.push(
-          best.bucketDeficit > 0
-            ? `טרם השלים/ה יעד ${targetBucket} (0 מתוך ${TRAINEE_SUGGESTION_TARGET_PER_BUCKET})`
-            : `כבר עמד/ה ביעד ${targetBucket} - נבחר/ה לפי מרווח/איזון עומס`
-        );
+      // Stage A - category-fairness segment, exactly the phrasing
+      // requested: first-time-in-this-category always wins the top phrase;
+      // a second (or later) assignment in the category gets one of two
+      // phrases depending on how good the resulting spacing is. Falls back
+      // to the slot's own bucketNote for a BEGINNER_GROUP slot
+      // (rankingCategory null), unchanged from before.
+      if (rankingCategory) {
+        if (best.categoryCount === 0) {
+          reasonParts.push("עדיפות כי טרם שובץ/ה בתפקיד הזה");
+        } else if (best.gapMinutes === Infinity || best.gapMinutes >= TRAINEE_SUGGESTION_GOOD_GAP_MINUTES) {
+          reasonParts.push("שיבוץ נוסף בתפקיד הזה, עם מרווח טוב");
+        } else {
+          reasonParts.push("כבר שובץ/ה בתפקיד הזה, אבל המרווח מתאים");
+        }
       } else {
         reasonParts.push(bucketNote ?? "שיבוץ לפי מרווח/איזון עומס");
       }
-      // Stage A - spacing phrasing, exactly the three reasons requested:
-      // no other assignment at all (best possible), a good-sized gap, or a
-      // tight/adjacent-but-not-overlapping gap (overlap itself is already a
-      // hard exclusion, never reaches here).
+      // Spacing segment - existing phrasing, unchanged.
       if (best.gapMinutes === Infinity) {
         reasonParts.push("פנוי/ה בשעה הזו - אין שיבוצים קבועים אחרים בכלל");
       } else if (best.gapMinutes >= TRAINEE_SUGGESTION_GOOD_GAP_MINUTES) {
@@ -1029,7 +1135,8 @@ export function computeTeachingPracticeTraineeSuggestions(
       defaultEndTime: track.defaultEndTime,
       rotationOrder,
       projectedRole,
-      targetBucket,
+      targetBucket: requiredBucket,
+      rankingCategory,
       bucketNote,
       currentTraineeId: null,
       currentTraineeName: null,
@@ -1040,19 +1147,21 @@ export function computeTeachingPracticeTraineeSuggestions(
     });
   }
 
-  // Pass 1: every real-target slot (targetBucket !== null), plus every
-  // already-filled slot regardless of bucket (recording an existing
-  // occupant never depends on pass ordering).
+  // Pass 1: every required slot (requiredBucket !== null - LUNGE, BEGINNER_
+  // PRIVATE rotationOrder 0), plus every already-filled slot regardless of
+  // category (recording an existing occupant never depends on pass
+  // ordering).
   for (const meta of trackMetas) {
     for (let rotationOrder = 0; rotationOrder < meta.expectedSize; rotationOrder++) {
       const alreadyFilled = meta.membershipByRotationOrder.has(rotationOrder);
-      const { bucket: targetBucket } = targetBucketForSlot(meta.track.practiceType, rotationOrder);
-      if (alreadyFilled || targetBucket) processSlot(meta, rotationOrder);
+      const { requiredBucket } = categorizeSlot(meta.track.practiceType, rotationOrder);
+      if (alreadyFilled || requiredBucket) processSlot(meta, rotationOrder);
     }
   }
-  // Pass 2: every remaining informational/general-load-only empty slot
-  // (targetBucket === null), now that all real targets have already had
-  // first claim on candidates and provisional state/windows.
+  // Pass 2: every remaining empty slot - privateAssistant (ranked but not
+  // required) and every BEGINNER_GROUP rotation (neither ranked nor
+  // required) - now that all required slots have already had first claim on
+  // candidates and provisional state/windows.
   for (const meta of trackMetas) {
     for (let rotationOrder = 0; rotationOrder < meta.expectedSize; rotationOrder++) {
       if (!meta.slotsByRotationOrder.has(rotationOrder)) processSlot(meta, rotationOrder);
@@ -1072,13 +1181,14 @@ export function computeTeachingPracticeTraineeSuggestions(
   }
 
   // ---- supply_below_demand, computed after all tracks are processed. Only
-  // meaningful for the 2 real buckets - a targetBucket===null slot never
-  // contributes to supplyByBucket and never factors into this warning.
+  // meaningful for the 2 required buckets - privateAssistant (ranked but not
+  // required) never contributes to supplyByBucket and never factors into
+  // this warning, by design.
   const bucketLabels: Record<TraineeSuggestionBucket, string> = {
     lungeAny: "לונג׳",
-    privateGroupAny: "פרטני/קבוצתי",
+    privateLead: "פרטני (מוביל/ה)",
   };
-  for (const bucket of ["lungeAny", "privateGroupAny"] as const) {
+  for (const bucket of ["lungeAny", "privateLead"] as const) {
     const demand = traineeSummaries.filter((s) => s.targetGaps[bucket] > 0).length;
     const supply = supplyByBucket[bucket];
     if (supply < demand) {
