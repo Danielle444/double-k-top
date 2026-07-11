@@ -218,6 +218,30 @@ export interface TraineeSuggestionExcludedCandidate {
   category: TraineeSuggestionExclusionCategory;
 }
 
+// Stage C1 - one row per surviving (non-hard-excluded) candidate for a slot,
+// in the exact order the existing scoring tiers already rank them (see the
+// `scored` array in processSlot below) - this is not a new computation, it's
+// exposing data the engine already builds internally and previously
+// discarded (only scored[0] used to survive into the output). Scoring
+// itself is unchanged; this is purely a "stop throwing away scored[1..]"
+// change so a UI can show the manager every real option, not just the
+// engine's own top pick.
+export interface TraineeSuggestionRankedCandidate {
+  traineeId: string;
+  traineeName: string;
+  categoryCount: number;
+  // Infinity (from nearestGapMinutes - "no other assignments to compare
+  // against") is converted to null here, not left as Infinity, since this
+  // shape crosses the Server Action boundary as JSON - callers must treat
+  // null the same way the pure engine's own Infinity is treated internally
+  // ("best possible spacing"), never as "unknown".
+  gapMinutes: number | null;
+  totalAssignments: number;
+  // True only for rankedCandidates[0] - always matches whether this
+  // candidate is also the slot's own suggestedTraineeId.
+  isRecommended: boolean;
+}
+
 export interface TraineeSuggestionRotationSlot {
   trackId: string;
   practiceType: TeachingPracticeTypeValue;
@@ -256,6 +280,12 @@ export interface TraineeSuggestionRotationSlot {
   suggestedTraineeName: string | null;
   reason: string;
   excludedCandidates: TraineeSuggestionExcludedCandidate[];
+  // Stage C1 - every surviving candidate (see TraineeSuggestionRankedCandidate
+  // above), always empty for an already-filled slot (candidates are never
+  // computed for one - see the early return in processSlot). rankedCandidates[0],
+  // when present, always equals suggestedTraineeId/suggestedTraineeName - both
+  // are kept for backward compatibility, not recomputed independently.
+  rankedCandidates: TraineeSuggestionRankedCandidate[];
 }
 
 export interface TraineeSuggestionTrackGroup {
@@ -951,6 +981,7 @@ export function computeTeachingPracticeTraineeSuggestions(
         suggestedTraineeName: null,
         reason: "הסלוט כבר משובץ - לא מוצעת החלפה אוטומטית",
         excludedCandidates: [],
+        rankedCandidates: [],
       });
       return;
     }
@@ -1070,6 +1101,19 @@ export function computeTeachingPracticeTraineeSuggestions(
         return a.candidate.fullName.localeCompare(b.candidate.fullName, "he");
       });
 
+    // Stage C1 - expose the whole ranked, surviving-candidate list (not just
+    // scored[0]) in the exact order scoring already produced above - no new
+    // sort, no new filtering, just a mapping to the public JSON-safe shape
+    // (Infinity -> null).
+    const rankedCandidates: TraineeSuggestionRankedCandidate[] = scored.map((s, index) => ({
+      traineeId: s.candidate.id,
+      traineeName: s.candidate.fullName,
+      categoryCount: s.categoryCount,
+      gapMinutes: s.gapMinutes === Infinity ? null : s.gapMinutes,
+      totalAssignments: s.totalAssignments,
+      isRecommended: index === 0,
+    }));
+
     const best = scored[0];
     let reason: string;
     let suggestedTraineeId: string | null = null;
@@ -1172,6 +1216,7 @@ export function computeTeachingPracticeTraineeSuggestions(
       suggestedTraineeName,
       reason,
       excludedCandidates,
+      rankedCandidates,
     });
   }
 

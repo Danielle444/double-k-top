@@ -145,6 +145,7 @@ import {
   type TraineeScheduleAssignment,
   type TraineeSuggestionWarning,
   type TraineeSuggestionWarningKind,
+  type TraineeSuggestionRankedCandidate,
 } from "@/lib/teaching-practice-trainee-suggestions";
 
 type Role = "admin" | "instructor";
@@ -207,12 +208,26 @@ function isTraineeSuggestionSlotSelectable(slot: {
   );
 }
 
+// Stage C1 - "hole" is broader than isTraineeSuggestionSlotSelectable above:
+// it also covers a required slot with NO suggestion at all (no eligible
+// candidate survived - see rankedCandidates.length === 0), which still needs
+// to surface in the holes-first section (with its own reason/excluded-list,
+// just no radio group) rather than being silently buried in the filled/info
+// section below. A BEGINNER_GROUP slot is never a "hole" regardless of fill
+// state - its roster is always derived, never directly assignable (same
+// rule as isTraineeSuggestionSlotSelectable), so it always belongs in the
+// filled/info section instead.
+function isHoleSlot(slot: { practiceType: TeachingPracticeTypeValue; currentTraineeId: string | null }): boolean {
+  return slot.practiceType !== "BEGINNER_GROUP" && slot.currentTraineeId == null;
+}
+
 function traineeSuggestionSlotKey(trackId: string, rotationOrder: number): string {
   return `${trackId}:${rotationOrder}`;
 }
 
 // Every selectable key across the whole result, in one Set - used both to
-// preselect on load and as the ceiling "בחר הכל" restores selection to.
+// size the "בחר הכל"/selected-count footer and to build the default/reset
+// choice map below.
 function allSelectableTraineeSuggestionKeys(result: ComputeTraineeSuggestionsResult): Set<string> {
   const keys = new Set<string>();
   for (const track of result.tracks) {
@@ -223,6 +238,26 @@ function allSelectableTraineeSuggestionKeys(result: ComputeTraineeSuggestionsRes
     }
   }
   return keys;
+}
+
+// Stage C1 - per-hole choice map, keyed the same way as
+// allSelectableTraineeSuggestionKeys: every selectable slot defaults to the
+// engine's own recommendation (rankedCandidates[0]/suggestedTraineeId) -
+// this is the "בחר הכל" reset target, and also what a freshly-loaded result
+// starts with, so the existing top recommendation stays the default choice,
+// unchanged from before Stage C1. A slot with no candidates at all is never
+// given an entry here (there's nothing to choose) - its hole card shows the
+// "no suitable candidate" state instead of a radio group.
+function buildDefaultSuggestionChoices(result: ComputeTraineeSuggestionsResult): Map<string, string | null> {
+  const choices = new Map<string, string | null>();
+  for (const track of result.tracks) {
+    for (const slot of track.slots) {
+      if (isTraineeSuggestionSlotSelectable(slot) && slot.suggestedTraineeId) {
+        choices.set(traineeSuggestionSlotKey(track.trackId, slot.rotationOrder), slot.suggestedTraineeId);
+      }
+    }
+  }
+  return choices;
 }
 
 type ScheduleCheckSubTab = "trainees" | "horses";
@@ -1125,31 +1160,38 @@ export function TeachingPracticeManager({
   const [suggestionResult, setSuggestionResult] = useState<ComputeTraineeSuggestionsResult | null>(null);
   const [suggestionGroupName, setSuggestionGroupName] = useState<string | null>(null);
 
-  // Stage 2 - which selectable slots (see isTraineeSuggestionSlotSelectable)
-  // are currently checked for "apply". Always recomputed from scratch (never
-  // merged) whenever a fresh result loads - see loadTraineeSuggestions -
-  // so a stale key can never survive into a newer result.
-  const [selectedSuggestionKeys, setSelectedSuggestionKeys] = useState<Set<string>>(new Set());
+  // Stage C1 - per-hole manual choice: holeKey -> chosen traineeId, or null
+  // for an explicit "דלג" (skip). Replaces the old Set<selected-key> model -
+  // a hole now always has exactly one effective choice (a specific candidate
+  // or skip), not a binary checked/unchecked over a single fixed
+  // recommendation. Always recomputed from scratch (never merged) whenever a
+  // fresh result loads - see loadTraineeSuggestions - so a stale key can
+  // never survive into a newer result. Only ever holds entries for
+  // isTraineeSuggestionSlotSelectable slots (see buildDefaultSuggestionChoices) -
+  // a slot with no candidates at all has nothing to choose, so it's never
+  // given a map entry.
+  const [suggestionChoices, setSuggestionChoices] = useState<Map<string, string | null>>(new Map());
   const [isApplyingSuggestions, startApplySuggestionsTransition] = useTransition();
   const [applySuggestionsError, setApplySuggestionsError] = useState<string | null>(null);
   const [applySuggestionsSuccess, setApplySuggestionsSuccess] = useState<string | null>(null);
 
   // Shared by the initial open and the post-apply refetch (Stage 2) - always
-  // preselects every currently-safe-selectable slot (approved default:
-  // preselect, with נקה בחירה as the opt-out) and clears any apply
-  // error/success banner left over from a previous run, so a refetched
-  // result never shows a stale message from before it loaded.
+  // defaults every hole to the engine's own recommendation (approved
+  // default: preselect the recommendation, with a per-hole "דלג" radio as
+  // the opt-out) and clears any apply error/success banner left over from a
+  // previous run, so a refetched result never shows a stale message from
+  // before it loaded.
   function loadTraineeSuggestions(groupName: string) {
     setSuggestionResult(null);
     setSuggestionError(null);
     setSuggestionLoading(true);
-    setSelectedSuggestionKeys(new Set());
+    setSuggestionChoices(new Map());
     setApplySuggestionsError(null);
     setApplySuggestionsSuccess(null);
     return getTeachingPracticeTraineeSuggestionsForAdmin(groupName)
       .then((data) => {
         setSuggestionResult(data);
-        setSelectedSuggestionKeys(allSelectableTraineeSuggestionKeys(data));
+        setSuggestionChoices(buildDefaultSuggestionChoices(data));
       })
       .catch((err: unknown) => {
         setSuggestionError(err instanceof Error ? err.message : "אירעה שגיאה בטעינת הצעות השיבוץ");
@@ -1165,36 +1207,52 @@ export function TeachingPracticeManager({
     void loadTraineeSuggestions(groupName);
   }
 
+  // "בחר הכל" - reset every hole back to its recommended candidate (the same
+  // state loadTraineeSuggestions starts with), not merely "select every key"
+  // as before - meaningful now that a hole can be manually pointed at a
+  // non-recommended candidate or at "דלג".
   function handleSelectAllTraineeSuggestions() {
     if (!suggestionResult) return;
-    setSelectedSuggestionKeys(allSelectableTraineeSuggestionKeys(suggestionResult));
+    setSuggestionChoices(buildDefaultSuggestionChoices(suggestionResult));
   }
 
+  // "נקה בחירה" - set every hole to explicit skip (null), not an empty map -
+  // an empty map and an all-null map behave identically for apply purposes
+  // (see handleApplySelectedTraineeSuggestions), but keeping every
+  // selectable hole's key present with a null value keeps each hole's own
+  // radio group showing "דלג" as checked, rather than no radio checked at
+  // all.
   function handleClearTraineeSuggestionSelection() {
-    setSelectedSuggestionKeys(new Set());
+    if (!suggestionResult) return;
+    const cleared = new Map<string, string | null>();
+    for (const key of allSelectableTraineeSuggestionKeys(suggestionResult)) cleared.set(key, null);
+    setSuggestionChoices(cleared);
   }
 
-  function toggleTraineeSuggestionSlot(trackId: string, rotationOrder: number, selectable: boolean) {
-    if (!selectable) return; // defensive - callers only ever wire this to a selectable row's checkbox
+  // Wired to each hole card's radio group - traineeId is either a specific
+  // candidate's id or null for the "דלג / לא לשבץ עכשיו" option.
+  function setSuggestionChoice(trackId: string, rotationOrder: number, traineeId: string | null) {
     const key = traineeSuggestionSlotKey(trackId, rotationOrder);
-    setSelectedSuggestionKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+    setSuggestionChoices((prev) => {
+      const next = new Map(prev);
+      next.set(key, traineeId);
       return next;
     });
   }
 
-  // Stage 2 (revised) - apply only the checked rows, sent as explicit
+  // Stage C1 - apply exactly what the manager chose per hole (which may
+  // differ from the engine's own recommendation), sent as explicit
   // {trackId, rotationOrder, traineeId} assignments in one call to
-  // applyTeachingPracticeTrackTraineeSlotSuggestionsAsAdmin - never a full
-  // roster array, so an empty earlier slot can never shift a later selected
-  // slot's rotationOrder. That action is all-or-nothing (validates every
-  // assignment before writing any of them), so there is no partial-success
-  // state to reconcile here: either every selected suggestion was applied,
-  // or none were and the inline error explains why.
+  // applyTeachingPracticeTrackTraineeSlotSuggestionsAsAdmin (unchanged action -
+  // it already accepts any valid trainee choice, not just suggestedTraineeId,
+  // see its own file). Never a full roster array, so an empty earlier slot
+  // can never shift a later chosen slot's rotationOrder. That action is
+  // all-or-nothing (validates every assignment before writing any of them),
+  // so there is no partial-success state to reconcile here: either every
+  // chosen assignment was applied, or none were and the inline error
+  // explains why.
   function handleApplySelectedTraineeSuggestions() {
-    if (!suggestionResult || selectedSuggestionKeys.size === 0) return;
+    if (!suggestionResult) return;
     const groupNameForRefetch = suggestionGroupName;
     setApplySuggestionsError(null);
     setApplySuggestionsSuccess(null);
@@ -1202,33 +1260,37 @@ export function TeachingPracticeManager({
     const assignments: TeachingPracticeTrackTraineeSlotAssignment[] = [];
     for (const track of suggestionResult.tracks) {
       // Stage B - defensive re-check, not just trusting that
-      // selectedSuggestionKeys could never contain a BEGINNER_GROUP key
-      // (isTraineeSuggestionSlotSelectable already keeps its checkbox from
-      // ever rendering, and "בחר הכל" is built from the same predicate) -
-      // this loop is the last client-side point before the write action
-      // runs, so it never forwards a BEGINNER_GROUP slot even if selection
-      // state were somehow tampered with.
+      // suggestionChoices could never contain a BEGINNER_GROUP key
+      // (isTraineeSuggestionSlotSelectable/buildDefaultSuggestionChoices
+      // already keep its radio group from ever rendering) - this loop is the
+      // last client-side point before the write action runs, so it never
+      // forwards a BEGINNER_GROUP slot even if selection state were somehow
+      // tampered with.
       if (track.practiceType === "BEGINNER_GROUP") continue;
       for (const slot of track.slots) {
         const key = traineeSuggestionSlotKey(track.trackId, slot.rotationOrder);
-        if (selectedSuggestionKeys.has(key) && slot.suggestedTraineeId) {
+        const chosenTraineeId = suggestionChoices.get(key);
+        if (chosenTraineeId) {
           assignments.push({
             trackId: track.trackId,
             rotationOrder: slot.rotationOrder,
-            traineeId: slot.suggestedTraineeId,
+            traineeId: chosenTraineeId,
           });
         }
       }
     }
-    if (assignments.length === 0) return;
+    if (assignments.length === 0) {
+      setApplySuggestionsError("לא נבחרו שיבוצים להחלה - כל החורים מסומנים כדלג (לא לשבץ עכשיו)");
+      return;
+    }
 
     startApplySuggestionsTransition(async () => {
       const result = await applyTeachingPracticeTrackTraineeSlotSuggestionsAsAdmin(assignments);
       if (!result.success) {
         setApplySuggestionsError(result.error ?? "אירעה שגיאה בהחלת השיבוצים שנבחרו");
-        // Deliberately not touching suggestionResult/selectedSuggestionKeys
-        // here - nothing was written (all-or-nothing), so the מנהלת keeps
-        // seeing exactly what she selected alongside the inline error.
+        // Deliberately not touching suggestionResult/suggestionChoices here -
+        // nothing was written (all-or-nothing), so the מנהלת keeps seeing
+        // exactly what she chose alongside the inline error.
         return;
       }
 
@@ -5624,8 +5686,9 @@ export function TeachingPracticeManager({
       >
         <div className="flex h-full min-h-0 flex-col gap-3">
           <p className="shrink-0 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-            כל שורה עם הצעה זמינה מסומנת מראש. שום שינוי לא נשמר עד לחיצה על &quot;החל שיבוצים שנבחרו&quot; - ניתן
-            לבטל סימון שורות לפני כן. שיבוצים קיימים אינם ניתנים להחלפה בשלב זה.
+            כל חור מוצג עם כל המועמדים האפשריים - המועמד/ת המומלץ/ת מסומן/ת מראש, וניתן לבחור מועמד/ת אחר/ת או
+            &quot;דלג&quot; לכל חור בנפרד. שום שינוי לא נשמר עד לחיצה על &quot;החל שיבוצים שנבחרו&quot;. שיבוצים קיימים
+            אינם ניתנים להחלפה בשלב זה.
           </p>
 
           {suggestionLoading && <p className="shrink-0 text-sm text-muted-foreground">טוען הצעות שיבוץ...</p>}
@@ -5636,15 +5699,15 @@ export function TeachingPracticeManager({
               <div className="min-h-0 flex-1 overflow-y-auto pl-1">
                 <TeachingPracticeTraineeSuggestionsPreview
                   result={suggestionResult}
-                  selectedKeys={selectedSuggestionKeys}
-                  onToggleSlot={toggleTraineeSuggestionSlot}
+                  choices={suggestionChoices}
+                  onChooseCandidate={setSuggestionChoice}
                   disabled={isApplyingSuggestions}
                 />
               </div>
 
               {(() => {
                 const selectableCount = allSelectableTraineeSuggestionKeys(suggestionResult).size;
-                const selectedCount = selectedSuggestionKeys.size;
+                const selectedCount = Array.from(suggestionChoices.values()).filter((v) => v != null).length;
                 return (
                   <div className="shrink-0 flex flex-col gap-2 border-t border-border pt-3">
                     {applySuggestionsError && <p className="text-sm text-danger">{applySuggestionsError}</p>}
@@ -6135,25 +6198,36 @@ function FixedStructureIssueList({
   );
 }
 
-// Stage 1 (preview) + Stage 2 (selection). Displays the already-fetched
-// Stage 0 result; the only interactive behavior it owns directly is the
-// summary-section collapse toggle below - actual selection state lives in
-// the parent (selectedKeys/onToggleSlot), so this stays a thin, easily
-// re-checked pass-through for the checkbox wiring rather than a second
-// source of truth for what's selected.
+// Stage C1 - decision-support preview. Displays the already-fetched result,
+// holes-first: every empty, applyable-or-not slot (see isHoleSlot) is shown
+// as its own card with a full ranked-candidate radio group before anything
+// else, so the מנהלת never has to scroll past filled/informational rows to
+// find what actually needs a decision. Warnings and the per-חניך summary
+// come next (still visible, just not first), and already-filled/BEGINNER_GROUP
+// slots move into a collapsed-by-default section at the end - same
+// underlying data as before Stage C1, just reordered. Actual choice state
+// lives in the parent (choices/onChooseCandidate), so this stays a thin
+// pass-through for the radio wiring rather than a second source of truth.
 function TeachingPracticeTraineeSuggestionsPreview({
   result,
-  selectedKeys,
-  onToggleSlot,
+  choices,
+  onChooseCandidate,
   disabled,
 }: {
   result: ComputeTraineeSuggestionsResult;
-  selectedKeys: Set<string>;
-  onToggleSlot: (trackId: string, rotationOrder: number, selectable: boolean) => void;
+  choices: Map<string, string | null>;
+  onChooseCandidate: (trackId: string, rotationOrder: number, traineeId: string | null) => void;
   disabled: boolean;
 }) {
   return (
     <div className="flex flex-col gap-4">
+      <TeachingPracticeSuggestionHolesSection
+        result={result}
+        choices={choices}
+        onChooseCandidate={onChooseCandidate}
+        disabled={disabled}
+      />
+
       {result.warnings.length > 0 && (
         <div className="flex flex-col gap-1.5">
           <h3 className="text-sm font-bold text-card-foreground">התראות</h3>
@@ -6165,24 +6239,225 @@ function TeachingPracticeTraineeSuggestionsPreview({
 
       <TeachingPracticeSuggestionSummarySection summaries={result.traineeSummaries} />
 
-      <div className="flex flex-col gap-3">
-        <h3 className="text-sm font-bold text-card-foreground">הצעות שיבוץ למבנה הקבוע</h3>
-        {result.tracks.length === 0 && (
-          <p className="text-sm text-muted-foreground">אין סלוטים קבועים פעילים בקבוצה זו.</p>
-        )}
-        {result.tracks.map((track) => (
-          <TeachingPracticeSuggestionTrackCard
-            key={track.trackId}
-            track={track}
-            selectedKeys={selectedKeys}
-            onToggleSlot={onToggleSlot}
-            disabled={disabled}
-          />
-        ))}
-      </div>
+      <TeachingPracticeSuggestionFilledInfoSection result={result} />
     </div>
   );
 }
+
+// Stage C1 - the primary, holes-first section: every slot where isHoleSlot
+// is true (empty and not BEGINNER_GROUP), flattened across tracks into one
+// list rather than grouped/buried inside per-track cards. Covers both
+// applyable holes (rankedCandidates.length > 0 - full radio group) and
+// required holes with literally no surviving candidate (rankedCandidates
+// empty - shown with the engine's own `reason`/excludedCandidates instead of
+// a radio group), so a real "nobody available" gap is still visible here
+// rather than silently absent.
+function TeachingPracticeSuggestionHolesSection({
+  result,
+  choices,
+  onChooseCandidate,
+  disabled,
+}: {
+  result: ComputeTraineeSuggestionsResult;
+  choices: Map<string, string | null>;
+  onChooseCandidate: (trackId: string, rotationOrder: number, traineeId: string | null) => void;
+  disabled: boolean;
+}) {
+  const holes = result.tracks.flatMap((track) =>
+    track.slots.filter((slot) => isHoleSlot(slot)).map((slot) => ({ track, slot }))
+  );
+  return (
+    <div className="flex flex-col gap-3">
+      <h3 className="text-sm font-bold text-card-foreground">
+        חורים להשלמה{holes.length > 0 && <span className="font-normal text-muted-foreground"> ({holes.length})</span>}
+      </h3>
+      {holes.length === 0 && (
+        <p className="text-sm text-muted-foreground">אין חורים פתוחים במבנה הקבוע של קבוצה זו כרגע.</p>
+      )}
+      {holes.map(({ track, slot }) => (
+        <TeachingPracticeSuggestionHoleCard
+          key={traineeSuggestionSlotKey(track.trackId, slot.rotationOrder)}
+          track={track}
+          slot={slot}
+          choice={choices.get(traineeSuggestionSlotKey(track.trackId, slot.rotationOrder)) ?? null}
+          onChoose={(traineeId) => onChooseCandidate(track.trackId, slot.rotationOrder, traineeId)}
+          disabled={disabled}
+        />
+      ))}
+    </div>
+  );
+}
+
+// One hole = one (track, empty-non-BEGINNER_GROUP-slot) pair. Shows the
+// track/time context, any already-assigned teammates on the same track (for
+// orientation - e.g. seeing who the lead already is when filling the
+// assistant seat), then either a full ranked-candidate radio group (plus an
+// explicit skip option) or, when nobody survived hard exclusion at all, the
+// engine's own reason/excluded-candidates text.
+function TeachingPracticeSuggestionHoleCard({
+  track,
+  slot,
+  choice,
+  onChoose,
+  disabled,
+}: {
+  track: ComputeTraineeSuggestionsResult["tracks"][number];
+  slot: ComputeTraineeSuggestionsResult["tracks"][number]["slots"][number];
+  choice: string | null;
+  onChoose: (traineeId: string | null) => void;
+  disabled: boolean;
+}) {
+  const weekdayLabel =
+    track.weekday != null && track.weekday >= 0 && track.weekday <= 6 ? WEEKDAY_LABELS[track.weekday] : "לא ידוע";
+  const teammates = track.slots.filter((s) => s.rotationOrder !== slot.rotationOrder && s.currentTraineeName);
+  const radioGroupName = `suggestion-hole-${track.trackId}-${slot.rotationOrder}`;
+  const hasCandidates = slot.rankedCandidates.length > 0;
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-semibold text-card-foreground">{PRACTICE_TYPE_LABELS[track.practiceType]}</span>
+        <span className="text-xs text-muted-foreground">
+          מס&apos; {slot.rotationOrder + 1} · {ROLE_LABELS[slot.projectedRole]}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          יום {weekdayLabel} · {track.defaultStartTime}-{track.defaultEndTime}
+        </span>
+      </div>
+      {teammates.length > 0 && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          כבר משובצים באותו מסלול: {teammates.map((t) => `${t.currentTraineeName} (מס' ${t.rotationOrder + 1})`).join("; ")}
+        </p>
+      )}
+      {slot.bucketNote && <p className="mt-0.5 text-xs italic text-muted-foreground">{slot.bucketNote}</p>}
+
+      {!hasCandidates ? (
+        <div className="mt-2 rounded-lg bg-danger-muted px-2 py-1.5 text-xs text-danger">
+          <p>{slot.reason}</p>
+          {slot.excludedCandidates.length > 0 && (
+            <p className="mt-0.5 text-muted-foreground">
+              מועמדים שנפסלו: {slot.excludedCandidates.map((c) => `${c.traineeName} (${c.reason})`).join("; ")}
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-col gap-1.5">
+          {slot.rankedCandidates.map((candidate) => (
+            <TeachingPracticeSuggestionCandidateOption
+              key={candidate.traineeId}
+              candidate={candidate}
+              radioGroupName={radioGroupName}
+              checked={choice === candidate.traineeId}
+              disabled={disabled}
+              onChoose={() => onChoose(candidate.traineeId)}
+            />
+          ))}
+          <label
+            className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs ${
+              disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+            } ${choice === null ? "bg-primary/10 ring-1 ring-primary" : "bg-muted/50"}`}
+          >
+            <input
+              type="radio"
+              name={radioGroupName}
+              checked={choice === null}
+              disabled={disabled}
+              onChange={() => onChoose(null)}
+            />
+            <span className="text-muted-foreground">דלג / לא לשבץ עכשיו</span>
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TeachingPracticeSuggestionCandidateOption({
+  candidate,
+  radioGroupName,
+  checked,
+  disabled,
+  onChoose,
+}: {
+  candidate: TraineeSuggestionRankedCandidate;
+  radioGroupName: string;
+  checked: boolean;
+  disabled: boolean;
+  onChoose: () => void;
+}) {
+  const gapLabel =
+    candidate.gapMinutes == null
+      ? "אין שיבוצים אחרים בכלל"
+      : candidate.gapMinutes >= TRAINEE_SUGGESTION_GOOD_GAP_MINUTES
+        ? `מרווח טוב (${candidate.gapMinutes} דק')`
+        : `צמוד (${candidate.gapMinutes} דק')`;
+  return (
+    <label
+      className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-2 py-1.5 text-xs ${
+        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+      } ${checked ? "bg-primary/10 ring-1 ring-primary" : "bg-muted/50"}`}
+    >
+      <input type="radio" name={radioGroupName} checked={checked} disabled={disabled} onChange={onChoose} />
+      <span className="font-medium text-card-foreground">{candidate.traineeName}</span>
+      {candidate.isRecommended && (
+        <span className="rounded-full bg-success-muted px-2 py-0.5 font-medium text-success">מומלץ</span>
+      )}
+      <span className="text-muted-foreground">בתפקיד זה עד כה: {candidate.categoryCount}</span>
+      <span className="text-muted-foreground">סה&quot;כ שיבוצים קבועים: {candidate.totalAssignments}</span>
+      <span className="text-muted-foreground">{gapLabel}</span>
+    </label>
+  );
+}
+
+// Stage C1 - collapsed-by-default section for everything that isn't a hole:
+// already-filled slots and BEGINNER_GROUP slots (informational/derived,
+// never selectable regardless of fill state - see isHoleSlot). Reuses the
+// pre-Stage-C1 track-card/slot-row rendering unchanged (same content as
+// before), just fed only the non-hole slots and always rendered read-only
+// (selectedKeys/onToggleSlot are inert here - none of these slots are ever
+// selectable, so their radio/checkbox branch never triggers).
+function TeachingPracticeSuggestionFilledInfoSection({ result }: { result: ComputeTraineeSuggestionsResult }) {
+  const [expanded, setExpanded] = useState(false);
+  const tracksWithNonHoleSlots = result.tracks
+    .map((track) => ({ ...track, slots: track.slots.filter((slot) => !isHoleSlot(slot)) }))
+    .filter((track) => track.slots.length > 0);
+  return (
+    <div className="rounded-xl border border-border bg-card p-3">
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        className="flex w-full items-center justify-between text-right text-sm font-bold text-card-foreground"
+      >
+        שיבוצים קיימים ומידע נוסף
+        <span className="text-muted-foreground">{expanded ? "▲" : "▼"}</span>
+      </button>
+      {expanded && (
+        <div className="mt-2 flex flex-col gap-3">
+          {tracksWithNonHoleSlots.length === 0 && (
+            <p className="text-sm text-muted-foreground">אין שיבוצים קיימים או מידע נוסף להצגה.</p>
+          )}
+          {tracksWithNonHoleSlots.map((track) => (
+            <TeachingPracticeSuggestionTrackCard
+              key={track.trackId}
+              track={track}
+              selectedKeys={EMPTY_SUGGESTION_SELECTION}
+              onToggleSlot={NOOP_SUGGESTION_TOGGLE}
+              disabled
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Stable, shared no-op/empty references for TeachingPracticeSuggestionFilledInfoSection
+// above - TeachingPracticeSuggestionTrackCard/TeachingPracticeSuggestionSlotRow
+// are reused there read-only, but none of their slots are ever selectable
+// (see isHoleSlot), so these are never actually read/called - only kept as
+// stable identities so a fresh object/function isn't allocated every render.
+const EMPTY_SUGGESTION_SELECTION: Set<string> = new Set();
+function NOOP_SUGGESTION_TOGGLE(): void {}
 
 function TeachingPracticeSuggestionWarningRow({ warning }: { warning: TraineeSuggestionWarning }) {
   const style = TRAINEE_SUGGESTION_WARNING_STYLE[warning.kind];
@@ -6194,11 +6469,12 @@ function TeachingPracticeSuggestionWarningRow({ warning }: { warning: TraineeSug
   );
 }
 
-// Collapsible per-חניך bucket-count summary - collapsible per the spec
-// ("this can be a second table or collapsible section"), defaulting to
-// expanded since it's core information, not a secondary detail.
+// Collapsible per-חניך bucket-count summary. Stage C1 - defaults to
+// collapsed (was expanded pre-Stage-C1): the holes-first section above is
+// now the primary content, so this secondary detail no longer needs to be
+// open by default.
 function TeachingPracticeSuggestionSummarySection({ summaries }: { summaries: ComputeTraineeSuggestionsResult["traineeSummaries"] }) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   return (
     <div className="rounded-xl border border-border bg-card p-3">
       <button
