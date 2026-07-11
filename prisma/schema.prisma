@@ -578,20 +578,43 @@ model StudentLungeProgressFeedback {
 }
 
 // Manager-entered פרזנטציה progress feedback - a standalone journal per
-// trainee, structurally identical to StudentRidingProgressFeedback/
-// StudentLungeProgressFeedback above (same rationale: not per-session, no
-// relation to ScheduleItem/RidingSlot/TeachingPracticeLesson, multiple rows
-// accumulate over time, both createdByName and updatedByName so an edited
-// row still shows who originally wrote it). Deliberately no horseName field
-// (unlike the other two progress models above) - a presentation has no
-// horse of its own to record. presentationType is free text (e.g. a stage/
-// type label), same "grows from whatever gets typed" convention as
+// trainee, same non-per-session rationale as StudentRidingProgressFeedback/
+// StudentLungeProgressFeedback above (no relation to ScheduleItem/RidingSlot/
+// TeachingPracticeLesson, multiple rows accumulate over time, both
+// createdByName and updatedByName so an edited row still shows who
+// originally wrote it). Deliberately no horseName field - a presentation has
+// no horse of its own to record. presentationType is free text (e.g. a
+// stage/type label), same "grows from whatever gets typed" convention as
 // topic/horseName on the sibling models - never a closed enum.
+//
+// Scoring is deliberately NOT the generic ratingHalfPoints (1.0-5.0)
+// convention every other progress/feedback model in this app uses - it
+// mirrors the actual uploaded presentation exam form instead: a fixed base
+// score of 70 (PRESENTATION_BASE_SCORE), adjusted by exactly 10 fixed
+// scoring categories (see lib/presentation-rubric.ts for the category
+// keys/labels and the -1/-0.5/0/+0.5/+1 per-category scale), against a
+// passing score of 66 (PRESENTATION_PASSING_SCORE). categoryScores is a
+// JSON object keyed by the 10 fixed category keys (never a free-form
+// category name/array, never an arbitrary point value) - kept as JSON
+// rather than 10 separate columns purely so the rubric never needs a
+// migration if the product later renames/relabels a category, but the
+// *set* of keys and *set* of legal values are both fixed and validated
+// server-side (see sanitizeCategoryScores in
+// lib/actions/student-presentation-progress-feedback.ts), not flexible.
+// baseScore is still stored per row (not hardcoded) so a future base-score
+// change never reinterprets historical rows. finalScore is a typed,
+// queryable snapshot - always computed and validated server-side as
+// baseScore + sum(categoryScores), never trusted as client-submitted input.
+// Decimal(5,1) (not Int) because half-point category values make finalScore
+// itself land on a .0/.5 boundary (e.g. 70.5) - see the action layer's own
+// comment on why Decimal was chosen over Float here.
 model StudentPresentationProgressFeedback {
   id               String   @id @default(cuid())
   studentId        String
   date             DateTime @db.Date
-  ratingHalfPoints Int?
+  baseScore        Int      @default(70)
+  categoryScores   Json
+  finalScore       Decimal  @db.Decimal(5, 1)
   feedback         String?
   topic            String?
   presentationType String?

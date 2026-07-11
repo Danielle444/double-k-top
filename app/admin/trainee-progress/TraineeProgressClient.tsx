@@ -31,6 +31,17 @@ import {
   type StudentPresentationProgressFeedbackInput,
   type StudentPresentationProgressFeedbackRow,
 } from "@/lib/actions/student-presentation-progress-feedback";
+import {
+  PRESENTATION_BASE_SCORE,
+  PRESENTATION_CATEGORY_KEYS,
+  PRESENTATION_CATEGORY_LABELS,
+  PRESENTATION_CATEGORY_SCORE_OPTIONS,
+  PRESENTATION_PASSING_SCORE,
+  defaultPresentationCategoryScores,
+  sumPresentationCategoryScores,
+  type PresentationCategoryScoreValue,
+  type PresentationCategoryScores,
+} from "@/lib/presentation-rubric";
 import { RidingHistoryList } from "@/lib/components/RidingHistoryList";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
 import { formatHebrewDate, formatHebrewDateTime, parseDateKey } from "@/lib/dates";
@@ -94,6 +105,7 @@ function TopicSection({
   title,
   subtitle,
   average,
+  badge,
   isOpen,
   onToggle,
   children,
@@ -104,6 +116,14 @@ function TopicSection({
   // that don't pass one, so every other existing TopicSection is unaffected.
   subtitle?: string;
   average: number | null;
+  // Stage P4c (revised) - overrides the default TopicAverageBadge (built
+  // around the 1.0-5.0 half-point rating scale every other section here
+  // uses) for a section whose "average" is on a different scale entirely -
+  // e.g. פרזנטציה's 0-100 finalScore, where TopicAverageBadge's color
+  // thresholds and "ממוצע X.X" wording would be meaningless/misleading.
+  // When omitted, every existing section's behavior (including `average`
+  // itself) is completely unchanged.
+  badge?: React.ReactNode;
   isOpen: boolean;
   onToggle: () => void;
   children: React.ReactNode;
@@ -118,7 +138,7 @@ function TopicSection({
         <div className="flex flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-bold text-card-foreground">{title}</h3>
-            <TopicAverageBadge average={average} />
+            {badge ?? <TopicAverageBadge average={average} />}
           </div>
           {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
         </div>
@@ -1010,26 +1030,30 @@ function LungeProgressFeedbackList({
   );
 }
 
-// Stage P4c - manager-entered פרזנטציה progress feedback
+// Stage P4c (revised again) - manager-entered פרזנטציה progress feedback
 // (StudentPresentationProgressFeedback) - a standalone journal per trainee,
-// structurally cloned from the Stage P4b לונג׳ pattern above, minus
-// horseName (a presentation has no horse of its own) and plus
-// presentationType in its place.
+// same non-per-session pattern as the לונג׳ section above, but scored
+// against the FIXED rubric from the actual uploaded presentation exam form
+// (see lib/presentation-rubric.ts, shared by both this file and the server
+// actions) - exactly 10 fixed categories, each one of -1/-0.5/0/+0.5/+1,
+// never a free-form category name or an arbitrary point value. Never the
+// generic 1.0-5.0 ratingHalfPoints scale every other progress section here
+// uses.
 interface PresentationProgressFormValues {
   date: string;
-  ratingHalfPoints: string;
   feedback: string;
   topic: string;
   presentationType: string;
+  categoryScores: PresentationCategoryScores;
 }
 
 function emptyPresentationProgressForm(): PresentationProgressFormValues {
   return {
     date: todayDateInputValue(),
-    ratingHalfPoints: "",
     feedback: "",
     topic: "",
     presentationType: "",
+    categoryScores: defaultPresentationCategoryScores(),
   };
 }
 
@@ -1038,29 +1062,103 @@ function presentationProgressFormToInput(
 ): StudentPresentationProgressFeedbackInput {
   return {
     date: values.date,
-    ratingHalfPoints: values.ratingHalfPoints ? Number(values.ratingHalfPoints) : null,
     feedback: values.feedback.trim() || null,
     topic: values.topic.trim() || null,
     presentationType: values.presentationType.trim() || null,
+    categoryScores: values.categoryScores,
   };
 }
 
 // Mirrors the server's own "meaningful content" guard (see
 // hasMeaningfulContent in lib/actions/student-presentation-progress-feedback.ts)
 // - checked here too so the admin gets an immediate, specific Hebrew error
-// instead of a round-trip just to learn the same thing.
+// instead of a round-trip just to learn the same thing. An all-zero rubric
+// (every category left at its 0 default) with no text counts as "nothing
+// entered yet," same as the server-side rule.
 function hasPresentationProgressFormContent(values: PresentationProgressFormValues): boolean {
   return (
-    values.ratingHalfPoints !== "" ||
     values.feedback.trim() !== "" ||
     values.topic.trim() !== "" ||
-    values.presentationType.trim() !== ""
+    values.presentationType.trim() !== "" ||
+    PRESENTATION_CATEGORY_KEYS.some((key) => values.categoryScores[key] !== 0)
   );
 }
 
-// Same shape/behavior as LungeProgressEntryForm above (see that component's
-// own comment on why this is duplicated rather than generalized), swapping
-// horseName/instructorName for topic/presentationType.
+// Live, client-side-only preview of PRESENTATION_BASE_SCORE + sum(category
+// values) - purely informational (the authoritative finalScore is always
+// recomputed server-side, never trusted from here).
+function computeFormFinalScorePreview(values: PresentationProgressFormValues): number {
+  return PRESENTATION_BASE_SCORE + sumPresentationCategoryScores(values.categoryScores);
+}
+
+// Formats a per-category value with an explicit sign, e.g. "+1"/"-0.5"/"0" -
+// shared by the rubric editor's <option> labels and every read-only display
+// of a category value (list card breakdown, live preview) so the sign
+// convention never drifts between them.
+function formatCategoryScoreValue(value: PresentationCategoryScoreValue): string {
+  return value > 0 ? `+${value}` : String(value);
+}
+
+// The fixed 10-row rubric table - each row is one of the 10 PRESENTATION_CATEGORY_KEYS
+// (never a free-text category name) with a <select> constrained to exactly
+// PRESENTATION_CATEGORY_SCORE_OPTIONS (never an arbitrary number). Compact
+// list layout (label + select per row) rather than a literal <table> -
+// consistent with every other compact field-list in this file (e.g.
+// PresentationCategoryScoresEditor's predecessor, TaughtStudentsChecklist).
+// Inline chip buttons, not a <select> - deliberately laid out to read like
+// the uploaded exam sheet: one row per fixed category, five tappable score
+// options side by side with the current selection visually filled-in.
+// flex-wrap + flex-1 (rather than a fixed width) lets the 5 buttons shrink
+// to fit a narrow phone screen without needing a horizontal scroll, while
+// still growing to fill the row on a wider tablet/desktop layout.
+function PresentationRubricEditor({
+  scores,
+  onChange,
+}: {
+  scores: PresentationCategoryScores;
+  onChange: (scores: PresentationCategoryScores) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      {PRESENTATION_CATEGORY_KEYS.map((key) => (
+        <div key={key} className="flex flex-col gap-1">
+          <span className="text-sm font-medium text-card-foreground">{PRESENTATION_CATEGORY_LABELS[key]}</span>
+          <div
+            role="radiogroup"
+            aria-label={PRESENTATION_CATEGORY_LABELS[key]}
+            className="flex flex-wrap gap-1.5"
+          >
+            {PRESENTATION_CATEGORY_SCORE_OPTIONS.map((v) => {
+              const isSelected = scores[key] === v;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  role="radio"
+                  aria-checked={isSelected}
+                  onClick={() => onChange({ ...scores, [key]: v })}
+                  className={`min-w-[3rem] flex-1 rounded-lg border px-2 py-2 text-center text-sm font-semibold transition-colors ${
+                    isSelected
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-card text-card-foreground hover:bg-muted"
+                  }`}
+                >
+                  {formatCategoryScoreValue(v)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Same overall shape as LungeProgressEntryForm above (see that component's
+// own comment on why this is duplicated rather than generalized), but the
+// rating <select> is replaced with PresentationRubricEditor (the fixed
+// 10-category rubric) plus a live finalScore preview line - swapping
+// horseName/instructorName for topic/presentationType, same as before.
 function PresentationProgressEntryForm({
   initialValues,
   submitLabel,
@@ -1083,6 +1181,8 @@ function PresentationProgressEntryForm({
   deleteError?: string | null;
 }) {
   const [values, setValues] = useState(initialValues);
+  const categoryTotal = sumPresentationCategoryScores(values.categoryScores);
+  const finalScorePreview = computeFormFinalScorePreview(values);
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3">
@@ -1095,21 +1195,6 @@ function PresentationProgressEntryForm({
             onChange={(e) => setValues((v) => ({ ...v, date: e.target.value }))}
             className="rounded-lg border border-border px-2 py-1.5 text-sm"
           />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-          דירוג
-          <select
-            value={values.ratingHalfPoints}
-            onChange={(e) => setValues((v) => ({ ...v, ratingHalfPoints: e.target.value }))}
-            className="rounded-lg border border-border px-2 py-1.5 text-sm"
-          >
-            <option value="">ללא דירוג</option>
-            {RATING_HALF_POINT_OPTIONS.map((v) => (
-              <option key={v} value={v}>
-                {(v / 2).toFixed(1)}
-              </option>
-            ))}
-          </select>
         </label>
         <label className="flex flex-col gap-1 text-xs text-muted-foreground">
           נושא / כותרת
@@ -1129,6 +1214,18 @@ function PresentationProgressEntryForm({
             className="rounded-lg border border-border px-2 py-1.5 text-sm"
           />
         </label>
+      </div>
+      <div className="flex flex-col gap-1.5 rounded-lg border border-border p-2.5">
+        <p className="text-xs font-medium text-muted-foreground">קטגוריות ניקוד</p>
+        <PresentationRubricEditor
+          scores={values.categoryScores}
+          onChange={(categoryScores) => setValues((v) => ({ ...v, categoryScores }))}
+        />
+        <p className="text-xs text-muted-foreground">
+          ציון סופי: {PRESENTATION_BASE_SCORE} {categoryTotal >= 0 ? "+" : "-"} {Math.abs(categoryTotal)} ={" "}
+          <span className="font-semibold text-card-foreground">{finalScorePreview}</span>
+          {" · "}ציון עובר: {PRESENTATION_PASSING_SCORE}
+        </p>
       </div>
       <label className="flex flex-col gap-1 text-xs text-muted-foreground">
         משוב
@@ -1169,6 +1266,80 @@ function PresentationProgressEntryForm({
         )}
       </div>
     </div>
+  );
+}
+
+// Same 4-tier convention as topicAverageBadgeClasses, but recalibrated to
+// this rubric's actual possible range - baseScore 70 +/- up to 10 (10
+// categories x max 1 point each) means finalScore can only ever land in
+// [60, 80], with 66 as the passing line (PRESENTATION_PASSING_SCORE). The
+// old generic 0-100 thresholds (>=90/>=75/>=60) would never even reach the
+// top tier and would call a failing 61 "warning" alongside a passing 66 -
+// these bands are deliberately built around the passing score instead.
+// Deliberately NOT reusing topicAverageBadgeClasses/formatTopicAverageLabel/
+// averageRatingFromHalfPoints, which are built around the unrelated 1.0-5.0
+// half-point scale.
+function presentationScoreBadgeClasses(score: number): string {
+  if (score >= 76) return "bg-success-muted text-success";
+  if (score >= PRESENTATION_PASSING_SCORE) return "bg-sky-100 text-sky-800";
+  if (score >= PRESENTATION_PASSING_SCORE - 5) return "bg-warning-muted text-warning";
+  return "bg-danger-muted text-danger";
+}
+
+// Small "עובר"/"לא עובר" badge against PRESENTATION_PASSING_SCORE (66) -
+// shown alongside (never instead of) the numeric score badge everywhere a
+// finalScore is displayed, so the pass/fail line is always explicit, not
+// left for the admin to infer from the score's color alone.
+function PresentationPassFailBadge({ finalScore }: { finalScore: number }) {
+  const passed = finalScore >= PRESENTATION_PASSING_SCORE;
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+        passed ? "bg-success-muted text-success" : "bg-danger-muted text-danger"
+      }`}
+    >
+      {passed ? "עובר" : "לא עובר"}
+    </span>
+  );
+}
+
+// Only the non-zero categories are listed (an admin who left most rows at
+// their 0 default doesn't need all 10 spelled out) - fixed category labels
+// via PRESENTATION_CATEGORY_LABELS, never a free-form name.
+function formatCategoryScoresSummary(categoryScores: PresentationCategoryScores): string | null {
+  const parts = PRESENTATION_CATEGORY_KEYS.filter((key) => categoryScores[key] !== 0).map(
+    (key) => `${PRESENTATION_CATEGORY_LABELS[key]}: ${formatCategoryScoreValue(categoryScores[key])}`
+  );
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+// Simple arithmetic mean of finalScore - unlike averageRatingFromHalfPoints,
+// every row always has a finalScore (never null by construction - see
+// StudentPresentationProgressFeedback's own schema comment), so there's no
+// "some rows unrated" filtering to do here.
+function averageFinalScore(scores: number[]): number | null {
+  if (scores.length === 0) return null;
+  return scores.reduce((sum, v) => sum + v, 0) / scores.length;
+}
+
+// .toFixed(1) (not (0)) - finalScore itself can land on a half-point
+// boundary (e.g. 70.5), so an average across several such rows can too.
+function formatScoreAverageLabel(average: number | null): string {
+  if (average == null) return "אין ציונים";
+  return `ציון ממוצע: ${average.toFixed(1)}`;
+}
+
+// The TopicSection `badge` override for "פרזנטציה" (see TopicSection's own
+// comment on why this can't reuse TopicAverageBadge).
+function ScoreAverageBadge({ average }: { average: number | null }) {
+  return (
+    <span
+      className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+        average == null ? "bg-muted text-muted-foreground" : presentationScoreBadgeClasses(average)
+      }`}
+    >
+      {formatScoreAverageLabel(average)}
+    </span>
   );
 }
 
@@ -1216,7 +1387,7 @@ function PresentationProgressFeedbackList({
 
   function handleAdd(values: PresentationProgressFormValues) {
     if (!hasPresentationProgressFormContent(values)) {
-      setAddError("יש להזין דירוג, משוב, נושא או סוג פרזנטציה");
+      setAddError("יש להזין משוב, נושא, סוג פרזנטציה או ניקוד בקטגוריה כלשהי");
       return;
     }
     setAddError(null);
@@ -1236,7 +1407,7 @@ function PresentationProgressFeedbackList({
 
   function handleEdit(id: string, values: PresentationProgressFormValues) {
     if (!hasPresentationProgressFormContent(values)) {
-      setEditError("יש להזין דירוג, משוב, נושא או סוג פרזנטציה");
+      setEditError("יש להזין משוב, נושא, סוג פרזנטציה או ניקוד בקטגוריה כלשהי");
       return;
     }
     setEditError(null);
@@ -1289,10 +1460,10 @@ function PresentationProgressFeedbackList({
               key={row.id}
               initialValues={{
                 date: row.date,
-                ratingHalfPoints: row.ratingHalfPoints != null ? String(row.ratingHalfPoints) : "",
                 feedback: row.feedback ?? "",
                 topic: row.topic ?? "",
                 presentationType: row.presentationType ?? "",
+                categoryScores: row.categoryScores,
               }}
               submitLabel="עדכון"
               pending={isEditPending}
@@ -1312,15 +1483,16 @@ function PresentationProgressFeedbackList({
                 <span className="font-semibold text-card-foreground">
                   {formatHebrewDate(parseDateKey(row.date))}
                 </span>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                    row.ratingHalfPoints != null
-                      ? "bg-success-muted text-success"
-                      : "bg-muted text-muted-foreground"
-                  }`}
-                >
-                  {row.ratingHalfPoints != null ? `דירוג: ${row.ratingHalfPoints / 2}` : "אין דירוג"}
-                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${presentationScoreBadgeClasses(
+                      row.finalScore
+                    )}`}
+                  >
+                    ציון: {row.finalScore}
+                  </span>
+                  <PresentationPassFailBadge finalScore={row.finalScore} />
+                </div>
               </div>
               {row.feedback && <p className="mb-1 text-sm text-card-foreground">{row.feedback}</p>}
               {(row.topic || row.presentationType) && (
@@ -1328,6 +1500,11 @@ function PresentationProgressFeedbackList({
                   {row.topic ? `נושא: ${row.topic}` : ""}
                   {row.topic && row.presentationType ? " · " : ""}
                   {row.presentationType ? `סוג: ${row.presentationType}` : ""}
+                </p>
+              )}
+              {formatCategoryScoresSummary(row.categoryScores) && (
+                <p className="mb-1 text-xs text-muted-foreground">
+                  ציון בסיס: {row.baseScore} · {formatCategoryScoresSummary(row.categoryScores)}
                 </p>
               )}
               <p className="text-xs text-muted-foreground">
@@ -1404,7 +1581,20 @@ interface CombinedTimelineItem {
   date: string;
   time: string;
   title: string;
+  // The 2-10 half-point rating every source EXCEPT presentationProgress
+  // uses - always null for a presentationProgress item (see presentationScore
+  // below instead).
   ratingHalfPoints: number | null;
+  // Stage P4c (revised) - presentationProgress's own 0-100 finalScore,
+  // fundamentally a different scale from ratingHalfPoints above, so it's a
+  // separate field rather than overloading ratingHalfPoints with a second
+  // meaning. Optional (not just nullable) so every OTHER builder function
+  // (buildRidingTimelineItems, buildTeachingPracticeTimelineItems,
+  // buildRidingProgressTimelineItems, buildLungeProgressTimelineItems) can
+  // stay completely untouched - they simply never set it, which
+  // CombinedTimelineList's badge logic treats identically to an explicit
+  // null (fall back to the ratingHalfPoints badge).
+  presentationScore?: number | null;
   text: string | null;
   updatedByName: string | null;
   updatedAt: string;
@@ -1522,9 +1712,13 @@ function buildLungeProgressTimelineItems(rows: StudentLungeProgressFeedbackRow[]
   });
 }
 
-// Stage P4c - same "no time-of-day field" shape as buildRidingProgressTimelineItems/
-// buildLungeProgressTimelineItems above (a פרזנטציה entry isn't tied to any
-// scheduled slot either), contextParts built from topic/presentationType.
+// Stage P4c (revised) - same "no time-of-day field" shape as
+// buildRidingProgressTimelineItems/buildLungeProgressTimelineItems above (a
+// פרזנטציה entry isn't tied to any scheduled slot either). ratingHalfPoints
+// is always null here (this source was never on that scale); presentationScore
+// carries the 0-100 finalScore instead - see CombinedTimelineItem's own
+// comment. contextParts include the category breakdown when present, same
+// wording as formatCategoryScoresSummary in the section's own display card.
 function buildPresentationProgressTimelineItems(
   rows: StudentPresentationProgressFeedbackRow[]
 ): CombinedTimelineItem[] {
@@ -1532,13 +1726,16 @@ function buildPresentationProgressTimelineItems(
     const contextParts: string[] = [];
     if (row.topic) contextParts.push(`נושא: ${row.topic}`);
     if (row.presentationType) contextParts.push(`סוג: ${row.presentationType}`);
+    const categorySummary = formatCategoryScoresSummary(row.categoryScores);
+    if (categorySummary) contextParts.push(`ציון בסיס: ${row.baseScore} · ${categorySummary}`);
     return {
       key: `presentation-progress-${row.id}`,
       source: "presentationProgress",
       date: row.date,
       time: "",
       title: "פרזנטציה",
-      ratingHalfPoints: row.ratingHalfPoints,
+      ratingHalfPoints: null,
+      presentationScore: row.finalScore,
       text: row.feedback,
       updatedByName: row.updatedByName,
       updatedAt: row.updatedAt,
@@ -1603,14 +1800,24 @@ function CombinedTimelineList({ items }: { items: CombinedTimelineItem[] }) {
                 {formatHebrewDate(parseDateKey(item.date))} · {item.time}
               </span>
             </div>
+            {/* Stage P4c (revised) - presentationScore (0-100) is checked
+                first and uses its own score-scale color classes; every
+                other source never sets it, so this falls through to the
+                original ratingHalfPoints (2-10 half-point) badge unchanged. */}
             <span
               className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                item.ratingHalfPoints != null
+                item.presentationScore != null
+                  ? presentationScoreBadgeClasses(item.presentationScore)
+                  : item.ratingHalfPoints != null
                   ? "bg-success-muted text-success"
                   : "bg-muted text-muted-foreground"
               }`}
             >
-              {item.ratingHalfPoints != null ? `דירוג: ${item.ratingHalfPoints / 2}` : "אין דירוג"}
+              {item.presentationScore != null
+                ? `ציון: ${item.presentationScore}`
+                : item.ratingHalfPoints != null
+                ? `דירוג: ${item.ratingHalfPoints / 2}`
+                : "אין דירוג"}
             </span>
           </div>
           <p className="mb-1 text-base font-bold text-card-foreground">{item.title}</p>
@@ -1879,13 +2086,13 @@ export function TraineeProgressClient({
     [lungeProgressRows]
   );
 
-  // Stage P4c - the standalone "פרזנטציה" TopicSection's own average, from
-  // StudentPresentationProgressFeedback rows only.
-  const presentationProgressAverageRating = useMemo(
-    () =>
-      presentationProgressRows
-        ? averageRatingFromHalfPoints(presentationProgressRows.map((r) => r.ratingHalfPoints))
-        : null,
+  // Stage P4c (revised) - the standalone "פרזנטציה" TopicSection's own
+  // average, from StudentPresentationProgressFeedback rows only - the mean
+  // of finalScore (0-100), via averageFinalScore, never
+  // averageRatingFromHalfPoints (built around the unrelated 1.0-5.0
+  // half-point scale - see ScoreAverageBadge's own comment).
+  const presentationScoreAverageRating = useMemo(
+    () => (presentationProgressRows ? averageFinalScore(presentationProgressRows.map((r) => r.finalScore)) : null),
     [presentationProgressRows]
   );
 
@@ -1968,7 +2175,17 @@ export function TraineeProgressClient({
   // are both counted, each exactly once, never double-counted against each
   // other.
   //
-  // Stage P4c - presentationProgressRows added the same way.
+  // Stage P4c (revised) - presentationProgressRows is intentionally
+  // EXCLUDED from the numeric average below (unlike every other source
+  // added so far): finalScore is a 0-100 grading score, not a 1.0-5.0
+  // half-point rating, and averaging it together with the half-point
+  // sources here would produce a meaningless combined number (e.g. a
+  // finalScore of 82 would swamp a true half-point average of ~4). Still
+  // included in the null-guard (so "כל המשובים" doesn't render before this
+  // source has finished loading) and still fully present in
+  // combinedTimelineItems above - just not folded into this one shared
+  // average. פרזנטציה's own score average has its own badge
+  // (presentationScoreAverageRating / ScoreAverageBadge) instead.
   const combinedAverageRating = useMemo(() => {
     if (
       ridingProgressRows === null ||
@@ -1981,7 +2198,6 @@ export function TraineeProgressClient({
     return averageRatingFromHalfPoints([
       ...ridingProgressRows.map((r) => r.ratingHalfPoints),
       ...lungeProgressRows.map((r) => r.ratingHalfPoints),
-      ...presentationProgressRows.map((r) => r.ratingHalfPoints),
       ...ridingRows.map((r) => r.ratingHalfPoints),
       ...teachingPracticeRows.map((r) => r.ratingHalfPoints),
     ]);
@@ -2154,8 +2370,9 @@ export function TraineeProgressClient({
               concept to disambiguate from. */}
           <TopicSection
             title="פרזנטציה"
-            subtitle="משובי פרזנטציה להזנה ידנית על ידי המנהלת."
-            average={presentationProgressAverageRating}
+            subtitle="משובי פרזנטציה להזנה ידנית על ידי המנהלת. ציון בסיס 70 + קטגוריות ניקוד."
+            average={null}
+            badge={<ScoreAverageBadge average={presentationScoreAverageRating} />}
             isOpen={isPresentationProgressOpen}
             onToggle={() => setIsPresentationProgressOpen((v) => !v)}
           >
