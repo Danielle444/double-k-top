@@ -13,6 +13,7 @@ import type { ParentSignatureFormContent, ParentSignatureFormTypeValue } from "@
 import type { ActionResult } from "@/lib/actions/students";
 import {
   buildParentSignatureChildStatus,
+  sortParentSignatureChildStatusRows,
   type ParentSignatureAssignmentContext,
   type ParentSignatureChildStatusRow,
 } from "@/lib/parent-signatures/status";
@@ -136,14 +137,14 @@ async function loadParentSignatureStatusInternal(): Promise<ParentSignatureStatu
     }
   }
 
-  const children = Array.from(byChild.values())
-    .map((child) =>
+  const children = sortParentSignatureChildStatusRows(
+    Array.from(byChild.values()).map((child) =>
       buildParentSignatureChildStatus({
         ...child,
         activeSignedForms: signedByChild.get(child.childId) ?? [],
       })
     )
-    .sort((a, b) => a.childName.localeCompare(b.childName, "he"));
+  );
 
   return { courseCycle, children };
 }

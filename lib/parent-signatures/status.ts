@@ -181,3 +181,52 @@ export function buildParentSignatureChildStatus(
     teachingPracticeContexts: buildTeachingPracticeContexts(input.assignments),
   };
 }
+
+// The single earliest (date, startTime) pair across every one of a child's
+// teachingPracticeContexts entries (a child can have both a LUNGE and a
+// beginner context - the earlier of the two is what should drive the sort),
+// as a lexically-sortable "YYYY-MM-DDTHH:MM" string, or null if none of the
+// child's contexts have a dated lesson yet.
+function earliestContextSortKey(contexts: ParentSignatureTeachingPracticeContext[]): string | null {
+  let earliest: string | null = null;
+  for (const ctx of contexts) {
+    if (!ctx.firstLessonDate) continue;
+    const key = `${ctx.firstLessonDate}T${ctx.firstLessonStartTime ?? "00:00"}`;
+    if (earliest === null || key < earliest) earliest = key;
+  }
+  return earliest;
+}
+
+// Status-list display order - not the array-building order above, so it's
+// a separate exported step the caller (lib/actions/parent-signatures.ts)
+// applies after mapping every child through buildParentSignatureChildStatus.
+// Ranch-tablet-friendly ordering: work through everyone who still needs a
+// signature (earliest-scheduled first) before ever reaching someone who's
+// already fully done.
+//
+// 1. Not-fully-cleared children before fully-cleared children (isCleared -
+//    already accounts for however many forms a given child actually needs;
+//    a 3-form child only counts as cleared once all 3 are signed, not a
+//    hardcoded 2).
+// 2. Within each of those two groups: children with a known earliest lesson
+//    date/time sort before children with none, then by that date/time
+//    ascending.
+// 3. Final tie-breaker: child name, Hebrew locale order.
+export function sortParentSignatureChildStatusRows(
+  rows: ParentSignatureChildStatusRow[]
+): ParentSignatureChildStatusRow[] {
+  return [...rows].sort((a, b) => {
+    if (a.isCleared !== b.isCleared) return a.isCleared ? 1 : -1;
+
+    const aKey = earliestContextSortKey(a.teachingPracticeContexts);
+    const bKey = earliestContextSortKey(b.teachingPracticeContexts);
+    if (aKey !== null && bKey !== null) {
+      if (aKey !== bKey) return aKey < bKey ? -1 : 1;
+    } else if (aKey !== bKey) {
+      // Exactly one of the two has a dated context - that one sorts first.
+      return aKey !== null ? -1 : 1;
+    }
+
+    return a.childName.localeCompare(b.childName, "he");
+  });
+}
