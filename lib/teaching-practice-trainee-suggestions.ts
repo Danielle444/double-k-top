@@ -954,46 +954,32 @@ export function computeTeachingPracticeTraineeSuggestions(
     };
   });
 
-  // processSlot handles one (track, rotationOrder) - shared by both passes
-  // below so the candidate-filtering/scoring/reason logic is never
-  // duplicated between them.
-  function processSlot(meta: TrackMeta, rotationOrder: number): void {
-    const { track, traineeIdsOnThisTrack } = meta;
-    const projectedRole = projectRoleForRotationOrder(track.practiceType, rotationOrder);
-    const { rankingCategory, requiredBucket, note: bucketNote } = categorizeSlot(track.practiceType, rotationOrder);
-    const currentTraineeId = meta.membershipByRotationOrder.get(rotationOrder) ?? null;
+  // Stage C2a - result of the hard-exclusion candidate filter, extracted out
+  // of processSlot (see filterEligibleCandidates below) so the most-
+  // constrained-first scheduler can evaluate "how many candidates currently
+  // survive for this slot" without committing anything.
+  interface CandidateFilterResult {
+    candidates: TraineeSuggestionInputTrainee[];
+    excludedCandidates: TraineeSuggestionExcludedCandidate[];
+  }
 
-    if (currentTraineeId) {
-      meta.slotsByRotationOrder.set(rotationOrder, {
-        trackId: track.id,
-        practiceType: track.practiceType,
-        weekday: track.weekday,
-        defaultStartTime: track.defaultStartTime,
-        defaultEndTime: track.defaultEndTime,
-        rotationOrder,
-        projectedRole,
-        targetBucket: requiredBucket,
-        rankingCategory,
-        bucketNote,
-        currentTraineeId,
-        currentTraineeName: traineeName(currentTraineeId),
-        suggestedTraineeId: null,
-        suggestedTraineeName: null,
-        reason: "הסלוט כבר משובץ - לא מוצעת החלפה אוטומטית",
-        excludedCandidates: [],
-        rankedCandidates: [],
-      });
-      return;
-    }
-
-    if (requiredBucket) supplyByBucket[requiredBucket] += 1;
-
-    // ---- Candidate filtering (hard constraints - the complete list) ----
+  // Stage C2a - the complete hard-exclusion filter (already_on_track, then
+  // overlap against provisionalWindows), unchanged from what used to live
+  // inline in processSlot - now shared by both the scheduler's read-only
+  // probing (runMostConstrainedFirst below) and processSlot's real,
+  // committing run, so there is exactly one implementation of "who's
+  // eligible right now," never two that could drift apart. Deliberately
+  // keyed on (meta, track) only, not rotationOrder - hard exclusion has
+  // never depended on which rotationOrder/category a slot is (only
+  // categoryCount scoring does, inside processSlot itself), so the exact
+  // same result is valid for every still-empty rotationOrder on this track
+  // at this moment in the run.
+  function filterEligibleCandidates(meta: TrackMeta, track: TraineeSuggestionInputTrack): CandidateFilterResult {
     const excludedCandidates: TraineeSuggestionExcludedCandidate[] = [];
     const candidates: TraineeSuggestionInputTrainee[] = [];
 
     for (const candidate of eligibleTrainees) {
-      if (traineeIdsOnThisTrack.has(candidate.id)) {
+      if (meta.traineeIdsOnThisTrack.has(candidate.id)) {
         excludedCandidates.push({
           traineeId: candidate.id,
           traineeName: candidate.fullName,
@@ -1002,14 +988,6 @@ export function computeTeachingPracticeTraineeSuggestions(
         });
         continue;
       }
-
-      // Stage A - category/bucket satisfaction is no longer a hard exclusion
-      // for anyone (see file header) - a candidate who already holds one (or
-      // more) assignments in this slot's rankingCategory is still a valid
-      // candidate, just ranked behind anyone with fewer (see the categoryCount
-      // scoring tier below). This is what allows a well-spaced second-round
-      // assignment once everyone has had a fair first turn, instead of
-      // leaving the slot as a permanent hole.
 
       // Checked against provisionalWindows (real memberships + anything
       // already suggested earlier in this run), not just real memberships -
@@ -1044,6 +1022,62 @@ export function computeTeachingPracticeTraineeSuggestions(
 
       candidates.push(candidate);
     }
+
+    return { candidates, excludedCandidates };
+  }
+
+  // processSlot handles one (track, rotationOrder) - shared by both passes
+  // below so the candidate-filtering/scoring/reason logic is never
+  // duplicated between them. Stage C2a - accepts an optional precomputed
+  // candidate filter (from the most-constrained-first scheduler's own probe
+  // of this exact slot, taken immediately before calling processSlot, with
+  // no other slot processed/committed in between) so the filter is never
+  // computed twice for the slot that's actually chosen; falls back to
+  // computing it fresh when called without one (the already-filled short-
+  // circuit below never needs it at all).
+  function processSlot(meta: TrackMeta, rotationOrder: number, precomputedFilter?: CandidateFilterResult): void {
+    const { track } = meta;
+    const projectedRole = projectRoleForRotationOrder(track.practiceType, rotationOrder);
+    const { rankingCategory, requiredBucket, note: bucketNote } = categorizeSlot(track.practiceType, rotationOrder);
+    const currentTraineeId = meta.membershipByRotationOrder.get(rotationOrder) ?? null;
+
+    if (currentTraineeId) {
+      meta.slotsByRotationOrder.set(rotationOrder, {
+        trackId: track.id,
+        practiceType: track.practiceType,
+        weekday: track.weekday,
+        defaultStartTime: track.defaultStartTime,
+        defaultEndTime: track.defaultEndTime,
+        rotationOrder,
+        projectedRole,
+        targetBucket: requiredBucket,
+        rankingCategory,
+        bucketNote,
+        currentTraineeId,
+        currentTraineeName: traineeName(currentTraineeId),
+        suggestedTraineeId: null,
+        suggestedTraineeName: null,
+        reason: "הסלוט כבר משובץ - לא מוצעת החלפה אוטומטית",
+        excludedCandidates: [],
+        rankedCandidates: [],
+      });
+      return;
+    }
+
+    if (requiredBucket) supplyByBucket[requiredBucket] += 1;
+
+    // ---- Candidate filtering (hard constraints - the complete list) ----
+    // Stage A - category/bucket satisfaction is no longer a hard exclusion
+    // for anyone (see file header) - a candidate who already holds one (or
+    // more) assignments in this slot's rankingCategory is still a valid
+    // candidate, just ranked behind anyone with fewer (see the categoryCount
+    // scoring tier below). This is what allows a well-spaced second-round
+    // assignment once everyone has had a fair first turn, instead of
+    // leaving the slot as a permanent hole. Stage C2a - the actual filtering
+    // now lives in filterEligibleCandidates above; precomputedFilter is
+    // reused when the most-constrained-first scheduler already evaluated
+    // this exact slot immediately before choosing to commit it.
+    const { candidates, excludedCandidates } = precomputedFilter ?? filterEligibleCandidates(meta, track);
 
     // ---- Scoring - against PROVISIONAL state, not the static starting
     // summary, so a candidate's category load/spacing/total-load already
@@ -1154,7 +1188,7 @@ export function computeTeachingPracticeTraineeSuggestions(
     } else {
       suggestedTraineeId = best.candidate.id;
       suggestedTraineeName = best.candidate.fullName;
-      traineeIdsOnThisTrack.add(best.candidate.id);
+      meta.traineeIdsOnThisTrack.add(best.candidate.id);
 
       // Fold this suggestion into the provisional state immediately,
       // before the next slot is scored - without this, the same
@@ -1220,26 +1254,80 @@ export function computeTeachingPracticeTraineeSuggestions(
     });
   }
 
-  // Pass 1: every required slot (requiredBucket !== null - LUNGE, BEGINNER_
-  // PRIVATE rotationOrder 0), plus every already-filled slot regardless of
-  // category (recording an existing occupant never depends on pass
-  // ordering).
+  // Stage C2a - most-constrained-first scheduler for one pass's still-open
+  // slots: repeatedly re-evaluates every remaining slot's LIVE eligible-
+  // candidate count (via filterEligibleCandidates, against whatever
+  // provisional state the run has reached so far - never a stale snapshot
+  // from before this pass started) and commits the most-constrained slot
+  // next, so a low-constraint hole can never "use up" a candidate who was
+  // one of very few options for a still-open, harder-to-fill hole elsewhere
+  // in the same pass. `pendingSlots` is built by the caller in the original
+  // track/rotationOrder order (same order raw processing used before Stage
+  // C2a); `remaining` preserves that relative order across splices, and the
+  // scan below only ever replaces the current pick on a STRICTLY smaller
+  // count (never on a tie) - so among equally-constrained slots, the one
+  // that appears earliest in original track/slot order always wins, giving
+  // a stable, reproducible tie-break with no extra bookkeeping needed.
+  function runMostConstrainedFirst(pendingSlots: { meta: TrackMeta; rotationOrder: number }[]): void {
+    const remaining = pendingSlots.slice();
+    while (remaining.length > 0) {
+      let winnerIndex = 0;
+      let winnerFilter = filterEligibleCandidates(remaining[0].meta, remaining[0].meta.track);
+      for (let i = 1; i < remaining.length; i++) {
+        const filter = filterEligibleCandidates(remaining[i].meta, remaining[i].meta.track);
+        if (filter.candidates.length < winnerFilter.candidates.length) {
+          winnerIndex = i;
+          winnerFilter = filter;
+        }
+      }
+      const { meta, rotationOrder } = remaining[winnerIndex];
+      remaining.splice(winnerIndex, 1);
+      processSlot(meta, rotationOrder, winnerFilter);
+    }
+  }
+
+  // Pass 1: every already-filled slot is recorded immediately, in original
+  // order - filled slots never consume a candidate or touch provisional
+  // state, so their processing order has never mattered (unchanged from
+  // before Stage C2a). Every required, still-EMPTY slot (requiredBucket !==
+  // null - LUNGE both seats, BEGINNER_PRIVATE rotationOrder 0) is instead
+  // collected and handed to the most-constrained-first scheduler, so within
+  // this pass the hardest-to-fill required hole is always resolved before an
+  // easier one can take a candidate it didn't strictly need. This preserves
+  // the original two-pass boundary exactly - every required slot (however
+  // it's ordered internally) still fully resolves before any non-required
+  // slot is even considered - which is what prevents an assistant/BEGINNER_
+  // GROUP slot from ever blocking a required one (see the two-pass rationale
+  // above).
+  const pass1Pending: { meta: TrackMeta; rotationOrder: number }[] = [];
   for (const meta of trackMetas) {
     for (let rotationOrder = 0; rotationOrder < meta.expectedSize; rotationOrder++) {
       const alreadyFilled = meta.membershipByRotationOrder.has(rotationOrder);
       const { requiredBucket } = categorizeSlot(meta.track.practiceType, rotationOrder);
-      if (alreadyFilled || requiredBucket) processSlot(meta, rotationOrder);
+      if (alreadyFilled) {
+        processSlot(meta, rotationOrder);
+      } else if (requiredBucket) {
+        pass1Pending.push({ meta, rotationOrder });
+      }
     }
   }
+  runMostConstrainedFirst(pass1Pending);
+
   // Pass 2: every remaining empty slot - privateAssistant (ranked but not
   // required) and every BEGINNER_GROUP rotation (neither ranked nor
-  // required) - now that all required slots have already had first claim on
-  // candidates and provisional state/windows.
+  // required) - now that every pass-1 slot (required + already-filled) has
+  // already committed/consumed provisional state, exactly as before Stage
+  // C2a. Most-constrained-first is applied within this pass too, on the
+  // same principle: a privateAssistant hole with only one real option is
+  // resolved before one with several, instead of raw track order deciding
+  // who "gets there first."
+  const pass2Pending: { meta: TrackMeta; rotationOrder: number }[] = [];
   for (const meta of trackMetas) {
     for (let rotationOrder = 0; rotationOrder < meta.expectedSize; rotationOrder++) {
-      if (!meta.slotsByRotationOrder.has(rotationOrder)) processSlot(meta, rotationOrder);
+      if (!meta.slotsByRotationOrder.has(rotationOrder)) pass2Pending.push({ meta, rotationOrder });
     }
   }
+  runMostConstrainedFirst(pass2Pending);
 
   for (const meta of trackMetas) {
     const slots = Array.from({ length: meta.expectedSize }, (_, i) => meta.slotsByRotationOrder.get(i)!);
