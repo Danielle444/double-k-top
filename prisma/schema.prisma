@@ -297,6 +297,17 @@ model Instructor {
   teachingPracticeLessonsResponsible   TeachingPracticeLesson[]
   teachingPracticeSignedFormsCollected TeachingPracticeSignedForm[]
 
+  // Stage I1 - instructor/coach-authored trainee-progress-journal rows (see
+  // each model's own schema comment). Gated by the reused
+  // canEditRidingNotes flag above, not a dedicated permission - see
+  // lib/actions/student-riding-progress-feedback-instructor.ts.
+  ridingProgressFeedbackCreated       StudentRidingProgressFeedback[]       @relation("RidingProgressFeedbackCreatedBy")
+  ridingProgressFeedbackUpdated       StudentRidingProgressFeedback[]       @relation("RidingProgressFeedbackUpdatedBy")
+  lungeProgressFeedbackCreated        StudentLungeProgressFeedback[]        @relation("LungeProgressFeedbackCreatedBy")
+  lungeProgressFeedbackUpdated        StudentLungeProgressFeedback[]        @relation("LungeProgressFeedbackUpdatedBy")
+  presentationProgressFeedbackCreated StudentPresentationProgressFeedback[] @relation("PresentationProgressFeedbackCreatedBy")
+  presentationProgressFeedbackUpdated StudentPresentationProgressFeedback[] @relation("PresentationProgressFeedbackUpdatedBy")
+
   @@map("instructors")
 }
 
@@ -539,9 +550,23 @@ model StudentRidingProgressFeedback {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  // Stage I1 - instructor/coach ownership, additive and nullable. Null on
+  // every existing row and on every future admin-created row (admin writes
+  // never set these); populated only when an instructor/coach writes via
+  // lib/actions/student-riding-progress-feedback-instructor.ts, which
+  // deliberately reuses Instructor.canEditRidingNotes as the gating
+  // permission for now (see that file's own comment on why). Two separate
+  // optional FKs to the same target model need distinct relation names -
+  // Prisma can't otherwise infer which is which.
+  createdByInstructorId String?
+  updatedByInstructorId String?
+
+  student             Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  createdByInstructor Instructor? @relation("RidingProgressFeedbackCreatedBy", fields: [createdByInstructorId], references: [id])
+  updatedByInstructor Instructor? @relation("RidingProgressFeedbackUpdatedBy", fields: [updatedByInstructorId], references: [id])
 
   @@index([studentId])
+  @@index([createdByInstructorId])
   @@map("student_riding_progress_feedback")
 }
 
@@ -571,9 +596,17 @@ model StudentLungeProgressFeedback {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  // Stage I1 - same instructor/coach ownership convention as
+  // StudentRidingProgressFeedback above - see that model's own comment.
+  createdByInstructorId String?
+  updatedByInstructorId String?
+
+  student             Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  createdByInstructor Instructor? @relation("LungeProgressFeedbackCreatedBy", fields: [createdByInstructorId], references: [id])
+  updatedByInstructor Instructor? @relation("LungeProgressFeedbackUpdatedBy", fields: [updatedByInstructorId], references: [id])
 
   @@index([studentId])
+  @@index([createdByInstructorId])
   @@map("student_lunge_progress_feedback")
 }
 
@@ -623,9 +656,17 @@ model StudentPresentationProgressFeedback {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  // Stage I1 - same instructor/coach ownership convention as
+  // StudentRidingProgressFeedback above - see that model's own comment.
+  createdByInstructorId String?
+  updatedByInstructorId String?
+
+  student             Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  createdByInstructor Instructor? @relation("PresentationProgressFeedbackCreatedBy", fields: [createdByInstructorId], references: [id])
+  updatedByInstructor Instructor? @relation("PresentationProgressFeedbackUpdatedBy", fields: [updatedByInstructorId], references: [id])
 
   @@index([studentId])
+  @@index([createdByInstructorId])
   @@map("student_presentation_progress_feedback")
 }
 
