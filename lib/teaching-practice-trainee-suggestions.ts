@@ -292,8 +292,13 @@ function isInformationalKey(value: BucketOrInformational): value is Informationa
 
 const PRIVATE_ASSISTANT_NOTE =
   "תפקיד עוזר/ת בשיעור פרטני - אינו נספר ליעד privateGroupAny (הנספר רק דרך תפקיד המוביל/ה, רוטציה 0) - שיבוץ לפי איזון עומס כללי בלבד";
+// Stage B - explicitly states the group roster is derived, not directly
+// assignable here (see isTraineeSuggestionSlotSelectable in
+// TeachingPracticeManager.tsx, which now excludes BEGINNER_GROUP slots from
+// the checkbox/apply flow entirely) - this note is the one place that
+// explanation reaches the UI, via slot.bucketNote.
 const BEGINNER_GROUP_NOTE =
-  "שיעור קבוצתי מתחילים - כל תפקידיו הם משניים ואינם נספרים ליעד privateGroupAny (הנספר רק דרך תפקיד המוביל/ה בשיעור פרטני) - שיבוץ לפי איזון עומס כללי בלבד";
+  "שיעור קבוצתי מתחילים - כל תפקידיו הם משניים ואינם נספרים ליעד privateGroupAny (הנספר רק דרך תפקיד המוביל/ה בשיעור פרטני) - שיבוץ לפי איזון עומס כללי בלבד. הצוות בפועל נגזר מהמסלולים הפרטניים המקושרים - לא ניתן להחיל הצעה ישירות כאן, יש לשבץ במסלול הפרטני המתאים";
 
 // What rotationOrder position `n` would receive on a track's first-ever
 // generated lesson (occurrenceIndex 0). Reuses the real, exported
@@ -393,6 +398,72 @@ function describeTrackTime(track: TraineeSuggestionInputTrack): string {
 function hasUsableTimeData(track: TraineeSuggestionInputTrack): boolean {
   return parseTimeToMinutes(track.defaultStartTime) != null && parseTimeToMinutes(track.defaultEndTime) != null;
 }
+
+// ---------------------------------------------------------------------------
+// Stage A - spacing ("gap") scoring. Ranks candidates for an empty slot by
+// how crowded the new assignment would be relative to their OTHER current
+// fixed-structure windows - a larger nearest gap is a better (more spacious)
+// candidate. This is layered on top of, not a replacement for, the hard
+// overlap exclusion above: a pair that actually overlaps never reaches this
+// code (it was already filtered out as a hard exclusion before scoring
+// runs), so minutesBetweenTracks below only ever needs to handle the
+// non-overlapping case.
+//
+// Day-blind, same limitation and same reasoning as tracksMayOverlap above:
+// the fixed structure has no real calendar date/day field (weekday is only
+// ever an unenforced display hint - see TeachingPracticeTrack's own schema
+// comment), so "nearest gap" is computed purely from time-of-day, exactly
+// like the overlap check it's built next to. A candidate's Monday-morning
+// slot and Wednesday-morning slot are scored as if they were 0 minutes
+// apart on the same day, not as unrelated. This is a deliberate, accepted
+// trade-off (kept consistent with the overlap check rather than introducing
+// a day-aware gap alongside a day-blind overlap, which would produce
+// confusing, inconsistent-feeling results) - not a bug.
+// ---------------------------------------------------------------------------
+
+// Minutes between two non-overlapping time windows, on whichever side is
+// closer (other entirely before target, or entirely after it). Returns null
+// when either side's time can't be parsed - callers must treat this the same
+// "unknown, never guessed" way tracksMayOverlap's own unknown result is
+// treated, never as a forced 0 (tie) or Infinity (automatic win). 0 in the
+// non-null return path is a defensive fallback for a pair that turns out to
+// overlap after all (should never happen here - overlap is already a hard
+// exclusion upstream, see processSlot below), not a real "adjacent" gap.
+function minutesBetweenTracks(target: TraineeSuggestionInputTrack, other: TraineeSuggestionInputTrack): number | null {
+  const targetStart = parseTimeToMinutes(target.defaultStartTime);
+  const targetEnd = parseTimeToMinutes(target.defaultEndTime);
+  const otherStart = parseTimeToMinutes(other.defaultStartTime);
+  const otherEnd = parseTimeToMinutes(other.defaultEndTime);
+  if (targetStart == null || targetEnd == null || otherStart == null || otherEnd == null) return null;
+  if (otherStart >= targetEnd) return otherStart - targetEnd;
+  if (targetStart >= otherEnd) return targetStart - otherEnd;
+  return 0;
+}
+
+// The candidate's nearest gap, in minutes, between the target slot and every
+// one of their OTHER current fixed-structure windows (real memberships plus
+// anything already suggested earlier in this same run - see
+// provisionalWindows in the main loop below). Infinity when the candidate
+// has no other windows at all (best possible spacing - "פנוי/ה בשעה הזו") or
+// when every other window's gap is unknown (missing/invalid time data,
+// already covered once upfront by the missing_or_invalid_time_data warning,
+// never re-penalized per candidate here).
+function nearestGapMinutes(target: TraineeSuggestionInputTrack, otherWindows: TraineeSuggestionInputTrack[]): number {
+  let nearest = Infinity;
+  for (const other of otherWindows) {
+    const gap = minutesBetweenTracks(target, other);
+    if (gap != null && gap < nearest) nearest = gap;
+  }
+  return nearest;
+}
+
+// Gaps at or above this are described as "מרווח טוב" (good spacing) in the
+// suggestion reason text; anything smaller (but not overlapping, which is
+// already a hard exclusion) is described as "צמוד" (tight/adjacent). A
+// simple, adjustable threshold, not a hard rule - same convention as
+// SAME_DUTY_REPEAT_THRESHOLD/TOTAL_DEVIATION_THRESHOLD in
+// lib/schedule-fairness.ts.
+const TRAINEE_SUGGESTION_GOOD_GAP_MINUTES = 60;
 
 // ---------------------------------------------------------------------------
 // Bucket-count computation
@@ -790,14 +861,27 @@ export function computeTeachingPracticeTraineeSuggestions(
     }
 
     // ---- Scoring - against PROVISIONAL state, not the static starting
-    // summary, so a candidate's deficit/load/same-weekday-count already
-    // reflects every suggestion accepted earlier in this run (including
-    // every real-target slot from pass 1, by the time pass 2 runs). For a
-    // slot with targetBucket===null, bucketDeficit is always 0 for everyone -
-    // scoring falls straight through to general load-balance (total
-    // assignments, then same-weekday clustering, then name), exactly the
-    // "general-load-balance suggestions" behavior required for
+    // summary, so a candidate's deficit/load/spacing already reflects every
+    // suggestion accepted earlier in this run (including every real-target
+    // slot from pass 1, by the time pass 2 runs). For a slot with
+    // targetBucket===null, bucketDeficit is always 0 for everyone - scoring
+    // falls straight through to spacing (then total-load, then name),
+    // exactly the "general-load-balance suggestions" behavior required for
     // BEGINNER_PRIVATE rotationOrder 1 / BEGINNER_GROUP slots.
+    //
+    // Stage A (spacing/gap ranking) - bucketDeficit stays the primary tier
+    // (it's what keeps a real required hole from being filled by reuse
+    // before every under-target candidate has had first claim - see the
+    // file header's "surplus seat" verification). Below that, ordering now
+    // prefers the most SPACIOUS candidate (largest nearestGapMinutes) over
+    // the previous same-weekday-clustering signal, which is retired here as
+    // redundant with - and less precise than - the new minute-level gap
+    // score (both existed to answer the same "how crowded would this make
+    // their schedule" question). gapMinutes is computed against
+    // otherWindows (provisionalWindows minus this exact track - never
+    // meaningfully present yet at this point, since the candidate hasn't
+    // been assigned to it, but filtered defensively the same way the
+    // overlap-exclusion loop above does).
     const scored = candidates
       .map((c) => {
         const state = provisionalBuckets.get(c.id);
@@ -805,15 +889,19 @@ export function computeTeachingPracticeTraineeSuggestions(
           ? Math.max(0, TRAINEE_SUGGESTION_TARGET_PER_BUCKET - (state?.[targetBucket] ?? 0))
           : 0;
         const totalAssignments = state?.totalAssignments ?? 0;
-        const sameWeekdayCount = (provisionalWindows.get(c.id) ?? []).filter(
-          (t) => track.weekday != null && t.weekday === track.weekday
-        ).length;
-        return { candidate: c, bucketDeficit, totalAssignments, sameWeekdayCount };
+        const otherWindows = (provisionalWindows.get(c.id) ?? []).filter((t) => t.id !== track.id);
+        const gapMinutes = nearestGapMinutes(track, otherWindows);
+        return { candidate: c, bucketDeficit, totalAssignments, gapMinutes };
       })
       .sort((a, b) => {
         if (b.bucketDeficit !== a.bucketDeficit) return b.bucketDeficit - a.bucketDeficit;
+        // Larger gap = more spacious = better, so a larger b.gapMinutes
+        // sorts first (positive result). Guarded by the equality check
+        // first so two Infinity gaps (both "no other assignments at all")
+        // never subtract to NaN - they fall through to the next tier
+        // instead, same convention as every other tier here.
+        if (b.gapMinutes !== a.gapMinutes) return b.gapMinutes - a.gapMinutes;
         if (a.totalAssignments !== b.totalAssignments) return a.totalAssignments - b.totalAssignments;
-        if (a.sameWeekdayCount !== b.sameWeekdayCount) return a.sameWeekdayCount - b.sameWeekdayCount;
         return a.candidate.fullName.localeCompare(b.candidate.fullName, "he");
       });
 
@@ -881,13 +969,23 @@ export function computeTeachingPracticeTraineeSuggestions(
         reasonParts.push(
           best.bucketDeficit > 0
             ? `טרם השלים/ה יעד ${targetBucket} (0 מתוך ${TRAINEE_SUGGESTION_TARGET_PER_BUCKET})`
-            : `כבר עמד/ה ביעד ${targetBucket} - נבחר/ה לפי איזון עומס כללי`
+            : `כבר עמד/ה ביעד ${targetBucket} - נבחר/ה לפי מרווח/איזון עומס`
         );
       } else {
-        reasonParts.push(bucketNote ?? "שיבוץ לפי איזון עומס כללי");
+        reasonParts.push(bucketNote ?? "שיבוץ לפי מרווח/איזון עומס");
+      }
+      // Stage A - spacing phrasing, exactly the three reasons requested:
+      // no other assignment at all (best possible), a good-sized gap, or a
+      // tight/adjacent-but-not-overlapping gap (overlap itself is already a
+      // hard exclusion, never reaches here).
+      if (best.gapMinutes === Infinity) {
+        reasonParts.push("פנוי/ה בשעה הזו - אין שיבוצים קבועים אחרים בכלל");
+      } else if (best.gapMinutes >= TRAINEE_SUGGESTION_GOOD_GAP_MINUTES) {
+        reasonParts.push(`מרווח טוב מהשיבוץ הקרוב (${best.gapMinutes} דק')`);
+      } else {
+        reasonParts.push(`צמוד לשיבוץ אחר (${best.gapMinutes} דק')`);
       }
       reasonParts.push(`סה"כ שיבוצים קבועים נוכחיים: ${best.totalAssignments}`);
-      if (best.sameWeekdayCount === 0) reasonParts.push("ללא חפיפת יום בשבוע עם שיבוצים אחרים");
       reason = reasonParts.join("; ");
     }
 

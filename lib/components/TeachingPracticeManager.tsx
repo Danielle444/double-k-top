@@ -182,11 +182,24 @@ const TRAINEE_SUGGESTION_WARNING_STYLE: Record<TraineeSuggestionWarningKind, { l
 // all, what "בחר הכל" selects, and what the apply loop is allowed to touch.
 // A filled slot never qualifies, by design - replacing an existing
 // assignment is out of scope for this stage.
+//
+// Stage B - a BEGINNER_GROUP slot never qualifies either, regardless of
+// having a (purely informational) suggestion: that track's own
+// TeachingPracticeTrackTrainee rows are re-derived from its linked
+// BEGINNER_PRIVATE tracks' slot-0 trainees on every fixed-structure sync
+// (see processTrackForSync in lib/teaching-practice-full-sync-core.ts) - a
+// direct apply here would just be silently overwritten by the next sync,
+// which would be confusing rather than unsafe. The suggestion itself still
+// computes and displays (see bucketNote in the pure engine) so the מנהלת
+// can still see it as information; only the checkbox/apply path is blocked.
 function isTraineeSuggestionSlotSelectable(slot: {
+  practiceType: TeachingPracticeTypeValue;
   currentTraineeId: string | null;
   suggestedTraineeId: string | null;
 }): boolean {
-  return slot.currentTraineeId == null && slot.suggestedTraineeId != null;
+  return (
+    slot.practiceType !== "BEGINNER_GROUP" && slot.currentTraineeId == null && slot.suggestedTraineeId != null
+  );
 }
 
 function traineeSuggestionSlotKey(trackId: string, rotationOrder: number): string {
@@ -1183,6 +1196,14 @@ export function TeachingPracticeManager({
 
     const assignments: TeachingPracticeTrackTraineeSlotAssignment[] = [];
     for (const track of suggestionResult.tracks) {
+      // Stage B - defensive re-check, not just trusting that
+      // selectedSuggestionKeys could never contain a BEGINNER_GROUP key
+      // (isTraineeSuggestionSlotSelectable already keeps its checkbox from
+      // ever rendering, and "בחר הכל" is built from the same predicate) -
+      // this loop is the last client-side point before the write action
+      // runs, so it never forwards a BEGINNER_GROUP slot even if selection
+      // state were somehow tampered with.
+      if (track.practiceType === "BEGINNER_GROUP") continue;
       for (const slot of track.slots) {
         const key = traineeSuggestionSlotKey(track.trackId, slot.rotationOrder);
         if (selectedSuggestionKeys.has(key) && slot.suggestedTraineeId) {
@@ -6208,13 +6229,17 @@ function TeachingPracticeSuggestionSlotRow({
 }) {
   // Single source of truth for "can this row ever have a checkbox" - a
   // filled slot never qualifies (replacing an existing assignment is out of
-  // scope for this stage), matching the same predicate used to build
-  // allSelectableTraineeSuggestionKeys/preselect on load.
+  // scope for this stage), and neither does a BEGINNER_GROUP slot (Stage B -
+  // see isTraineeSuggestionSlotSelectable's own comment), matching the same
+  // predicate used to build allSelectableTraineeSuggestionKeys/preselect on
+  // load.
   const selectable = isTraineeSuggestionSlotSelectable(slot);
   const status = slot.currentTraineeId
     ? { label: "משובץ/ת כבר", className: "bg-muted text-muted-foreground" }
     : slot.suggestedTraineeId
-      ? { label: "הצעה זמינה", className: "bg-success-muted text-success" }
+      ? selectable
+        ? { label: "הצעה זמינה", className: "bg-success-muted text-success" }
+        : { label: "מידע בלבד - לא ניתן להחיל כאן", className: "bg-secondary text-secondary-foreground" }
       : { label: "אין הצעה מתאימה", className: "bg-danger-muted text-danger" };
 
   return (

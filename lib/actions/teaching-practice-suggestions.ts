@@ -213,6 +213,25 @@ async function applyTeachingPracticeTrackTraineeSlotSuggestionsInternal(
     const track = trackById.get(a.trackId);
     if (!track) return { success: false, error: SLOT_NOT_FOUND_TRACK };
 
+    // Stage B - server-side safety net, independent of whatever the client
+    // already filtered (TeachingPracticeManager.tsx's isTraineeSuggestionSlotSelectable
+    // already keeps a BEGINNER_GROUP slot's checkbox from ever appearing,
+    // and its apply handler re-checks defensively before calling this
+    // action) - this is the one place that's not optional: a BEGINNER_GROUP
+    // track's own TeachingPracticeTrackTrainee rows are re-derived from its
+    // linked BEGINNER_PRIVATE tracks' slot-0 trainees on every
+    // fixed-structure sync (see processTrackForSync in
+    // lib/teaching-practice-full-sync-core.ts), so writing here directly
+    // would just be silently overwritten by the next sync - reject the
+    // whole batch rather than silently dropping this one assignment, same
+    // all-or-nothing guarantee as every other validation in this loop.
+    if (track.practiceType === "BEGINNER_GROUP") {
+      return {
+        success: false,
+        error: "לא ניתן להחיל הצעה ישירות על שיעור קבוצתי - הצוות נגזר מהמסלולים הפרטניים המקושרים",
+      };
+    }
+
     const trainee = traineeById.get(a.traineeId);
     if (!trainee) return { success: false, error: "אחד או יותר מהחניכים שנבחרו לא נמצאו" };
     if (!trainee.isActive) return { success: false, error: `לא ניתן לשבץ את ${trainee.fullName} - אינו/ה פעיל/ה` };
