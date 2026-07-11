@@ -2394,26 +2394,23 @@ export function TeachingPracticeManager({
   // rejection, meaningful-feedback sync protection are all inherited as-is).
   // -------------------------------------------------------------------------
 
-  // "שעה"/"מיקום" cells. Rebuilds the full TeachingPracticeLessonInput from
-  // the lesson's own already-loaded fields (same full-object-rebuild idiom as
-  // handleInlineEditTrackNotes for tracks), changing only startTime or
-  // location. date/responsibleInstructorId/notes are always resent
-  // unchanged; roleLabelOverrides is deliberately omitted from this input so
-  // it's left completely untouched - updateTeachingPracticeLessonInternal
-  // only touches that key when it's present in the input at all (see its own
-  // comment). endTime is never sent - it stays server-derived exactly as
-  // today.
-  function handleInlineUpdateLessonField(
-    lesson: TeachingPracticeLessonSummary,
-    field: "startTime" | "location",
-    value: string
-  ) {
-    const cellKey = `lesson-${lesson.id}-${field}`;
+  // "שעה" cell. Rebuilds the full TeachingPracticeLessonInput from the
+  // lesson's own already-loaded fields (same full-object-rebuild idiom as
+  // handleInlineEditTrackNotes for tracks), changing only startTime.
+  // date/location/responsibleInstructorId/notes are always resent unchanged
+  // (location stays editable via the existing expanded "עריכה" form, not
+  // inline - see its own section below); roleLabelOverrides is deliberately
+  // omitted from this input so it's left completely untouched -
+  // updateTeachingPracticeLessonInternal only touches that key when it's
+  // present in the input at all (see its own comment). endTime is never
+  // sent - it stays server-derived exactly as today.
+  function handleInlineUpdateLessonField(lesson: TeachingPracticeLessonSummary, startTime: string) {
+    const cellKey = `lesson-${lesson.id}-startTime`;
     const input: TeachingPracticeLessonInput = {
       date: lesson.date,
-      startTime: field === "startTime" ? value : lesson.startTime,
+      startTime,
       responsibleInstructorId: lesson.responsibleInstructorId,
-      location: field === "location" ? value || null : lesson.location,
+      location: lesson.location,
       notes: lesson.notes,
     };
 
@@ -2426,7 +2423,7 @@ export function TeachingPracticeManager({
           : await updateTeachingPracticeLessonAsInstructor(actorId!, lesson.id, input);
       setSavingLessonCellKey(null);
       if (!result.success) {
-        setLessonActionError(result.error ?? "אירעה שגיאה בעדכון פרטי השיעור");
+        setLessonActionError(result.error ?? "אירעה שגיאה בעדכון שעת ההתחלה");
         return;
       }
       await refreshLessons();
@@ -6792,11 +6789,7 @@ function LessonGroupTable({
   ) => Promise<ActionResult>;
   onOpenFeedback: (participantId: string) => void;
   onOpenSameParentPopup: (childId: string) => void;
-  onInlineUpdateField: (
-    lesson: TeachingPracticeLessonSummary,
-    field: "startTime" | "location",
-    value: string
-  ) => void;
+  onInlineUpdateField: (lesson: TeachingPracticeLessonSummary, startTime: string) => void;
   onInlineUpdateParticipant: (
     lesson: TeachingPracticeLessonDetail,
     roleSlots: TeachingPracticeRoleValue[],
@@ -6845,7 +6838,6 @@ function LessonGroupTable({
           <thead>
             <tr className="bg-muted text-muted-foreground">
               <th className="sticky top-0 right-0 z-20 bg-muted px-2 py-2 text-right font-bold">שעה</th>
-              <th className="sticky top-0 z-10 bg-muted px-2 py-2 text-right font-bold">מיקום</th>
               <th className="sticky top-0 z-10 bg-muted px-2 py-2 text-right font-bold">חניך</th>
               <th className="sticky top-0 z-10 bg-muted px-2 py-2 text-right font-bold">תפקיד</th>
               <th className="sticky top-0 z-10 bg-muted px-2 py-2 text-right font-bold">שם הילד</th>
@@ -7084,11 +7076,7 @@ function LessonTableRow({
     childAssignmentRows: TeachingPracticeChildAssignmentInput[]
   ) => Promise<ActionResult>;
   onOpenFeedback: (participantId: string) => void;
-  onInlineUpdateField: (
-    lesson: TeachingPracticeLessonSummary,
-    field: "startTime" | "location",
-    value: string
-  ) => void;
+  onInlineUpdateField: (lesson: TeachingPracticeLessonSummary, startTime: string) => void;
   onInlineUpdateParticipant: (
     lesson: TeachingPracticeLessonDetail,
     roleSlots: TeachingPracticeRoleValue[],
@@ -7197,7 +7185,7 @@ function LessonTableRow({
     return [clearOption, ...options];
   }
 
-  const colSpan = 14;
+  const colSpan = 13;
   // Stage 1 - how many TeachingPracticeChildAssignment slots this
   // practiceType expects (see EXPECTED_CHILD_SLOTS_BY_PRACTICE_TYPE's own
   // comment) - used to bound which rows get an inline child/horse/equipment
@@ -7236,25 +7224,10 @@ function LessonTableRow({
               endTime={lesson.endTime}
               editable={canEdit}
               disabled={savingCellKey === `lesson-${lesson.id}-startTime`}
-              onCommit={(startTime) => onInlineUpdateField(lesson, "startTime", startTime)}
+              onCommit={(startTime) => onInlineUpdateField(lesson, startTime)}
               rowSpan={rowCount}
             />
           )}
-          {i === 0 &&
-            (canEdit ? (
-              <InlineTextEditCell
-                value={lesson.location ?? ""}
-                label={lesson.location ?? "—"}
-                editable
-                disabled={savingCellKey === `lesson-${lesson.id}-location`}
-                onCommit={(value) => onInlineUpdateField(lesson, "location", value)}
-                rowSpan={rowCount}
-              />
-            ) : (
-              <td rowSpan={rowCount} className="px-2 py-2 align-top">
-                {lesson.location || "—"}
-              </td>
-            ))}
           {canEdit && i < roleSlots.length ? (
             <TraineeAssignmentCell
               value={row.participant?.traineeId ?? ""}
