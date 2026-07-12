@@ -27,7 +27,7 @@ type BulkMode = "skipExisting" | "overwrite";
 interface BulkForm {
   groupName: string;
   subgroupNumber: string;
-  instructorId: string;
+  instructorIds: string[];
   arena: string;
   mode: BulkMode;
 }
@@ -35,7 +35,7 @@ interface BulkForm {
 const EMPTY_BULK_FORM: BulkForm = {
   groupName: "",
   subgroupNumber: "",
-  instructorId: "",
+  instructorIds: [],
   arena: "",
   mode: "skipExisting",
 };
@@ -64,6 +64,77 @@ function isActivityTargeted(activity: WeeklyRidingActivity, targetGroupName: str
   if (!targetGroupName) return true;
   if (activity.groupName === null) return true;
   return activity.groupName === targetGroupName;
+}
+
+// Local to this bulk form only - deliberately not the RidingSlotModal.tsx
+// InstructorChecklist (tied to that modal's own AssignmentForm setter) nor
+// SearchableMultiSelect (see this app's own prior note on why a shared-state
+// multi-select fought with a surrounding form's re-renders). Same shape as
+// TaughtStudentsChecklist in InstructorRidingSlotsSection.tsx: holds no
+// selection state of its own - selectedIds always comes straight from the
+// parent's bulkForm, and every checkbox/chip toggle calls back out via
+// onToggle, so there is no intermediate copy that could ever fall out of
+// sync or duplicate an id.
+function BulkInstructorChecklist({
+  options,
+  selectedIds,
+  onToggle,
+}: {
+  options: { value: string; label: string }[];
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+
+  const filteredOptions = options.filter((o) => o.label.toLowerCase().includes(search.trim().toLowerCase()));
+  const selectedOptions = options.filter((o) => selectedIds.includes(o.value));
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {selectedOptions.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {selectedOptions.map((o) => (
+            <span
+              key={o.value}
+              className="flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground"
+            >
+              {o.label}
+              <button
+                type="button"
+                onClick={() => onToggle(o.value)}
+                aria-label={`הסרת ${o.label}`}
+                className="text-secondary-foreground/70 hover:text-secondary-foreground"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="חיפוש מדריך"
+        className="rounded-lg border border-border px-3 py-2 text-sm"
+      />
+      <div className="flex max-h-40 flex-col gap-0.5 overflow-y-auto rounded-lg border border-border p-1.5">
+        {filteredOptions.length === 0 ? (
+          <p className="px-1.5 py-1 text-sm text-muted-foreground">לא נמצאו מדריכים</p>
+        ) : (
+          filteredOptions.map((o) => (
+            <label
+              key={o.value}
+              className="flex items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-muted"
+            >
+              <input type="checkbox" checked={selectedIds.includes(o.value)} onChange={() => onToggle(o.value)} />
+              {o.label}
+            </label>
+          ))
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function WeeklyRidingClient({
@@ -141,6 +212,22 @@ export function WeeklyRidingClient({
   const assignmentTargetedCount = getTargetedActivities(bulkForm.groupName).length;
   const visibilityTargetedCount = getTargetedActivities(bulkVisibilityForm.groupName).length;
 
+  // Same toggle convention as RidingSlotModal.tsx's own InstructorChecklist -
+  // a stable functional setState reading/writing bulkForm.instructorIds
+  // directly, so a toggle can never duplicate an already-selected id or lose
+  // one to a stale closure.
+  function toggleBulkInstructor(instructorId: string) {
+    setBulkForm((current) => {
+      const exists = current.instructorIds.includes(instructorId);
+      return {
+        ...current,
+        instructorIds: exists
+          ? current.instructorIds.filter((id) => id !== instructorId)
+          : [...current.instructorIds, instructorId],
+      };
+    });
+  }
+
   function handleBulkApply() {
     setBulkError(null);
     setBulkMessage(null);
@@ -154,7 +241,7 @@ export function WeeklyRidingClient({
         activities,
         groupName: bulkForm.groupName || undefined,
         subgroupNumber: bulkForm.subgroupNumber ? Number(bulkForm.subgroupNumber) : undefined,
-        instructorId: bulkForm.instructorId || undefined,
+        instructorIds: bulkForm.instructorIds,
         arena: bulkForm.arena || undefined,
         mode: bulkForm.mode,
       });
@@ -242,7 +329,7 @@ export function WeeklyRidingClient({
           מתוך {visibleActivityCount} פעילויות מוצגות) - לא על פעילויות מוסתרות ע&quot;י הסינון ולא
           על פעילויות של הקבוצה השנייה בלבד.
         </p>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <label className="flex flex-col gap-1 text-sm">
             קבוצה
             <select
@@ -266,21 +353,6 @@ export function WeeklyRidingClient({
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
-            מדריך/ה
-            <select
-              value={bulkForm.instructorId}
-              onChange={(e) => setBulkForm((f) => ({ ...f, instructorId: e.target.value }))}
-              className="rounded-lg border border-border px-3 py-2 text-sm"
-            >
-              <option value="">ללא</option>
-              {instructors.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.fullName}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
             מגרש
             <input
               value={bulkForm.arena}
@@ -289,6 +361,15 @@ export function WeeklyRidingClient({
               className="rounded-lg border border-border px-3 py-2 text-sm"
             />
           </label>
+        </div>
+
+        <div className="flex flex-col gap-1 text-sm">
+          מדריכים/ות אחראים/ות
+          <BulkInstructorChecklist
+            options={instructors.map((i) => ({ value: i.id, label: i.fullName }))}
+            selectedIds={bulkForm.instructorIds}
+            onToggle={toggleBulkInstructor}
+          />
         </div>
 
         <div className="flex flex-wrap items-center gap-4">

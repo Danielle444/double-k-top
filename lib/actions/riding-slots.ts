@@ -640,7 +640,15 @@ export async function getInstructorRidingSlots(
 const bulkAssignmentInputSchema = z.object({
   groupName: z.enum(["", "א", "ב"]).optional(),
   subgroupNumber: z.coerce.number().int().positive().optional(),
+  // Legacy single-instructor input - still accepted so any caller that
+  // hasn't been upgraded to instructorIds keeps working unchanged. See
+  // assignmentInputSchema's identical field.
   instructorId: z.string().trim().optional(),
+  // Full instructor list for this bulk template. When provided (even as an
+  // empty array, meaning "no instructors"), this wins over instructorId.
+  // Resolved the same way as assignmentInputSchema's instructorIds - see
+  // resolveInstructorIds.
+  instructorIds: z.array(z.string().trim().min(1)).optional(),
   arena: z.string().trim().optional(),
   mode: z.enum(["skipExisting", "overwrite"]),
 });
@@ -652,7 +660,10 @@ export interface BulkRidingAssignmentInput {
   activities: { scheduleItemIds: string[] }[];
   groupName?: string;
   subgroupNumber?: number;
+  // Legacy single-instructor input - kept for backward compat. See
+  // BulkRidingAssignmentInput.instructorIds.
   instructorId?: string;
+  instructorIds?: string[];
   arena?: string;
   mode: "skipExisting" | "overwrite";
 }
@@ -670,7 +681,7 @@ export interface BulkRidingAssignmentResult extends ActionResult {
   summary?: BulkRidingAssignmentSummary;
 }
 
-// Applies one (groupName, subgroupNumber, instructorId, arena) assignment
+// Applies one (groupName, subgroupNumber, instructorIds, arena) assignment
 // template across every given activity - reuses the exact same
 // resolveOrCreateRidingSlot (self-healing join-table logic, safe for merged
 // activities) and applyAssignmentSplit (safe null-aware upsert) used by the
@@ -691,6 +702,7 @@ export async function bulkApplyRidingAssignment(
     groupName: input.groupName,
     subgroupNumber: input.subgroupNumber,
     instructorId: input.instructorId,
+    instructorIds: input.instructorIds,
     arena: input.arena,
     mode: input.mode,
   });
@@ -699,16 +711,13 @@ export async function bulkApplyRidingAssignment(
   }
   const data = parsed.data;
 
-  if (data.instructorId) {
-    const instructor = await prisma.instructor.findUnique({ where: { id: data.instructorId } });
-    if (!instructor) {
-      return { success: false, error: NOT_FOUND_INSTRUCTOR };
-    }
+  const instructorIds = resolveInstructorIds(data);
+  if (!(await validateInstructorIds(instructorIds))) {
+    return { success: false, error: NOT_FOUND_INSTRUCTOR };
   }
 
   const groupName = data.groupName || null;
   const subgroupNumber = data.subgroupNumber ?? null;
-  const instructorId = data.instructorId || null;
   const arena = data.arena || null;
   const skipIfExists = data.mode === "skipExisting";
 
@@ -740,7 +749,7 @@ export async function bulkApplyRidingAssignment(
         ridingSlotId: resolved.ridingSlotId,
         groupName,
         subgroupNumber,
-        instructorIds: instructorId ? [instructorId] : [],
+        instructorIds,
         arena,
         skipIfExists,
       });
