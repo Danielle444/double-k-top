@@ -13,6 +13,7 @@ import { Modal } from "@/lib/components/Modal";
 import { formatHebrewDate, parseDateKey } from "@/lib/dates";
 import { cleanScheduleTitle } from "@/lib/schedule-title";
 import { formatInstructorNames } from "@/lib/riding-assignment-matching";
+import { RidingHorseListEditor } from "@/lib/components/RidingHorseListEditor";
 import {
   getRidingSlotForScheduleItem,
   createOrGetRidingSlot,
@@ -256,6 +257,8 @@ export function RidingSlotModal({
   const [isSavingAssignment, startAssignmentTransition] = useTransition();
 
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const [showHorseListEditor, setShowHorseListEditor] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -562,6 +565,17 @@ export function RidingSlotModal({
                 />
               )}
             </div>
+
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-border p-3">
+              <p className="text-sm font-semibold text-card-foreground">סוסים לאיכוף</p>
+              <Button
+                variant="secondary"
+                className="!px-2 !py-1 !text-xs"
+                onClick={() => setShowHorseListEditor(true)}
+              >
+                הגדרת סוסים לאיכוף
+              </Button>
+            </div>
           </>
         )}
         </div>
@@ -572,6 +586,16 @@ export function RidingSlotModal({
           </Button>
         </div>
       </div>
+
+      {ridingSlot && (
+        <RidingHorseListEditor
+          open={showHorseListEditor}
+          onClose={() => setShowHorseListEditor(false)}
+          ridingSlotId={ridingSlot.id}
+          contextLabel={`${cleanScheduleTitle(scheduleItemInfo.title)} · ${scheduleItemInfo.startTime}-${scheduleItemInfo.endTime}`}
+          actor={{ type: "admin" }}
+        />
+      )}
     </Modal>
   );
 }

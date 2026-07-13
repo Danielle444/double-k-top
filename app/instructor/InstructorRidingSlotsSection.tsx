@@ -18,6 +18,7 @@ import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
 import { formatInstructorNames } from "@/lib/riding-assignment-matching";
 import { groupByGroupAndSubgroup, STATUS_BADGE_CLASS, type GroupSection } from "@/lib/attendance-ui";
+import { RidingHorseListEditor } from "@/lib/components/RidingHorseListEditor";
 import {
   getInstructorRidingSlots,
   getRidingSlotStudentNotes,
@@ -807,6 +808,12 @@ export function InstructorRidingSlotsSection({
   const [historyResult, setHistoryResult] = useState<StudentRidingHistoryResult | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
+  // Separate from openActivity/editingStudent above so this modal never
+  // entangles with the riding-notes editor's own save-on-close orchestration
+  // (see StudentEditor.requestClose) - opening/closing this one is a plain
+  // independent action.
+  const [horseListActivity, setHorseListActivity] = useState<WeeklyRidingActivity | null>(null);
+
   // Loaded once at the section level (not per student row) and passed down
   // to StudentEditor - same "load once, reuse" convention as
   // HorseFeedingSection's loadKnownValues. Only editors ever open the form
@@ -1171,21 +1178,35 @@ export function InstructorRidingSlotsSection({
                         </div>
                       )}
 
-                      <div className="mt-2">
+                      <div className="mt-2 flex flex-wrap gap-2">
                         {activity.ridingSlot ? (
-                          <Button
-                            variant="secondary"
-                            className="!px-2 !py-1 !text-xs"
-                            onClick={(e) => {
-                              // Stops the click from also bubbling to the
-                              // card's own onClick above, which would
-                              // otherwise call openStudents twice for one tap.
-                              e.stopPropagation();
-                              openStudents(activity);
-                            }}
-                          >
-                            צפייה בחניכים
-                          </Button>
+                          <>
+                            <Button
+                              variant="secondary"
+                              className="!px-2 !py-1 !text-xs"
+                              onClick={(e) => {
+                                // Stops the click from also bubbling to the
+                                // card's own onClick above, which would
+                                // otherwise call openStudents twice for one tap.
+                                e.stopPropagation();
+                                openStudents(activity);
+                              }}
+                            >
+                              צפייה בחניכים
+                            </Button>
+                            {canEdit && (
+                              <Button
+                                variant="secondary"
+                                className="!px-2 !py-1 !text-xs"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setHorseListActivity(activity);
+                                }}
+                              >
+                                הגדרת סוסים לאיכוף
+                              </Button>
+                            )}
+                          </>
                         ) : (
                           <p className="text-xs italic text-muted-foreground">
                             רכיבה זו טרם הוגדרה ע&quot;י המנהל/ת
@@ -1340,6 +1361,16 @@ export function InstructorRidingSlotsSection({
           ) : null}
         </div>
       </Modal>
+
+      {horseListActivity && horseListActivity.ridingSlot && (
+        <RidingHorseListEditor
+          open={horseListActivity !== null}
+          onClose={() => setHorseListActivity(null)}
+          ridingSlotId={horseListActivity.ridingSlot.id}
+          contextLabel={`${cleanScheduleTitle(horseListActivity.title)} · ${horseListActivity.startTime}-${horseListActivity.endTime}`}
+          actor={{ type: "instructor", instructorId }}
+        />
+      )}
     </div>
   );
 }
