@@ -549,6 +549,11 @@ async function commitTeachingPracticeChildrenImportInternal(
   let updatedCount = 0;
   let skippedCount = 0;
 
+  // Explicit timeout - this loop performs multiple sequential writes, and in
+  // production (Vercel -> pooled Supabase over the public internet) that can
+  // exceed Prisma's default 5000ms interactive-transaction timeout (seen as
+  // P2028 "transaction expired"). 30s gives enough headroom while still
+  // rolling back the whole import atomically if something goes wrong.
   await prisma.$transaction(async (tx) => {
     for (const row of rows) {
       if (row.action === "skip") {
@@ -578,7 +583,7 @@ async function commitTeachingPracticeChildrenImportInternal(
         createdCount++;
       }
     }
-  });
+  }, { timeout: 30_000 });
 
   return { success: true, createdCount, updatedCount, skippedCount };
 }
