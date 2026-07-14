@@ -78,21 +78,46 @@ function renderScheduleCard(
         compact ? "p-2.5" : "p-4"
       }`}
     >
-      <div className="mb-1 flex flex-wrap items-center justify-between gap-1.5">
-        <span
-          className={`font-semibold text-card-foreground ${compact ? "text-sm" : "text-base"}`}
-        >
-          {item.startTime}-{item.endTime}
-        </span>
-        <span
-          className={`rounded-full bg-muted text-muted-foreground ${
-            compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm"
-          }`}
-        >
-          {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
-        </span>
-      </div>
-      <p className={`font-bold text-card-foreground ${compact ? "text-base" : "text-lg"}`}>
+      {compact ? (
+        // Compact grid cards can be as short as a single time-slot row (see
+        // ScheduleTimeGrid), which clips card content from the bottom up.
+        // Time and tag stay on one in-flow line (so the header keeps its
+        // original height); edit is taken out of flow and absolutely
+        // positioned directly under the tag, so it stays visible near the
+        // top without pushing the title/instructor/location down. The
+        // upstream per-item wrapper's existing overflow-hidden (unchanged)
+        // still clips it the same way it clips everything else in a short
+        // slot.
+        <div className="relative mb-1 flex items-start justify-between gap-2">
+          <span className="font-semibold text-card-foreground text-sm">
+            {item.startTime}-{item.endTime}
+          </span>
+          <span className="rounded-full bg-muted text-muted-foreground px-2 py-0.5 text-xs">
+            {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
+          </span>
+          <Button
+            variant="ghost"
+            className="absolute left-0 top-full z-10 !h-auto !min-h-0 !px-1.5 !py-0 !text-xs leading-tight"
+            onClick={() => onEdit(item)}
+          >
+            עריכה
+          </Button>
+        </div>
+      ) : (
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-1.5">
+          <span className="font-semibold text-card-foreground text-base">
+            {item.startTime}-{item.endTime}
+          </span>
+          <span className="rounded-full bg-muted text-muted-foreground px-3 py-1 text-sm">
+            {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
+          </span>
+        </div>
+      )}
+      <p
+        className={`font-bold text-card-foreground ${
+          compact ? "pl-12 text-base" : "text-lg"
+        }`}
+      >
         {cleanScheduleTitle(item.title)}
       </p>
       {item.instructorName && (
@@ -106,9 +131,11 @@ function renderScheduleCard(
         </p>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <Button variant="ghost" className="!px-2 !py-1 !text-xs" onClick={() => onEdit(item)}>
-          עריכה
-        </Button>
+        {!compact && (
+          <Button variant="ghost" className="!px-2 !py-1 !text-xs" onClick={() => onEdit(item)}>
+            עריכה
+          </Button>
+        )}
         {isMerged ? (
           <p className="text-xs italic text-muted-foreground">
             מחיקה לא זמינה עבור פעילות ממוזגת - ניתן לערוך את כל הפריטים המקוריים יחד
