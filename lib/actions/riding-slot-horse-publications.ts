@@ -58,6 +58,27 @@ function buildDefaultPublicationTitle(meta: RidingSlotScheduleMeta): string {
   return `סוסים לאיכוף — ${meta.activityTitle}, ${formatHebrewDate(meta.date)} ${meta.startTime}-${meta.endTime}`;
 }
 
+// ---------- Trainee-group audience mapping ----------
+
+// Narrow, validated input type - never an arbitrary client-supplied
+// audience string. The only two real trainee groups this app has (see the
+// existing "א"/"ב" convention used throughout riding-slot-assignments).
+export type RidingHorseTraineeGroup = "א" | "ב";
+
+type PublicationAudienceValue = "INSTRUCTORS" | "GROUP_A_TRAINEES" | "GROUP_B_TRAINEES";
+
+function isValidTraineeGroup(value: unknown): value is RidingHorseTraineeGroup {
+  return value === "א" || value === "ב";
+}
+
+function groupToAudience(group: RidingHorseTraineeGroup): "GROUP_A_TRAINEES" | "GROUP_B_TRAINEES" {
+  return group === "א" ? "GROUP_A_TRAINEES" : "GROUP_B_TRAINEES";
+}
+
+function buildDefaultGroupPublicationTitle(meta: RidingSlotScheduleMeta, group: RidingHorseTraineeGroup): string {
+  return `סוסים לאיכוף — קבוצה ${group} — ${meta.activityTitle}, ${formatHebrewDate(meta.date)} ${meta.startTime}-${meta.endTime}`;
+}
+
 // ---------- Status (read-only) ----------
 
 export type RidingHorsePublicationStatusLabel = "UNPUBLISHED" | "CURRENT" | "STALE";
@@ -80,14 +101,18 @@ export interface RidingSlotHorsePublicationStatus {
   status: RidingHorsePublicationStatusLabel;
 }
 
-async function buildInstructorHorsePublicationStatus(
-  ridingSlotId: string
+// Shared by every status action below (instructor and trainee-group alike) -
+// audience-agnostic on purpose, since the shape of "unpublished/current/
+// stale" is identical regardless of which audience row is being checked.
+async function buildHorsePublicationStatus(
+  ridingSlotId: string,
+  audience: PublicationAudienceValue
 ): Promise<RidingSlotHorsePublicationStatus> {
   const list = await prisma.ridingSlotHorseList.findUnique({
     where: { ridingSlotId },
     // At most one row can ever match - see @@unique([horseListId, audience])
     // on RidingSlotHorsePublication - so this is never more than one row.
-    include: { publications: { where: { audience: "INSTRUCTORS" } } },
+    include: { publications: { where: { audience } } },
   });
 
   if (!list) {
@@ -132,7 +157,7 @@ export async function getInstructorHorsePublicationStatusForAdmin(
   ridingSlotId: string
 ): Promise<RidingSlotHorsePublicationStatus> {
   await requireAdmin();
-  return buildInstructorHorsePublicationStatus(ridingSlotId);
+  return buildHorsePublicationStatus(ridingSlotId, "INSTRUCTORS");
 }
 
 // instructorId is checked for existence/isActive only - NOT
@@ -149,7 +174,36 @@ export async function getInstructorHorsePublicationStatusForInstructor(
   const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
   if (!instructor || !instructor.isActive) return null;
 
-  return buildInstructorHorsePublicationStatus(ridingSlotId);
+  return buildHorsePublicationStatus(ridingSlotId, "INSTRUCTORS");
+}
+
+// Same shape/behavior as the instructor status action above, just for a
+// trainee-group audience instead - an invalid group value (defensive only;
+// TS already narrows this at compile time) is treated as "nothing here"
+// rather than thrown.
+export async function getGroupHorsePublicationStatusForAdmin(
+  ridingSlotId: string,
+  group: RidingHorseTraineeGroup
+): Promise<RidingSlotHorsePublicationStatus> {
+  await requireAdmin();
+  if (!isValidTraineeGroup(group)) {
+    return { ridingSlotId, hasHorseList: false, horseListVersion: 0, publication: null, status: "UNPUBLISHED" };
+  }
+  return buildHorsePublicationStatus(ridingSlotId, groupToAudience(group));
+}
+
+// Same read convention as getInstructorHorsePublicationStatusForInstructor -
+// exists/isActive only, not canEditRidingNotes.
+export async function getGroupHorsePublicationStatusForInstructor(
+  instructorId: string,
+  ridingSlotId: string,
+  group: RidingHorseTraineeGroup
+): Promise<RidingSlotHorsePublicationStatus | null> {
+  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
+  if (!instructor || !instructor.isActive) return null;
+  if (!isValidTraineeGroup(group)) return null;
+
+  return buildHorsePublicationStatus(ridingSlotId, groupToAudience(group));
 }
 
 // ---------- Publish / update (write) ----------
@@ -379,6 +433,220 @@ export async function publishRidingHorseListToInstructorsAsInstructor(
   });
 }
 
+// ---------- Publish / update to a trainee group (write) ----------
+
+export interface PublishHorseListToGroupInput {
+  ridingSlotId: string;
+  group: RidingHorseTraineeGroup;
+  title?: string;
+  generalNote?: string | null;
+}
+
+export interface PublishHorseListToGroupResult extends ActionResult {
+  status?: RidingSlotHorsePublicationStatus;
+  // Only meaningful here (the INSTRUCTORS publish never excludes anything) -
+  // count of source items that had no group split (groupName === null) and
+  // therefore could not be safely attributed to this trainee group. Not
+  // schema-backed; recomputed fresh on every publish/update call, purely for
+  // a later authoring UI to surface if useful.
+  excludedUngroupedItemCount?: number;
+}
+
+// Deliberately a separate function from publishRidingHorseListToInstructorsInternal
+// rather than a generalized merge of the two - the instructor write path is
+// already shipped and tested, and this keeps it byte-for-byte unchanged
+// (zero regression risk) at the cost of some duplicated structure. The
+// consistency/transaction shape is identical to the instructor version (see
+// its own comment); the two real differences are: (1) the source items are
+// filtered down to this one group before snapshotting, and items with no
+// group split (groupName === null) are always excluded - they can never be
+// safely attributed to one specific trainee group, and are never inferred
+// from any other field; (2) the default title names the group explicitly.
+async function publishRidingHorseListToGroupInternal(
+  input: PublishHorseListToGroupInput,
+  actor: PublicationActor
+): Promise<PublishHorseListToGroupResult> {
+  const ridingSlotId = input.ridingSlotId?.trim();
+  if (!ridingSlotId || !isValidTraineeGroup(input.group)) {
+    return { success: false, error: NOT_FOUND_RIDING_SLOT };
+  }
+  const group = input.group;
+  const audience = groupToAudience(group);
+
+  const scheduleMeta = await resolveRidingSlotScheduleMeta(ridingSlotId);
+  if (!scheduleMeta) {
+    return { success: false, error: NOT_FOUND_RIDING_SLOT };
+  }
+
+  const assignments = await prisma.ridingSlotAssignment.findMany({
+    where: { ridingSlotId },
+    include: {
+      instructor: true,
+      instructors: { include: { instructor: true }, orderBy: { createdAt: "asc" } },
+    },
+  });
+
+  const trimmedTitle = input.title?.trim() || null;
+  const generalNoteProvided = input.generalNote !== undefined;
+  const generalNoteToApply =
+    input.generalNote === null || input.generalNote === undefined
+      ? null
+      : input.generalNote.trim() || null;
+
+  const actorData = {
+    updatedByInstructorId: actor.instructorId,
+    updatedByAdminEmail: actor.adminEmail,
+    updatedByAdminName: actor.adminName,
+    updatedByName: actor.displayName,
+  };
+
+  const txResult = await prisma.$transaction(async (tx) => {
+    // The one consistent transactional read this whole publish is built
+    // from - list.version and list.items below are never re-read or mixed
+    // with a value obtained outside this call. Same guarantee as the
+    // instructor publish.
+    const list = await tx.ridingSlotHorseList.findUnique({
+      where: { ridingSlotId },
+      include: {
+        items: {
+          include: { student: { select: { id: true, fullName: true } } },
+          orderBy: { createdAt: "asc" },
+        },
+      },
+    });
+    if (!list) {
+      return { ok: false as const };
+    }
+
+    // Group-scoped snapshot: only items whose groupName exactly matches the
+    // requested group. Items with groupName === null ("whole slot," no
+    // split) remain visible only in the INSTRUCTORS publication - they are
+    // never included here and never inferred into one group or the other.
+    const groupItems = list.items.filter((item) => item.groupName === group);
+    const excludedUngroupedItemCount = list.items.filter((item) => item.groupName === null).length;
+
+    // Same stable ordering as the instructor publish: group, then subgroup,
+    // then existing source-item order.
+    const orderedItems = groupByGroupAndSubgroup(groupItems).flatMap((section) =>
+      section.subgroups.flatMap((sub) => sub.items)
+    );
+
+    const snapshotRows = orderedItems.map((item) => {
+      const assignment = findAssignmentForStudent(assignments, item.groupName, item.subgroupNumber);
+      const responsibleInstructorNames = assignment
+        ? formatInstructorNames(getAssignmentInstructorNames(assignment))
+        : null;
+      return {
+        groupName: item.groupName,
+        subgroupNumber: item.subgroupNumber,
+        responsibleInstructorNames,
+        studentId: item.studentId,
+        studentName: item.student?.fullName ?? null,
+        horseName: item.horseName,
+      };
+    });
+
+    const existing = await tx.ridingSlotHorsePublication.findUnique({
+      where: { horseListId_audience: { horseListId: list.id, audience } },
+    });
+
+    const titleToUse =
+      trimmedTitle ?? existing?.title ?? buildDefaultGroupPublicationTitle(scheduleMeta, group);
+    const generalNoteToUse = generalNoteProvided ? generalNoteToApply : (existing?.generalNote ?? null);
+
+    // Native upsert on the exact unique key, keyed by this group's own
+    // audience value - never touches the INSTRUCTORS row or the other
+    // group's row, and can never collide/duplicate under concurrent calls.
+    const publication = await tx.ridingSlotHorsePublication.upsert({
+      where: { horseListId_audience: { horseListId: list.id, audience } },
+      create: {
+        horseListId: list.id,
+        audience,
+        title: titleToUse,
+        generalNote: generalNoteToUse,
+        sourceVersion: list.version,
+        ...actorData,
+        // firstPublishedAt intentionally omitted - see the instructor
+        // publish's identical comment on why.
+      },
+      update: {
+        title: titleToUse,
+        generalNote: generalNoteToUse,
+        sourceVersion: list.version,
+        ...actorData,
+      },
+    });
+
+    await tx.ridingSlotHorsePublicationItem.deleteMany({ where: { publicationId: publication.id } });
+    if (snapshotRows.length > 0) {
+      await tx.ridingSlotHorsePublicationItem.createMany({
+        data: snapshotRows.map((row) => ({ ...row, publicationId: publication.id })),
+      });
+    }
+
+    return { ok: true as const, listVersion: list.version, publication, excludedUngroupedItemCount };
+  });
+
+  if (!txResult.ok) {
+    return { success: false, error: NOT_FOUND_HORSE_LIST };
+  }
+
+  revalidatePath("/admin/weekly-schedule");
+  revalidatePath("/instructor");
+  revalidatePath("/student");
+
+  return {
+    success: true,
+    excludedUngroupedItemCount: txResult.excludedUngroupedItemCount,
+    status: {
+      ridingSlotId,
+      hasHorseList: true,
+      horseListVersion: txResult.listVersion,
+      publication: {
+        id: txResult.publication.id,
+        title: txResult.publication.title,
+        generalNote: txResult.publication.generalNote,
+        sourceVersion: txResult.publication.sourceVersion,
+        firstPublishedAt: txResult.publication.firstPublishedAt.toISOString(),
+        updatedAt: txResult.publication.updatedAt.toISOString(),
+        updatedByName: txResult.publication.updatedByName,
+      },
+      status: "CURRENT",
+    },
+  };
+}
+
+export async function publishRidingHorseListToGroupAsAdmin(
+  input: PublishHorseListToGroupInput
+): Promise<PublishHorseListToGroupResult> {
+  const admin = await requireAdmin();
+  return publishRidingHorseListToGroupInternal(input, {
+    instructorId: null,
+    adminEmail: admin.email,
+    adminName: admin.name ?? null,
+    displayName: admin.name ?? admin.email,
+  });
+}
+
+// Same write gate as publishRidingHorseListToInstructorsAsInstructor -
+// isActive AND canEditRidingNotes. canEditHorseFeeding alone does not grant
+// publish/update access here either.
+export async function publishRidingHorseListToGroupAsInstructor(
+  instructorId: string,
+  input: PublishHorseListToGroupInput
+): Promise<PublishHorseListToGroupResult> {
+  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
+  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
+    return { success: false, error: NO_PERMISSION };
+  }
+  return publishRidingHorseListToGroupInternal(input, {
+    instructorId: instructor.id,
+    adminEmail: null,
+    adminName: null,
+    displayName: instructor.fullName,
+  });
+}
+
 // ---------- Instructor feed (read-only) ----------
 
 export interface RidingHorsePublicationFeedSubgroup {
@@ -409,25 +677,17 @@ export interface RidingHorsePublicationFeedItem {
   groups: RidingHorsePublicationFeedGroup[];
 }
 
-// Re-reads isActive/(canEditRidingNotes OR canEditHorseFeeding) from the DB
-// on every call - never trusts a client-supplied boolean, and returns []
-// (not an error) for an instructor who doesn't qualify, matching the
-// "graceful, no-error" convention already used elsewhere for view gates.
-// One query with an OR condition naturally returns each qualifying
-// instructor's own publications without any recipient-row materialization
-// or a two-audience-then-concatenate query - there is exactly one row per
-// (horseListId, audience) regardless of how many permissions grant a given
-// instructor visibility into it.
-export async function getRidingHorsePublicationsForInstructor(
-  instructorId: string
+// Shared by every feed action below (instructor and trainee-group alike) -
+// takes the target audience as its only filter, applied inside the Prisma
+// `where` itself so the other audience's rows are never fetched into memory
+// in the first place, let alone serialized back out. No recipient-row
+// materialization and no two-audience-then-concatenate query anywhere - at
+// most one row exists per (horseListId, audience) regardless of caller.
+async function buildPublicationFeedItems(
+  audience: PublicationAudienceValue
 ): Promise<RidingHorsePublicationFeedItem[]> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !(instructor.canEditRidingNotes || instructor.canEditHorseFeeding)) {
-    return [];
-  }
-
   const publications = await prisma.ridingSlotHorsePublication.findMany({
-    where: { audience: "INSTRUCTORS" },
+    where: { audience },
     include: {
       horseList: { select: { ridingSlotId: true } },
       items: { orderBy: { createdAt: "asc" } },
@@ -479,4 +739,51 @@ export async function getRidingHorsePublicationsForInstructor(
   feedItems.sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
 
   return feedItems;
+}
+
+// Re-reads isActive/(canEditRidingNotes OR canEditHorseFeeding) from the DB
+// on every call - never trusts a client-supplied boolean, and returns []
+// (not an error) for an instructor who doesn't qualify, matching the
+// "graceful, no-error" convention already used elsewhere for view gates.
+export async function getRidingHorsePublicationsForInstructor(
+  instructorId: string
+): Promise<RidingHorsePublicationFeedItem[]> {
+  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
+  if (!instructor || !instructor.isActive || !(instructor.canEditRidingNotes || instructor.canEditHorseFeeding)) {
+    return [];
+  }
+
+  return buildPublicationFeedItems("INSTRUCTORS");
+}
+
+// ---------- Trainee feed (read-only) ----------
+
+// Privacy: re-reads Student.groupName fresh from the DB by studentId on
+// every call - the client-held session's own copy of groupName (students
+// have no NextAuth session in this app either) is never trusted or even
+// looked at here. A student whose groupName is null or anything other than
+// "א"/"ב" maps to no audience at all and gets [] - never "both," never a
+// guess. The audience filter lives in the Prisma `where` clause itself (via
+// buildPublicationFeedItems), so a group-B student's query never touches a
+// GROUP_A_TRAINEES row in the first place - there is no post-fetch filter
+// step that could be forgotten. Never returns INSTRUCTORS-audience
+// publications, live RidingSlotHorseListItem rows, or any internal actor id.
+export async function getRidingHorsePublicationsForStudent(
+  studentId: string
+): Promise<RidingHorsePublicationFeedItem[]> {
+  const student = await prisma.student.findUnique({
+    where: { id: studentId },
+    select: { groupName: true, isActive: true },
+  });
+  // Returns [] uniformly whether the student doesn't exist, is inactive, or
+  // has no/an unrecognized groupName - never a distinguishable error, so a
+  // caller can't use this to probe whether a given studentId exists or is
+  // active.
+  if (!student || !student.isActive) return [];
+
+  const audience: PublicationAudienceValue | null =
+    student.groupName === "א" ? "GROUP_A_TRAINEES" : student.groupName === "ב" ? "GROUP_B_TRAINEES" : null;
+  if (!audience) return [];
+
+  return buildPublicationFeedItems(audience);
 }
