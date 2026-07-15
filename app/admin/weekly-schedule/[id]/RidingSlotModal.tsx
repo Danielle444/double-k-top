@@ -14,6 +14,7 @@ import { formatHebrewDate, parseDateKey } from "@/lib/dates";
 import { cleanScheduleTitle } from "@/lib/schedule-title";
 import { formatInstructorNames } from "@/lib/riding-assignment-matching";
 import { RidingHorseListEditor } from "@/lib/components/RidingHorseListEditor";
+import { RidingComplexPlanEditor } from "@/lib/components/RidingComplexPlanEditor";
 import {
   getRidingSlotForScheduleItem,
   createOrGetRidingSlot,
@@ -23,6 +24,8 @@ import {
   type RidingSlotRow,
   type RidingSlotAssignmentRow,
 } from "@/lib/actions/riding-slots";
+import { getRidingSlotHorseListForAdmin } from "@/lib/actions/riding-slot-horses";
+import { getRidingSlotComplexPlanForAdmin, createRidingSlotComplexPlanAsAdmin } from "@/lib/actions/riding-slot-complex";
 
 interface ScheduleItemInfo {
   title: string;
@@ -231,6 +234,22 @@ function AssignmentEditForm({
   );
 }
 
+type RidingSlotMode = "loading" | "none" | "simple" | "complex" | "error";
+
+// The server/database is the sole source of truth for which mode a
+// RidingSlot is in - never a separate client-side flag. Checks the complex
+// plan first (cheap - a single read, no candidates/schedule-meta computed
+// when null) and only falls back to the simple horse-list read when no
+// complex plan exists, since the two modes are mutually exclusive by
+// construction (see the P2 server-side guard).
+async function detectRidingSlotMode(ridingSlotId: string): Promise<RidingSlotMode> {
+  const complexPlan = await getRidingSlotComplexPlanForAdmin(ridingSlotId);
+  if (complexPlan) return "complex";
+  const horseList = await getRidingSlotHorseListForAdmin(ridingSlotId);
+  if (horseList?.listId) return "simple";
+  return "none";
+}
+
 export function RidingSlotModal({
   open,
   onClose,
@@ -260,6 +279,14 @@ export function RidingSlotModal({
 
   const [showHorseListEditor, setShowHorseListEditor] = useState(false);
 
+  // Mode (simple vs. complex vs. not-yet-chosen) is entirely re-derived from
+  // the server on every ridingSlot change - never a separate client-side
+  // source of truth. See detectRidingSlotMode above.
+  const [mode, setMode] = useState<RidingSlotMode>("loading");
+  const [modeError, setModeError] = useState<string | null>(null);
+  const [isChoosingComplex, startChooseComplexTransition] = useTransition();
+  const [showComplexEditor, setShowComplexEditor] = useState(false);
+
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -271,6 +298,7 @@ export function RidingSlotModal({
     setLoadError(null);
     setEditingAssignmentId(null);
     setDeleteError(null);
+    setModeError(null);
     getRidingSlotForScheduleItem(scheduleItemIds)
       .then((slot) => {
         if (cancelled) return;
@@ -290,6 +318,78 @@ export function RidingSlotModal({
     // re-renders while the modal is open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, scheduleItemIds.join(",")]);
+
+  // Re-derives mode fresh every time ridingSlot changes (including the
+  // null -> created transition from handleCreateSlot) - never left stale
+  // across a schedule-item switch, since ridingSlot?.id itself already
+  // changes in that case.
+  useEffect(() => {
+    if (!ridingSlot) return;
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMode("loading");
+    detectRidingSlotMode(ridingSlot.id)
+      .then((detected) => {
+        if (cancelled) return;
+        setMode(detected);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setMode("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Deliberately keyed on the primitive ridingSlot?.id, not the whole
+    // object - same convention as the load effect's scheduleItemIds.join(",")
+    // above, so an unrelated parent re-render (a new ridingSlot object
+    // reference with the same id) never re-triggers this fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ridingSlot?.id]);
+
+  function refreshMode() {
+    if (!ridingSlot) return;
+    setMode("loading");
+    detectRidingSlotMode(ridingSlot.id)
+      .then(setMode)
+      .catch(() => setMode("error"));
+  }
+
+  // Simple mode is never created merely by choosing it here - matches the
+  // existing lazy-creation behavior (a RidingSlotHorseList row is only
+  // written on the editor's own first Save). Choosing this just opens the
+  // existing, unmodified RidingHorseListEditor.
+  function handleChooseSimple() {
+    setModeError(null);
+    setShowHorseListEditor(true);
+  }
+
+  // Complex mode, unlike simple, is created eagerly right when chosen (per
+  // the approved P3a product behavior) via the P2 admin create action - a
+  // SIMPLE_LIST_EXISTS conflict (another tab created a simple list in the
+  // meantime) shows its exact Hebrew message and re-derives mode from the
+  // server, never deletes or converts either mode.
+  function handleChooseComplex() {
+    if (!ridingSlot) return;
+    setModeError(null);
+    startChooseComplexTransition(async () => {
+      const result = await createRidingSlotComplexPlanAsAdmin(ridingSlot.id);
+      if (!result.success) {
+        setModeError(result.error ?? "אירעה שגיאה");
+        refreshMode();
+        return;
+      }
+      setMode("complex");
+      setShowComplexEditor(true);
+    });
+  }
+
+  // Fired after a successful מחיקת התכנון המורכב inside RidingComplexPlanEditor -
+  // returns to the mode-selection state, never auto-creates a simple list.
+  function handleComplexPlanDeleted() {
+    setShowComplexEditor(false);
+    setMode("none");
+  }
 
   function handleCreateSlot() {
     setLoadError(null);
@@ -566,15 +666,56 @@ export function RidingSlotModal({
               )}
             </div>
 
-            <div className="flex items-center justify-between gap-2 rounded-lg border border-border p-3">
-              <p className="text-sm font-semibold text-card-foreground">סוסים לאיכוף</p>
-              <Button
-                variant="secondary"
-                className="!px-2 !py-1 !text-xs"
-                onClick={() => setShowHorseListEditor(true)}
-              >
-                הגדרת סוסים לאיכוף
-              </Button>
+            <div className="rounded-lg border border-border p-3">
+              <p className="mb-2 text-sm font-semibold text-card-foreground">מצב רכיבה</p>
+              {modeError && <p className="mb-2 text-sm text-danger">{modeError}</p>}
+              {mode === "loading" && <p className="text-sm text-muted-foreground">בודק מצב...</p>}
+              {mode === "error" && (
+                <p className="text-sm text-danger">שגיאה בבדיקת מצב הרכיבה. נסו לרענן.</p>
+              )}
+              {mode === "none" && (
+                <div className="flex flex-col gap-2">
+                  <p className="text-sm text-muted-foreground">
+                    טרם נבחר מצב עבור רכיבה זו - יש לבחור אחד מהבאים:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" onClick={handleChooseSimple}>
+                      רשימת סוסים רגילה
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      disabled={isChoosingComplex}
+                      onClick={handleChooseComplex}
+                    >
+                      {isChoosingComplex ? "יוצר..." : "תכנון רכיבה מורכבת — בלוקים וזוגות"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {mode === "simple" && (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground">מצב: רשימת סוסים רגילה</p>
+                  <Button
+                    variant="secondary"
+                    className="!px-2 !py-1 !text-xs"
+                    onClick={() => setShowHorseListEditor(true)}
+                  >
+                    הגדרת סוסים לאיכוף
+                  </Button>
+                </div>
+              )}
+              {mode === "complex" && (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground">מצב: תכנון רכיבה מורכבת</p>
+                  <Button
+                    variant="secondary"
+                    className="!px-2 !py-1 !text-xs"
+                    onClick={() => setShowComplexEditor(true)}
+                  >
+                    פתיחת תכנון רכיבה מורכבת
+                  </Button>
+                </div>
+              )}
             </div>
           </>
         )}
@@ -590,10 +731,29 @@ export function RidingSlotModal({
       {ridingSlot && (
         <RidingHorseListEditor
           open={showHorseListEditor}
-          onClose={() => setShowHorseListEditor(false)}
+          onClose={() => {
+            setShowHorseListEditor(false);
+            // Re-derives mode after closing - if the save inside hit a
+            // COMPLEX_PLAN_EXISTS conflict (already shown inline by the
+            // unmodified editor itself), this reflects the true server
+            // state instead of leaving the "none" choice screen stale.
+            refreshMode();
+          }}
           ridingSlotId={ridingSlot.id}
           contextLabel={`${cleanScheduleTitle(scheduleItemInfo.title)} · ${scheduleItemInfo.startTime}-${scheduleItemInfo.endTime}`}
           actor={{ type: "admin" }}
+        />
+      )}
+
+      {ridingSlot && (
+        <RidingComplexPlanEditor
+          open={showComplexEditor}
+          onClose={() => setShowComplexEditor(false)}
+          ridingSlotId={ridingSlot.id}
+          contextLabel={`${cleanScheduleTitle(scheduleItemInfo.title)} · ${scheduleItemInfo.startTime}-${scheduleItemInfo.endTime}`}
+          instructors={instructors}
+          actor={{ type: "admin" }}
+          onDeleted={handleComplexPlanDeleted}
         />
       )}
     </Modal>
