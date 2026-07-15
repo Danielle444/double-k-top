@@ -18,6 +18,10 @@ const NO_PERMISSION = "אין הרשאה לערוך את רשימת הסוסים
 const DUPLICATE_STUDENT = "אין לבחור אותו/ה חניכ/ה יותר מפעם אחת";
 const DUPLICATE_HORSE_IN_SUBGROUP = "אותו שם סוס נבחר יותר מפעם אחת באותה קבוצה/תת-קבוצה";
 const STUDENT_NOT_IN_ROSTER = "אחד או יותר מהחניכים שנבחרו אינם/ן קיימ/ות או אינם/ן שייכ/ות לרכיבה זו";
+// RIDING-PAIRS P2 mutual-exclusivity guard - see saveRidingSlotHorseListInternal.
+const COMPLEX_PLAN_EXISTS =
+  "לא ניתן לשמור רשימת סוסים רגילה - קיים כבר תכנון רכיבה מורכבת עבור רכיבה זו";
+const LOCK_TIMEOUT = "המערכת עמוסה כרגע - נסי שוב בעוד רגע";
 
 // ---------- Shared read model ----------
 
@@ -323,71 +327,116 @@ async function saveRidingSlotHorseListInternal(
     return { success: false, error: DUPLICATE_HORSE_IN_SUBGROUP };
   }
 
-  const savedList = await prisma.$transaction(async (tx) => {
-    const existing = await tx.ridingSlotHorseList.findUnique({
-      where: { ridingSlotId: data.ridingSlotId },
-    });
-    const actorData = {
-      updatedByInstructorId: actor.instructorId,
-      updatedByAdminEmail: actor.adminEmail,
-      updatedByAdminName: actor.adminName,
-      updatedByName: actor.displayName,
-    };
+  // RIDING-PAIRS P2 mutual-exclusivity guard - txResult.ok mirrors the same
+  // discriminated-transaction-result convention already used by
+  // publishRidingHorseListToInstructorsInternal in
+  // riding-slot-horse-publications.ts, rather than throwing. The guard check
+  // and the list write happen inside ONE transaction (never relying only on
+  // a pre-transaction read), guarded by the same Postgres advisory
+  // transaction lock (keyed by ridingSlotId) that
+  // createComplexPlanInternal in lib/actions/riding-slot-complex.ts takes as
+  // its own first statement - transaction-scoped (not session-scoped), so
+  // it is safe under Supabase's pooled connections and fully serializes any
+  // concurrent create-simple-list / create-complex-plan attempt for this
+  // exact ridingSlotId. Applies to every save (both first creation and
+  // later updates), not just creation, since a complex plan must never
+  // coexist with this list regardless of how the list came to exist.
+  // Waiting on the advisory lock below counts against this transaction's
+  // normal interactive-transaction timeout (Prisma default 5000ms). No
+  // custom timeout is added here (this transaction's own work is a handful
+  // of point reads/writes, not a long loop like
+  // teaching-practice-child-import.ts's explicit 30s case) - if two callers
+  // contend for the same ridingSlotId for more than 5s, the loser gets a
+  // P2028 timeout, caught below and mapped to a clear Hebrew message (same
+  // duck-typed error-code check already used for P2002 in
+  // lib/actions/weekly-feedback.ts), never a raw Prisma error.
+  try {
+    const txResult = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${data.ridingSlotId}))`;
 
-    const list = existing
-      ? await tx.ridingSlotHorseList.update({
-          where: { id: existing.id },
-          data: { version: { increment: 1 }, ...actorData },
-        })
-      : await tx.ridingSlotHorseList.create({
-          data: { ridingSlotId: data.ridingSlotId, version: 1, ...actorData },
+      const complexPlan = await tx.ridingSlotComplexPlan.findUnique({
+        where: { ridingSlotId: data.ridingSlotId },
+        select: { id: true },
+      });
+      if (complexPlan) {
+        return { ok: false as const };
+      }
+
+      const existing = await tx.ridingSlotHorseList.findUnique({
+        where: { ridingSlotId: data.ridingSlotId },
+      });
+      const actorData = {
+        updatedByInstructorId: actor.instructorId,
+        updatedByAdminEmail: actor.adminEmail,
+        updatedByAdminName: actor.adminName,
+        updatedByName: actor.displayName,
+      };
+
+      const list = existing
+        ? await tx.ridingSlotHorseList.update({
+            where: { id: existing.id },
+            data: { version: { increment: 1 }, ...actorData },
+          })
+        : await tx.ridingSlotHorseList.create({
+            data: { ridingSlotId: data.ridingSlotId, version: 1, ...actorData },
+          });
+
+      await tx.ridingSlotHorseListItem.deleteMany({ where: { listId: list.id } });
+      if (deduped.length > 0) {
+        await tx.ridingSlotHorseListItem.createMany({
+          data: deduped.map((item) => ({
+            listId: list.id,
+            groupName: item.groupName,
+            subgroupNumber: item.subgroupNumber,
+            studentId: item.studentId,
+            horseName: item.horseName,
+          })),
         });
+      }
 
-    await tx.ridingSlotHorseListItem.deleteMany({ where: { listId: list.id } });
-    if (deduped.length > 0) {
-      await tx.ridingSlotHorseListItem.createMany({
-        data: deduped.map((item) => ({
-          listId: list.id,
+      return { ok: true as const, list };
+    });
+
+    if (!txResult.ok) {
+      return { success: false, error: COMPLEX_PLAN_EXISTS };
+    }
+    const savedList = txResult.list;
+
+    // Publications are never touched here - just read for the caller's
+    // read-only status display (e.g. a later stage's "stale" banner).
+    const publications = await prisma.ridingSlotHorsePublication.findMany({
+      where: { horseListId: savedList.id },
+      select: { sourceVersion: true },
+    });
+
+    revalidatePath("/admin/weekly-schedule");
+    revalidatePath("/instructor");
+
+    return {
+      success: true,
+      status: {
+        ridingSlotId: data.ridingSlotId,
+        listId: savedList.id,
+        version: savedList.version,
+        updatedAt: savedList.updatedAt.toISOString(),
+        updatedByName: savedList.updatedByName,
+        items: deduped.map((item) => ({
           groupName: item.groupName,
           subgroupNumber: item.subgroupNumber,
           studentId: item.studentId,
+          studentName: item.studentId ? (rosterByStudentId.get(item.studentId)?.studentName ?? null) : null,
           horseName: item.horseName,
         })),
-      });
+        hasPublications: publications.length > 0,
+        hasStalePublication: publications.some((p) => p.sourceVersion < savedList.version),
+      },
+    };
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && err.code === "P2028") {
+      return { success: false, error: LOCK_TIMEOUT };
     }
-
-    return list;
-  });
-
-  // Publications are never touched here - just read for the caller's
-  // read-only status display (e.g. a later stage's "stale" banner).
-  const publications = await prisma.ridingSlotHorsePublication.findMany({
-    where: { horseListId: savedList.id },
-    select: { sourceVersion: true },
-  });
-
-  revalidatePath("/admin/weekly-schedule");
-  revalidatePath("/instructor");
-
-  return {
-    success: true,
-    status: {
-      ridingSlotId: data.ridingSlotId,
-      listId: savedList.id,
-      version: savedList.version,
-      updatedAt: savedList.updatedAt.toISOString(),
-      updatedByName: savedList.updatedByName,
-      items: deduped.map((item) => ({
-        groupName: item.groupName,
-        subgroupNumber: item.subgroupNumber,
-        studentId: item.studentId,
-        studentName: item.studentId ? (rosterByStudentId.get(item.studentId)?.studentName ?? null) : null,
-        horseName: item.horseName,
-      })),
-      hasPublications: publications.length > 0,
-      hasStalePublication: publications.some((p) => p.sourceVersion < savedList.version),
-    },
-  };
+    throw err;
+  }
 }
 
 export async function saveRidingSlotHorseListAsAdmin(
