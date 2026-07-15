@@ -7,13 +7,15 @@ import { hasMeaningfulTeachingPracticeFeedback } from "@/lib/teaching-practice-f
 import type { TeachingPracticeRoleValue, TeachingPracticeTypeValue } from "@/lib/teaching-practice-rotation";
 import { requireInstructorWithTraineeProgressAccess } from "@/lib/actions/trainee-progress-instructor-access";
 
-// Read-only, admin-only surface for Stage P2 of the trainee progress page
-// (/admin/trainee-progress) - a per-trainee feedback HISTORY, not a
-// date-level results dashboard and not an editing screen. Deliberately
-// separate from lib/actions/teaching-practice.ts (2600+ lines already,
-// admin/instructor CRUD + sync/generation/publish) so this narrow read path
-// stays easy to read on its own and never risks touching write/sync logic.
-// Never mutates anything - no create/update/delete call anywhere here.
+// Read-only surface for the trainee-progress page's "התנסויות מתחילים"
+// section (both /admin/trainee-progress and the instructor equivalent) - a
+// per-trainee feedback HISTORY, not a date-level results dashboard and not
+// an editing screen. Deliberately separate from lib/actions/teaching-practice.ts
+// (2600+ lines already, admin/instructor CRUD + sync/generation/publish) so
+// this narrow read path stays easy to read on its own and never risks
+// touching write/sync logic. Never mutates anything - no create/update/
+// delete call anywhere here (upsertTeachingPracticeFeedbackAsInstructor/
+// AsAdmin, both in teaching-practice.ts, remain the only way to write).
 
 // Mirrors ROLE_SLOTS_BY_PRACTICE_TYPE in lib/components/TeachingPracticeManager.tsx
 // - duplicated rather than imported since that file is a client component
@@ -29,16 +31,14 @@ const ROLE_SLOTS_BY_PRACTICE_TYPE: Record<TeachingPracticeTypeValue, TeachingPra
   BEGINNER_GROUP: ["LEAD_INSTRUCTOR", "SECOND_INSTRUCTOR", "EVALUATOR"],
 };
 
+// One row per participant with MEANINGFUL feedback only - feedbackId/
+// updatedAt are never null here. This DTO is never used to carry
+// not-yet-filled-in participations (see TeachingPracticeUnfilledParticipationRow
+// below for that, a deliberately separate shape) - "do not globally expose
+// empty rows through the history DTO merely for editing" is a hard
+// requirement, not just a convention.
 export interface TeachingPracticeFeedbackHistoryRow {
-  // Null when this participant has no meaningful TeachingPracticeFeedback
-  // row yet - only possible when this row came from
-  // buildStudentTeachingPracticeFeedbackHistory's includeEmpty mode (see
-  // that function's own comment); every other caller only ever produces
-  // rows that already have meaningful feedback, so feedbackId is never null
-  // for them in practice, even though the type allows it everywhere for one
-  // shared shape. A null feedbackId is what the shared detail view renders
-  // as the neutral "טרם מולא" state.
-  feedbackId: string | null;
+  feedbackId: string;
   lessonId: string;
   date: string;
   startTime: string;
@@ -54,8 +54,7 @@ export interface TeachingPracticeFeedbackHistoryRow {
   ratingHalfPoints: number | null;
   feedback: string | null;
   updatedByName: string | null;
-  // Null exactly when feedbackId is null (no feedback row yet).
-  updatedAt: string | null;
+  updatedAt: string;
   childFullName: string | null;
   horseName: string | null;
   equipmentNotes: string | null;
@@ -64,9 +63,32 @@ export interface TeachingPracticeFeedbackHistoryRow {
   // with canEditTeachingPracticeFeedback straight to the existing
   // upsertTeachingPracticeFeedbackAsInstructor(instructorId, participantId,
   // input) action (see lib/actions/teaching-practice.ts), without this read
-  // path having to duplicate any of that action's own logic. Always
-  // present, unlike feedbackId - this is what the UI keys/edits by.
+  // path having to duplicate any of that action's own logic.
   participantId: string;
+}
+
+// A real TeachingPracticeParticipant/TeachingPracticeLesson record that has
+// NO meaningful feedback yet - never a synthesized/fake row. Deliberately a
+// separate type from TeachingPracticeFeedbackHistoryRow (no feedbackId/
+// ratingHalfPoints/feedback/updatedByName/updatedAt fields at all, since
+// none of that exists yet) so the two can never be accidentally merged into
+// one list again. Only ever returned by
+// getUnfilledTeachingPracticeParticipationsForInstructor below, which feeds
+// the "הוספת משוב להתנסות" picker - never the visible feedback-history list,
+// never כל המשובים, never any average.
+export interface TeachingPracticeUnfilledParticipationRow {
+  participantId: string;
+  lessonId: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  practiceType: TeachingPracticeTypeValue;
+  groupName: string | null;
+  location: string | null;
+  role: TeachingPracticeRoleValue;
+  childFullName: string | null;
+  horseName: string | null;
+  equipmentNotes: string | null;
 }
 
 type LessonParticipantForPairing = { traineeId: string; role: TeachingPracticeRoleValue };
@@ -114,37 +136,13 @@ function resolveChildForParticipant(
   return { childFullName: match.child.fullName, horseName: match.horseName, equipmentNotes: match.equipmentNotes };
 }
 
-// By default, one row per participant with MEANINGFUL feedback
-// (hasMeaningfulTeachingPracticeFeedback - a saved-but-empty
-// TeachingPracticeFeedback row, e.g. from opening and closing the feedback
-// modal without entering anything, is excluded, same rule the sync/
-// overwrite-protection logic already uses elsewhere) - this is the shape
-// every pre-existing caller (admin history, the read-only "history" list)
-// expects and must keep getting, unchanged, so it stays the default.
-//
-// options.includeEmpty (only ever passed by
-// getStudentTeachingPracticeFeedbackForInstructorTraineeProgress below, for
-// an instructor who can actually create feedback) additionally includes one
-// row per participant that has NO meaningful feedback yet - real lesson/
-// participant records, never synthesized - with feedbackId/ratingHalfPoints/
-// feedback/updatedByName/updatedAt all null, which the shared detail view
-// renders as a neutral "טרם מולא" state instead of hiding the participant
-// entirely. This is what lets an instructor create the FIRST feedback entry
-// for a trainee's Teaching Practice participation, not just edit one that
-// already exists.
-//
-// Sorted newest lesson first (date desc, then startTime desc). Returns null
-// only when the student itself doesn't exist - a student that exists but
-// has no (meaningful) feedback yet returns an empty array (or, in
-// includeEmpty mode, a full list of "טרם מולא" rows), never null. Shared by
-// every read action below - same buildStudentRidingHistory/
-// getStudentRidingHistoryForAdmin+ForInstructor split already used in
-// lib/actions/riding-slots.ts, so the query/shape logic itself is never
-// duplicated between callers.
-async function buildStudentTeachingPracticeFeedbackHistory(
-  studentId: string,
-  options: { includeEmpty?: boolean } = {}
-): Promise<TeachingPracticeFeedbackHistoryRow[] | null> {
+// Shared query + child-context resolution, reused by both
+// buildStudentTeachingPracticeFeedbackHistory (meaningful-only) and
+// buildStudentTeachingPracticeUnfilledParticipations (no-feedback-yet only)
+// below, so the Prisma query and the child/horse/equipment resolution logic
+// is never duplicated between the two - only the final filter/shape
+// differs. Returns null only when the student itself doesn't exist.
+async function fetchTeachingPracticeParticipantsForStudent(studentId: string) {
   const student = await prisma.student.findUnique({ where: { id: studentId } });
   if (!student) return null;
 
@@ -161,34 +159,87 @@ async function buildStudentTeachingPracticeFeedbackHistory(
     },
   });
 
-  const rows: TeachingPracticeFeedbackHistoryRow[] = participants
-    .filter((p) => options.includeEmpty || hasMeaningfulTeachingPracticeFeedback(p.feedback))
-    .map((p) => {
-      const childContext = resolveChildForParticipant(
-        p.lesson.practiceType,
-        p.traineeId,
-        p.lesson.participants,
-        p.lesson.childAssignments
-      );
-      const hasFeedback = hasMeaningfulTeachingPracticeFeedback(p.feedback);
-      return {
-        feedbackId: hasFeedback ? p.feedback!.id : null,
-        lessonId: p.lessonId,
-        participantId: p.id,
-        date: dateKey(p.lesson.date),
-        startTime: p.lesson.startTime,
-        endTime: p.lesson.endTime,
-        practiceType: p.lesson.practiceType,
-        groupName: p.lesson.groupName,
-        location: p.lesson.location,
-        role: p.role,
-        ratingHalfPoints: hasFeedback ? p.feedback!.ratingHalfPoints : null,
-        feedback: hasFeedback ? p.feedback!.feedback : null,
-        updatedByName: hasFeedback ? p.feedback!.updatedByName : null,
-        updatedAt: hasFeedback ? p.feedback!.updatedAt.toISOString() : null,
-        ...childContext,
-      };
-    });
+  return participants.map((p) => ({
+    participant: p,
+    childContext: resolveChildForParticipant(
+      p.lesson.practiceType,
+      p.traineeId,
+      p.lesson.participants,
+      p.lesson.childAssignments
+    ),
+  }));
+}
+
+// One row per participant with MEANINGFUL feedback
+// (hasMeaningfulTeachingPracticeFeedback - a saved-but-empty
+// TeachingPracticeFeedback row, e.g. from opening and closing the feedback
+// modal without entering anything, is excluded, same rule the sync/
+// overwrite-protection logic already uses elsewhere). Sorted newest lesson
+// first (date desc, then startTime desc). Returns null only when the
+// student itself doesn't exist - a student that exists but has no
+// (meaningful) feedback yet returns an empty array, never null. Shared by
+// every history read action below - same buildStudentRidingHistory/
+// getStudentRidingHistoryForAdmin+ForInstructor split already used in
+// lib/actions/riding-slots.ts, so the query/shape logic itself is never
+// duplicated between callers.
+async function buildStudentTeachingPracticeFeedbackHistory(
+  studentId: string
+): Promise<TeachingPracticeFeedbackHistoryRow[] | null> {
+  const entries = await fetchTeachingPracticeParticipantsForStudent(studentId);
+  if (entries === null) return null;
+
+  const rows: TeachingPracticeFeedbackHistoryRow[] = entries
+    .filter(({ participant: p }) => hasMeaningfulTeachingPracticeFeedback(p.feedback))
+    .map(({ participant: p, childContext }) => ({
+      feedbackId: p.feedback!.id,
+      lessonId: p.lessonId,
+      participantId: p.id,
+      date: dateKey(p.lesson.date),
+      startTime: p.lesson.startTime,
+      endTime: p.lesson.endTime,
+      practiceType: p.lesson.practiceType,
+      groupName: p.lesson.groupName,
+      location: p.lesson.location,
+      role: p.role,
+      ratingHalfPoints: p.feedback!.ratingHalfPoints,
+      feedback: p.feedback!.feedback,
+      updatedByName: p.feedback!.updatedByName,
+      updatedAt: p.feedback!.updatedAt.toISOString(),
+      ...childContext,
+    }));
+
+  rows.sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
+
+  return rows;
+}
+
+// The mirror-image filter of buildStudentTeachingPracticeFeedbackHistory -
+// one row per participant WITHOUT meaningful feedback, real records only
+// (same query, same child-context resolution, via
+// fetchTeachingPracticeParticipantsForStudent), for the "הוספת משוב
+// להתנסות" picker only. Never called by anything that also touches כל
+// המשובים or an average - see the two exported wrappers below for exactly
+// who this is for.
+async function buildStudentTeachingPracticeUnfilledParticipations(
+  studentId: string
+): Promise<TeachingPracticeUnfilledParticipationRow[] | null> {
+  const entries = await fetchTeachingPracticeParticipantsForStudent(studentId);
+  if (entries === null) return null;
+
+  const rows: TeachingPracticeUnfilledParticipationRow[] = entries
+    .filter(({ participant: p }) => !hasMeaningfulTeachingPracticeFeedback(p.feedback))
+    .map(({ participant: p, childContext }) => ({
+      participantId: p.id,
+      lessonId: p.lessonId,
+      date: dateKey(p.lesson.date),
+      startTime: p.lesson.startTime,
+      endTime: p.lesson.endTime,
+      practiceType: p.lesson.practiceType,
+      groupName: p.lesson.groupName,
+      location: p.lesson.location,
+      role: p.role,
+      ...childContext,
+    }));
 
   rows.sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
 
@@ -210,22 +261,36 @@ export async function getStudentTeachingPracticeFeedbackForAdmin(
 // this read is authorized from the start: re-fetches the instructor fresh
 // from the DB, requires isActive, and requires canEditRidingNotes ||
 // canEditTeachingPracticeFeedback (the same page-access gate the tab itself
-// is gated on) before returning anything.
-//
-// includeEmpty is derived server-side from the freshly-fetched instructor's
-// own canEditTeachingPracticeFeedback flag - never a caller-supplied
-// boolean - so only an instructor who can actually save feedback ever sees
-// the "טרם מולא" placeholder rows; an instructor here only for
-// canEditRidingNotes still sees the section (full page-access viewing
-// requirement) but only the rows that already have meaningful feedback,
-// same as before this stage.
+// is gated on) before returning anything. Always meaningful-only, for every
+// instructor regardless of which specific permission they have - the
+// "הוספת משוב להתנסות" picker (getUnfilledTeachingPracticeParticipationsForInstructor
+// below) is the only source of not-yet-filled-in participations; this read
+// never mixes them in.
 export async function getStudentTeachingPracticeFeedbackForInstructorTraineeProgress(
   instructorId: string,
   studentId: string
 ): Promise<TeachingPracticeFeedbackHistoryRow[] | null> {
   const instructor = await requireInstructorWithTraineeProgressAccess(instructorId);
   if (!instructor) return null;
-  return buildStudentTeachingPracticeFeedbackHistory(studentId, {
-    includeEmpty: instructor.canEditTeachingPracticeFeedback,
-  });
+  return buildStudentTeachingPracticeFeedbackHistory(studentId);
+}
+
+// Feeds ONLY the "הוספת משוב להתנסות" picker in the instructor trainee-
+// progress detail view - never the visible history list, never כל המשובים,
+// never an average. Gated specifically to canEditTeachingPracticeFeedback
+// (re-fetched fresh from the DB, isActive required) rather than the
+// broader page-access OR-predicate other trainee-progress reads use: only
+// an instructor who can actually call upsertTeachingPracticeFeedbackAsInstructor
+// has any use for a list of participations still missing feedback, and this
+// keeps that stricter, narrower authorization visible at the call site
+// rather than folding it into the generic helper.
+export async function getUnfilledTeachingPracticeParticipationsForInstructor(
+  instructorId: string,
+  studentId: string
+): Promise<TeachingPracticeUnfilledParticipationRow[] | null> {
+  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
+  if (!instructor || !instructor.isActive || !instructor.canEditTeachingPracticeFeedback) {
+    return null;
+  }
+  return buildStudentTeachingPracticeUnfilledParticipations(studentId);
 }

@@ -3,7 +3,10 @@
 import { useEffect, useMemo, useState, useTransition } from "react";
 import type { ActionResult } from "@/lib/actions/students";
 import type { RidingHistoryRow } from "@/lib/actions/riding-slots";
-import type { TeachingPracticeFeedbackHistoryRow } from "@/lib/actions/teaching-practice-feedback-history";
+import type {
+  TeachingPracticeFeedbackHistoryRow,
+  TeachingPracticeUnfilledParticipationRow,
+} from "@/lib/actions/teaching-practice-feedback-history";
 import type { TeachingPracticeFeedbackInput } from "@/lib/actions/teaching-practice";
 import type {
   StudentRidingProgressFeedbackInput,
@@ -227,6 +230,13 @@ function TeachingPracticeFeedbackEntryForm({
   );
 }
 
+// Meaningful-feedback rows only, always - this list never renders a
+// not-yet-filled-in participation (see TeachingPracticeUnfilledParticipationRow's
+// own comment on why that's a hard, separate-DTO requirement). "existing
+// feedback → editable" is still supported: canEdit/onSaveFeedback still let
+// an authorized instructor open the same TeachingPracticeFeedbackEntryForm
+// on an existing row - only the "create the first entry" path moved out to
+// AddTeachingPracticeFeedbackPicker below.
 function TeachingPracticeFeedbackHistoryList({
   rows,
   emptyMessage = "עדיין לא הוזן משוב התנסויות מתחילים לחניך/ה זה/זו.",
@@ -268,86 +278,177 @@ function TeachingPracticeFeedbackHistoryList({
 
   return (
     <div className="flex flex-col gap-3">
-      {rows.map((row) => {
-        const hasFeedback = row.feedbackId != null;
-        return (
-          <div key={row.participantId} className="rounded-xl border border-border bg-card p-4">
-            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-              <span className="font-semibold text-card-foreground">
-                {formatHebrewDate(parseDateKey(row.date))} · {row.startTime}-{row.endTime}
-              </span>
-              {!hasFeedback ? (
-                <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                  טרם מולא
-                </span>
+      {rows.map((row) => (
+        <div key={row.feedbackId} className="rounded-xl border border-border bg-card p-4">
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+            <span className="font-semibold text-card-foreground">
+              {formatHebrewDate(parseDateKey(row.date))} · {row.startTime}-{row.endTime}
+            </span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                row.ratingHalfPoints != null
+                  ? "bg-success-muted text-success"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              {row.ratingHalfPoints != null ? `דירוג: ${row.ratingHalfPoints / 2}` : "אין דירוג"}
+            </span>
+          </div>
+          <p className="mb-1 text-base font-bold text-card-foreground">
+            {PRACTICE_TYPE_LABELS[row.practiceType]}
+            {row.groupName ? ` · קבוצה ${row.groupName}` : ""}
+          </p>
+          <p className="mb-1 text-xs text-muted-foreground">
+            תפקיד: {ROLE_LABELS[row.role]}
+            {row.location ? ` · מיקום: ${row.location}` : ""}
+          </p>
+          {row.feedback && <p className="mb-1 text-sm text-card-foreground">משוב: {row.feedback}</p>}
+          {(row.childFullName || row.horseName || row.equipmentNotes) && (
+            <p className="mb-1 text-xs text-muted-foreground">
+              {row.childFullName ? `ילד/ה: ${row.childFullName}` : ""}
+              {row.childFullName && row.horseName ? " · " : ""}
+              {row.horseName ? `סוס: ${row.horseName}` : ""}
+              {(row.childFullName || row.horseName) && row.equipmentNotes ? " · " : ""}
+              {row.equipmentNotes ? `ציוד: ${row.equipmentNotes}` : ""}
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            {row.updatedByName && `עודכן על ידי: ${row.updatedByName}`}
+            {row.updatedByName && " · "}
+            עודכן בתאריך: {formatHebrewDateTime(new Date(row.updatedAt))}
+          </p>
+          {canEdit && onSaveFeedback && (
+            <div className="mt-1">
+              {editingParticipantId === row.participantId ? (
+                <TeachingPracticeFeedbackEntryForm
+                  initialRatingHalfPoints={row.ratingHalfPoints}
+                  initialFeedback={row.feedback}
+                  pending={isPending}
+                  error={error}
+                  onSubmit={(input) => handleSave(row.participantId, input)}
+                  onCancel={() => {
+                    setEditingParticipantId(null);
+                    setError(null);
+                  }}
+                />
               ) : (
-                <span
-                  className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                    row.ratingHalfPoints != null
-                      ? "bg-success-muted text-success"
-                      : "bg-muted text-muted-foreground"
-                  }`}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingParticipantId(row.participantId);
+                    setError(null);
+                  }}
+                  className="text-xs font-medium text-secondary-foreground underline hover:opacity-80"
                 >
-                  {row.ratingHalfPoints != null ? `דירוג: ${row.ratingHalfPoints / 2}` : "אין דירוג"}
-                </span>
+                  עריכה
+                </button>
               )}
             </div>
-            <p className="mb-1 text-base font-bold text-card-foreground">
-              {PRACTICE_TYPE_LABELS[row.practiceType]}
-              {row.groupName ? ` · קבוצה ${row.groupName}` : ""}
-            </p>
-            <p className="mb-1 text-xs text-muted-foreground">
-              תפקיד: {ROLE_LABELS[row.role]}
-              {row.location ? ` · מיקום: ${row.location}` : ""}
-            </p>
-            {row.feedback && <p className="mb-1 text-sm text-card-foreground">משוב: {row.feedback}</p>}
-            {(row.childFullName || row.horseName || row.equipmentNotes) && (
-              <p className="mb-1 text-xs text-muted-foreground">
-                {row.childFullName ? `ילד/ה: ${row.childFullName}` : ""}
-                {row.childFullName && row.horseName ? " · " : ""}
-                {row.horseName ? `סוס: ${row.horseName}` : ""}
-                {(row.childFullName || row.horseName) && row.equipmentNotes ? " · " : ""}
-                {row.equipmentNotes ? `ציוד: ${row.equipmentNotes}` : ""}
-              </p>
-            )}
-            {hasFeedback && row.updatedAt && (
-              <p className="text-xs text-muted-foreground">
-                {row.updatedByName && `עודכן על ידי: ${row.updatedByName}`}
-                {row.updatedByName && " · "}
-                עודכן בתאריך: {formatHebrewDateTime(new Date(row.updatedAt))}
-              </p>
-            )}
-            {canEdit && onSaveFeedback && (
-              <div className="mt-1">
-                {editingParticipantId === row.participantId ? (
-                  <TeachingPracticeFeedbackEntryForm
-                    initialRatingHalfPoints={row.ratingHalfPoints}
-                    initialFeedback={row.feedback}
-                    pending={isPending}
-                    error={error}
-                    onSubmit={(input) => handleSave(row.participantId, input)}
-                    onCancel={() => {
-                      setEditingParticipantId(null);
-                      setError(null);
-                    }}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingParticipantId(row.participantId);
-                      setError(null);
-                    }}
-                    className="text-xs font-medium text-secondary-foreground underline hover:opacity-80"
-                  >
-                    {hasFeedback ? "עריכה" : "הזנת משוב"}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// The "הוספת משוב להתנסות" action - a compact, collapsed-by-default picker
+// over real not-yet-filled-in participations (TeachingPracticeUnfilledParticipationRow,
+// from getUnfilledTeachingPracticeParticipationsForInstructor - never
+// synthesized). Selecting one opens the exact same TeachingPracticeFeedbackEntryForm
+// used to edit an existing row, seeded empty, saving through the same
+// onSaveFeedback (upsertTeachingPracticeFeedbackAsInstructor). Only ever
+// rendered when the caller has both canEdit and a non-empty/loaded
+// unfilledRows array to show - see TeachingPracticeFeedbackSection below.
+function AddTeachingPracticeFeedbackPicker({
+  unfilledRows,
+  onSaveFeedback,
+  onSaved,
+}: {
+  unfilledRows: TeachingPracticeUnfilledParticipationRow[];
+  onSaveFeedback: (participantId: string, input: TeachingPracticeFeedbackInput) => Promise<ActionResult>;
+  onSaved: () => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [selectedParticipantId, setSelectedParticipantId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+
+  function handleSave(participantId: string, input: TeachingPracticeFeedbackInput) {
+    setError(null);
+    startTransition(async () => {
+      const result = await onSaveFeedback(participantId, input);
+      if (!result.success) {
+        setError(result.error ?? "אירעה שגיאה");
+        return;
+      }
+      setSelectedParticipantId(null);
+      setIsOpen(false);
+      onSaved();
+    });
+  }
+
+  if (!isOpen) {
+    return (
+      <button
+        type="button"
+        onClick={() => setIsOpen(true)}
+        className="self-start rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+      >
+        הוספת משוב להתנסות
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3">
+      {selectedParticipantId ? (
+        <TeachingPracticeFeedbackEntryForm
+          initialRatingHalfPoints={null}
+          initialFeedback={null}
+          pending={isPending}
+          error={error}
+          onSubmit={(input) => handleSave(selectedParticipantId, input)}
+          onCancel={() => {
+            setSelectedParticipantId(null);
+            setError(null);
+          }}
+        />
+      ) : (
+        <>
+          {unfilledRows.length === 0 ? (
+            <p className="text-xs text-muted-foreground">אין התנסויות ללא משוב.</p>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {unfilledRows.map((row) => (
+                <button
+                  key={row.participantId}
+                  type="button"
+                  onClick={() => setSelectedParticipantId(row.participantId)}
+                  className="flex flex-col items-start gap-0.5 rounded-lg border border-border bg-card px-3 py-2 text-right text-xs hover:bg-muted"
+                >
+                  <span className="font-semibold text-card-foreground">
+                    {formatHebrewDate(parseDateKey(row.date))} · {row.startTime}-{row.endTime} ·{" "}
+                    {PRACTICE_TYPE_LABELS[row.practiceType]}
+                  </span>
+                  <span className="text-muted-foreground">
+                    תפקיד: {ROLE_LABELS[row.role]}
+                    {row.groupName ? ` · קבוצה ${row.groupName}` : ""}
+                    {row.childFullName ? ` · ילד/ה: ${row.childFullName}` : ""}
+                    {row.horseName ? ` · סוס: ${row.horseName}` : ""}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setIsOpen(false)}
+            className="self-start rounded-lg bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted/70"
+          >
+            ביטול
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -356,47 +457,77 @@ function TeachingPracticeFeedbackSection({
   lungeRows,
   beginnerRows,
   canEdit,
+  unfilledRows,
   onSaveFeedback,
   onSaved,
 }: {
   lungeRows: TeachingPracticeFeedbackHistoryRow[];
   beginnerRows: TeachingPracticeFeedbackHistoryRow[];
   canEdit: boolean;
+  // null while still loading, or simply never provided for a caller without
+  // canEdit (admin, or an instructor without canEditTeachingPracticeFeedback)
+  // - the add-action only ever renders when both canEdit and a loaded array
+  // are present.
+  unfilledRows: TeachingPracticeUnfilledParticipationRow[] | null;
   onSaveFeedback?: (participantId: string, input: TeachingPracticeFeedbackInput) => Promise<ActionResult>;
   onSaved: () => void;
 }) {
   const lungeAverage = averageRatingFromHalfPoints(lungeRows.map((r) => r.ratingHalfPoints));
   const beginnerAverage = averageRatingFromHalfPoints(beginnerRows.map((r) => r.ratingHalfPoints));
+  // A single, friendlier neutral message when there is truly nothing to
+  // show yet across both subsections, instead of two separate near-
+  // identical empty-state blocks - purely presentational, applies the same
+  // way for admin and instructor alike (never changes which rows are
+  // included, only what's shown when there are zero of them).
+  const isEntirelyEmpty = lungeRows.length === 0 && beginnerRows.length === 0;
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <h4 className="text-sm font-bold text-card-foreground">לונג׳ עם רוכב</h4>
-          <TopicAverageBadge average={lungeAverage} />
-        </div>
-        <TeachingPracticeFeedbackHistoryList
-          rows={lungeRows}
-          emptyMessage="עדיין לא הוזן משוב לונג׳ עם רוכב לחניך/ה זה/זו."
-          canEdit={canEdit}
-          onSaveFeedback={onSaveFeedback}
-          onSaved={onSaved}
-        />
-      </div>
+      {isEntirelyEmpty ? (
+        <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
+          אין עדיין משובים על התנסויות מתחילים
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <h4 className="text-sm font-bold text-card-foreground">לונג׳ עם רוכב</h4>
+              <TopicAverageBadge average={lungeAverage} />
+            </div>
+            <TeachingPracticeFeedbackHistoryList
+              rows={lungeRows}
+              emptyMessage="עדיין לא הוזן משוב לונג׳ עם רוכב לחניך/ה זה/זו."
+              canEdit={canEdit}
+              onSaveFeedback={onSaveFeedback}
+              onSaved={onSaved}
+            />
+          </div>
 
-      <div className="flex flex-col gap-2 border-t border-border pt-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <h4 className="text-sm font-bold text-card-foreground">שיעורי מתחילים - פרטני/קבוצתי</h4>
-          <TopicAverageBadge average={beginnerAverage} />
+          <div className="flex flex-col gap-2 border-t border-border pt-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <h4 className="text-sm font-bold text-card-foreground">שיעורי מתחילים - פרטני/קבוצתי</h4>
+              <TopicAverageBadge average={beginnerAverage} />
+            </div>
+            <TeachingPracticeFeedbackHistoryList
+              rows={beginnerRows}
+              emptyMessage="עדיין לא הוזן משוב שיעורי מתחילים לחניך/ה זה/זו."
+              canEdit={canEdit}
+              onSaveFeedback={onSaveFeedback}
+              onSaved={onSaved}
+            />
+          </div>
+        </>
+      )}
+
+      {canEdit && onSaveFeedback && unfilledRows !== null && (
+        <div className="border-t border-border pt-4">
+          <AddTeachingPracticeFeedbackPicker
+            unfilledRows={unfilledRows}
+            onSaveFeedback={onSaveFeedback}
+            onSaved={onSaved}
+          />
         </div>
-        <TeachingPracticeFeedbackHistoryList
-          rows={beginnerRows}
-          emptyMessage="עדיין לא הוזן משוב שיעורי מתחילים לחניך/ה זה/זו."
-          canEdit={canEdit}
-          onSaveFeedback={onSaveFeedback}
-          onSaved={onSaved}
-        />
-      </div>
+      )}
     </div>
   );
 }
@@ -461,39 +592,35 @@ function buildRidingTimelineItems(rows: RidingHistoryRow[]): CombinedTimelineIte
   });
 }
 
-// Only rows that already have a real feedback record (feedbackId/updatedAt
-// non-null) become timeline entries - an includeEmpty "טרם מולא" placeholder
-// (see buildStudentTeachingPracticeFeedbackHistory's own comment) must never
-// appear in "כל המשובים" or be mistaken for an actual feedback entry. This
-// filter is a no-op for the admin/view-only-instructor callers, whose rows
-// never contain empty placeholders in the first place.
+// rows here are always meaningful-only (TeachingPracticeFeedbackHistoryRow
+// no longer has an empty/"טרם מולא" variant at all - see that type's own
+// comment), so every row becomes a timeline entry, same as before this
+// whole feature ever existed.
 function buildTeachingPracticeTimelineItems(
   rows: TeachingPracticeFeedbackHistoryRow[],
   source: "teachingPracticeLunge" | "teachingPracticeBeginner"
 ): CombinedTimelineItem[] {
-  return rows
-    .filter((row): row is TeachingPracticeFeedbackHistoryRow & { updatedAt: string } => row.updatedAt != null)
-    .map((row) => {
-      const contextParts: string[] = [];
-      if (row.groupName) contextParts.push(`קבוצה ${row.groupName}`);
-      contextParts.push(`תפקיד: ${ROLE_LABELS[row.role]}`);
-      if (row.childFullName) contextParts.push(`ילד/ה: ${row.childFullName}`);
-      if (row.horseName) contextParts.push(`סוס: ${row.horseName}`);
-      if (row.equipmentNotes) contextParts.push(`ציוד: ${row.equipmentNotes}`);
-      if (row.location) contextParts.push(`מיקום: ${row.location}`);
-      return {
-        key: `teaching-practice-${row.participantId}`,
-        source,
-        date: row.date,
-        time: row.startTime,
-        title: PRACTICE_TYPE_LABELS[row.practiceType],
-        ratingHalfPoints: row.ratingHalfPoints,
-        text: row.feedback,
-        updatedByName: row.updatedByName,
-        updatedAt: row.updatedAt,
-        contextParts,
-      };
-    });
+  return rows.map((row) => {
+    const contextParts: string[] = [];
+    if (row.groupName) contextParts.push(`קבוצה ${row.groupName}`);
+    contextParts.push(`תפקיד: ${ROLE_LABELS[row.role]}`);
+    if (row.childFullName) contextParts.push(`ילד/ה: ${row.childFullName}`);
+    if (row.horseName) contextParts.push(`סוס: ${row.horseName}`);
+    if (row.equipmentNotes) contextParts.push(`ציוד: ${row.equipmentNotes}`);
+    if (row.location) contextParts.push(`מיקום: ${row.location}`);
+    return {
+      key: `teaching-practice-${row.feedbackId}`,
+      source,
+      date: row.date,
+      time: row.startTime,
+      title: PRACTICE_TYPE_LABELS[row.practiceType],
+      ratingHalfPoints: row.ratingHalfPoints,
+      text: row.feedback,
+      updatedByName: row.updatedByName,
+      updatedAt: row.updatedAt,
+      contextParts,
+    };
+  });
 }
 
 function buildRidingProgressTimelineItems(rows: StudentRidingProgressFeedbackRow[]): CombinedTimelineItem[] {
@@ -683,6 +810,14 @@ export interface TraineeProgressDataSource {
     participantId: string,
     input: TeachingPracticeFeedbackInput
   ) => Promise<ActionResult>;
+  // Feeds the "הוספת משוב להתנסות" picker only - present only for the
+  // instructor caller (and only meaningful when canEditTeachingPracticeFeedback
+  // is true; see getUnfilledTeachingPracticeParticipationsForInstructor's own
+  // authorization comment). Never provided by the admin caller - admin gets
+  // no add-action, per the approved scope for this stage.
+  listUnfilledTeachingPracticeParticipations?: (
+    studentId: string
+  ) => Promise<TeachingPracticeUnfilledParticipationRow[] | null>;
 
   listLungeProgress: (studentId: string) => Promise<StudentLungeProgressFeedbackRow[] | null>;
   createLungeProgress?: (studentId: string, input: StudentLungeProgressFeedbackInput) => Promise<ActionResult>;
@@ -735,6 +870,9 @@ export function TraineeProgressDetail({
   const [lungeProgressRows, setLungeProgressRows] = useState<StudentLungeProgressFeedbackRow[] | null>(null);
   const [presentationProgressRows, setPresentationProgressRows] = useState<
     StudentPresentationProgressFeedbackRow[] | null
+  >(null);
+  const [unfilledTeachingPracticeRows, setUnfilledTeachingPracticeRows] = useState<
+    TeachingPracticeUnfilledParticipationRow[] | null
   >(null);
   const [, startTransition] = useTransition();
 
@@ -808,11 +946,43 @@ export function TraineeProgressDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId]);
 
+  // Only fetched when the caller actually provided the loader (the
+  // instructor caller, when canEditTeachingPracticeFeedback) - null stays
+  // null for admin/view-only-instructor, which is exactly what tells
+  // TeachingPracticeFeedbackSection not to render the add-action at all.
+  useEffect(() => {
+    if (!dataSource.listUnfilledTeachingPracticeParticipations) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setUnfilledTeachingPracticeRows(null);
+      return;
+    }
+    let cancelled = false;
+    setUnfilledTeachingPracticeRows(null);
+    startTransition(async () => {
+      const result = await dataSource.listUnfilledTeachingPracticeParticipations!(studentId);
+      if (!cancelled) setUnfilledTeachingPracticeRows(result ?? []);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studentId]);
+
+  // Refreshes both the visible history AND the unfilled-participations
+  // picker after any Teaching Practice save - a first-time save must move
+  // the occurrence out of the "הוספת משוב להתנסות" list and into the normal
+  // history list in the same refresh, never leaving it in both or neither.
   function refreshTeachingPractice() {
     startTransition(async () => {
       const result = await dataSource.getTeachingPracticeHistory(studentId);
       setTeachingPracticeRows(result ?? []);
     });
+    if (dataSource.listUnfilledTeachingPracticeParticipations) {
+      startTransition(async () => {
+        const result = await dataSource.listUnfilledTeachingPracticeParticipations!(studentId);
+        setUnfilledTeachingPracticeRows(result ?? []);
+      });
+    }
   }
 
   useEffect(() => {
@@ -1057,6 +1227,7 @@ export function TraineeProgressDetail({
             lungeRows={lungeTeachingPracticeFeedback}
             beginnerRows={beginnerTeachingPracticeFeedback}
             canEdit={canEditTeachingPracticeFeedbackHere}
+            unfilledRows={unfilledTeachingPracticeRows}
             onSaveFeedback={dataSource.upsertTeachingPracticeFeedback}
             onSaved={refreshTeachingPractice}
           />

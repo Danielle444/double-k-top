@@ -20,7 +20,10 @@ import {
   deleteStudentPresentationProgressFeedbackAsInstructor,
 } from "@/lib/actions/student-presentation-progress-feedback-instructor";
 import { getStudentRidingHistoryForInstructorTraineeProgress } from "@/lib/actions/riding-slots";
-import { getStudentTeachingPracticeFeedbackForInstructorTraineeProgress } from "@/lib/actions/teaching-practice-feedback-history";
+import {
+  getStudentTeachingPracticeFeedbackForInstructorTraineeProgress,
+  getUnfilledTeachingPracticeParticipationsForInstructor,
+} from "@/lib/actions/teaching-practice-feedback-history";
 import { upsertTeachingPracticeFeedbackAsInstructor } from "@/lib/actions/teaching-practice";
 import {
   listStudentGeneralNotesForInstructor,
@@ -244,6 +247,8 @@ export function InstructorTraineeProgressSection({
         getStudentTeachingPracticeFeedbackForInstructorTraineeProgress(instructorId, studentId),
       upsertTeachingPracticeFeedback: (participantId, input) =>
         upsertTeachingPracticeFeedbackAsInstructor(instructorId, participantId, input),
+      listUnfilledTeachingPracticeParticipations: (studentId) =>
+        getUnfilledTeachingPracticeParticipationsForInstructor(instructorId, studentId),
 
       listLungeProgress: (studentId) => listStudentLungeProgressFeedbackForInstructorView(instructorId, studentId),
       createLungeProgress: (studentId, input) =>
