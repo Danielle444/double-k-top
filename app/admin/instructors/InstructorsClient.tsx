@@ -182,7 +182,7 @@ export function InstructorsClient({ instructors }: { instructors: InstructorRow[
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-muted text-muted-foreground">
-              <th className="sticky top-0 z-10 bg-muted px-4 py-3 text-right font-medium">שם מלא</th>
+              <th className="sticky top-0 right-0 z-20 border-l border-border bg-muted px-4 py-3 text-right font-medium">שם מלא</th>
               <th className="sticky top-0 z-10 bg-muted px-4 py-3 text-right font-medium">ת.ז.</th>
               <th className="sticky top-0 z-10 bg-muted px-4 py-3 text-right font-medium">טלפון</th>
               <th className="sticky top-0 z-10 bg-muted px-4 py-3 text-right font-medium">סטטוס</th>
@@ -202,7 +202,7 @@ export function InstructorsClient({ instructors }: { instructors: InstructorRow[
           <tbody>
             {filteredInstructors.map((instructor) => (
               <tr key={instructor.id} className="border-b border-border last:border-0">
-                <td className="px-4 py-3 font-medium text-card-foreground">
+                <td className="sticky right-0 z-10 border-l border-border bg-card px-4 py-3 font-medium text-card-foreground">
                   {instructor.fullName}
                 </td>
                 <td className="px-4 py-3 font-mono text-muted-foreground">

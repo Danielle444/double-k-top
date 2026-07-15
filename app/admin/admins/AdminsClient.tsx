@@ -67,14 +67,20 @@ export function AdminsClient({
         {error && <p className="text-sm text-danger">{error}</p>}
       </form>
 
-      <div className="overflow-x-auto rounded-xl border border-border bg-card">
+      {/* Bounded self-contained scroll box (same max-h-[70vh] overflow-auto
+          pattern as HorsesClient.tsx/InstructorsClient.tsx) - the header
+          row's sticky top-0 below sticks to the top of *this* box only,
+          never the page, so it can't collide with the admin layout's own
+          sticky header. A short list never hits max-h, so it never looks
+          boxed-in. */}
+      <div className="max-h-[70vh] overflow-auto rounded-xl border border-border bg-card">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-muted text-muted-foreground">
-              <th className="px-4 py-3 text-right font-medium">אימייל</th>
-              <th className="px-4 py-3 text-right font-medium">שם</th>
-              <th className="px-4 py-3 text-right font-medium">סטטוס</th>
-              <th className="px-4 py-3 text-right font-medium">פעולות</th>
+              <th className="sticky top-0 z-10 bg-muted px-4 py-3 text-right font-medium">אימייל</th>
+              <th className="sticky top-0 z-10 bg-muted px-4 py-3 text-right font-medium">שם</th>
+              <th className="sticky top-0 z-10 bg-muted px-4 py-3 text-right font-medium">סטטוס</th>
+              <th className="sticky top-0 z-10 bg-muted px-4 py-3 text-right font-medium">פעולות</th>
             </tr>
           </thead>
           <tbody>
