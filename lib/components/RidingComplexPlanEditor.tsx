@@ -546,6 +546,25 @@ function computeUsedTraineeIds(
   return used;
 }
 
+// Trainees already paired somewhere in an EARLIER time block of the same
+// plan (by block.sortOrder, the server-guaranteed ordering - never array
+// position on its own and never compared across unrelated RidingSlots).
+// Informational only: unlike computeUsedTraineeIds this never disables
+// selection and is not treated as a validation error - repeated scheduling
+// across blocks is allowed and common (e.g. a trainee riding twice).
+function computeEarlierAssignedTraineeIds(earlierBlocks: RidingSlotComplexBlockRow[]): Set<string> {
+  const ids = new Set<string>();
+  for (const block of earlierBlocks) {
+    for (const station of block.stations) {
+      for (const pair of station.pairs) {
+        if (pair.trainee1Id) ids.add(pair.trainee1Id);
+        if (pair.trainee2Id) ids.add(pair.trainee2Id);
+      }
+    }
+  }
+  return ids;
+}
+
 function candidateMatchesStationCoach(
   candidate: RidingSlotComplexTraineeCandidate,
   stationInstructorName: string | null
@@ -614,12 +633,18 @@ function PairContextInfo({
 function ContextualPairPicker({
   candidates,
   usedTraineeIds,
+  earlierAssignedTraineeIds,
   stationInstructorName,
   onConfirm,
   onCancel,
 }: {
   candidates: RidingSlotComplexTraineeCandidate[];
   usedTraineeIds: Set<string>;
+  // Empty set when the current block is the plan's first block (by
+  // sortOrder) - the "not yet scheduled" summary below is only rendered
+  // when there is at least one earlier block, so it never claims "0 trainees
+  // scheduled" clutter on the very first block.
+  earlierAssignedTraineeIds: { ids: Set<string>; hasEarlierBlocks: boolean };
   stationInstructorName: string | null;
   onConfirm: (trainee1Id: string, trainee2Id: string | null, prefillHorse: string) => void;
   onCancel: () => void;
@@ -648,12 +673,19 @@ function ContextualPairPicker({
   const filtered = candidates.filter((c) => c.studentName.toLowerCase().includes(search.trim().toLowerCase()));
   const sections = groupByGroupAndSubgroup(filtered);
 
+  const notYetScheduledCount = earlierAssignedTraineeIds.hasEarlierBlocks
+    ? candidates.filter((c) => !earlierAssignedTraineeIds.ids.has(c.studentId)).length
+    : null;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex shrink-0 items-center justify-between gap-2">
         <p className="text-sm font-semibold text-card-foreground">בחירת חניכים לזוג</p>
         <span className="text-xs text-muted-foreground">נבחרו {selectedIds.length} מתוך 2</span>
       </div>
+      {notYetScheduledCount !== null && (
+        <p className="shrink-0 text-xs text-muted-foreground">טרם שובצו קודם: {notYetScheduledCount}</p>
+      )}
       <input
         type="text"
         value={search}
@@ -681,6 +713,10 @@ function ContextualPairPicker({
                     const atCap = !isSelected && selectedIds.length >= 2;
                     const disableTap = isUsed || atCap;
                     const isCoachMatch = candidateMatchesStationCoach(c, stationInstructorName);
+                    // Non-blocking - never disables the trainee, never
+                    // treated as a validation issue, does not prevent
+                    // repeated scheduling across blocks.
+                    const isScheduledEarlier = earlierAssignedTraineeIds.ids.has(c.studentId);
                     return (
                       <button
                         key={c.studentId}
@@ -711,7 +747,7 @@ function ContextualPairPicker({
                           <span>· סוס: {c.horseName ? c.horseNameDisplay : "לא הוגדר סוס"}</span>
                           <span>· מאמן/ת: {c.responsibleInstructorNames ?? "לא הוגדר מאמן"}</span>
                         </div>
-                        {(isUsed || isCoachMatch) && (
+                        {(isUsed || isCoachMatch || isScheduledEarlier) && (
                           <div className="flex flex-wrap gap-1.5">
                             {isUsed && (
                               <span className="rounded-full bg-warning-muted px-2 py-0.5 text-[10px] font-medium text-warning">
@@ -721,6 +757,11 @@ function ContextualPairPicker({
                             {isCoachMatch && (
                               <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
                                 מהקבוצה של המאמן/ת
+                              </span>
+                            )}
+                            {isScheduledEarlier && (
+                              <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium text-secondary-foreground">
+                                שובץ בטווח קודם
                               </span>
                             )}
                           </div>
@@ -750,6 +791,25 @@ function ContextualPairPicker({
 // tap targets. The trainee selectors here remain fully editable after
 // creation (via the picker or directly loaded from the server) - only the
 // picker itself is reserved for creating a brand-new pair.
+// Quick-choice horse buttons for a pair row, derived from the two selected
+// trainees' currently assigned horses (candidate.horseName - same raw,
+// original-capitalization field computePrefillHorse already uses for the
+// one-time pair-creation prefill). Suggestions only: clicking never disables
+// further manual edits, and nothing here re-runs automatically when the
+// trainee selection changes later (that would silently overwrite a horse the
+// user already chose) - see PairRowEditor's own render for the trigger.
+function quickHorseChoices(
+  trainee1: RidingSlotComplexTraineeCandidate | null,
+  trainee2: RidingSlotComplexTraineeCandidate | null
+): string[] {
+  const h1 = trainee1?.horseName?.trim() || null;
+  const h2 = trainee2?.horseName?.trim() || null;
+  const choices: string[] = [];
+  if (h1) choices.push(h1);
+  if (h2 && (!h1 || h2.toLowerCase() !== h1.toLowerCase())) choices.push(h2);
+  return choices;
+}
+
 function PairRowEditor({
   pair,
   candidates,
@@ -764,6 +824,11 @@ function PairRowEditor({
   onRemove: () => void;
 }) {
   const [showNote, setShowNote] = useState(Boolean(pair.note));
+  const horseInputRef = useRef<{ focus: () => void } | null>(null);
+
+  const trainee1 = candidates.find((c) => c.studentId === pair.trainee1Id) ?? null;
+  const trainee2 = pair.trainee2Id ? (candidates.find((c) => c.studentId === pair.trainee2Id) ?? null) : null;
+  const horseChoices = quickHorseChoices(trainee1, trainee2);
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-2.5">
@@ -783,9 +848,33 @@ function PairRowEditor({
         />
       </div>
       <PairContextInfo pair={pair} candidates={candidates} />
+      {(horseChoices.length > 0 || pair.trainee1Id) && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {horseChoices.map((h) => (
+            <Button
+              key={h}
+              type="button"
+              variant="secondary"
+              className="!px-2 !py-1 !text-xs"
+              onClick={() => onChange({ ...pair, horseName: h })}
+            >
+              {h}
+            </Button>
+          ))}
+          <Button
+            type="button"
+            variant="ghost"
+            className="!px-2 !py-1 !text-xs"
+            onClick={() => horseInputRef.current?.focus()}
+          >
+            סוס אחר
+          </Button>
+        </div>
+      )}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1">
           <SuggestInput
+            ref={horseInputRef}
             value={pair.horseName}
             onChange={(v) => onChange({ ...pair, horseName: v })}
             suggestions={knownHorseNames}
@@ -915,6 +1004,7 @@ function StationEditorForm({
   ridingSlotId,
   blockId,
   block,
+  earlierBlocks,
   station,
   canEdit,
   instructors,
@@ -927,6 +1017,10 @@ function StationEditorForm({
   ridingSlotId: string;
   blockId: string;
   block: RidingSlotComplexBlockRow;
+  // Every block in the same plan that sorts before this one (by
+  // block.sortOrder) - used only for the non-blocking "assigned in an
+  // earlier block" indicator in ContextualPairPicker.
+  earlierBlocks: RidingSlotComplexBlockRow[];
   station: RidingSlotComplexStationRow | null;
   // When false, this renders a read-only detail view instead (below) - a
   // read-only viewer only ever reaches this via "צפייה" on an EXISTING
@@ -960,6 +1054,10 @@ function StationEditorForm({
 
   const usedTraineeIds = computeUsedTraineeIds(block, station?.id ?? null, pairs);
   const stationInstructorName = instructors.find((i) => i.id === instructorId)?.fullName ?? null;
+  const earlierAssignedTraineeIds = {
+    ids: computeEarlierAssignedTraineeIds(earlierBlocks),
+    hasEarlierBlocks: earlierBlocks.length > 0,
+  };
 
   function handleSave() {
     if (!canSave || isSavingRef.current) return;
@@ -1055,6 +1153,7 @@ function StationEditorForm({
       <ContextualPairPicker
         candidates={candidates}
         usedTraineeIds={usedTraineeIds}
+        earlierAssignedTraineeIds={earlierAssignedTraineeIds}
         stationInstructorName={stationInstructorName}
         onConfirm={handlePickerConfirm}
         onCancel={() => setPickerOpen(false)}
@@ -1311,6 +1410,75 @@ function StationCard({
   );
 }
 
+// Read-only "show all" overview of one station - same fields as StationCard
+// plus each pair's trainees/horse/note inline, so a read-only instructor can
+// read the whole block without opening every station's own detail view (that
+// detail view, StationEditorForm's canEdit===false branch, stays reachable
+// via "פתיחת תחנה" for anyone who still wants it focused on one station).
+// Never rendered for an editable actor - no mutation controls exist here at
+// all, matching StationEditorForm's own read-only branch.
+function StationOverviewCard({
+  station,
+  candidates,
+  onOpenDetail,
+}: {
+  station: RidingSlotComplexStationRow;
+  candidates: RidingSlotComplexTraineeCandidate[];
+  onOpenDetail: () => void;
+}) {
+  const badges = stationWarningBadges(station);
+
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border-2 border-border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-1.5">
+        <span className="text-base font-bold text-card-foreground">
+          {station.instructor?.fullName ?? "לא הוגדר מאמן"}
+        </span>
+        <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+          {station.pairs.length} זוגות
+        </span>
+      </div>
+      <p className="truncate text-sm text-card-foreground">מגרש: {station.arena ?? "לא הוגדר מגרש"}</p>
+      {badges.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {badges.map((b) => (
+            <span key={b} className="rounded-full bg-warning-muted px-2 py-0.5 text-[11px] font-medium text-warning">
+              {b}
+            </span>
+          ))}
+        </div>
+      )}
+      {station.pairs.length === 0 ? (
+        <p className="text-sm text-muted-foreground">אין זוגות בתחנה זו</p>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {station.pairs.map((pair) => {
+            const trainee1 = candidates.find((c) => c.studentId === pair.trainee1Id);
+            const trainee2 = candidates.find((c) => c.studentId === pair.trainee2Id);
+            return (
+              <div key={pair.id} className="rounded-lg bg-muted/50 p-2 text-xs">
+                <p className="font-medium text-card-foreground">
+                  {trainee1?.studentName ?? pair.trainee1Name ?? "לא נבחר/ה"}
+                  {trainee2 || pair.trainee2Name ? ` + ${trainee2?.studentName ?? pair.trainee2Name}` : ""}
+                </p>
+                <p className="text-muted-foreground">
+                  סוס: {pair.horseName || "לא הוגדר"}
+                  {pair.note ? ` · הערה: ${pair.note}` : ""}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="flex justify-end">
+        <Button variant="ghost" className="!px-2 !py-1 !text-xs" onClick={onOpenDetail}>
+          פתיחת תחנה
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 // Shared complex-session editor, opened as its own Modal exactly like
 // RidingHorseListEditor - entirely self-contained (fetches on open, saves
 // via the P5b actions routed through the actor prop) so the caller only
@@ -1345,6 +1513,10 @@ export function RidingComplexPlanEditor({
   const [stationListError, setStationListError] = useState<string | null>(null);
   const [busyBlockId, setBusyBlockId] = useState<string | null>(null);
   const [busyStationId, setBusyStationId] = useState<string | null>(null);
+  // Read-only-instructor-only compact overview toggle for the station list
+  // (see StationOverviewCard) - never affects an editable actor's station
+  // list, which always renders the original StationCard-per-station view.
+  const [showAllStations, setShowAllStations] = useState(false);
   const [isReorderingBlocks, startReorderBlocksTransition] = useTransition();
   const [isDuplicatingBlock, startDuplicateBlockTransition] = useTransition();
   const [isDeletingBlock, startDeleteBlockTransition] = useTransition();
@@ -1372,6 +1544,7 @@ export function RidingComplexPlanEditor({
     setListError(null);
     setStationListError(null);
     setDeletePlanError(null);
+    setShowAllStations(false);
 
     readComplexPlan(actor, ridingSlotId)
       .then((result) => {
@@ -1430,6 +1603,7 @@ export function RidingComplexPlanEditor({
   function handleOpenStations(blockId: string) {
     setStationListError(null);
     setLastStationWarnings(null);
+    setShowAllStations(false);
     setView({ type: "stationList", blockId });
   }
 
@@ -1705,7 +1879,7 @@ export function RidingComplexPlanEditor({
                   <Button variant="ghost" className="!px-2 !py-1 !text-xs" onClick={handleBackToBlockList}>
                     ← חזרה לטווחי השעות
                   </Button>
-                  {canEdit && (
+                  {canEdit ? (
                     <Button
                       variant="secondary"
                       className="!px-2 !py-1 !text-xs"
@@ -1714,6 +1888,16 @@ export function RidingComplexPlanEditor({
                     >
                       + הוספת תחנת מאמן
                     </Button>
+                  ) : (
+                    activeBlock.stations.length > 0 && (
+                      <Button
+                        variant="secondary"
+                        className="!px-2 !py-1 !text-xs"
+                        onClick={() => setShowAllStations((v) => !v)}
+                      >
+                        {showAllStations ? "הצגת רשימה מקוצרת" : "הצגת כל השיבוץ"}
+                      </Button>
+                    )
                   )}
                 </div>
 
@@ -1738,6 +1922,17 @@ export function RidingComplexPlanEditor({
                         </Button>
                       )}
                     </div>
+                  ) : !canEdit && showAllStations ? (
+                    activeBlock.stations.map((station) => (
+                      <StationOverviewCard
+                        key={station.id}
+                        station={station}
+                        candidates={editing.candidates}
+                        onOpenDetail={() =>
+                          setView({ type: "editStation", blockId: activeBlock.id, stationId: station.id })
+                        }
+                      />
+                    ))
                   ) : (
                     activeBlock.stations.map((station, index) => (
                       <StationCard
@@ -1765,6 +1960,7 @@ export function RidingComplexPlanEditor({
                 ridingSlotId={ridingSlotId}
                 blockId={activeBlock.id}
                 block={activeBlock}
+                earlierBlocks={plan.blocks.filter((b) => b.sortOrder < activeBlock.sortOrder)}
                 station={activeStation}
                 canEdit={canEdit}
                 instructors={instructors}

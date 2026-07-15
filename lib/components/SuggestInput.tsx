@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 // A free-text input with a lightweight, self-contained suggestions dropdown -
 // used instead of the native <input list> + <datalist> combo, which has
@@ -10,19 +10,22 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // just fills the input, it doesn't "select" anything exclusive. Shared by
 // HorseFeedingSection (hay/concentrate types) and the riding lesson note
 // editor (lesson topic, session horse).
-export function SuggestInput({
-  value,
-  onChange,
-  suggestions,
-  placeholder,
-}: {
+// forwardRef exposes only .focus() (via useImperativeHandle) so a caller can
+// drive focus into this input without reaching into its internal DOM
+// structure - existing callers that don't pass a ref are unaffected.
+export const SuggestInput = forwardRef<{ focus: () => void }, {
   value: string;
   onChange: (value: string) => void;
   suggestions: string[];
   placeholder?: string;
-}) {
+}>(function SuggestInput({ value, onChange, suggestions, placeholder }, forwardedRef) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useImperativeHandle(forwardedRef, () => ({
+    focus: () => inputRef.current?.focus(),
+  }));
 
   useEffect(() => {
     function handlePointerDown(e: MouseEvent) {
@@ -45,6 +48,7 @@ export function SuggestInput({
   return (
     <div ref={containerRef} className="relative min-w-0 w-full">
       <input
+        ref={inputRef}
         value={value}
         onChange={(e) => {
           onChange(e.target.value);
@@ -75,4 +79,4 @@ export function SuggestInput({
       )}
     </div>
   );
-}
+});
