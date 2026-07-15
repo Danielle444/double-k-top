@@ -31,6 +31,7 @@ import {
   type TeachingPracticeRoleValue,
   type TeachingPracticeTypeValue,
 } from "@/lib/teaching-practice-rotation";
+import { hasMeaningfulTeachingPracticeFeedback } from "@/lib/teaching-practice-feedback";
 import {
   buildParentKeyByChildId,
   buildSameParentOtherNamesByChildId,
@@ -400,6 +401,61 @@ const FEEDBACK_ELIGIBLE_ROLES_BY_PRACTICE_TYPE: Record<TeachingPracticeTypeValue
 
 function isFeedbackEligibleRole(practiceType: TeachingPracticeTypeValue, role: TeachingPracticeRoleValue): boolean {
   return FEEDBACK_ELIGIBLE_ROLES_BY_PRACTICE_TYPE[practiceType].includes(role);
+}
+
+// Same "HH:MM" -> minutes-since-midnight convention as timeToMinutes in
+// app/instructor/InstructorRidingSlotsSection.tsx (not imported from there -
+// riding stays untouched - just the same small, obvious parse). Used to
+// normalize lesson.startTime for both the feedback switcher's chronological
+// sort and the same-time chip grouping below, rather than comparing the raw
+// "HH:MM" strings (which would only sort correctly if every startTime in the
+// data happens to be zero-padded).
+function teachingPracticeTimeToMinutes(time: string): number {
+  const [h, m] = time.split(":").map(Number);
+  return h * 60 + m;
+}
+
+// Feedback families for the same-time chip row (see sameTimeEntries below) -
+// LUNGE is its own, separate context; BEGINNER_PRIVATE and BEGINNER_GROUP
+// share one "BEGINNER" family since they're the two halves of the same
+// beginner-lesson rotation. An explicit classification (not a string/label
+// comparison) so grouping can never accidentally depend on how a
+// practiceType happens to be displayed.
+type TeachingPracticeFeedbackFamily = "LUNGE" | "BEGINNER";
+function teachingPracticeFeedbackFamily(practiceType: TeachingPracticeTypeValue): TeachingPracticeFeedbackFamily {
+  return practiceType === "LUNGE" ? "LUNGE" : "BEGINNER";
+}
+
+// Real generated lesson startTime first (never lessonDateDetail's own
+// incidental array/object order, which the feedback switcher used to rely on
+// implicitly) - ties broken by PRACTICE_TYPES' existing display order, then
+// by lessonId/participantId as a final stable, ID-based tie-breaker so two
+// entries never compare equal (and never reorder from one render to the
+// next) purely by chance.
+function compareFeedbackEntriesChronologically(
+  a: TeachingPracticeFeedbackEntry,
+  b: TeachingPracticeFeedbackEntry
+): number {
+  const timeDiff = teachingPracticeTimeToMinutes(a.lesson.startTime) - teachingPracticeTimeToMinutes(b.lesson.startTime);
+  if (timeDiff !== 0) return timeDiff;
+  const typeDiff = PRACTICE_TYPES.indexOf(a.lesson.practiceType) - PRACTICE_TYPES.indexOf(b.lesson.practiceType);
+  if (typeDiff !== 0) return typeDiff;
+  const lessonIdDiff = a.lesson.id.localeCompare(b.lesson.id);
+  if (lessonIdDiff !== 0) return lessonIdDiff;
+  return a.participantId.localeCompare(b.participantId);
+}
+
+// Same shortening rule (and same "don't invent an initial for a one-word
+// name" edge case) as formatTraineeTabLabel in
+// app/instructor/InstructorRidingSlotsSection.tsx - kept as an independent
+// copy rather than a cross-feature import, same reasoning as
+// teachingPracticeTimeToMinutes above.
+function formatTraineeChipLabel(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return parts[0] ?? fullName;
+  const firstName = parts[0];
+  const lastInitial = parts[parts.length - 1].charAt(0);
+  return lastInitial ? `${firstName} ${lastInitial}׳` : firstName;
 }
 
 // Expected number of TeachingPracticeChildAssignment rows per practiceType
@@ -948,11 +1004,26 @@ export function TeachingPracticeManager({
         : await listTeachingPracticeLessonsForInstructor(actorId!);
     setLessons(fresh);
   }
+  // Request-generation guard (same pattern as notesRequestRef/
+  // loadMyTeachingPracticeDayNotes below) - every caller (the date-tab load
+  // effect, every admin inline edit, and the feedback modal's own
+  // save/switch/close path) funnels through this one function, so a single
+  // guard here protects all of them at once. Without it, an older in-flight
+  // request that happens to resolve after a newer one (e.g. the instructor
+  // switches lesson dates, or switches feedback trainees, before the first
+  // request lands) could overwrite lessonDateDetail with stale data - and
+  // since the feedback modal's own open state is derived from whether its
+  // participantId is still present in lessonDateDetail (see
+  // feedbackModalParticipantId below), a stale overwrite could silently
+  // close the modal out from under whatever the instructor is doing.
+  const lessonDateDetailRequestRef = useRef(0);
   async function refreshLessonDateDetail(date: string) {
+    const requestId = ++lessonDateDetailRequestRef.current;
     const fresh =
       role === "admin"
         ? await listTeachingPracticeLessonsDetailForDateAsAdmin(date)
         : await listTeachingPracticeLessonsDetailForDateAsInstructor(actorId!, date);
+    if (lessonDateDetailRequestRef.current !== requestId) return;
     setLessonDateDetail(fresh);
   }
   async function refreshChildren() {
@@ -5895,10 +5966,58 @@ export function TeachingPracticeManager({
         // Context locking: the switcher (and therefore previous/next) may
         // only offer other participants from the same practiceType this
         // modal was opened for - never lets switching silently hop from a
-        // LUNGE trainee to a private/group one or vice versa.
+        // LUNGE trainee to a private/group one or vice versa. Sorted
+        // chronologically (see compareFeedbackEntriesChronologically) rather
+        // than left in feedbackEntries' own incidental order.
         const switchableEntries = activeFeedbackEntry
-          ? feedbackEntries.filter((e) => e.lesson.practiceType === activeFeedbackEntry.lesson.practiceType)
+          ? feedbackEntries
+              .filter((e) => e.lesson.practiceType === activeFeedbackEntry.lesson.practiceType)
+              .sort(compareFeedbackEntriesChronologically)
           : [];
+        // Same-time chips (Stage D) - every feedback-eligible participant at
+        // the exact same normalized (minutes-since-midnight) lesson start
+        // time AND the same feedback family (see teachingPracticeFeedbackFamily)
+        // as the active entry. Deliberately looser than switchableEntries'
+        // practiceType lock (BEGINNER_PRIVATE and BEGINNER_GROUP mix here,
+        // since they're one family) but never crosses into LUNGE, which is
+        // its own family - mixing LUNGE into a beginner-lesson switcher (or
+        // vice versa) would be a confusing context jump, not a convenience.
+        // A quick-nav aid alongside the dropdown, not a replacement for it.
+        const sameTimeEntries = activeFeedbackEntry
+          ? feedbackEntries
+              .filter(
+                (e) =>
+                  teachingPracticeTimeToMinutes(e.lesson.startTime) ===
+                    teachingPracticeTimeToMinutes(activeFeedbackEntry.lesson.startTime) &&
+                  teachingPracticeFeedbackFamily(e.lesson.practiceType) ===
+                    teachingPracticeFeedbackFamily(activeFeedbackEntry.lesson.practiceType)
+              )
+              .sort(compareFeedbackEntriesChronologically)
+          : [];
+        // Base (unqualified) chip label collisions - e.g. two different
+        // trainees whose names both shorten to "דניאל כ׳", or genuinely
+        // duplicate/bad data producing the same trainee twice at this time.
+        // Never collapses the underlying entries (each still gets its own
+        // chip keyed by its own participantId below) - only appends the
+        // practiceType label to the *display text* of colliding chips so
+        // they stay visually distinguishable.
+        const sameTimeBaseLabelCounts = new Map<string, number>();
+        for (const e of sameTimeEntries) {
+          const base = formatTraineeChipLabel(e.traineeName);
+          sameTimeBaseLabelCounts.set(base, (sameTimeBaseLabelCounts.get(base) ?? 0) + 1);
+        }
+        const sameTimeChipOptions = sameTimeEntries.map((e) => {
+          const base = formatTraineeChipLabel(e.traineeName);
+          const label =
+            (sameTimeBaseLabelCounts.get(base) ?? 0) > 1
+              ? `${base} (${PRACTICE_TYPE_LABELS[e.lesson.practiceType]})`
+              : base;
+          return {
+            participantId: e.participantId,
+            label,
+            hasFeedback: hasMeaningfulTeachingPracticeFeedback(e.feedback),
+          };
+        });
         return (
           <Modal
             open={activeFeedbackEntry !== null}
@@ -5912,8 +6031,9 @@ export function TeachingPracticeManager({
                 entry={activeFeedbackEntry}
                 switchOptions={switchableEntries.map((e) => ({
                   value: e.participantId,
-                  label: e.traineeName,
+                  label: `${e.lesson.startTime} · ${e.traineeName}`,
                 }))}
+                sameTimeOptions={sameTimeChipOptions}
                 onSave={handleSaveTeachingPracticeFeedback}
                 onClose={() => setFeedbackModalParticipantId(null)}
                 onSwitchTo={setFeedbackModalParticipantId}
@@ -8454,6 +8574,7 @@ export interface TeachingPracticeFeedbackModalHandle {
 function TeachingPracticeFeedbackModal({
   entry,
   switchOptions,
+  sameTimeOptions,
   onSave,
   onClose,
   onSwitchTo,
@@ -8463,6 +8584,12 @@ function TeachingPracticeFeedbackModal({
   // Every participant on the currently selected date (see feedbackEntries),
   // including this entry itself so it shows as selected.
   switchOptions: SearchableSelectOption[];
+  // Every feedback-eligible participant at the same lesson start time as
+  // entry (see the sameTimeEntries/sameTimeChipOptions build in the parent),
+  // including entry itself. A second, additive way to switch trainees -
+  // routed through the exact same handleSwitchTo below as the dropdown, not
+  // a separate implementation.
+  sameTimeOptions: { participantId: string; label: string; hasFeedback: boolean }[];
   onSave: (participantId: string, input: TeachingPracticeFeedbackInput) => Promise<ActionResult>;
   // Called only after a successful save-then-close.
   onClose: () => void;
@@ -8482,6 +8609,14 @@ function TeachingPracticeFeedbackModal({
   const isSavingRef = useRef(false);
   const pendingCloseRef = useRef(false);
   const pendingSwitchToRef = useRef<string | null>(null);
+  // Scrolls the active chip into view on mount - this component remounts
+  // fresh (see the key={entry.participantId} comment above) every time the
+  // active trainee changes, so a plain mount-only effect is enough to keep
+  // it visible after every switch, without tracking scroll position by hand.
+  const activeChipRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    activeChipRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, []);
 
   function performSave(options?: { switchToParticipantId?: string; shouldClose?: boolean }) {
     if (isSavingRef.current) return;
@@ -8539,6 +8674,47 @@ function TeachingPracticeFeedbackModal({
 
   return (
     <div className="flex flex-col gap-3">
+      {sameTimeOptions.length > 1 && (
+        // Single row, horizontal-scroll rather than wrap (shrink-0 per chip)
+        // - keeps this bounded to one row's height no matter how many
+        // parallel lessons share this start time, so it can never grow the
+        // modal (which has no max-height at this size) unreasonably tall.
+        <div
+          role="tablist"
+          aria-label="מעבר לחניך/ה באותה שעה"
+          className="flex max-w-full gap-1.5 overflow-x-auto pb-1"
+        >
+          {sameTimeOptions.map((o) => {
+            const isActive = o.participantId === entry.participantId;
+            return (
+              <button
+                key={o.participantId}
+                ref={isActive ? activeChipRef : undefined}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => handleSwitchTo(o.participantId)}
+                className={`relative shrink-0 max-w-[10rem] truncate rounded-full px-3 py-1.5 text-sm font-medium ${
+                  isActive
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                {o.label}
+                {o.hasFeedback && (
+                  <span
+                    aria-hidden="true"
+                    className={`absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full ${
+                      isActive ? "bg-primary-foreground" : "bg-success"
+                    }`}
+                  />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {switchOptions.length > 1 && (
         <label className="flex flex-col gap-1 text-sm">
           מעבר לחניך/ה אחר/ת
