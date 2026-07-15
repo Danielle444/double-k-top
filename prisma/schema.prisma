@@ -334,13 +334,16 @@ model Instructor {
   ridingSlotHorseListUpdates        RidingSlotHorseList[]        @relation("HorseListUpdatedByInstructor")
   ridingSlotHorsePublicationUpdates RidingSlotHorsePublication[] @relation("HorsePublicationUpdatedByInstructor")
 
-  // RIDING-PAIRS P1 - complex riding session planning (shared time blocks +
-  // trainee pairs), schema-only in this stage - no server action writes to
-  // these yet. Back-relation for RidingSlotComplexPlan.updatedByInstructor,
-  // plus this instructor's responsible-coach rows across complex blocks (same
-  // join-table shape as ridingSlotAssignmentInstructors above).
-  ridingSlotComplexPlanUpdates     RidingSlotComplexPlan[]            @relation("ComplexPlanUpdatedByInstructor")
-  ridingSlotComplexBlockInstructor RidingSlotComplexBlockInstructor[]
+  // RIDING-PAIRS P1/P5a - complex riding session planning (time blocks ->
+  // coach/arena stations -> trainee pairs), schema-only in this stage - no
+  // server action writes to these yet (P2/P3 are still being redesigned to
+  // match the P5a station hierarchy). Back-relation for
+  // RidingSlotComplexPlan.updatedByInstructor, plus this instructor's
+  // station assignments (P5a replaced the old many-to-many
+  // RidingSlotComplexBlockInstructor join table with a single nullable FK
+  // per station - see RidingSlotComplexStation.instructor's own comment).
+  ridingSlotComplexPlanUpdates        RidingSlotComplexPlan[]    @relation("ComplexPlanUpdatedByInstructor")
+  ridingSlotComplexStationAssignments RidingSlotComplexStation[] @relation("ComplexStationInstructor")
 
   @@map("instructors")
 }
@@ -735,61 +738,85 @@ model RidingSlotComplexPlan {
   @@map("riding_slot_complex_plans")
 }
 
-// One shared time block within a complex plan. start/end time, arena, and
-// the responsible coach(es) below are all shared by every trainee pair
-// inside this block (product requirement) - they live here once rather than
-// being repeated per pair. arena is free text (String?), matching
-// RidingSlotAssignment.arena's existing convention - no Arena model exists
-// in this schema. startTime/endTime are required "HH:MM" strings, matching
-// ScheduleItem/RidingSlotAssignment's own time-string convention elsewhere.
-// sortOrder is a plain explicit display order, set/maintained by a later
-// stage's server actions - never inferred from startTime.
+// RIDING-PAIRS P5a - one shared TIME RANGE within a complex plan, nothing
+// else. Previously also owned arena/instructor(s)/pairs directly, but the
+// product now requires several independent coach/arena "stations" inside
+// one time range (e.g. Coach A in Arena 1 with pairs 1-2, Coach B in Arena 2
+// with pair 3, both 09:00-09:45) - see RidingSlotComplexStation below, which
+// now owns all of that. startTime/endTime are required "HH:MM" strings,
+// matching ScheduleItem/RidingSlotAssignment's own time-string convention
+// elsewhere. sortOrder is a plain explicit display order, set/maintained by
+// a later stage's server actions - never inferred from startTime.
 model RidingSlotComplexBlock {
   id        String   @id @default(cuid())
   planId    String
   startTime String
   endTime   String
-  arena     String?
   sortOrder Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  plan        RidingSlotComplexPlan              @relation(fields: [planId], references: [id], onDelete: Cascade)
-  instructors RidingSlotComplexBlockInstructor[]
-  pairs       RidingSlotComplexPair[]
+  plan     RidingSlotComplexPlan      @relation(fields: [planId], references: [id], onDelete: Cascade)
+  stations RidingSlotComplexStation[]
 
   @@index([planId, sortOrder])
   @@map("riding_slot_complex_blocks")
 }
 
-// Responsible coach(es) for one block - a block may have multiple
-// instructors. Same join-table multi-instructor pattern as
-// RidingSlotAssignmentInstructor (which plays the identical role for the
-// simple/legacy RidingSlotAssignment split), for consistency with the rest
-// of this app rather than a single-FK column. Coach is optional at the
-// block level (see RidingSlotComplexBlock.arena comment on the same
-// draft-friendly convention) - a block may have zero rows here.
-model RidingSlotComplexBlockInstructor {
+// RIDING-PAIRS P5a - one coach/arena "station" within a time block: exactly
+// one instructor, one arena, its own trainee pairs. Replaces the removed
+// RidingSlotComplexBlockInstructor join table entirely - a single nullable
+// FK column is the right shape for "exactly one coach," not a many-to-many
+// join. instructorId/arena are both nullable for the same draft-friendly
+// reason as everywhere else in this feature: a station may be created as a
+// placeholder before a coach or arena is chosen, or may temporarily have
+// neither. arena is free text (String?), matching
+// RidingSlotAssignment.arena's existing convention - no Arena model exists
+// in this schema. Two stations in the same block may legitimately share the
+// same arena (a large arena split between two coaches at once is normal
+// ranch workflow) - that is deliberately never validated against, at this
+// schema layer or any other.
+//
+// instructor uses onDelete: SetNull, not Cascade - this is NOT a naive
+// carry-over of the removed join table's onDelete: Cascade on its own
+// instructor FK (which was safe there: deleting one join row only ever
+// affected that one instructor's membership, never the block). Once the
+// instructor became a single FK column directly on this row, Cascade would
+// mean deleting an Instructor silently deletes this whole station AND
+// cascades further to delete every one of its pairs - a materially larger,
+// newly-introduced blast radius. SetNull (matching
+// RidingSlotComplexPair.trainee1Id/trainee2Id's identical reasoning below)
+// keeps a later Instructor deletion (already rare - Instructor.isActive is
+// the standing soft-delete convention, not hard deletion) non-destructive:
+// the station survives, it just loses its coach.
+model RidingSlotComplexStation {
   id           String   @id @default(cuid())
   blockId      String
-  instructorId String
+  instructorId String?
+  arena        String?
+  sortOrder    Int      @default(0)
   createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  block      RidingSlotComplexBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
-  instructor Instructor             @relation(fields: [instructorId], references: [id], onDelete: Cascade)
+  block      RidingSlotComplexBlock  @relation(fields: [blockId], references: [id], onDelete: Cascade)
+  instructor Instructor?             @relation("ComplexStationInstructor", fields: [instructorId], references: [id], onDelete: SetNull)
+  pairs      RidingSlotComplexPair[]
 
-  @@unique([blockId, instructorId])
-  @@map("riding_slot_complex_block_instructors")
+  @@index([blockId, sortOrder])
+  @@map("riding_slot_complex_stations")
 }
 
-// One trainee pair within a block. trainee1Id/trainee2Id/horseName are all
-// nullable by deliberate design (not merely "not yet enforced") - a pair may
-// be saved as an in-progress draft (e.g. trainees picked before a horse is
-// assigned, or only one trainee picked so far). A later stage's server
-// actions are expected to require at least trainee1Id for a row to be worth
-// persisting at all, and to warn (never hard-block) on a missing trainee2Id
-// or horseName - see the RIDING-PAIRS audit report for the full save-time
-// validation rules; none of that completeness logic belongs in this schema.
+// One trainee pair within a station (moved one level deeper than before -
+// see RidingSlotComplexStation above; every other field/relation/onDelete
+// choice is unchanged from the original design). trainee1Id/trainee2Id/
+// horseName are all nullable by deliberate design (not merely "not yet
+// enforced") - a pair may be saved as an in-progress draft (e.g. trainees
+// picked before a horse is assigned, or only one trainee picked so far). A
+// later stage's server actions are expected to require at least trainee1Id
+// for a row to be worth persisting at all, and to warn (never hard-block) on
+// a missing trainee2Id or horseName - see the RIDING-PAIRS audit report for
+// the full save-time validation rules; none of that completeness logic
+// belongs in this schema.
 //
 // Both trainee FKs use onDelete: SetNull, deliberately symmetric: a later
 // Student deletion (already rare in this schema - Student.isActive is the
@@ -810,7 +837,7 @@ model RidingSlotComplexBlockInstructor {
 // belongs to a future publication stage, if one is ever built, not here.
 model RidingSlotComplexPair {
   id         String   @id @default(cuid())
-  blockId    String
+  stationId  String
   trainee1Id String?
   trainee2Id String?
   horseName  String?
@@ -819,11 +846,11 @@ model RidingSlotComplexPair {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  block    RidingSlotComplexBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
-  trainee1 Student?               @relation("ComplexPairTrainee1", fields: [trainee1Id], references: [id], onDelete: SetNull)
-  trainee2 Student?               @relation("ComplexPairTrainee2", fields: [trainee2Id], references: [id], onDelete: SetNull)
+  station  RidingSlotComplexStation @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  trainee1 Student?                 @relation("ComplexPairTrainee1", fields: [trainee1Id], references: [id], onDelete: SetNull)
+  trainee2 Student?                 @relation("ComplexPairTrainee2", fields: [trainee2Id], references: [id], onDelete: SetNull)
 
-  @@index([blockId, sortOrder])
+  @@index([stationId, sortOrder])
   @@map("riding_slot_complex_pairs")
 }
 

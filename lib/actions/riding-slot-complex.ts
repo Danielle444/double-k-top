@@ -16,18 +16,22 @@ import { buildHorseCandidates, type RidingHorseCandidate } from "@/lib/actions/r
 const NOT_FOUND_RIDING_SLOT = 'ניהול הרכיבה לא נמצא. נסי לרענן את העמוד.';
 const NOT_FOUND_COMPLEX_PLAN = "תכנון הרכיבה המורכבת לא נמצא. ייתכן שטרם נוצר - נסי לרענן את העמוד.";
 const NOT_FOUND_BLOCK = "הבלוק לא נמצא בתכנון רכיבה זה. ייתכן שנמחק - נסי לרענן את העמוד.";
+const NOT_FOUND_STATION = "התחנה לא נמצאה בבלוק זה. ייתכן שנמחקה - נסי לרענן את העמוד.";
 const NO_PERMISSION = "אין הרשאה לערוך תכנון רכיבה מורכבת";
 const SIMPLE_LIST_EXISTS = "לא ניתן ליצור תכנון רכיבה מורכבת - קיימת כבר רשימת סוסים רגילה עבור רכיבה זו";
 const INVALID_TIME = "פורמט שעה לא תקין (HH:MM)";
 const END_BEFORE_START = "שעת הסיום חייבת להיות אחרי שעת ההתחלה";
+const OVERLAP_WARNING = "קיים טווח שעות נוסף שחופף לטווח זה";
 const SAME_TRAINEE_TWICE_IN_PAIR = "לא ניתן לבחור את אותו/ה חניכ/ה פעמיים באותו זוג";
 const PAIR_MISSING_TRAINEE1 = "יש לבחור חניכ/ה ראשונ/ה לכל זוג שמכיל פרטים (סוס, הערה או חניכ/ה שני/ה)";
 const LOCK_TIMEOUT = "המערכת עמוסה כרגע - נסי שוב בעוד רגע";
-const DUPLICATE_TRAINEE_IN_BLOCK = "אותו/ה חניכ/ה נבחר/ה יותר מפעם אחת באותו בלוק";
-const DUPLICATE_HORSE_IN_BLOCK = "אותו שם סוס נבחר יותר מפעם אחת באותו בלוק";
+const DUPLICATE_TRAINEE_IN_BLOCK = "אותו/ה חניכ/ה נבחר/ה יותר מפעם אחת באותו טווח שעות";
+const DUPLICATE_HORSE_IN_BLOCK = "אותו שם סוס נבחר יותר מפעם אחת באותו טווח שעות";
+const DUPLICATE_INSTRUCTOR_IN_BLOCK = "אותו/ה מדריכ/ה משובצ/ת ליותר מתחנה אחת באותו טווח שעות";
 const INVALID_INSTRUCTOR = "אחד או יותר מהמדריכים/ות שנבחרו אינם/ן פעילים/ות או לא נמצאו";
 const INVALID_TRAINEE = "אחד או יותר מהחניכים שנבחרו אינם/ן פעילים/ות או לא נמצאו";
 const INVALID_BLOCK_ORDER = "רשימת סדר הבלוקים אינה תואמת את הבלוקים הקיימים בתכנון זה";
+const INVALID_STATION_ORDER = "רשימת סדר התחנות אינה תואמת את התחנות הקיימות בבלוק זה";
 
 // ---------- Shared read model ----------
 
@@ -51,15 +55,28 @@ export interface RidingSlotComplexPairRow {
   sortOrder: number;
 }
 
+// RIDING-PAIRS P5b - one coach/arena station within a block. instructor is
+// resolved live (not a snapshot), same convention as trainee1Name/
+// trainee2Name on RidingSlotComplexPairRow - null-safe if the Instructor row
+// is later deleted (the FK is onDelete: SetNull, so instructorId and this
+// resolved object go null together, the station itself is never affected).
+export interface RidingSlotComplexStationRow {
+  id: string;
+  instructorId: string | null;
+  instructor: { id: string; fullName: string } | null;
+  arena: string | null;
+  sortOrder: number;
+  pairs: RidingSlotComplexPairRow[];
+}
+
+// RIDING-PAIRS P5b - a block is now a pure time range; arena/instructor(s)/
+// pairs all moved to RidingSlotComplexStationRow, one level deeper.
 export interface RidingSlotComplexBlockRow {
   id: string;
   startTime: string;
   endTime: string;
-  arena: string | null;
   sortOrder: number;
-  instructorIds: string[];
-  instructors: { id: string; fullName: string }[];
-  pairs: RidingSlotComplexPairRow[];
+  stations: RidingSlotComplexStationRow[];
 }
 
 export interface RidingSlotComplexPlanRow {
@@ -77,8 +94,11 @@ export interface RidingSlotComplexScheduleMeta {
   activityTitle: string;
 }
 
+// RIDING-PAIRS P5b - now describes one STATION's completeness (a station has
+// exactly one instructor, not a list - noInstructor is singular, renamed
+// from the old block-level noInstructors).
 export interface RidingSlotComplexSaveWarnings {
-  noInstructors: boolean;
+  noInstructor: boolean;
   noArena: boolean;
   zeroPairs: boolean;
   pairsMissingTrainee2: number;
@@ -97,8 +117,14 @@ export interface RidingSlotComplexPlanForEditing {
 
 export interface RidingSlotComplexPlanActionResult extends ActionResult {
   plan?: RidingSlotComplexPlanRow;
+  // Station-save warnings only (see RidingSlotComplexSaveWarnings) - never
+  // set by a block save, which uses overlapWarning below instead.
   warnings?: RidingSlotComplexSaveWarnings;
   newBlockId?: string;
+  // Block-save only - a non-blocking notice that the saved time range
+  // overlaps another block already in this plan (see saveComplexBlockInternal).
+  // Never an error; the save still succeeds.
+  overlapWarning?: string;
 }
 
 interface ComplexPlanActor {
@@ -111,8 +137,8 @@ interface ComplexPlanActor {
 // Small mechanical helpers only - not a broader refactor. Every
 // *AsAdmin/*AsInstructor wrapper below builds the same two actor shapes and
 // every *Internal function derives the same write-fields shape from an
-// actor; these three helpers just remove that repetition (12 + 5 inline
-// occurrences before this change) without touching any behavior.
+// actor; these three helpers just remove that repetition without touching
+// any behavior.
 function adminActor(admin: { email: string; name: string | null }): ComplexPlanActor {
   return {
     instructorId: null,
@@ -160,23 +186,32 @@ async function resolveComplexScheduleMeta(ridingSlotId: string): Promise<RidingS
   };
 }
 
+type PairWithRelations = {
+  id: string;
+  trainee1Id: string | null;
+  trainee2Id: string | null;
+  horseName: string | null;
+  note: string | null;
+  sortOrder: number;
+  trainee1: { id: string; fullName: string } | null;
+  trainee2: { id: string; fullName: string } | null;
+};
+
+type StationWithRelations = {
+  id: string;
+  instructorId: string | null;
+  arena: string | null;
+  sortOrder: number;
+  instructor: { id: string; fullName: string } | null;
+  pairs: PairWithRelations[];
+};
+
 type BlockWithRelations = {
   id: string;
   startTime: string;
   endTime: string;
-  arena: string | null;
   sortOrder: number;
-  instructors: { instructor: { id: string; fullName: string } }[];
-  pairs: {
-    id: string;
-    trainee1Id: string | null;
-    trainee2Id: string | null;
-    horseName: string | null;
-    note: string | null;
-    sortOrder: number;
-    trainee1: { id: string; fullName: string } | null;
-    trainee2: { id: string; fullName: string } | null;
-  }[];
+  stations: StationWithRelations[];
 };
 
 type PlanWithRelations = {
@@ -191,19 +226,24 @@ const COMPLEX_PLAN_INCLUDE = {
   blocks: {
     orderBy: [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }],
     include: {
-      instructors: { include: { instructor: true }, orderBy: { createdAt: "asc" as const } },
-      pairs: {
+      stations: {
         orderBy: [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }],
         include: {
-          trainee1: { select: { id: true, fullName: true } },
-          trainee2: { select: { id: true, fullName: true } },
+          instructor: { select: { id: true, fullName: true } },
+          pairs: {
+            orderBy: [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }],
+            include: {
+              trainee1: { select: { id: true, fullName: true } },
+              trainee2: { select: { id: true, fullName: true } },
+            },
+          },
         },
       },
     },
   },
 };
 
-function toPairRow(p: BlockWithRelations["pairs"][number]): RidingSlotComplexPairRow {
+function toPairRow(p: PairWithRelations): RidingSlotComplexPairRow {
   return {
     id: p.id,
     trainee1Id: p.trainee1Id,
@@ -216,16 +256,24 @@ function toPairRow(p: BlockWithRelations["pairs"][number]): RidingSlotComplexPai
   };
 }
 
+function toStationRow(s: StationWithRelations): RidingSlotComplexStationRow {
+  return {
+    id: s.id,
+    instructorId: s.instructorId,
+    instructor: s.instructor,
+    arena: s.arena,
+    sortOrder: s.sortOrder,
+    pairs: s.pairs.map(toPairRow),
+  };
+}
+
 function toBlockRow(b: BlockWithRelations): RidingSlotComplexBlockRow {
   return {
     id: b.id,
     startTime: b.startTime,
     endTime: b.endTime,
-    arena: b.arena,
     sortOrder: b.sortOrder,
-    instructorIds: b.instructors.map((i) => i.instructor.id),
-    instructors: b.instructors.map((i) => i.instructor),
-    pairs: b.pairs.map(toPairRow),
+    stations: b.stations.map(toStationRow),
   };
 }
 
@@ -249,6 +297,12 @@ async function validateActiveTraineeIds(traineeIds: string[]): Promise<boolean> 
   if (traineeIds.length === 0) return true;
   const found = await prisma.student.findMany({ where: { id: { in: traineeIds }, isActive: true } });
   return found.length === traineeIds.length;
+}
+
+function timeToMinutes(t: string): number {
+  const m = t.match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return 0;
+  return Number(m[1]) * 60 + Number(m[2]);
 }
 
 // Builds the full editing shape for an EXISTING complex plan only - callers
@@ -295,9 +349,6 @@ async function buildComplexPlanForEditing(
 // distinguishable-but-both-empty cases into one null return" convention
 // already used by getRidingSlotHorseListForInstructor elsewhere in this
 // app, since this function's return type has no separate error channel.
-// P3 is expected to attempt createRidingSlotComplexPlanAsAdmin/AsInstructor
-// directly (which returns a clear Hebrew conflict error if a simple list
-// already exists) rather than needing a separate pre-creation probe read.
 export async function getRidingSlotComplexPlanForAdmin(
   ridingSlotId: string
 ): Promise<RidingSlotComplexPlanForEditing | null> {
@@ -320,6 +371,7 @@ export async function getRidingSlotComplexPlanForInstructor(
 }
 
 // ---------- Create plan (mutual-exclusivity gate) ----------
+// UNCHANGED from P2/P3a - not touched by the P5 station redesign.
 
 // Shared core of createRidingSlotComplexPlanAsAdmin/AsInstructor. The
 // simple-list-exists check and the plan insert happen inside ONE
@@ -344,10 +396,8 @@ async function createComplexPlanInternal(ridingSlotId: string, actor: ComplexPla
   // Waiting on the advisory lock below counts against this transaction's
   // normal interactive-transaction timeout (Prisma default 5000ms) - it is
   // in-body wait time, not connection-acquisition wait time. No custom
-  // timeout is added: unlike teaching-practice-child-import.ts's explicit
-  // 30s timeout (needed there because that transaction's OWN work is a long
-  // sequential-write loop), this transaction's own work is a handful of
-  // point reads/writes - the only thing that could make it run long is lock
+  // timeout is added: this transaction's own work is a handful of point
+  // reads/writes - the only thing that could make it run long is lock
   // contention, and extending the timeout would just make a genuinely stuck
   // caller wait longer for no benefit. If two callers contend for the same
   // ridingSlotId for more than 5s, Prisma aborts the losing transaction with
@@ -427,44 +477,25 @@ export async function createRidingSlotComplexPlanAsInstructor(
   return { success: true, plan: editing?.plan };
 }
 
-// ---------- Save block (create or update, full-replace instructors/pairs) ----------
-
-const pairInputSchema = z.object({
-  trainee1Id: z.string().trim().optional(),
-  trainee2Id: z.string().trim().optional(),
-  horseName: z.string().trim().optional(),
-  note: z.string().trim().optional(),
-});
+// ---------- Save block (time range only) ----------
 
 const blockSaveInputSchema = z.object({
   ridingSlotId: z.string().min(1),
   blockId: z.string().trim().optional(),
   startTime: z.string().regex(/^\d{1,2}:\d{2}$/, INVALID_TIME),
   endTime: z.string().regex(/^\d{1,2}:\d{2}$/, INVALID_TIME),
-  arena: z.string().trim().optional(),
-  instructorIds: z.array(z.string().trim().min(1)).optional().default([]),
-  pairs: z.array(pairInputSchema).optional().default([]),
 });
 
-export type RidingSlotComplexPairInput = z.infer<typeof pairInputSchema>;
 export type RidingSlotComplexBlockSaveInput = z.infer<typeof blockSaveInputSchema>;
 
-function timeToMinutes(t: string): number {
-  const m = t.match(/^(\d{1,2}):(\d{2})/);
-  if (!m) return 0;
-  return Number(m[1]) * 60 + Number(m[2]);
-}
-
-// Shared core of saveRidingSlotComplexBlockAsAdmin/AsInstructor. All
-// read-only validation (block/plan lookup, active instructor/trainee checks)
-// runs BEFORE the transaction - only the actual writes (upsert block,
-// full-replace instructors, full-replace pairs, touch plan actor metadata)
-// run inside it, kept short and DB-only (no network calls), same pattern as
-// saveRidingSlotHorseListInternal. No custom transaction timeout is needed:
-// Prisma's default interactive-transaction timeout (5000ms) is generous for
-// a handful of local insert/delete/update statements with nothing external
-// in between - this deliberately avoids the "Excel-import job" timeout
-// mistake this schema's own comments warn about elsewhere.
+// RIDING-PAIRS P5b - a block save now only ever writes startTime/endTime.
+// arena/instructor(s)/pairs moved to saveComplexStationInternal below.
+// Overlap against every OTHER block in the plan is computed and returned as
+// a non-blocking warning (never rejects the save) - see this file's
+// OVERLAP_WARNING constant and the approved [start, end) interval-overlap
+// rule. All read-only validation runs before the transaction; only the
+// actual writes run inside it, kept short and DB-only, same pattern as
+// every other save in this file.
 async function saveComplexBlockInternal(
   input: RidingSlotComplexBlockSaveInput,
   actor: ComplexPlanActor
@@ -491,19 +522,167 @@ async function saveComplexBlockInternal(
     }
   }
 
-  const instructorIds = Array.from(new Set(data.instructorIds.filter((id) => id.length > 0)));
-  if (!(await validateActiveInstructorIds(instructorIds))) {
+  // Overlap check against every OTHER block already in this plan - a
+  // warning only, never blocks the save (overlapping time blocks may be a
+  // deliberate split or an in-progress draft). Excludes the block being
+  // edited against itself.
+  const otherBlocks = await prisma.ridingSlotComplexBlock.findMany({
+    where: { planId: plan.id, ...(data.blockId ? { id: { not: data.blockId } } : {}) },
+    select: { startTime: true, endTime: true },
+  });
+  const newStart = timeToMinutes(data.startTime);
+  const newEnd = timeToMinutes(data.endTime);
+  const hasOverlap = otherBlocks.some(
+    (b) => newStart < timeToMinutes(b.endTime) && newEnd > timeToMinutes(b.startTime)
+  );
+
+  const actorData = actorWriteFields(actor);
+
+  // updateMany with a compound (id + planId) where, rather than a plain
+  // update-by-id, is the "sufficiently restrictive write condition" for the
+  // existing-block path: it can never throw a not-found error, and
+  // re-enforces ownership INSIDE the transaction rather than trusting the
+  // plain pre-transaction existingBlock read above.
+  const txResult = await prisma.$transaction(async (tx) => {
+    let blockId = data.blockId;
+    let createdBlockId: string | null = null;
+    if (blockId) {
+      const updated = await tx.ridingSlotComplexBlock.updateMany({
+        where: { id: blockId, planId: plan.id },
+        data: { startTime: data.startTime, endTime: data.endTime },
+      });
+      if (updated.count === 0) {
+        return { ok: false as const };
+      }
+    } else {
+      const maxSort = await tx.ridingSlotComplexBlock.aggregate({
+        where: { planId: plan.id },
+        _max: { sortOrder: true },
+      });
+      const created = await tx.ridingSlotComplexBlock.create({
+        data: {
+          planId: plan.id,
+          startTime: data.startTime,
+          endTime: data.endTime,
+          sortOrder: (maxSort._max.sortOrder ?? -1) + 1,
+        },
+      });
+      blockId = created.id;
+      createdBlockId = created.id;
+    }
+
+    await tx.ridingSlotComplexPlan.update({ where: { id: plan.id }, data: actorData });
+    return { ok: true as const, createdBlockId };
+  });
+
+  if (!txResult.ok) {
+    return { success: false, error: NOT_FOUND_BLOCK };
+  }
+
+  revalidatePath("/admin/weekly-schedule");
+  revalidatePath("/instructor");
+
+  const editing = await buildComplexPlanForEditing(data.ridingSlotId, { canEdit: true });
+  return {
+    success: true,
+    plan: editing?.plan,
+    overlapWarning: hasOverlap ? OVERLAP_WARNING : undefined,
+    newBlockId: txResult.createdBlockId ?? undefined,
+  };
+}
+
+export async function saveRidingSlotComplexBlockAsAdmin(
+  input: RidingSlotComplexBlockSaveInput
+): Promise<RidingSlotComplexPlanActionResult> {
+  const admin = await requireAdmin();
+  return saveComplexBlockInternal(input, adminActor(admin));
+}
+
+export async function saveRidingSlotComplexBlockAsInstructor(
+  instructorId: string,
+  input: RidingSlotComplexBlockSaveInput
+): Promise<RidingSlotComplexPlanActionResult> {
+  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
+  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
+    return { success: false, error: NO_PERMISSION };
+  }
+  return saveComplexBlockInternal(input, instructorActor(instructor));
+}
+
+// ---------- Save station (create or update, full-replace only this station's pairs) ----------
+
+const stationPairInputSchema = z.object({
+  trainee1Id: z.string().trim(),
+  trainee2Id: z.string().trim().nullish(),
+  horseName: z.string().trim().nullish(),
+  note: z.string().trim().nullish(),
+});
+
+const stationSaveInputSchema = z.object({
+  ridingSlotId: z.string().min(1),
+  blockId: z.string().min(1),
+  stationId: z.string().trim().optional(),
+  instructorId: z.string().trim().nullish(),
+  arena: z.string().trim().nullish(),
+  pairs: z.array(stationPairInputSchema).optional().default([]),
+});
+
+export type RidingSlotComplexPairInput = z.infer<typeof stationPairInputSchema>;
+export type RidingSlotComplexStationSaveInput = z.infer<typeof stationSaveInputSchema>;
+
+// Shared core of saveRidingSlotComplexStationAsAdmin/AsInstructor. All
+// read-only validation (plan/block/station lookup, active instructor/
+// trainee checks, within-submission and cross-station duplicate checks)
+// runs BEFORE the transaction - only the actual writes (upsert station,
+// full-replace this station's pairs, touch plan actor metadata) run inside
+// it, kept short and DB-only, same pattern as every other save in this file.
+//
+// Cross-station duplicate checks (trainee/instructor/horse) read every
+// OTHER station already persisted in this block via a plain pre-transaction
+// query, the same established convention this file already uses for
+// validateActiveTraineeIds/validateActiveInstructorIds - not moved inside
+// the transaction, so it carries the same small, already-accepted residual
+// race window those checks have always had (a concurrent save to a
+// different station in the same block, landing in the gap between this
+// read and the transaction's commit, is not caught here). Ownership itself
+// (station belongs to this exact block) IS re-enforced inside the
+// transaction via the compound updateMany where-clause below.
+async function saveComplexStationInternal(
+  input: RidingSlotComplexStationSaveInput,
+  actor: ComplexPlanActor
+): Promise<RidingSlotComplexPlanActionResult> {
+  const parsed = stationSaveInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
+  }
+  const data = parsed.data;
+
+  const plan = await prisma.ridingSlotComplexPlan.findUnique({ where: { ridingSlotId: data.ridingSlotId } });
+  if (!plan) {
+    return { success: false, error: NOT_FOUND_COMPLEX_PLAN };
+  }
+
+  const block = await prisma.ridingSlotComplexBlock.findUnique({ where: { id: data.blockId } });
+  if (!block || block.planId !== plan.id) {
+    return { success: false, error: NOT_FOUND_BLOCK };
+  }
+
+  if (data.stationId) {
+    const existingStation = await prisma.ridingSlotComplexStation.findUnique({ where: { id: data.stationId } });
+    if (!existingStation || existingStation.blockId !== block.id) {
+      return { success: false, error: NOT_FOUND_STATION };
+    }
+  }
+
+  const instructorId = data.instructorId || null;
+  if (instructorId && !(await validateActiveInstructorIds([instructorId]))) {
     return { success: false, error: INVALID_INSTRUCTOR };
   }
 
-  // Draft-friendly normalization: blank optional strings -> null. A
-  // COMPLETELY blank placeholder row (every field empty) is silently
-  // dropped - this is what "do not create a pair row with no trainee1Id
-  // through normal actions" allows. A row that carries any OTHER meaningful
-  // data (trainee2, horse, or note) but no trainee1Id is malformed, not a
-  // blank placeholder - it must not disappear silently (that would silently
-  // discard whatever the caller entered), so the whole save is rejected
-  // with a clear error instead.
+  // Draft-friendly normalization - identical rule set to the original P2
+  // block-level save: a completely blank pair placeholder is silently
+  // dropped; a pair with meaningful data (trainee2/horse/note) but no
+  // trainee1Id is malformed and rejects the whole save.
   const normalizedRaw = data.pairs.map((p) => ({
     trainee1Id: p.trainee1Id || null,
     trainee2Id: p.trainee2Id || null,
@@ -529,6 +708,9 @@ async function saveComplexBlockInternal(
     }
   }
 
+  // Within-submission duplicate checks, scoped to this station's own
+  // submitted pairs - the cross-station, block-wide checks happen
+  // separately below, against every OTHER already-persisted station.
   const traineeOccurrences = new Map<string, number>();
   for (const pair of normalizedPairs) {
     traineeOccurrences.set(pair.trainee1Id, (traineeOccurrences.get(pair.trainee1Id) ?? 0) + 1);
@@ -555,61 +737,78 @@ async function saveComplexBlockInternal(
     return { success: false, error: INVALID_TRAINEE };
   }
 
+  // Block-wide cross-station validation: every OTHER station already
+  // persisted in this block (excluding the one being saved, if editing an
+  // existing one), checked against the submitted replacement data.
+  const otherStations = await prisma.ridingSlotComplexStation.findMany({
+    where: {
+      blockId: block.id,
+      ...(data.stationId ? { id: { not: data.stationId } } : {}),
+    },
+    select: {
+      instructorId: true,
+      pairs: { select: { trainee1Id: true, trainee2Id: true, horseName: true } },
+    },
+  });
+
+  if (instructorId && otherStations.some((s) => s.instructorId === instructorId)) {
+    return { success: false, error: DUPLICATE_INSTRUCTOR_IN_BLOCK };
+  }
+
+  const otherTraineeIds = new Set<string>();
+  const otherHorseKeys = new Set<string>();
+  for (const station of otherStations) {
+    for (const pair of station.pairs) {
+      if (pair.trainee1Id) otherTraineeIds.add(pair.trainee1Id);
+      if (pair.trainee2Id) otherTraineeIds.add(pair.trainee2Id);
+      if (pair.horseName) otherHorseKeys.add(pair.horseName.trim().toLowerCase());
+    }
+  }
+  if (allTraineeIds.some((id) => otherTraineeIds.has(id))) {
+    return { success: false, error: DUPLICATE_TRAINEE_IN_BLOCK };
+  }
+  if (Array.from(horseOccurrences.keys()).some((key) => otherHorseKeys.has(key))) {
+    return { success: false, error: DUPLICATE_HORSE_IN_BLOCK };
+  }
+
   const arena = data.arena || null;
   const actorData = actorWriteFields(actor);
 
-  // updateMany with a compound (id + planId) where, rather than a plain
-  // update-by-id, is the "sufficiently restrictive write condition" for the
-  // existing-block path: it can never throw a not-found error (unlike
-  // update-by-unique-id), and re-enforces ownership INSIDE the transaction
-  // rather than trusting the plain pre-transaction existingBlock read above
-  // (which only fast-fails the common "obviously wrong id" case and could
-  // otherwise go stale if the block were deleted in the gap between that
-  // read and this transaction). count === 0 here means the block vanished
-  // (or never belonged to this plan) since that pre-check.
   const txResult = await prisma.$transaction(async (tx) => {
-    let blockId = data.blockId;
-    if (blockId) {
-      const updated = await tx.ridingSlotComplexBlock.updateMany({
-        where: { id: blockId, planId: plan.id },
-        data: { startTime: data.startTime, endTime: data.endTime, arena },
+    let stationId = data.stationId;
+    if (stationId) {
+      const updated = await tx.ridingSlotComplexStation.updateMany({
+        where: { id: stationId, blockId: block.id },
+        data: { instructorId, arena },
       });
       if (updated.count === 0) {
         return { ok: false as const };
       }
     } else {
-      const maxSort = await tx.ridingSlotComplexBlock.aggregate({
-        where: { planId: plan.id },
+      const maxSort = await tx.ridingSlotComplexStation.aggregate({
+        where: { blockId: block.id },
         _max: { sortOrder: true },
       });
-      const created = await tx.ridingSlotComplexBlock.create({
+      const created = await tx.ridingSlotComplexStation.create({
         data: {
-          planId: plan.id,
-          startTime: data.startTime,
-          endTime: data.endTime,
+          blockId: block.id,
+          instructorId,
           arena,
           sortOrder: (maxSort._max.sortOrder ?? -1) + 1,
         },
       });
-      blockId = created.id;
-    }
-
-    await tx.ridingSlotComplexBlockInstructor.deleteMany({ where: { blockId } });
-    if (instructorIds.length > 0) {
-      await tx.ridingSlotComplexBlockInstructor.createMany({
-        data: instructorIds.map((instructorId) => ({ blockId: blockId!, instructorId })),
-      });
+      stationId = created.id;
     }
 
     // Array order is the canonical pair sortOrder - client-submitted pair
     // ids are deliberately not part of the input shape at all (full-replace
     // semantics make them unnecessary, same convention as
     // RidingSlotHorseListItem's identical delete+recreate save).
-    await tx.ridingSlotComplexPair.deleteMany({ where: { blockId } });
+    await tx.ridingSlotComplexPair.deleteMany({ where: { stationId } });
     if (normalizedPairs.length > 0) {
       await tx.ridingSlotComplexPair.createMany({
         data: normalizedPairs.map((p, index) => ({
-          blockId: blockId!,
+          stationId: stationId!,
           trainee1Id: p.trainee1Id,
           trainee2Id: p.trainee2Id,
           horseName: p.horseName,
@@ -624,14 +823,14 @@ async function saveComplexBlockInternal(
   });
 
   if (!txResult.ok) {
-    return { success: false, error: NOT_FOUND_BLOCK };
+    return { success: false, error: NOT_FOUND_STATION };
   }
 
   revalidatePath("/admin/weekly-schedule");
   revalidatePath("/instructor");
 
   const warnings: RidingSlotComplexSaveWarnings = {
-    noInstructors: instructorIds.length === 0,
+    noInstructor: !instructorId,
     noArena: !arena,
     zeroPairs: normalizedPairs.length === 0,
     pairsMissingTrainee2: normalizedPairs.filter((p) => !p.trainee2Id).length,
@@ -642,25 +841,184 @@ async function saveComplexBlockInternal(
   return { success: true, plan: editing?.plan, warnings };
 }
 
-export async function saveRidingSlotComplexBlockAsAdmin(
-  input: RidingSlotComplexBlockSaveInput
+export async function saveRidingSlotComplexStationAsAdmin(
+  input: RidingSlotComplexStationSaveInput
 ): Promise<RidingSlotComplexPlanActionResult> {
   const admin = await requireAdmin();
-  return saveComplexBlockInternal(input, adminActor(admin));
+  return saveComplexStationInternal(input, adminActor(admin));
 }
 
-export async function saveRidingSlotComplexBlockAsInstructor(
+export async function saveRidingSlotComplexStationAsInstructor(
   instructorId: string,
-  input: RidingSlotComplexBlockSaveInput
+  input: RidingSlotComplexStationSaveInput
 ): Promise<RidingSlotComplexPlanActionResult> {
   const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
   if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
     return { success: false, error: NO_PERMISSION };
   }
-  return saveComplexBlockInternal(input, instructorActor(instructor));
+  return saveComplexStationInternal(input, instructorActor(instructor));
+}
+
+// ---------- Delete station ----------
+
+async function deleteComplexStationInternal(
+  ridingSlotId: string,
+  blockId: string,
+  stationId: string,
+  actor: ComplexPlanActor
+): Promise<RidingSlotComplexPlanActionResult> {
+  const plan = await prisma.ridingSlotComplexPlan.findUnique({ where: { ridingSlotId } });
+  if (!plan) {
+    return { success: false, error: NOT_FOUND_COMPLEX_PLAN };
+  }
+
+  const block = await prisma.ridingSlotComplexBlock.findUnique({ where: { id: blockId } });
+  if (!block || block.planId !== plan.id) {
+    return { success: false, error: NOT_FOUND_BLOCK };
+  }
+
+  const station = await prisma.ridingSlotComplexStation.findUnique({ where: { id: stationId } });
+  if (!station || station.blockId !== block.id) {
+    return { success: false, error: NOT_FOUND_STATION };
+  }
+
+  const actorData = actorWriteFields(actor);
+
+  // deleteMany with a compound (id + blockId) where - same
+  // sufficiently-restrictive-write-condition reasoning used throughout this
+  // file: never throws not-found, and re-checks ownership inside the
+  // transaction rather than trusting the plain pre-transaction reads above.
+  const txResult = await prisma.$transaction(async (tx) => {
+    // Cascade (schema onDelete: Cascade) removes this station's pairs -
+    // never the parent block.
+    const deleted = await tx.ridingSlotComplexStation.deleteMany({ where: { id: stationId, blockId: block.id } });
+    if (deleted.count === 0) {
+      return { ok: false as const };
+    }
+    await tx.ridingSlotComplexPlan.update({ where: { id: plan.id }, data: actorData });
+    return { ok: true as const };
+  });
+
+  if (!txResult.ok) {
+    return { success: false, error: NOT_FOUND_STATION };
+  }
+
+  revalidatePath("/admin/weekly-schedule");
+  revalidatePath("/instructor");
+
+  const editing = await buildComplexPlanForEditing(ridingSlotId, { canEdit: true });
+  return { success: true, plan: editing?.plan };
+}
+
+export async function deleteRidingSlotComplexStationAsAdmin(
+  ridingSlotId: string,
+  blockId: string,
+  stationId: string
+): Promise<RidingSlotComplexPlanActionResult> {
+  const admin = await requireAdmin();
+  return deleteComplexStationInternal(ridingSlotId, blockId, stationId, adminActor(admin));
+}
+
+export async function deleteRidingSlotComplexStationAsInstructor(
+  instructorId: string,
+  ridingSlotId: string,
+  blockId: string,
+  stationId: string
+): Promise<RidingSlotComplexPlanActionResult> {
+  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
+  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
+    return { success: false, error: NO_PERMISSION };
+  }
+  return deleteComplexStationInternal(ridingSlotId, blockId, stationId, instructorActor(instructor));
+}
+
+// ---------- Reorder stations (within one block) ----------
+
+async function reorderComplexStationsInternal(
+  ridingSlotId: string,
+  blockId: string,
+  orderedStationIds: string[],
+  actor: ComplexPlanActor
+): Promise<RidingSlotComplexPlanActionResult> {
+  const plan = await prisma.ridingSlotComplexPlan.findUnique({ where: { ridingSlotId } });
+  if (!plan) {
+    return { success: false, error: NOT_FOUND_COMPLEX_PLAN };
+  }
+
+  const block = await prisma.ridingSlotComplexBlock.findUnique({ where: { id: blockId } });
+  if (!block || block.planId !== plan.id) {
+    return { success: false, error: NOT_FOUND_BLOCK };
+  }
+
+  const existingStations = await prisma.ridingSlotComplexStation.findMany({
+    where: { blockId: block.id },
+    select: { id: true },
+  });
+  const existingIds = new Set(existingStations.map((s) => s.id));
+  const submittedIds = new Set(orderedStationIds);
+
+  if (
+    orderedStationIds.length !== existingStations.length ||
+    submittedIds.size !== orderedStationIds.length ||
+    orderedStationIds.some((id) => !existingIds.has(id))
+  ) {
+    return { success: false, error: INVALID_STATION_ORDER };
+  }
+
+  const actorData = actorWriteFields(actor);
+
+  const txResult = await prisma.$transaction(async (tx) => {
+    for (const [index, id] of orderedStationIds.entries()) {
+      const updated = await tx.ridingSlotComplexStation.updateMany({
+        where: { id, blockId: block.id },
+        data: { sortOrder: index },
+      });
+      if (updated.count === 0) {
+        return { ok: false as const };
+      }
+    }
+    await tx.ridingSlotComplexPlan.update({ where: { id: plan.id }, data: actorData });
+    return { ok: true as const };
+  });
+
+  if (!txResult.ok) {
+    return { success: false, error: INVALID_STATION_ORDER };
+  }
+
+  revalidatePath("/admin/weekly-schedule");
+  revalidatePath("/instructor");
+
+  const editing = await buildComplexPlanForEditing(ridingSlotId, { canEdit: true });
+  return { success: true, plan: editing?.plan };
+}
+
+export async function reorderRidingSlotComplexStationsAsAdmin(
+  ridingSlotId: string,
+  blockId: string,
+  orderedStationIds: string[]
+): Promise<RidingSlotComplexPlanActionResult> {
+  const admin = await requireAdmin();
+  return reorderComplexStationsInternal(ridingSlotId, blockId, orderedStationIds, adminActor(admin));
+}
+
+export async function reorderRidingSlotComplexStationsAsInstructor(
+  instructorId: string,
+  ridingSlotId: string,
+  blockId: string,
+  orderedStationIds: string[]
+): Promise<RidingSlotComplexPlanActionResult> {
+  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
+  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
+    return { success: false, error: NO_PERMISSION };
+  }
+  return reorderComplexStationsInternal(ridingSlotId, blockId, orderedStationIds, instructorActor(instructor));
 }
 
 // ---------- Delete block ----------
+// UNCHANGED from P2 - a block delete never referenced arena/instructors/
+// pairs directly, so nothing here needed to change; the schema's own
+// cascade (block -> stations -> pairs) now runs one level deeper than
+// before, entirely transparently to this code.
 
 async function deleteComplexBlockInternal(
   ridingSlotId: string,
@@ -685,8 +1043,8 @@ async function deleteComplexBlockInternal(
   // and re-checks ownership inside the transaction rather than trusting the
   // plain pre-transaction block read above.
   const txResult = await prisma.$transaction(async (tx) => {
-    // Cascades (schema onDelete: Cascade) remove this block's instructors
-    // and pairs - never the parent plan.
+    // Cascades (schema onDelete: Cascade) remove this block's stations,
+    // which cascade further to their pairs - never the parent plan.
     const deleted = await tx.ridingSlotComplexBlock.deleteMany({ where: { id: blockId, planId: plan.id } });
     if (deleted.count === 0) {
       return { ok: false as const };
@@ -728,11 +1086,12 @@ export async function deleteRidingSlotComplexBlockAsInstructor(
 
 // ---------- Duplicate block ----------
 
-// Copies time/arena/instructors only - pairs are never duplicated (per the
-// approved product decision). Cannot violate simple/complex mutual
-// exclusivity: it only ever creates a new RidingSlotComplexBlock inside an
-// ALREADY-EXISTING plan, never a new RidingSlotComplexPlan row, so the
-// exclusivity check that matters (at plan-creation time) is untouched here.
+// RIDING-PAIRS P5b - now copies startTime/endTime plus every station's
+// instructorId+arena (and station ordering) - never any pair, per the
+// approved product decision. Cannot violate simple/complex mutual
+// exclusivity: it only ever creates a new RidingSlotComplexBlock (and its
+// station copies) inside an ALREADY-EXISTING plan, never a new
+// RidingSlotComplexPlan row.
 async function duplicateComplexBlockInternal(
   ridingSlotId: string,
   blockId: string,
@@ -756,15 +1115,14 @@ async function duplicateComplexBlockInternal(
 
   const actorData = actorWriteFields(actor);
 
-  // The source block is re-read INSIDE the transaction (fresh, not from the
-  // precheck above) so the copy always reflects its latest
-  // startTime/endTime/arena/instructors, never a value that could have gone
-  // stale in the gap between the precheck and this transaction opening -
-  // "no write relies only on a stale pre-transaction object."
+  // The source block (and its stations) is re-read INSIDE the transaction
+  // (fresh, not from the precheck above) so the copy always reflects the
+  // latest committed state, never a value that could have gone stale in the
+  // gap between the precheck and this transaction opening.
   const txResult = await prisma.$transaction(async (tx) => {
     const sourceBlock = await tx.ridingSlotComplexBlock.findUnique({
       where: { id: blockId },
-      include: { instructors: true },
+      include: { stations: { orderBy: { sortOrder: "asc" } } },
     });
     if (!sourceBlock || sourceBlock.planId !== plan.id) {
       return { ok: false as const };
@@ -779,15 +1137,43 @@ async function duplicateComplexBlockInternal(
         planId: plan.id,
         startTime: sourceBlock.startTime,
         endTime: sourceBlock.endTime,
-        arena: sourceBlock.arena,
         sortOrder: (maxSort._max.sortOrder ?? -1) + 1,
       },
     });
-    if (sourceBlock.instructors.length > 0) {
-      await tx.ridingSlotComplexBlockInstructor.createMany({
-        data: sourceBlock.instructors.map((i) => ({ blockId: created.id, instructorId: i.instructorId })),
+
+    if (sourceBlock.stations.length > 0) {
+      // A copied instructorId may have gone inactive (or, defensively, no
+      // longer exist) since the source station was saved. Rather than
+      // failing the whole duplication over one now-inactive coach, that one
+      // station's copy is created with instructorId null - every other
+      // station in the source block still copies normally. This is the
+      // approved rule: "create the duplicated station with instructorId
+      // null rather than fail the entire duplication."
+      const sourceInstructorIds = sourceBlock.stations
+        .map((s) => s.instructorId)
+        .filter((id): id is string => id !== null);
+      const activeInstructorIds =
+        sourceInstructorIds.length > 0
+          ? new Set(
+              (
+                await tx.instructor.findMany({
+                  where: { id: { in: sourceInstructorIds }, isActive: true },
+                  select: { id: true },
+                })
+              ).map((i) => i.id)
+            )
+          : new Set<string>();
+
+      await tx.ridingSlotComplexStation.createMany({
+        data: sourceBlock.stations.map((s, index) => ({
+          blockId: created.id,
+          instructorId: s.instructorId && activeInstructorIds.has(s.instructorId) ? s.instructorId : null,
+          arena: s.arena,
+          sortOrder: index,
+        })),
       });
     }
+
     await tx.ridingSlotComplexPlan.update({ where: { id: plan.id }, data: actorData });
     return { ok: true as const, newBlockId: created.id };
   });
@@ -824,6 +1210,7 @@ export async function duplicateRidingSlotComplexBlockAsInstructor(
 }
 
 // ---------- Reorder blocks ----------
+// UNCHANGED from P2 - never referenced arena/instructors/pairs.
 
 async function reorderComplexBlocksInternal(
   ridingSlotId: string,
@@ -903,12 +1290,9 @@ export async function reorderRidingSlotComplexBlocksAsInstructor(
   return reorderComplexBlocksInternal(ridingSlotId, orderedBlockIds, instructorActor(instructor));
 }
 
-// ---------- Delete plan (admin only - future guarded mode-switch building block) ----------
+// ---------- Delete plan (admin only) ----------
+// UNCHANGED from P2.
 
-// Admin-only by design - instructors must not be able to delete a whole
-// plan. Deletes the plan and, by cascade, every block/block-instructor/pair
-// under it. Never creates a simple RidingSlotHorseList afterward - mode
-// switching (and any confirmation UX around it) is out of scope for P2.
 export async function deleteRidingSlotComplexPlanAsAdmin(ridingSlotId: string): Promise<ActionResult> {
   await requireAdmin();
 
