@@ -55,6 +55,12 @@ model Student {
   ridingSlotComplexPairsAsTrainee1 RidingSlotComplexPair[] @relation("ComplexPairTrainee1")
   ridingSlotComplexPairsAsTrainee2 RidingSlotComplexPair[] @relation("ComplexPairTrainee2")
 
+  // RIDING-COMPLEX-PUBLICATION P7A - back-relations for
+  // RidingSlotComplexPublicationPair.trainee1/trainee2 (see that model's own
+  // comment for why these are real FKs, onDelete: SetNull).
+  ridingSlotComplexPublicationPairsAsTrainee1 RidingSlotComplexPublicationPair[] @relation("ComplexPublicationPairTrainee1")
+  ridingSlotComplexPublicationPairsAsTrainee2 RidingSlotComplexPublicationPair[] @relation("ComplexPublicationPairTrainee2")
+
   @@map("students")
 }
 
@@ -349,6 +355,13 @@ model Instructor {
   // per station - see RidingSlotComplexStation.instructor's own comment).
   ridingSlotComplexPlanUpdates        RidingSlotComplexPlan[]    @relation("ComplexPlanUpdatedByInstructor")
   ridingSlotComplexStationAssignments RidingSlotComplexStation[] @relation("ComplexStationInstructor")
+
+  // RIDING-COMPLEX-PUBLICATION P7A - back-relations for
+  // RidingSlotComplexPublication.updatedByInstructor and
+  // RidingSlotComplexPublicationStation.instructor (see each model's own
+  // comment).
+  ridingSlotComplexPublicationUpdates            RidingSlotComplexPublication[]        @relation("ComplexPublicationUpdatedByInstructor")
+  ridingSlotComplexPublicationStationAssignments RidingSlotComplexPublicationStation[] @relation("ComplexPublicationStationInstructor")
 
   @@map("instructors")
 }
@@ -726,6 +739,15 @@ model RidingSlotComplexPlan {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  // RIDING-COMPLEX-PUBLICATION P7A - live counter, bumped (never reset)
+  // whenever a persisted change affects trainee-visible published content
+  // (block/station/pair create/update/delete/reorder/duplicate) - see the
+  // version-bump wiring in lib/actions/riding-slot-complex.ts. Compared
+  // against RidingSlotComplexPublication.sourceVersion to compute
+  // UNPUBLISHED/CURRENT/STALE, same convention as
+  // RidingSlotHorseList.version/RidingSlotHorsePublication.sourceVersion.
+  version Int @default(1)
+
   // Same dual-actor-identity convention as RidingSlotHorseList
   // (updatedByInstructorId/updatedByAdminEmail/updatedByAdminName/updatedByName)
   // - admin and instructor use two different auth systems in this app, and
@@ -736,9 +758,14 @@ model RidingSlotComplexPlan {
   updatedByAdminName    String?
   updatedByName         String
 
-  ridingSlot          RidingSlot               @relation(fields: [ridingSlotId], references: [id], onDelete: Cascade)
-  updatedByInstructor Instructor?              @relation("ComplexPlanUpdatedByInstructor", fields: [updatedByInstructorId], references: [id], onDelete: SetNull)
+  ridingSlot          RidingSlot                    @relation(fields: [ridingSlotId], references: [id], onDelete: Cascade)
+  updatedByInstructor Instructor?                   @relation("ComplexPlanUpdatedByInstructor", fields: [updatedByInstructorId], references: [id], onDelete: SetNull)
   blocks              RidingSlotComplexBlock[]
+  // RIDING-COMPLEX-PUBLICATION P7A - at most one CURRENT trainee-facing
+  // snapshot per plan (planId unique on the child side) - never a history
+  // of past publications, only the one current row. See
+  // RidingSlotComplexPublication below.
+  publication         RidingSlotComplexPublication?
 
   @@map("riding_slot_complex_plans")
 }
@@ -857,6 +884,134 @@ model RidingSlotComplexPair {
 
   @@index([stationId, sortOrder])
   @@map("riding_slot_complex_pairs")
+}
+
+// RIDING-COMPLEX-PUBLICATION P7A - the trainee-visible, immutable/current
+// snapshot of a complex riding plan (blocks -> stations -> pairs mirrored
+// one level each below). Exactly one row per plan (planId unique) - publish
+// is always an upsert-and-replace-children of this same row, never a second
+// row; there is no publication history, only the one current snapshot.
+// Mirrors RidingSlotHorsePublication's materialize-at-publish-time
+// convention (see that model's own comment), but scoped per-plan rather
+// than per-audience: a complex-plan trainee only ever sees their own pair
+// (see getPublishedComplexRidingAssignmentsForStudentInternal in
+// lib/actions/riding-slot-complex-publications.ts), never a group
+// broadcast, so no audience enum is needed here.
+model RidingSlotComplexPublication {
+  id     String @id @default(cuid())
+  planId String @unique
+
+  // Copied from RidingSlotComplexPlan.version at the moment this
+  // publication's snapshot rows were last (re)generated - compared against
+  // the live plan's current version to compute UNPUBLISHED/CURRENT/STALE.
+  // Never derived from child-row timestamps.
+  sourceVersion    Int
+  firstPublishedAt DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Same dual-actor-identity convention as RidingSlotComplexPlan/
+  // RidingSlotHorseList above - admin and instructor use two different auth
+  // systems in this app.
+  updatedByInstructorId String?
+  updatedByAdminEmail   String?
+  updatedByAdminName    String?
+  updatedByName         String
+
+  plan                RidingSlotComplexPlan               @relation(fields: [planId], references: [id], onDelete: Cascade)
+  updatedByInstructor Instructor?                         @relation("ComplexPublicationUpdatedByInstructor", fields: [updatedByInstructorId], references: [id], onDelete: SetNull)
+  blocks              RidingSlotComplexPublicationBlock[]
+
+  @@map("riding_slot_complex_publications")
+}
+
+// Immutable/generated snapshot row - regenerated wholesale (delete+recreate)
+// only by publishComplexRidingPlanAsAdmin/AsInstructor, never edited
+// directly. sourceBlockId is a plain, unconstrained id value (not a Prisma
+// relation/FK) kept only for possible future traceability ("which live
+// block did this come from") - deliberately NOT a relation, so this table
+// never needs an onDelete trigger wired onto RidingSlotComplexBlock (a
+// live, frequently delete+recreated table) and RidingSlotComplexBlock's own
+// semantics stay completely untouched by this stage. Display must never
+// depend on sourceBlockId still resolving to a live row.
+model RidingSlotComplexPublicationBlock {
+  id            String   @id @default(cuid())
+  publicationId String
+  sourceBlockId String?
+  startTime     String
+  endTime       String
+  sortOrder     Int
+  createdAt     DateTime @default(now())
+
+  publication RidingSlotComplexPublication          @relation(fields: [publicationId], references: [id], onDelete: Cascade)
+  stations    RidingSlotComplexPublicationStation[]
+
+  @@index([publicationId, sortOrder])
+  @@map("riding_slot_complex_publication_blocks")
+}
+
+// One coach/arena station snapshot within a publication block. instructorId
+// IS a real FK (unlike sourceBlockId above) - same "kept only for a
+// possible future click-through, display must always use the *Snapshot
+// field" reasoning RidingSlotHorsePublicationItem.studentId already
+// establishes for a stable, rarely-hard-deleted entity (Instructor).
+// onDelete: SetNull so a later Instructor deletion never destroys this
+// already-published snapshot row - instructorNameSnapshot keeps it
+// meaningful regardless. instructorId/arena are both nullable: a station
+// missing a coach or arena is a warning, never a publish blocker (see the
+// hard-block rules in lib/actions/riding-slot-complex-publications.ts).
+model RidingSlotComplexPublicationStation {
+  id                     String   @id @default(cuid())
+  publicationBlockId     String
+  sourceStationId        String?
+  instructorId           String?
+  instructorNameSnapshot String?
+  arena                  String?
+  sortOrder              Int
+  createdAt              DateTime @default(now())
+
+  publicationBlock RidingSlotComplexPublicationBlock  @relation(fields: [publicationBlockId], references: [id], onDelete: Cascade)
+  instructor       Instructor?                        @relation("ComplexPublicationStationInstructor", fields: [instructorId], references: [id], onDelete: SetNull)
+  pairs            RidingSlotComplexPublicationPair[]
+
+  @@index([publicationBlockId, sortOrder])
+  @@map("riding_slot_complex_publication_stations")
+}
+
+// One trainee pair snapshot within a publication station. trainee1Id/
+// trainee2Id are real FKs (same reasoning as instructorId above), onDelete:
+// SetNull so a later Student deletion never destroys this row - the
+// trainee1NameSnapshot/trainee2NameSnapshot fields are what every reader
+// (including the trainee-scoped read action) must actually display.
+// trainee1Id is nullable (not required) purely so SetNull is possible; it
+// is always populated at publish time, since the live save action never
+// persists a RidingSlotComplexPair without a trainee1Id in the first place
+// (see saveComplexStationInternal's own "a completely blank pair is
+// silently dropped" rule). note is deliberately NOT snapshotted here - pair
+// notes are instructor/admin planning commentary, never trainee-visible
+// (same "never exposed to trainees" precedent as
+// RidingLessonNote.note/TeachingPracticeFeedback.feedback elsewhere in this
+// schema).
+model RidingSlotComplexPublicationPair {
+  id                   String   @id @default(cuid())
+  publicationStationId String
+  sourcePairId         String?
+  trainee1Id           String?
+  trainee1NameSnapshot String?
+  trainee2Id           String?
+  trainee2NameSnapshot String?
+  horseName            String?
+  sortOrder            Int
+  createdAt            DateTime @default(now())
+
+  publicationStation RidingSlotComplexPublicationStation @relation(fields: [publicationStationId], references: [id], onDelete: Cascade)
+  trainee1           Student?                            @relation("ComplexPublicationPairTrainee1", fields: [trainee1Id], references: [id], onDelete: SetNull)
+  trainee2           Student?                            @relation("ComplexPublicationPairTrainee2", fields: [trainee2Id], references: [id], onDelete: SetNull)
+
+  @@index([publicationStationId, sortOrder])
+  @@index([trainee1Id])
+  @@index([trainee2Id])
+  @@map("riding_slot_complex_publication_pairs")
 }
 
 // Manager-entered riding progress feedback, separate from RidingLessonNote,

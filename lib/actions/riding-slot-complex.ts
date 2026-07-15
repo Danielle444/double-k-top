@@ -571,7 +571,14 @@ async function saveComplexBlockInternal(
       createdBlockId = created.id;
     }
 
-    await tx.ridingSlotComplexPlan.update({ where: { id: plan.id }, data: actorData });
+    // RIDING-COMPLEX-PUBLICATION P7A - version bump is folded into this
+    // same actor-metadata update, inside the same transaction as the block
+    // write above, so it can never drift out of sync with the mutation it
+    // represents (see RidingSlotComplexPlan.version's own schema comment).
+    await tx.ridingSlotComplexPlan.update({
+      where: { id: plan.id },
+      data: { ...actorData, version: { increment: 1 } },
+    });
     return { ok: true as const, createdBlockId };
   });
 
@@ -818,7 +825,12 @@ async function saveComplexStationInternal(
       });
     }
 
-    await tx.ridingSlotComplexPlan.update({ where: { id: plan.id }, data: actorData });
+    // RIDING-COMPLEX-PUBLICATION P7A - see saveComplexBlockInternal's
+    // identical comment.
+    await tx.ridingSlotComplexPlan.update({
+      where: { id: plan.id },
+      data: { ...actorData, version: { increment: 1 } },
+    });
     return { ok: true as const };
   });
 
@@ -895,7 +907,12 @@ async function deleteComplexStationInternal(
     if (deleted.count === 0) {
       return { ok: false as const };
     }
-    await tx.ridingSlotComplexPlan.update({ where: { id: plan.id }, data: actorData });
+    // RIDING-COMPLEX-PUBLICATION P7A - see saveComplexBlockInternal's
+    // identical comment.
+    await tx.ridingSlotComplexPlan.update({
+      where: { id: plan.id },
+      data: { ...actorData, version: { increment: 1 } },
+    });
     return { ok: true as const };
   });
 
@@ -977,7 +994,12 @@ async function reorderComplexStationsInternal(
         return { ok: false as const };
       }
     }
-    await tx.ridingSlotComplexPlan.update({ where: { id: plan.id }, data: actorData });
+    // RIDING-COMPLEX-PUBLICATION P7A - see saveComplexBlockInternal's
+    // identical comment.
+    await tx.ridingSlotComplexPlan.update({
+      where: { id: plan.id },
+      data: { ...actorData, version: { increment: 1 } },
+    });
     return { ok: true as const };
   });
 
@@ -1049,7 +1071,12 @@ async function deleteComplexBlockInternal(
     if (deleted.count === 0) {
       return { ok: false as const };
     }
-    await tx.ridingSlotComplexPlan.update({ where: { id: plan.id }, data: actorData });
+    // RIDING-COMPLEX-PUBLICATION P7A - see saveComplexBlockInternal's
+    // identical comment.
+    await tx.ridingSlotComplexPlan.update({
+      where: { id: plan.id },
+      data: { ...actorData, version: { increment: 1 } },
+    });
     return { ok: true as const };
   });
 
@@ -1174,7 +1201,12 @@ async function duplicateComplexBlockInternal(
       });
     }
 
-    await tx.ridingSlotComplexPlan.update({ where: { id: plan.id }, data: actorData });
+    // RIDING-COMPLEX-PUBLICATION P7A - see saveComplexBlockInternal's
+    // identical comment.
+    await tx.ridingSlotComplexPlan.update({
+      where: { id: plan.id },
+      data: { ...actorData, version: { increment: 1 } },
+    });
     return { ok: true as const, newBlockId: created.id };
   });
 
@@ -1255,7 +1287,12 @@ async function reorderComplexBlocksInternal(
         return { ok: false as const };
       }
     }
-    await tx.ridingSlotComplexPlan.update({ where: { id: plan.id }, data: actorData });
+    // RIDING-COMPLEX-PUBLICATION P7A - see saveComplexBlockInternal's
+    // identical comment.
+    await tx.ridingSlotComplexPlan.update({
+      where: { id: plan.id },
+      data: { ...actorData, version: { increment: 1 } },
+    });
     return { ok: true as const };
   });
 
