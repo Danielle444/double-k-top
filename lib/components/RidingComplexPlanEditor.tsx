@@ -453,6 +453,7 @@ function BlockEditorForm({
   actor,
   ridingSlotId,
   block,
+  canEdit,
   instructors,
   candidates,
   knownHorseNames,
@@ -462,6 +463,11 @@ function BlockEditorForm({
   actor: RidingComplexPlanEditorActor;
   ridingSlotId: string;
   block: RidingSlotComplexBlockRow | null;
+  // When false, this renders a read-only detail view instead (below) - a
+  // read-only viewer only ever reaches this component via "צפייה" on an
+  // EXISTING block (BlockCard.canEdit already hides "+ הוספת בלוק" entirely),
+  // so `block` is always non-null in that branch.
+  canEdit: boolean;
   instructors: InstructorOption[];
   candidates: RidingSlotComplexTraineeCandidate[];
   knownHorseNames: string[];
@@ -525,6 +531,70 @@ function BlockEditorForm({
         pairsMissingHorse: 0,
       });
     });
+  }
+
+  // Read-only detail view - same local state as the editable form above
+  // (initialized from the same `block`), just rendered as static text with
+  // no inputs, no Add/remove-pair, no instructor selection, no Save - only
+  // a Close/Back button. This is the one small shared detail mode requested
+  // instead of a second editor component; block is always non-null here
+  // (see the canEdit prop's own comment above).
+  if (!canEdit) {
+    const selectedInstructorNames = instructors
+      .filter((i) => instructorIds.includes(i.id))
+      .map((i) => i.fullName);
+    return (
+      <div className="flex min-h-0 flex-1 flex-col gap-3">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto ps-1 text-sm">
+          <div className="grid grid-cols-2 gap-2">
+            <p>
+              <span className="text-muted-foreground">שעת התחלה: </span>
+              {startTime}
+            </p>
+            <p>
+              <span className="text-muted-foreground">שעת סיום: </span>
+              {endTime}
+            </p>
+          </div>
+          <p>
+            <span className="text-muted-foreground">מגרש: </span>
+            {arena || "לא הוגדר מגרש"}
+          </p>
+          <p>
+            <span className="text-muted-foreground">מדריכים/ות אחראים/ות: </span>
+            {selectedInstructorNames.length > 0 ? selectedInstructorNames.join(", ") : "לא נבחרו מדריכים"}
+          </p>
+
+          <div className="flex flex-col gap-2">
+            <p className="font-semibold text-card-foreground">זוגות</p>
+            {pairs.length === 0 ? (
+              <p className="text-muted-foreground">אין זוגות בבלוק זה</p>
+            ) : (
+              pairs.map((pair) => {
+                const trainee1 = candidates.find((c) => c.studentId === pair.trainee1Id);
+                const trainee2 = candidates.find((c) => c.studentId === pair.trainee2Id);
+                return (
+                  <div key={pair.key} className="flex flex-col gap-1 rounded-lg border border-border bg-card p-2.5">
+                    <p className="font-medium text-card-foreground">
+                      {trainee1?.studentName ?? "לא נבחר/ה"}
+                      {trainee2 ? ` + ${trainee2.studentName}` : ""}
+                    </p>
+                    <p className="text-muted-foreground">סוס: {pair.horseName || "לא הוגדר"}</p>
+                    {pair.note && <p className="text-muted-foreground">הערה: {pair.note}</p>}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 justify-end">
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            חזרה
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -623,22 +693,31 @@ function BlockCard({
   block,
   index,
   total,
+  canEdit,
   onEdit,
   onDuplicate,
   onDelete,
   onMoveUp,
   onMoveDown,
-  disabled,
+  pendingDisabled,
 }: {
   block: RidingSlotComplexBlockRow;
   index: number;
   total: number;
+  // Gates only the mutating actions (duplicate/delete/reorder), which are
+  // hidden entirely for a read-only viewer - "עריכה" itself is never
+  // permission-gated, it just becomes "צפייה" and opens BlockEditorForm's
+  // read-only detail branch instead of the editable one (see canEdit prop
+  // on BlockEditorForm below).
+  canEdit: boolean;
   onEdit: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
-  disabled: boolean;
+  // A block-level action already in flight (reorder/duplicate/delete) -
+  // never permission-related, only re-entrancy protection.
+  pendingDisabled: boolean;
 }) {
   const instructorNames =
     block.instructors.length > 0 ? block.instructors.map((i) => i.fullName).join(", ") : "לא נבחרו מאמנים";
@@ -669,34 +748,43 @@ function BlockCard({
         </div>
       )}
       <div className="flex flex-wrap items-center gap-1.5">
-        <Button variant="secondary" className="!px-2 !py-1 !text-xs" onClick={onEdit} disabled={disabled}>
-          עריכה
+        <Button variant="secondary" className="!px-2 !py-1 !text-xs" onClick={onEdit} disabled={pendingDisabled}>
+          {canEdit ? "עריכה" : "צפייה"}
         </Button>
-        <Button variant="secondary" className="!px-2 !py-1 !text-xs" onClick={onDuplicate} disabled={disabled}>
-          שכפול
-        </Button>
-        <Button variant="danger" className="!px-2 !py-1 !text-xs" onClick={onDelete} disabled={disabled}>
-          מחיקה
-        </Button>
-        <span className="mx-1 h-5 w-px bg-border" />
-        <Button
-          variant="ghost"
-          className="!px-2 !py-1 !text-xs"
-          onClick={onMoveUp}
-          disabled={disabled || index === 0}
-          aria-label="הזזה למעלה"
-        >
-          ↑
-        </Button>
-        <Button
-          variant="ghost"
-          className="!px-2 !py-1 !text-xs"
-          onClick={onMoveDown}
-          disabled={disabled || index === total - 1}
-          aria-label="הזזה למטה"
-        >
-          ↓
-        </Button>
+        {canEdit && (
+          <>
+            <Button
+              variant="secondary"
+              className="!px-2 !py-1 !text-xs"
+              onClick={onDuplicate}
+              disabled={pendingDisabled}
+            >
+              שכפול
+            </Button>
+            <Button variant="danger" className="!px-2 !py-1 !text-xs" onClick={onDelete} disabled={pendingDisabled}>
+              מחיקה
+            </Button>
+            <span className="mx-1 h-5 w-px bg-border" />
+            <Button
+              variant="ghost"
+              className="!px-2 !py-1 !text-xs"
+              onClick={onMoveUp}
+              disabled={pendingDisabled || index === 0}
+              aria-label="הזזה למעלה"
+            >
+              ↑
+            </Button>
+            <Button
+              variant="ghost"
+              className="!px-2 !py-1 !text-xs"
+              onClick={onMoveDown}
+              disabled={pendingDisabled || index === total - 1}
+              aria-label="הזזה למטה"
+            >
+              ↓
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -961,7 +1049,8 @@ export function RidingComplexPlanEditor({
                         block={block}
                         index={index}
                         total={plan.blocks.length}
-                        disabled={!canEdit || anyBlockActionPending || busyBlockId === block.id}
+                        canEdit={canEdit}
+                        pendingDisabled={anyBlockActionPending || busyBlockId === block.id}
                         onEdit={() => {
                           setEditingBlockId(block.id);
                           setView("editBlock");
@@ -1001,6 +1090,7 @@ export function RidingComplexPlanEditor({
                     ? (plan.blocks.find((b) => b.id === editingBlockId) ?? null)
                     : null
                 }
+                canEdit={canEdit}
                 instructors={instructors}
                 candidates={editing.candidates}
                 knownHorseNames={editing.knownHorseNames}

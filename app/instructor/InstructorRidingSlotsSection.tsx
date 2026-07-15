@@ -19,6 +19,7 @@ import { getHorseDisplayInfo } from "@/lib/horse-info";
 import { formatInstructorNames } from "@/lib/riding-assignment-matching";
 import { groupByGroupAndSubgroup, STATUS_BADGE_CLASS, type GroupSection } from "@/lib/attendance-ui";
 import { RidingHorseListEditor } from "@/lib/components/RidingHorseListEditor";
+import { RidingComplexPlanEditor } from "@/lib/components/RidingComplexPlanEditor";
 import {
   getInstructorRidingSlots,
   getRidingSlotStudentNotes,
@@ -32,6 +33,18 @@ import {
   type RidingSlotAssignmentRow,
   type StudentRidingHistoryResult,
 } from "@/lib/actions/riding-slots";
+import { getRidingSlotHorseListForInstructor } from "@/lib/actions/riding-slot-horses";
+import {
+  getRidingSlotComplexPlanForInstructor,
+  createRidingSlotComplexPlanAsInstructor,
+} from "@/lib/actions/riding-slot-complex";
+// Existing, already-exported, read-only, no-permission-gate action (used
+// today by ContactsSection) - reused here as-is for the complex block
+// editor's instructor multi-select, exactly the same active-instructor
+// roster shape RidingSlotModal.tsx already gets server-side via
+// prisma.instructor.findMany({ where: { isActive: true } }). No server
+// action was added or modified for this.
+import { getInstructorContacts } from "@/lib/actions/contacts";
 
 type ViewMode = "day" | "week";
 type ScopeMode = "mine" | "all";
@@ -49,6 +62,26 @@ const RATING_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 function isAssignedToInstructor(activity: WeeklyRidingActivity, instructorId: string): boolean {
   return activity.ridingSlot?.assignments.some((a) => a.instructorIds.includes(instructorId)) ?? false;
+}
+
+// "loading" is represented by absence from the modeByRidingSlotId map, not a
+// fourth enum value here - see the batch-detection effect below. The
+// server/database is the sole source of truth for mode, same convention as
+// the admin RidingSlotModal's own detectRidingSlotMode - never a client-side
+// flag. Checks the complex plan first (cheap - a single read, returns null
+// fast when no plan exists) and only falls back to the simple horse-list
+// read when no complex plan exists, since the two modes are mutually
+// exclusive by construction (P2's server-side guard). Both underlying reads
+// already return null for an inactive instructor (isActive re-checked
+// server-side on every call) - no extra handling needed here for that case.
+type InstructorSlotMode = "none" | "simple" | "complex" | "error";
+
+async function detectInstructorRidingSlotMode(instructorId: string, ridingSlotId: string): Promise<InstructorSlotMode> {
+  const complexPlan = await getRidingSlotComplexPlanForInstructor(instructorId, ridingSlotId);
+  if (complexPlan) return "complex";
+  const horseList = await getRidingSlotHorseListForInstructor(instructorId, ridingSlotId);
+  if (horseList?.listId) return "simple";
+  return "none";
 }
 
 // Finds the assignment responsible for a given group/subgroup section,
@@ -814,6 +847,34 @@ export function InstructorRidingSlotsSection({
   // independent action.
   const [horseListActivity, setHorseListActivity] = useState<WeeklyRidingActivity | null>(null);
 
+  // Complex-plan editor - same independence from openActivity/editingStudent
+  // as horseListActivity above. Per-RidingSlot mode is looked up in
+  // modeByRidingSlotId (keyed by ridingSlot.id, absence = still loading) so
+  // every visible card can show its own choice/label without a single
+  // section-wide mode state.
+  const [complexActivity, setComplexActivity] = useState<WeeklyRidingActivity | null>(null);
+  const [modeByRidingSlotId, setModeByRidingSlotId] = useState<Record<string, InstructorSlotMode>>({});
+  const [creatingComplexForId, setCreatingComplexForId] = useState<string | null>(null);
+  const [isCreatingComplex, startCreateComplexTransition] = useTransition();
+  const [chooseError, setChooseError] = useState<{ ridingSlotId: string; message: string } | null>(null);
+
+  // Active-instructor roster for the complex block editor's multi-select -
+  // loaded once regardless of canEdit (a read-only viewer still needs it to
+  // resolve/display already-assigned instructor names; RidingComplexPlanEditor
+  // itself decides whether the picker is interactive via canEdit).
+  const [instructorOptions, setInstructorOptions] = useState<{ id: string; fullName: string }[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getInstructorContacts().then((rows) => {
+      if (cancelled) return;
+      setInstructorOptions(rows.map((r) => ({ id: r.id, fullName: r.fullName })));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Loaded once at the section level (not per student row) and passed down
   // to StudentEditor - same "load once, reuse" convention as
   // HorseFeedingSection's loadKnownValues. Only editors ever open the form
@@ -841,6 +902,12 @@ export function InstructorRidingSlotsSection({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoadError(null);
     setDays(null);
+    // Reset every time the date range changes - a stale mode from the
+    // previous range's RidingSlot ids must never appear to still apply
+    // after switching day/week, same "switching must reset state" rule
+    // applied to this per-card map instead of a single mode variable.
+    setModeByRidingSlotId({});
+    setChooseError(null);
     getInstructorRidingSlots(rangeStart, rangeEnd)
       .then((r) => {
         if (cancelled) return;
@@ -855,6 +922,80 @@ export function InstructorRidingSlotsSection({
       cancelled = true;
     };
   }, [rangeStart, rangeEnd]);
+
+  // Batch-detects mode for every visible RidingSlot once `days` loads -
+  // keyed on the full (unfiltered) days list rather than the scopeMode-
+  // filtered visibleDays below, so toggling "הרכיבות שלי"/"כל הרכיבות" never
+  // re-triggers a fetch for data already retrieved. Each result writes to
+  // its own map key, so a stale response landing after a later range switch
+  // is harmless on its own (the map was already reset above) - `cancelled`
+  // still guards against writing into a map that belongs to an even later
+  // range switch.
+  useEffect(() => {
+    const ridingSlotIds = Array.from(
+      new Set(
+        (days ?? [])
+          .flatMap((day) => day.activities)
+          .map((a) => a.ridingSlot?.id)
+          .filter((id): id is string => Boolean(id))
+      )
+    );
+    if (ridingSlotIds.length === 0) return;
+    let cancelled = false;
+    for (const ridingSlotId of ridingSlotIds) {
+      detectInstructorRidingSlotMode(instructorId, ridingSlotId)
+        .then((detected) => {
+          if (cancelled) return;
+          setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: detected }));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: "error" }));
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [days, instructorId]);
+
+  function refreshModeFor(ridingSlotId: string) {
+    detectInstructorRidingSlotMode(instructorId, ridingSlotId)
+      .then((detected) => setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: detected })))
+      .catch(() => setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: "error" })));
+  }
+
+  // Complex mode is created eagerly right when chosen (mirrors the admin
+  // RidingSlotModal's identical behavior) via the P2 instructor create
+  // action - a SIMPLE_LIST_EXISTS conflict shows its exact Hebrew message
+  // inline on this card and re-derives mode from the server, never deletes
+  // or converts either mode. creatingComplexForId (not just isCreatingComplex)
+  // prevents a double-tap on a DIFFERENT card from being silently ignored
+  // while also making sure only the tapped card shows "יוצר...".
+  function handleChooseComplex(activity: WeeklyRidingActivity) {
+    if (!activity.ridingSlot || creatingComplexForId) return;
+    const ridingSlotId = activity.ridingSlot.id;
+    setChooseError(null);
+    setCreatingComplexForId(ridingSlotId);
+    startCreateComplexTransition(async () => {
+      const result = await createRidingSlotComplexPlanAsInstructor(instructorId, ridingSlotId);
+      setCreatingComplexForId(null);
+      if (!result.success) {
+        setChooseError({ ridingSlotId, message: result.error ?? "אירעה שגיאה" });
+        refreshModeFor(ridingSlotId);
+        return;
+      }
+      setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: "complex" }));
+      setComplexActivity(activity);
+    });
+  }
+
+  // Fired after a successful מחיקת התכנון המורכב inside RidingComplexPlanEditor
+  // (admin-only there, but the callback itself is generic) - returns this
+  // card to the mode-selection state, never auto-creates a simple list.
+  function handleComplexPlanDeleted(ridingSlotId: string) {
+    setComplexActivity(null);
+    setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: "none" }));
+  }
 
   function openStudents(activity: WeeklyRidingActivity) {
     if (!activity.ridingSlot) return;
@@ -1178,7 +1319,7 @@ export function InstructorRidingSlotsSection({
                         </div>
                       )}
 
-                      <div className="mt-2 flex flex-wrap gap-2">
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
                         {activity.ridingSlot ? (
                           <>
                             <Button
@@ -1194,18 +1335,91 @@ export function InstructorRidingSlotsSection({
                             >
                               צפייה בחניכים
                             </Button>
-                            {canEdit && (
-                              <Button
-                                variant="secondary"
-                                className="!px-2 !py-1 !text-xs"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setHorseListActivity(activity);
-                                }}
-                              >
-                                הגדרת סוסים לאיכוף
-                              </Button>
-                            )}
+                            {(() => {
+                              const ridingSlotId = activity.ridingSlot!.id;
+                              const slotMode = modeByRidingSlotId[ridingSlotId];
+                              if (slotMode === undefined) return null; // still detecting - no placeholder, avoids per-card jitter
+                              if (slotMode === "error") {
+                                return (
+                                  <span className="text-xs text-danger">שגיאה בבדיקת מצב הרכיבה</span>
+                                );
+                              }
+                              if (slotMode === "none") {
+                                if (!canEdit) {
+                                  return (
+                                    <span className="text-xs italic text-muted-foreground">
+                                      עדיין לא הוגדר תכנון סוסים לרכיבה זו
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <>
+                                    <Button
+                                      variant="secondary"
+                                      className="!px-2 !py-1 !text-xs"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setChooseError(null);
+                                        setHorseListActivity(activity);
+                                      }}
+                                    >
+                                      רשימת סוסים רגילה
+                                    </Button>
+                                    <Button
+                                      variant="secondary"
+                                      className="!px-2 !py-1 !text-xs"
+                                      disabled={isCreatingComplex && creatingComplexForId === ridingSlotId}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleChooseComplex(activity);
+                                      }}
+                                    >
+                                      {isCreatingComplex && creatingComplexForId === ridingSlotId
+                                        ? "יוצר..."
+                                        : "תכנון רכיבה מורכבת — בלוקים וזוגות"}
+                                    </Button>
+                                  </>
+                                );
+                              }
+                              if (slotMode === "simple") {
+                                return (
+                                  <>
+                                    {canEdit && (
+                                      <Button
+                                        variant="secondary"
+                                        className="!px-2 !py-1 !text-xs"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setHorseListActivity(activity);
+                                        }}
+                                      >
+                                        הגדרת סוסים לאיכוף
+                                      </Button>
+                                    )}
+                                    <span className="text-xs text-muted-foreground">מצב: רשימת סוסים רגילה</span>
+                                  </>
+                                );
+                              }
+                              // "complex" - open/view is available to every active
+                              // instructor regardless of canEdit; the shared editor
+                              // itself renders read-only ("צפייה") when
+                              // canEditRidingNotes is false, per the P3b correction.
+                              return (
+                                <>
+                                  <Button
+                                    variant="secondary"
+                                    className="!px-2 !py-1 !text-xs"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setComplexActivity(activity);
+                                    }}
+                                  >
+                                    פתיחת תכנון רכיבה מורכבת
+                                  </Button>
+                                  <span className="text-xs text-muted-foreground">מצב: תכנון רכיבה מורכבת</span>
+                                </>
+                              );
+                            })()}
                           </>
                         ) : (
                           <p className="text-xs italic text-muted-foreground">
@@ -1213,6 +1427,9 @@ export function InstructorRidingSlotsSection({
                           </p>
                         )}
                       </div>
+                      {activity.ridingSlot && chooseError?.ridingSlotId === activity.ridingSlot.id && (
+                        <p className="mt-1 text-xs text-danger">{chooseError.message}</p>
+                      )}
                     </div>
                   );
                 })}
@@ -1365,10 +1582,31 @@ export function InstructorRidingSlotsSection({
       {horseListActivity && horseListActivity.ridingSlot && (
         <RidingHorseListEditor
           open={horseListActivity !== null}
-          onClose={() => setHorseListActivity(null)}
+          onClose={() => {
+            const ridingSlotId = horseListActivity.ridingSlot!.id;
+            setHorseListActivity(null);
+            // Re-derives this card's mode after closing - if the save
+            // inside hit a COMPLEX_PLAN_EXISTS conflict (already shown
+            // inline by the unmodified editor itself), this reflects the
+            // true server state instead of leaving a stale "none"/"simple"
+            // label on the card.
+            refreshModeFor(ridingSlotId);
+          }}
           ridingSlotId={horseListActivity.ridingSlot.id}
           contextLabel={`${cleanScheduleTitle(horseListActivity.title)} · ${horseListActivity.startTime}-${horseListActivity.endTime}`}
           actor={{ type: "instructor", instructorId }}
+        />
+      )}
+
+      {complexActivity && complexActivity.ridingSlot && (
+        <RidingComplexPlanEditor
+          open={complexActivity !== null}
+          onClose={() => setComplexActivity(null)}
+          ridingSlotId={complexActivity.ridingSlot.id}
+          contextLabel={`${cleanScheduleTitle(complexActivity.title)} · ${complexActivity.startTime}-${complexActivity.endTime}`}
+          instructors={instructorOptions}
+          actor={{ type: "instructor", instructorId }}
+          onDeleted={() => handleComplexPlanDeleted(complexActivity.ridingSlot!.id)}
         />
       )}
     </div>
