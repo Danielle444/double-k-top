@@ -15,9 +15,14 @@ import {
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
 import { SearchableSelect, type SearchableSelectOption } from "@/lib/components/SearchableSelect";
+import { TeachingPracticeInstructorDayNoteEditor } from "@/lib/components/TeachingPracticeInstructorDayNoteEditor";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey, todayDateKey } from "@/lib/dates";
 import { buildTelLink, buildWhatsAppLink } from "@/lib/phone-contact-links";
 import type { ActionResult } from "@/lib/actions/students";
+import {
+  getMyTeachingPracticeDayNotes,
+  type TeachingPracticeDayNotesByType,
+} from "@/lib/actions/teaching-practice-instructor-day-notes";
 import {
   addMinutesToTimeString,
   ROLE_LABELS,
@@ -865,6 +870,25 @@ export function TeachingPracticeManager({
   // studentEditorRef) - the modal component alone holds the current draft.
   const feedbackModalRef = useRef<TeachingPracticeFeedbackModalHandle>(null);
 
+  // TP-DAY-NOTES - instructor-private per-section notes for the currently
+  // selected date. Instructor-only surface: never fetched for role ===
+  // "admin" (see the load effect below), never joined into lessonDateDetail,
+  // and has no admin-facing action at all (see
+  // lib/actions/teaching-practice-instructor-day-notes.ts). dayNotes is
+  // keyed by practiceType, always reset to null before a new date/instructor's
+  // notes are fetched so a stale date's content can never render under the
+  // new selection. notesRequestRef guards against an in-flight request from
+  // a previous date/instructor landing after a newer one has already
+  // started (see loadMyTeachingPracticeDayNotes).
+  const [dayNotes, setDayNotes] = useState<TeachingPracticeDayNotesByType | null>(null);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [notesLoadError, setNotesLoadError] = useState<string | null>(null);
+  // Restricted to the three supported practice types (or null/closed) by
+  // construction - only ever set via handleOpenNoteEditor below, which takes
+  // a TeachingPracticeTypeValue.
+  const [openNoteType, setOpenNoteType] = useState<TeachingPracticeTypeValue | null>(null);
+  const notesRequestRef = useRef(0);
+
   // Every real participant across the whole selected date (not just one
   // lesson), each paired with its lesson/child context via the exact same
   // pairLessonParticipantsWithChildren helper the generated-lessons table
@@ -1057,6 +1081,121 @@ export function TeachingPracticeManager({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, selectedLessonDate, role, actorId]);
+
+  // TP-DAY-NOTES load - requestId (not just a boolean "cancelled" flag) so an
+  // in-flight request from a previous date/instructor can never overwrite
+  // dayNotes after a newer request has already started, even out of order.
+  // Exposed as a standalone function (not inlined in the effect below) so
+  // the retry control can re-run exactly this after a load failure.
+  async function loadMyTeachingPracticeDayNotes(date: string) {
+    if (role !== "instructor" || !actorId) return;
+    const requestId = ++notesRequestRef.current;
+    setNotesLoadError(null);
+    setNotesLoading(true);
+    try {
+      const result = await getMyTeachingPracticeDayNotes(actorId, date);
+      if (notesRequestRef.current !== requestId) return;
+      if (!result) {
+        setNotesLoadError("שגיאה בטעינת ההערות האישיות");
+        return;
+      }
+      setDayNotes(result);
+    } catch {
+      if (notesRequestRef.current !== requestId) return;
+      setNotesLoadError("שגיאה בטעינת ההערות האישיות");
+    } finally {
+      if (notesRequestRef.current !== requestId) return;
+      setNotesLoading(false);
+    }
+  }
+
+  // Instructor-private day notes: every date/instructor change resets
+  // dayNotes/error/loading immediately (synchronously, before the fetch
+  // below even starts) so the previous date's note content can never render
+  // under a newly selected date, and closes any open note editor so a draft
+  // typed for the old date/instructor can never be saved under the new one.
+  // Admin never reaches the body of this effect - the whole feature is
+  // instructor-only, matching how the note controls themselves are gated.
+  useEffect(() => {
+    // Invalidates any request already in flight from before this switch,
+    // even if this effect run doesn't start a new one below (e.g. no date
+    // selected yet) - see loadMyTeachingPracticeDayNotes's requestId guard.
+    notesRequestRef.current += 1;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDayNotes(null);
+    setNotesLoadError(null);
+    setNotesLoading(false);
+    setOpenNoteType(null);
+    if (tab !== "lessons" || role !== "instructor" || !actorId || selectedLessonDate === null) return;
+    void loadMyTeachingPracticeDayNotes(selectedLessonDate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, role, actorId, selectedLessonDate]);
+
+  function handleOpenNoteEditor(practiceType: TeachingPracticeTypeValue) {
+    if (role !== "instructor" || !actorId || selectedLessonDate === null) return;
+    setOpenNoteType(practiceType);
+  }
+
+  function handleCloseNoteEditor() {
+    setOpenNoteType(null);
+  }
+
+  // Called only after a successful save - updates just the saved section's
+  // entry so the existing-note indicator/button label flip immediately
+  // without a full refetch, then closes the editor.
+  function handleNoteSaved(practiceType: TeachingPracticeTypeValue, content: string) {
+    setDayNotes((prev) => ({
+      LUNGE: prev?.LUNGE ?? "",
+      BEGINNER_PRIVATE: prev?.BEGINNER_PRIVATE ?? "",
+      BEGINNER_GROUP: prev?.BEGINNER_GROUP ?? "",
+      [practiceType]: content,
+    }));
+    setOpenNoteType(null);
+  }
+
+  // Small button beside a section heading (never the heading itself) that
+  // opens/reopens the private note editor for that section on the currently
+  // selected date. Returns null for admin (and whenever there's no
+  // instructor/date context) so this control cannot appear on the admin
+  // side of this shared component. Loading/error states replace the button
+  // itself rather than layering on top of it, so an instructor can never
+  // open the editor against not-yet-known or possibly-stale note content.
+  function renderDayNoteControl(practiceType: TeachingPracticeTypeValue) {
+    if (role !== "instructor" || !actorId || selectedLessonDate === null) return null;
+
+    if (notesLoading) {
+      return <span className="shrink-0 text-xs text-secondary-foreground/70">טוען הערה...</span>;
+    }
+
+    if (notesLoadError) {
+      return (
+        <button
+          type="button"
+          onClick={() => void loadMyTeachingPracticeDayNotes(selectedLessonDate)}
+          className="shrink-0 rounded-lg bg-danger-muted px-3 py-2 text-xs font-medium text-danger transition-colors hover:opacity-80"
+        >
+          {notesLoadError} · נסה שוב
+        </button>
+      );
+    }
+
+    const hasNote = Boolean(dayNotes?.[practiceType]?.trim());
+    const label = hasNote ? "עריכת הערה" : "הוספת הערה";
+
+    return (
+      <button
+        type="button"
+        onClick={() => handleOpenNoteEditor(practiceType)}
+        aria-label={`${label} אישית`}
+        title={`${label} אישית`}
+        className="flex shrink-0 items-center gap-1.5 rounded-lg bg-card px-3 py-2 text-xs font-medium text-card-foreground shadow-sm transition-colors hover:opacity-80"
+      >
+        <span aria-hidden="true">✎</span>
+        {label}
+        {hasNote && <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />}
+      </button>
+    );
+  }
 
   // -------------------------------------------------------------------------
   // Tracks: fixed-structure assignment tables (LUNGE, and BEGINNER_PRIVATE +
@@ -5049,9 +5188,10 @@ export function TeachingPracticeManager({
                         <>
                           {lungeGroups.length > 0 && (
                             <div className="flex min-w-0 flex-col gap-3">
-                              <h3 className="rounded-lg bg-secondary px-3 py-2 text-sm font-bold text-secondary-foreground">
-                                לונג׳
-                              </h3>
+                              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary px-3 py-2">
+                                <h3 className="text-sm font-bold text-secondary-foreground">לונג׳</h3>
+                                {renderDayNoteControl("LUNGE")}
+                              </div>
                               {lungeGroups.map(([groupName, groupLessons]) => (
                                 <LessonGroupTable
                                   key={`lunge-${groupName ?? "none"}`}
@@ -5080,9 +5220,10 @@ export function TeachingPracticeManager({
 
                           {beginnerPrivateGroups.length > 0 && (
                             <div className="flex min-w-0 flex-col gap-3">
-                              <h3 className="rounded-lg bg-secondary px-3 py-2 text-sm font-bold text-secondary-foreground">
-                                שיעורים פרטניים
-                              </h3>
+                              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary px-3 py-2">
+                                <h3 className="text-sm font-bold text-secondary-foreground">שיעורים פרטניים</h3>
+                                {renderDayNoteControl("BEGINNER_PRIVATE")}
+                              </div>
                               {beginnerPrivateGroups.map(([groupName, groupLessons]) => (
                                 <LessonGroupTable
                                   key={`private-${groupName ?? "none"}`}
@@ -5111,9 +5252,10 @@ export function TeachingPracticeManager({
 
                           {beginnerGroupGroups.length > 0 && (
                             <div className="flex min-w-0 flex-col gap-3">
-                              <h3 className="rounded-lg bg-secondary px-3 py-2 text-sm font-bold text-secondary-foreground">
-                                שיעורים קבוצתיים
-                              </h3>
+                              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary px-3 py-2">
+                                <h3 className="text-sm font-bold text-secondary-foreground">שיעורים קבוצתיים</h3>
+                                {renderDayNoteControl("BEGINNER_GROUP")}
+                              </div>
                               {beginnerGroupGroups.map(([groupName, groupLessons]) => (
                                 <LessonGroupTable
                                   key={`group-${groupName ?? "none"}`}
@@ -5780,6 +5922,25 @@ export function TeachingPracticeManager({
           </Modal>
         );
       })()}
+
+      {/* TP-DAY-NOTES editor - instructor-only, mounted only while
+          openNoteType is set. Always reads its initial content from the
+          current dayNotes/selectedLessonDate/actorId, so it can never be
+          opened stale; the date/instructor-switch effect above always
+          closes it first (setOpenNoteType(null)) before dayNotes is reset,
+          so this can never render for a date/instructor it wasn't opened
+          for. */}
+      {openNoteType && role === "instructor" && actorId && selectedLessonDate !== null && (
+        <TeachingPracticeInstructorDayNoteEditor
+          key={`${actorId}-${selectedLessonDate}-${openNoteType}`}
+          instructorId={actorId}
+          date={selectedLessonDate}
+          practiceType={openNoteType}
+          initialContent={dayNotes?.[openNoteType] ?? ""}
+          onClose={handleCloseNoteEditor}
+          onSaved={handleNoteSaved}
+        />
+      )}
 
       {/* Stage 1 (preview) + Stage 2 (apply selected) trainee-assignment
           suggestions. Always mounted (like the feedback modal above) rather
