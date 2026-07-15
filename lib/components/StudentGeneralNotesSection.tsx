@@ -21,7 +21,12 @@ import type { StudentGeneralNoteRow } from "@/lib/actions/student-general-notes"
 export interface StudentGeneralNotesActions {
   create: (studentId: string, content: string) => Promise<ActionResult>;
   update: (noteId: string, content: string) => Promise<ActionResult>;
-  delete: (noteId: string) => Promise<ActionResult>;
+  // Optional - the instructor trainee-progress detail view has no delete
+  // action for general notes (stays manager-only for this stage, see this
+  // stage's implementation report for the smallest-safe-deletion-rule note
+  // flagged separately). When omitted, the delete button is hidden entirely
+  // rather than rendered pointing at nothing.
+  delete?: (noteId: string) => Promise<ActionResult>;
 }
 
 // A note only ever gets a distinct "updated" line once it's actually been
@@ -107,11 +112,12 @@ export function StudentGeneralNotesSection({
   // clears any open edit form for the same row on success, never touches the
   // Student row or any other feedback record (see the action's own comment).
   function handleDelete(id: string) {
+    if (!actions.delete) return;
     if (!window.confirm("למחוק את ההערה הזו? לא ניתן לשחזר את הפעולה.")) return;
     setDeleteError(null);
     setDeletingId(id);
     startDeleteTransition(async () => {
-      const result = await actions.delete(id);
+      const result = await actions.delete!(id);
       if (!result.success) {
         setDeleteError({ id, message: result.error ?? "אירעה שגיאה" });
         setDeletingId(null);
@@ -184,14 +190,16 @@ export function StudentGeneralNotesSection({
                 >
                   ביטול
                 </button>
-                <button
-                  type="button"
-                  disabled={deletingId === row.id}
-                  onClick={() => handleDelete(row.id)}
-                  className="rounded-lg px-3 py-1.5 text-xs font-medium text-danger underline hover:opacity-80 disabled:opacity-50"
-                >
-                  {deletingId === row.id ? "מוחק..." : "מחיקה"}
-                </button>
+                {actions.delete && (
+                  <button
+                    type="button"
+                    disabled={deletingId === row.id}
+                    onClick={() => handleDelete(row.id)}
+                    className="rounded-lg px-3 py-1.5 text-xs font-medium text-danger underline hover:opacity-80 disabled:opacity-50"
+                  >
+                    {deletingId === row.id ? "מוחק..." : "מחיקה"}
+                  </button>
+                )}
               </div>
             </div>
           ) : (
@@ -216,14 +224,16 @@ export function StudentGeneralNotesSection({
                 >
                   עריכה
                 </button>
-                <button
-                  type="button"
-                  disabled={deletingId === row.id}
-                  onClick={() => handleDelete(row.id)}
-                  className="text-xs font-medium text-danger underline hover:opacity-80 disabled:opacity-50"
-                >
-                  {deletingId === row.id ? "מוחק..." : "מחיקה"}
-                </button>
+                {actions.delete && (
+                  <button
+                    type="button"
+                    disabled={deletingId === row.id}
+                    onClick={() => handleDelete(row.id)}
+                    className="text-xs font-medium text-danger underline hover:opacity-80 disabled:opacity-50"
+                  >
+                    {deletingId === row.id ? "מוחק..." : "מחיקה"}
+                  </button>
+                )}
               </div>
               {deleteError?.id === row.id && (
                 <p className="mt-1 text-xs text-danger">{deleteError.message}</p>

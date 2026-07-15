@@ -211,17 +211,23 @@ export interface LungeProgressFeedbackActions {
 
 // Same shape/behavior as RidingProgressFeedbackList - see that component's
 // own comments for the isAdding/editingId/onChanged conventions, unchanged
-// here.
+// here. canAdd/isRowEditable also mirror RidingProgressFeedbackList's own -
+// see its own comment on why they exist and their admin-unaffecting
+// defaults.
 export function LungeProgressFeedbackList({
   studentId,
   rows,
   onChanged,
   actions,
+  canAdd = true,
+  isRowEditable = () => true,
 }: {
   studentId: string;
   rows: StudentLungeProgressFeedbackRow[];
   onChanged: () => void;
   actions: LungeProgressFeedbackActions;
+  canAdd?: boolean;
+  isRowEditable?: (row: StudentLungeProgressFeedbackRow) => boolean;
 }) {
   const [isAdding, setIsAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
@@ -291,27 +297,28 @@ export function LungeProgressFeedbackList({
 
   return (
     <div className="flex flex-col gap-3">
-      {isAdding ? (
-        <LungeProgressEntryForm
-          initialValues={emptyLungeProgressForm()}
-          submitLabel="שמירה"
-          pending={isAddPending}
-          error={addError}
-          onSubmit={handleAdd}
-          onCancel={() => {
-            setIsAdding(false);
-            setAddError(null);
-          }}
-        />
-      ) : (
-        <button
-          type="button"
-          onClick={() => setIsAdding(true)}
-          className="self-start rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
-        >
-          הוספת משוב לונג׳
-        </button>
-      )}
+      {canAdd &&
+        (isAdding ? (
+          <LungeProgressEntryForm
+            initialValues={emptyLungeProgressForm()}
+            submitLabel="שמירה"
+            pending={isAddPending}
+            error={addError}
+            onSubmit={handleAdd}
+            onCancel={() => {
+              setIsAdding(false);
+              setAddError(null);
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setIsAdding(true)}
+            className="self-start rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+          >
+            הוספת משוב לונג׳
+          </button>
+        ))}
 
       {rows.length === 0 ? (
         <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
@@ -374,26 +381,28 @@ export function LungeProgressFeedbackList({
                 {row.updatedByName && `עודכן על ידי: ${row.updatedByName} · `}
                 עודכן בתאריך: {formatHebrewDateTime(new Date(row.updatedAt))}
               </p>
-              <div className="mt-1 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingId(row.id);
-                    setEditError(null);
-                  }}
-                  className="text-xs font-medium text-secondary-foreground underline hover:opacity-80"
-                >
-                  עריכה
-                </button>
-                <button
-                  type="button"
-                  disabled={deletingId === row.id}
-                  onClick={() => handleDelete(row.id)}
-                  className="text-xs font-medium text-danger underline hover:opacity-80 disabled:opacity-50"
-                >
-                  {deletingId === row.id ? "מוחק..." : "מחיקה"}
-                </button>
-              </div>
+              {isRowEditable(row) && (
+                <div className="mt-1 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingId(row.id);
+                      setEditError(null);
+                    }}
+                    className="text-xs font-medium text-secondary-foreground underline hover:opacity-80"
+                  >
+                    עריכה
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deletingId === row.id}
+                    onClick={() => handleDelete(row.id)}
+                    className="text-xs font-medium text-danger underline hover:opacity-80 disabled:opacity-50"
+                  >
+                    {deletingId === row.id ? "מוחק..." : "מחיקה"}
+                  </button>
+                </div>
+              )}
               {deleteError?.id === row.id && (
                 <p className="mt-1 text-xs text-danger">{deleteError.message}</p>
               )}

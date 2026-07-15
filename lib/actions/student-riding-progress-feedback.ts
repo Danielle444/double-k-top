@@ -22,6 +22,14 @@ export interface StudentRidingProgressFeedbackRow {
   topic: string | null;
   createdByName: string | null;
   updatedByName: string | null;
+  // Null for admin-created rows, an Instructor id for instructor-created
+  // rows - exposed so the shared trainee-progress detail view can show
+  // edit/delete controls only on rows the acting instructor themself
+  // created (the "view all, edit own" rule - see
+  // listStudentRidingProgressFeedbackForInstructorView's own comment).
+  // Admin's own UI ignores this field entirely (admin may edit/delete any
+  // row, unchanged).
+  createdByInstructorId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -36,6 +44,7 @@ function toRow(row: {
   topic: string | null;
   createdByName: string | null;
   updatedByName: string | null;
+  createdByInstructorId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }): StudentRidingProgressFeedbackRow {
@@ -49,6 +58,7 @@ function toRow(row: {
     topic: row.topic,
     createdByName: row.createdByName,
     updatedByName: row.updatedByName,
+    createdByInstructorId: row.createdByInstructorId,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

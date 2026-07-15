@@ -5,6 +5,7 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 import { dateKey } from "@/lib/dates";
 import { hasMeaningfulTeachingPracticeFeedback } from "@/lib/teaching-practice-feedback";
 import type { TeachingPracticeRoleValue, TeachingPracticeTypeValue } from "@/lib/teaching-practice-rotation";
+import { requireInstructorWithTraineeProgressAccess } from "@/lib/actions/trainee-progress-instructor-access";
 
 // Read-only, admin-only surface for Stage P2 of the trainee progress page
 // (/admin/trainee-progress) - a per-trainee feedback HISTORY, not a
@@ -29,7 +30,15 @@ const ROLE_SLOTS_BY_PRACTICE_TYPE: Record<TeachingPracticeTypeValue, TeachingPra
 };
 
 export interface TeachingPracticeFeedbackHistoryRow {
-  feedbackId: string;
+  // Null when this participant has no meaningful TeachingPracticeFeedback
+  // row yet - only possible when this row came from
+  // buildStudentTeachingPracticeFeedbackHistory's includeEmpty mode (see
+  // that function's own comment); every other caller only ever produces
+  // rows that already have meaningful feedback, so feedbackId is never null
+  // for them in practice, even though the type allows it everywhere for one
+  // shared shape. A null feedbackId is what the shared detail view renders
+  // as the neutral "טרם מולא" state.
+  feedbackId: string | null;
   lessonId: string;
   date: string;
   startTime: string;
@@ -45,10 +54,19 @@ export interface TeachingPracticeFeedbackHistoryRow {
   ratingHalfPoints: number | null;
   feedback: string | null;
   updatedByName: string | null;
-  updatedAt: string;
+  // Null exactly when feedbackId is null (no feedback row yet).
+  updatedAt: string | null;
   childFullName: string | null;
   horseName: string | null;
   equipmentNotes: string | null;
+  // The underlying TeachingPracticeParticipant id - exposed so the shared
+  // trainee-progress detail view can wire an edit control for instructors
+  // with canEditTeachingPracticeFeedback straight to the existing
+  // upsertTeachingPracticeFeedbackAsInstructor(instructorId, participantId,
+  // input) action (see lib/actions/teaching-practice.ts), without this read
+  // path having to duplicate any of that action's own logic. Always
+  // present, unlike feedbackId - this is what the UI keys/edits by.
+  participantId: string;
 }
 
 type LessonParticipantForPairing = { traineeId: string; role: TeachingPracticeRoleValue };
@@ -96,18 +114,37 @@ function resolveChildForParticipant(
   return { childFullName: match.child.fullName, horseName: match.horseName, equipmentNotes: match.equipmentNotes };
 }
 
-// One row per participant with MEANINGFUL feedback (hasMeaningfulTeachingPracticeFeedback
-// - a saved-but-empty TeachingPracticeFeedback row, e.g. from opening and
-// closing the feedback modal without entering anything, is excluded, same
-// rule the sync/overwrite-protection logic already uses elsewhere). Sorted
-// newest lesson first (date desc, then startTime desc). Returns null only
-// when the student itself doesn't exist - a student that exists but has no
-// (meaningful) feedback yet returns an empty array, never null.
-export async function getStudentTeachingPracticeFeedbackForAdmin(
-  studentId: string
+// By default, one row per participant with MEANINGFUL feedback
+// (hasMeaningfulTeachingPracticeFeedback - a saved-but-empty
+// TeachingPracticeFeedback row, e.g. from opening and closing the feedback
+// modal without entering anything, is excluded, same rule the sync/
+// overwrite-protection logic already uses elsewhere) - this is the shape
+// every pre-existing caller (admin history, the read-only "history" list)
+// expects and must keep getting, unchanged, so it stays the default.
+//
+// options.includeEmpty (only ever passed by
+// getStudentTeachingPracticeFeedbackForInstructorTraineeProgress below, for
+// an instructor who can actually create feedback) additionally includes one
+// row per participant that has NO meaningful feedback yet - real lesson/
+// participant records, never synthesized - with feedbackId/ratingHalfPoints/
+// feedback/updatedByName/updatedAt all null, which the shared detail view
+// renders as a neutral "טרם מולא" state instead of hiding the participant
+// entirely. This is what lets an instructor create the FIRST feedback entry
+// for a trainee's Teaching Practice participation, not just edit one that
+// already exists.
+//
+// Sorted newest lesson first (date desc, then startTime desc). Returns null
+// only when the student itself doesn't exist - a student that exists but
+// has no (meaningful) feedback yet returns an empty array (or, in
+// includeEmpty mode, a full list of "טרם מולא" rows), never null. Shared by
+// every read action below - same buildStudentRidingHistory/
+// getStudentRidingHistoryForAdmin+ForInstructor split already used in
+// lib/actions/riding-slots.ts, so the query/shape logic itself is never
+// duplicated between callers.
+async function buildStudentTeachingPracticeFeedbackHistory(
+  studentId: string,
+  options: { includeEmpty?: boolean } = {}
 ): Promise<TeachingPracticeFeedbackHistoryRow[] | null> {
-  await requireAdmin();
-
   const student = await prisma.student.findUnique({ where: { id: studentId } });
   if (!student) return null;
 
@@ -125,7 +162,7 @@ export async function getStudentTeachingPracticeFeedbackForAdmin(
   });
 
   const rows: TeachingPracticeFeedbackHistoryRow[] = participants
-    .filter((p) => hasMeaningfulTeachingPracticeFeedback(p.feedback))
+    .filter((p) => options.includeEmpty || hasMeaningfulTeachingPracticeFeedback(p.feedback))
     .map((p) => {
       const childContext = resolveChildForParticipant(
         p.lesson.practiceType,
@@ -133,9 +170,11 @@ export async function getStudentTeachingPracticeFeedbackForAdmin(
         p.lesson.participants,
         p.lesson.childAssignments
       );
+      const hasFeedback = hasMeaningfulTeachingPracticeFeedback(p.feedback);
       return {
-        feedbackId: p.feedback!.id,
+        feedbackId: hasFeedback ? p.feedback!.id : null,
         lessonId: p.lessonId,
+        participantId: p.id,
         date: dateKey(p.lesson.date),
         startTime: p.lesson.startTime,
         endTime: p.lesson.endTime,
@@ -143,10 +182,10 @@ export async function getStudentTeachingPracticeFeedbackForAdmin(
         groupName: p.lesson.groupName,
         location: p.lesson.location,
         role: p.role,
-        ratingHalfPoints: p.feedback!.ratingHalfPoints,
-        feedback: p.feedback!.feedback,
-        updatedByName: p.feedback!.updatedByName,
-        updatedAt: p.feedback!.updatedAt.toISOString(),
+        ratingHalfPoints: hasFeedback ? p.feedback!.ratingHalfPoints : null,
+        feedback: hasFeedback ? p.feedback!.feedback : null,
+        updatedByName: hasFeedback ? p.feedback!.updatedByName : null,
+        updatedAt: hasFeedback ? p.feedback!.updatedAt.toISOString() : null,
         ...childContext,
       };
     });
@@ -154,4 +193,39 @@ export async function getStudentTeachingPracticeFeedbackForAdmin(
   rows.sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
 
   return rows;
+}
+
+export async function getStudentTeachingPracticeFeedbackForAdmin(
+  studentId: string
+): Promise<TeachingPracticeFeedbackHistoryRow[] | null> {
+  await requireAdmin();
+  return buildStudentTeachingPracticeFeedbackHistory(studentId);
+}
+
+// Authorized read used ONLY by the instructor trainee-progress detail view
+// (app/instructor/InstructorTraineeProgressSection.tsx via
+// TraineeProgressDetail.tsx) - this is its only caller, so unlike
+// getStudentRidingHistoryForInstructor in riding-slots.ts (which has an
+// older, separate caller and is deliberately left unrestricted/unchanged),
+// this read is authorized from the start: re-fetches the instructor fresh
+// from the DB, requires isActive, and requires canEditRidingNotes ||
+// canEditTeachingPracticeFeedback (the same page-access gate the tab itself
+// is gated on) before returning anything.
+//
+// includeEmpty is derived server-side from the freshly-fetched instructor's
+// own canEditTeachingPracticeFeedback flag - never a caller-supplied
+// boolean - so only an instructor who can actually save feedback ever sees
+// the "טרם מולא" placeholder rows; an instructor here only for
+// canEditRidingNotes still sees the section (full page-access viewing
+// requirement) but only the rows that already have meaningful feedback,
+// same as before this stage.
+export async function getStudentTeachingPracticeFeedbackForInstructorTraineeProgress(
+  instructorId: string,
+  studentId: string
+): Promise<TeachingPracticeFeedbackHistoryRow[] | null> {
+  const instructor = await requireInstructorWithTraineeProgressAccess(instructorId);
+  if (!instructor) return null;
+  return buildStudentTeachingPracticeFeedbackHistory(studentId, {
+    includeEmpty: instructor.canEditTeachingPracticeFeedback,
+  });
 }

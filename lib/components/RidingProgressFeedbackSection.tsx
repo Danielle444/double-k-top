@@ -196,16 +196,30 @@ export interface RidingProgressFeedbackActions {
 // which save button applies to which entry. onChanged is called after any
 // successful create/update/delete so the parent can refetch the now-stale
 // list - this component never touches that state directly.
+//
+// canAdd/isRowEditable - added for the instructor trainee-progress detail
+// view, which reuses this exact component to show EVERY row for a trainee
+// (admin- and every instructor-created alike, see
+// listStudentRidingProgressFeedbackForInstructorView) while only allowing
+// the acting instructor to add/edit/delete their OWN rows (existing
+// ownership rule, preserved server-side regardless of these props - see
+// updateStudentRidingProgressFeedbackAsInstructor). Both default to the
+// unrestricted admin behavior (add always available, every row editable) so
+// the existing admin call site is unaffected by adding these props.
 export function RidingProgressFeedbackList({
   studentId,
   rows,
   onChanged,
   actions,
+  canAdd = true,
+  isRowEditable = () => true,
 }: {
   studentId: string;
   rows: StudentRidingProgressFeedbackRow[];
   onChanged: () => void;
   actions: RidingProgressFeedbackActions;
+  canAdd?: boolean;
+  isRowEditable?: (row: StudentRidingProgressFeedbackRow) => boolean;
 }) {
   const [isAdding, setIsAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
@@ -279,27 +293,28 @@ export function RidingProgressFeedbackList({
 
   return (
     <div className="flex flex-col gap-3">
-      {isAdding ? (
-        <RidingProgressEntryForm
-          initialValues={emptyRidingProgressForm()}
-          submitLabel="שמירה"
-          pending={isAddPending}
-          error={addError}
-          onSubmit={handleAdd}
-          onCancel={() => {
-            setIsAdding(false);
-            setAddError(null);
-          }}
-        />
-      ) : (
-        <button
-          type="button"
-          onClick={() => setIsAdding(true)}
-          className="self-start rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
-        >
-          הוספת משוב רכיבה
-        </button>
-      )}
+      {canAdd &&
+        (isAdding ? (
+          <RidingProgressEntryForm
+            initialValues={emptyRidingProgressForm()}
+            submitLabel="שמירה"
+            pending={isAddPending}
+            error={addError}
+            onSubmit={handleAdd}
+            onCancel={() => {
+              setIsAdding(false);
+              setAddError(null);
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setIsAdding(true)}
+            className="self-start rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+          >
+            הוספת משוב רכיבה
+          </button>
+        ))}
 
       {rows.length === 0 ? (
         <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
@@ -359,26 +374,28 @@ export function RidingProgressFeedbackList({
                 {row.updatedByName && `עודכן על ידי: ${row.updatedByName} · `}
                 עודכן בתאריך: {formatHebrewDateTime(new Date(row.updatedAt))}
               </p>
-              <div className="mt-1 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingId(row.id);
-                    setEditError(null);
-                  }}
-                  className="text-xs font-medium text-secondary-foreground underline hover:opacity-80"
-                >
-                  עריכה
-                </button>
-                <button
-                  type="button"
-                  disabled={deletingId === row.id}
-                  onClick={() => handleDelete(row.id)}
-                  className="text-xs font-medium text-danger underline hover:opacity-80 disabled:opacity-50"
-                >
-                  {deletingId === row.id ? "מוחק..." : "מחיקה"}
-                </button>
-              </div>
+              {isRowEditable(row) && (
+                <div className="mt-1 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingId(row.id);
+                      setEditError(null);
+                    }}
+                    className="text-xs font-medium text-secondary-foreground underline hover:opacity-80"
+                  >
+                    עריכה
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deletingId === row.id}
+                    onClick={() => handleDelete(row.id)}
+                    className="text-xs font-medium text-danger underline hover:opacity-80 disabled:opacity-50"
+                  >
+                    {deletingId === row.id ? "מוחק..." : "מחיקה"}
+                  </button>
+                </div>
+              )}
               {deleteError?.id === row.id && (
                 <p className="mt-1 text-xs text-danger">{deleteError.message}</p>
               )}

@@ -11,6 +11,7 @@ import { getHorseDisplayInfo } from "@/lib/horse-info";
 import { getKnownHorseNames } from "@/lib/actions/horse-feeding";
 import type { ActionResult } from "@/lib/actions/students";
 import type { AttendanceStatusValue } from "@/lib/actions/attendance";
+import { requireInstructorWithTraineeProgressAccess } from "@/lib/actions/trainee-progress-instructor-access";
 import {
   findAssignmentForStudent,
   getAssignmentInstructors,
@@ -1201,10 +1202,34 @@ export async function getStudentRidingHistoryForAdmin(
 
 // Unrestricted view - matches the existing "all instructors can view"
 // convention (attendance, riding slots). Never called from student-facing
-// code; students must not see notes/ratings at all.
+// code; students must not see notes/ratings at all. Used by
+// InstructorRidingSlotsSection.tsx's own "צפייה בחניכים" flow - left
+// completely unchanged (same unrestricted contract) rather than tightened,
+// since that existing caller relies on it; see
+// getStudentRidingHistoryForInstructorTraineeProgress below for the
+// authorized wrapper the trainee-progress detail view uses instead.
 export async function getStudentRidingHistoryForInstructor(
   studentId: string
 ): Promise<StudentRidingHistoryResult | null> {
+  return buildStudentRidingHistory(studentId);
+}
+
+// Authorized counterpart used ONLY by the instructor trainee-progress
+// detail view (app/instructor/InstructorTraineeProgressSection.tsx via
+// TraineeProgressDetail.tsx) - re-fetches the instructor fresh from the DB,
+// requires isActive, and requires canEditRidingNotes ||
+// canEditTeachingPracticeFeedback (the same page-access gate the tab itself
+// is gated on) before returning anything, rather than trusting the caller's
+// context the way getStudentRidingHistoryForInstructor above does. A
+// separate wrapper (not a behavior change to the function above) so
+// InstructorRidingSlotsSection.tsx's existing "צפייה בחניכים" flow is
+// completely unaffected.
+export async function getStudentRidingHistoryForInstructorTraineeProgress(
+  instructorId: string,
+  studentId: string
+): Promise<StudentRidingHistoryResult | null> {
+  const instructor = await requireInstructorWithTraineeProgressAccess(instructorId);
+  if (!instructor) return null;
   return buildStudentRidingHistory(studentId);
 }
 

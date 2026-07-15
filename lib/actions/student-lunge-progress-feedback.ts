@@ -27,6 +27,9 @@ export interface StudentLungeProgressFeedbackRow {
   instructorName: string | null;
   createdByName: string | null;
   updatedByName: string | null;
+  // Same "view all, edit own" purpose as StudentRidingProgressFeedbackRow's
+  // own createdByInstructorId field - see that file's own comment.
+  createdByInstructorId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -42,6 +45,7 @@ function toRow(row: {
   instructorName: string | null;
   createdByName: string | null;
   updatedByName: string | null;
+  createdByInstructorId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }): StudentLungeProgressFeedbackRow {
@@ -56,6 +60,7 @@ function toRow(row: {
     instructorName: row.instructorName,
     createdByName: row.createdByName,
     updatedByName: row.updatedByName,
+    createdByInstructorId: row.createdByInstructorId,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

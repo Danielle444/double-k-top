@@ -7,6 +7,7 @@ import type {
   StudentLungeProgressFeedbackInput,
   StudentLungeProgressFeedbackRow,
 } from "@/lib/actions/student-lunge-progress-feedback";
+import { requireInstructorWithTraineeProgressAccess } from "@/lib/actions/trainee-progress-instructor-access";
 
 // Instructor/coach read/create/update/delete surface for
 // StudentLungeProgressFeedback ("לונג׳ בלי רוכב") - the trainee-progress-
@@ -74,6 +75,7 @@ function toRow(row: {
   instructorName: string | null;
   createdByName: string | null;
   updatedByName: string | null;
+  createdByInstructorId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }): StudentLungeProgressFeedbackRow {
@@ -88,6 +90,7 @@ function toRow(row: {
     instructorName: row.instructorName,
     createdByName: row.createdByName,
     updatedByName: row.updatedByName,
+    createdByInstructorId: row.createdByInstructorId,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -104,6 +107,27 @@ export async function listStudentLungeProgressFeedbackForInstructor(
 
   const rows = await prisma.studentLungeProgressFeedback.findMany({
     where: { createdByInstructorId: instructor.id, ...(studentId ? { studentId } : {}) },
+    orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+  });
+
+  return rows.map(toRow);
+}
+
+// Same "view all, edit own" purpose as
+// listStudentRidingProgressFeedbackForInstructorView - see that function's
+// own comment.
+export async function listStudentLungeProgressFeedbackForInstructorView(
+  instructorId: string,
+  studentId: string
+): Promise<StudentLungeProgressFeedbackRow[] | null> {
+  const instructor = await requireInstructorWithTraineeProgressAccess(instructorId);
+  if (!instructor) return null;
+
+  const student = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!student) return null;
+
+  const rows = await prisma.studentLungeProgressFeedback.findMany({
+    where: { studentId },
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
   });
 

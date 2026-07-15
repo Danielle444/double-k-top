@@ -27,6 +27,7 @@ import { InstructorRidingSlotsSection } from "@/app/instructor/InstructorRidingS
 import { InstructorTeachingPracticeSection } from "@/app/instructor/InstructorTeachingPracticeSection";
 import { InstructorChildSignaturesSection } from "@/app/instructor/InstructorChildSignaturesSection";
 import { InstructorTraineeProgressSection } from "@/app/instructor/InstructorTraineeProgressSection";
+import { canAccessTraineeProgress } from "@/lib/trainee-progress-permissions";
 import { ContactsSection } from "@/lib/components/ContactsSection";
 import { HelpContent } from "@/lib/components/HelpContent";
 import { NotificationsList } from "@/lib/components/NotificationsList";
@@ -460,13 +461,15 @@ export function InstructorClient({
   // re-checks the flag fresh from the DB regardless of how this list was
   // built (see getParentSignatureStatusForInstructor).
   //
-  // Stage I2 - "מעקב חניכים" is likewise only inserted for instructors with
-  // canEditRidingNotes, deliberately reusing that existing permission
-  // rather than adding a new one (see
-  // lib/actions/student-riding-progress-feedback-instructor.ts's own
-  // comment on why this is intentional/temporary). Same UX-convenience-only
-  // caveat: every InstructorTraineeProgressSection action re-checks the
-  // flag fresh from the DB regardless of how this list was built.
+  // "מעקב חניכים" is inserted for instructors with canEditRidingNotes OR
+  // canEditTeachingPracticeFeedback (canAccessTraineeProgress) - either
+  // permission alone is enough to open the full trainee-progress detail
+  // view; which edit controls appear once inside it is a separate, per-
+  // section check (see InstructorTraineeProgressSection/
+  // TraineeProgressDetail). Same UX-convenience-only caveat as
+  // canManageChildSignatures below: every underlying action re-checks the
+  // flags fresh from the DB regardless of how this list was built (see
+  // lib/actions/trainee-progress-instructor-access.ts).
   let instructorMoreItems: { id: MainTabId; label: string }[] = INSTRUCTOR_MORE_ITEMS;
   if (session.canManageChildSignatures) {
     const items = [...instructorMoreItems];
@@ -474,7 +477,7 @@ export function InstructorClient({
     items.splice(helpIndex, 0, { id: "childSignatures", label: "חתימות ילדים" });
     instructorMoreItems = items;
   }
-  if (session.canEditRidingNotes) {
+  if (canAccessTraineeProgress(session)) {
     const items = [...instructorMoreItems];
     const helpIndex = items.findIndex((item) => item.id === "help");
     items.splice(helpIndex, 0, { id: "traineeProgress", label: "מעקב חניכים" });
@@ -749,11 +752,13 @@ export function InstructorClient({
           <InstructorChildSignaturesSection instructorId={session.id} />
         )}
 
-        {activeTab === "traineeProgress" && session.canEditRidingNotes && (
+        {activeTab === "traineeProgress" && canAccessTraineeProgress(session) && (
           <InstructorTraineeProgressSection
             instructorId={session.id}
             students={students}
             studentHorseInfo={studentHorseInfo}
+            canEditRidingNotes={session.canEditRidingNotes}
+            canEditTeachingPracticeFeedback={session.canEditTeachingPracticeFeedback}
           />
         )}
 

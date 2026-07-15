@@ -7,6 +7,7 @@ import type {
   StudentRidingProgressFeedbackInput,
   StudentRidingProgressFeedbackRow,
 } from "@/lib/actions/student-riding-progress-feedback";
+import { requireInstructorWithTraineeProgressAccess } from "@/lib/actions/trainee-progress-instructor-access";
 
 // Instructor/coach read/create/update/delete surface for
 // StudentRidingProgressFeedback - the trainee-progress-journal counterpart
@@ -75,6 +76,7 @@ function toRow(row: {
   topic: string | null;
   createdByName: string | null;
   updatedByName: string | null;
+  createdByInstructorId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }): StudentRidingProgressFeedbackRow {
@@ -88,6 +90,7 @@ function toRow(row: {
     topic: row.topic,
     createdByName: row.createdByName,
     updatedByName: row.updatedByName,
+    createdByInstructorId: row.createdByInstructorId,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -109,6 +112,39 @@ export async function listStudentRidingProgressFeedbackForInstructor(
 
   const rows = await prisma.studentRidingProgressFeedback.findMany({
     where: { createdByInstructorId: instructor.id, ...(studentId ? { studentId } : {}) },
+    orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+  });
+
+  return rows.map(toRow);
+}
+
+// The shared trainee-progress detail view's counterpart to
+// listStudentRidingProgressFeedbackForAdmin - EVERY row for the trainee
+// (admin- and every instructor-created alike), not just this instructor's
+// own, so the instructor sees the exact same "רכיבה" section content the
+// manager sees (goal: "same progress information"). Gated by
+// requireInstructorWithTraineeProgressAccess (canEditRidingNotes OR
+// canEditTeachingPracticeFeedback) rather than
+// requireInstructorWithRidingNotesPermission above - viewing this section is
+// part of the full-page-access grant, not itself gated to the narrower
+// riding-notes permission; only create/update/delete stay gated to
+// canEditRidingNotes (via the unchanged functions below). The returned
+// row's createdByInstructorId lets the caller decide, per row, whether to
+// show edit/delete controls for the acting instructor (never trusted to
+// enforce anything on its own - update/delete below still re-check
+// ownership server-side regardless of what the UI shows).
+export async function listStudentRidingProgressFeedbackForInstructorView(
+  instructorId: string,
+  studentId: string
+): Promise<StudentRidingProgressFeedbackRow[] | null> {
+  const instructor = await requireInstructorWithTraineeProgressAccess(instructorId);
+  if (!instructor) return null;
+
+  const student = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!student) return null;
+
+  const rows = await prisma.studentRidingProgressFeedback.findMany({
+    where: { studentId },
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
   });
 

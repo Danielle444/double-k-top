@@ -17,6 +17,7 @@ import {
   type PresentationCategoryKey,
   type PresentationCategoryScores,
 } from "@/lib/presentation-rubric";
+import { requireInstructorWithTraineeProgressAccess } from "@/lib/actions/trainee-progress-instructor-access";
 
 // Instructor/coach read/create/update/delete surface for
 // StudentPresentationProgressFeedback - the trainee-progress-journal
@@ -123,6 +124,7 @@ function toRow(row: {
   presentationType: string | null;
   createdByName: string | null;
   updatedByName: string | null;
+  createdByInstructorId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }): StudentPresentationProgressFeedbackRow {
@@ -138,6 +140,7 @@ function toRow(row: {
     presentationType: row.presentationType,
     createdByName: row.createdByName,
     updatedByName: row.updatedByName,
+    createdByInstructorId: row.createdByInstructorId,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -154,6 +157,31 @@ export async function listStudentPresentationProgressFeedbackForInstructor(
 
   const rows = await prisma.studentPresentationProgressFeedback.findMany({
     where: { createdByInstructorId: instructor.id, ...(studentId ? { studentId } : {}) },
+    orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+  });
+
+  return rows.map(toRow);
+}
+
+// Same "view all, edit own" purpose as
+// listStudentRidingProgressFeedbackForInstructorView - see that function's
+// own comment. This is the wiring that was previously missing: the CRUD
+// actions below already existed but were never called from any UI - this
+// view-all read (plus the shared component rendering
+// PresentationProgressFeedbackList with these CRUD actions when the acting
+// instructor has canEditRidingNotes) is what actually exposes them.
+export async function listStudentPresentationProgressFeedbackForInstructorView(
+  instructorId: string,
+  studentId: string
+): Promise<StudentPresentationProgressFeedbackRow[] | null> {
+  const instructor = await requireInstructorWithTraineeProgressAccess(instructorId);
+  if (!instructor) return null;
+
+  const student = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!student) return null;
+
+  const rows = await prisma.studentPresentationProgressFeedback.findMany({
+    where: { studentId },
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
   });
 

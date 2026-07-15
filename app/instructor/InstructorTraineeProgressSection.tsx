@@ -1,45 +1,59 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useMemo, useState } from "react";
 import {
-  listStudentRidingProgressFeedbackForInstructor,
+  listStudentRidingProgressFeedbackForInstructorView,
   createStudentRidingProgressFeedbackAsInstructor,
   updateStudentRidingProgressFeedbackAsInstructor,
   deleteStudentRidingProgressFeedbackAsInstructor,
 } from "@/lib/actions/student-riding-progress-feedback-instructor";
 import {
-  listStudentLungeProgressFeedbackForInstructor,
+  listStudentLungeProgressFeedbackForInstructorView,
   createStudentLungeProgressFeedbackAsInstructor,
   updateStudentLungeProgressFeedbackAsInstructor,
   deleteStudentLungeProgressFeedbackAsInstructor,
 } from "@/lib/actions/student-lunge-progress-feedback-instructor";
-import { RidingProgressFeedbackList } from "@/lib/components/RidingProgressFeedbackSection";
-import { LungeProgressFeedbackList } from "@/lib/components/LungeProgressFeedbackSection";
-import type { StudentRidingProgressFeedbackRow } from "@/lib/actions/student-riding-progress-feedback";
-import type { StudentLungeProgressFeedbackRow } from "@/lib/actions/student-lunge-progress-feedback";
+import {
+  listStudentPresentationProgressFeedbackForInstructorView,
+  createStudentPresentationProgressFeedbackAsInstructor,
+  updateStudentPresentationProgressFeedbackAsInstructor,
+  deleteStudentPresentationProgressFeedbackAsInstructor,
+} from "@/lib/actions/student-presentation-progress-feedback-instructor";
+import { getStudentRidingHistoryForInstructorTraineeProgress } from "@/lib/actions/riding-slots";
+import { getStudentTeachingPracticeFeedbackForInstructorTraineeProgress } from "@/lib/actions/teaching-practice-feedback-history";
+import { upsertTeachingPracticeFeedbackAsInstructor } from "@/lib/actions/teaching-practice";
+import {
+  listStudentGeneralNotesForInstructor,
+  createStudentGeneralNoteAsInstructor,
+  updateStudentGeneralNoteAsInstructor,
+} from "@/lib/actions/student-general-notes-instructor";
+import {
+  TraineeProgressDetail,
+  type TraineeProgressCapabilities,
+  type TraineeProgressDataSource,
+} from "@/lib/components/TraineeProgressDetail";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
 
-// Stage I2 - instructor/coach-facing "מעקב חניכים" screen for the two
-// newer trainee-progress journals (רכיבה, לונג׳ בלי רוכב). Deliberately
-// does NOT include הדרכת מתקדמים (already has its own instructor flow -
-// see app/instructor/InstructorRidingSlotsSection.tsx, the "רכיבות" main
-// tab) or התנסויות מתחילים (already has its own instructor flow - see
-// app/instructor/InstructorTeachingPracticeSection.tsx, the "התנסויות
-// מתחילים" עוד item) or פרזנטציה (next stage). This screen only reads/
-// writes StudentRidingProgressFeedback/StudentLungeProgressFeedback via the
-// Stage I1 instructor actions, which re-check Instructor.canEditRidingNotes
-// fresh from the DB on every call - the same permission already gates
-// whether this screen is even shown (see InstructorClient.tsx), reused
-// deliberately rather than a new permission (see the Stage I1 instructor
-// action files' own comments for the full rationale).
+// Instructor/coach-facing "מעקב חניכים" screen. Trainee browsing (search +
+// group/subgroup sections below) is unchanged from the original Stage I2
+// screen; once a trainee is selected, this now renders the exact same
+// TraineeProgressDetail component the manager's /admin/trainee-progress
+// page renders for that trainee - same section layout/content/records/
+// timelines/averages, per the product requirement that an authorized
+// instructor sees the full picture, never a reduced instructor-only
+// summary. Which edit controls are actually enabled is driven entirely by
+// `capabilities` below (derived from this instructor's own
+// canEditRidingNotes/canEditTeachingPracticeFeedback flags, re-verified
+// fresh from the DB inside every dataSource action regardless of what this
+// screen renders) - this file never imports requireAdmin or any *AsAdmin
+// action.
 //
-// UI reuse: the רכיבה/לונג׳ form+list components are shared with the admin
-// page via lib/components/RidingProgressFeedbackSection.tsx and
-// lib/components/LungeProgressFeedbackSection.tsx (Stage I2 extraction) -
-// this screen passes thin wrappers around the *AsInstructor actions
-// (currying instructorId through) as each component's `actions` prop, so
-// the exact same form/list UI/validation-echo is never duplicated between
-// admin and instructor.
+// The VIEW data source below uses the *ForInstructorView reads (every row
+// for the trainee, admin- and instructor-authored alike, gated by page
+// access) rather than the pre-existing own-rows-only
+// listStudent*ProgressFeedbackForInstructor actions - see this stage's
+// implementation report for why viewing needed a new, wider read while
+// editing keeps the existing own-row restriction.
 //
 // Students: reuses the `students` prop already loaded once in
 // app/instructor/page.tsx (active students only, id/fullName/groupName/
@@ -149,17 +163,17 @@ export function InstructorTraineeProgressSection({
   instructorId,
   students,
   studentHorseInfo,
+  canEditRidingNotes,
+  canEditTeachingPracticeFeedback,
 }: {
   instructorId: string;
   students: TraineeProgressStudentOption[];
   studentHorseInfo: TraineeProgressHorseInfoOption[];
+  canEditRidingNotes: boolean;
+  canEditTeachingPracticeFeedback: boolean;
 }) {
   const [search, setSearch] = useState("");
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
-  const [, startTransition] = useTransition();
-
-  const [ridingRows, setRidingRows] = useState<StudentRidingProgressFeedbackRow[] | null>(null);
-  const [lungeRows, setLungeRows] = useState<StudentLungeProgressFeedbackRow[] | null>(null);
 
   const mergedTrainees = useMemo<MergedTraineeRow[]>(() => {
     const horseById = new Map(studentHorseInfo.map((h) => [h.id, h]));
@@ -190,58 +204,63 @@ export function InstructorTraineeProgressSection({
     [mergedTrainees, selectedStudentId]
   );
 
-  // Own rows only (list...ForInstructor already filters to
-  // createdByInstructorId === this instructor - see that action's own
-  // comment) - never another instructor's or an admin's rows, by design.
-  useEffect(() => {
-    if (!selectedStudentId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setRidingRows(null);
-      return;
-    }
-    let cancelled = false;
-    setRidingRows(null);
-    startTransition(async () => {
-      const result = await listStudentRidingProgressFeedbackForInstructor(instructorId, selectedStudentId);
-      if (!cancelled) setRidingRows(result ?? []);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [instructorId, selectedStudentId]);
+  // Same capabilities/dataSource shape TraineeProgressClient.tsx builds for
+  // admin, wired to the instructor-scoped actions instead. `students` here
+  // is already active-only (see app/instructor/page.tsx), so isActive is
+  // always true for every trainee this screen can ever select.
+  const capabilities: TraineeProgressCapabilities = useMemo(
+    () => ({
+      isAdmin: false,
+      canEditRidingFeedback: canEditRidingNotes,
+      canEditTeachingPracticeFeedback,
+      canDeleteGeneralNotes: false,
+    }),
+    [canEditRidingNotes, canEditTeachingPracticeFeedback]
+  );
 
-  useEffect(() => {
-    if (!selectedStudentId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLungeRows(null);
-      return;
-    }
-    let cancelled = false;
-    setLungeRows(null);
-    startTransition(async () => {
-      const result = await listStudentLungeProgressFeedbackForInstructor(instructorId, selectedStudentId);
-      if (!cancelled) setLungeRows(result ?? []);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [instructorId, selectedStudentId]);
+  const dataSource: TraineeProgressDataSource = useMemo(
+    () => ({
+      listGeneralNotes: (studentId) => listStudentGeneralNotesForInstructor(instructorId, studentId),
+      createGeneralNote: (studentId, content) =>
+        createStudentGeneralNoteAsInstructor(instructorId, studentId, content),
+      updateGeneralNote: (noteId, content) =>
+        updateStudentGeneralNoteAsInstructor(instructorId, noteId, content),
+      // No deleteGeneralNote - general-note deletion stays manager-only for
+      // this stage (see this stage's implementation report).
 
-  function refreshRiding() {
-    if (!selectedStudentId) return;
-    startTransition(async () => {
-      const result = await listStudentRidingProgressFeedbackForInstructor(instructorId, selectedStudentId);
-      setRidingRows(result ?? []);
-    });
-  }
+      listRidingProgress: (studentId) =>
+        listStudentRidingProgressFeedbackForInstructorView(instructorId, studentId),
+      createRidingProgress: (studentId, input) =>
+        createStudentRidingProgressFeedbackAsInstructor(instructorId, studentId, input),
+      updateRidingProgress: (id, input) => updateStudentRidingProgressFeedbackAsInstructor(instructorId, id, input),
+      deleteRidingProgress: (id) => deleteStudentRidingProgressFeedbackAsInstructor(instructorId, id),
 
-  function refreshLunge() {
-    if (!selectedStudentId) return;
-    startTransition(async () => {
-      const result = await listStudentLungeProgressFeedbackForInstructor(instructorId, selectedStudentId);
-      setLungeRows(result ?? []);
-    });
-  }
+      getRidingHistory: async (studentId) => {
+        const result = await getStudentRidingHistoryForInstructorTraineeProgress(instructorId, studentId);
+        return result?.rows ?? null;
+      },
+
+      getTeachingPracticeHistory: (studentId) =>
+        getStudentTeachingPracticeFeedbackForInstructorTraineeProgress(instructorId, studentId),
+      upsertTeachingPracticeFeedback: (participantId, input) =>
+        upsertTeachingPracticeFeedbackAsInstructor(instructorId, participantId, input),
+
+      listLungeProgress: (studentId) => listStudentLungeProgressFeedbackForInstructorView(instructorId, studentId),
+      createLungeProgress: (studentId, input) =>
+        createStudentLungeProgressFeedbackAsInstructor(instructorId, studentId, input),
+      updateLungeProgress: (id, input) => updateStudentLungeProgressFeedbackAsInstructor(instructorId, id, input),
+      deleteLungeProgress: (id) => deleteStudentLungeProgressFeedbackAsInstructor(instructorId, id),
+
+      listPresentationProgress: (studentId) =>
+        listStudentPresentationProgressFeedbackForInstructorView(instructorId, studentId),
+      createPresentationProgress: (studentId, input) =>
+        createStudentPresentationProgressFeedbackAsInstructor(instructorId, studentId, input),
+      updatePresentationProgress: (id, input) =>
+        updateStudentPresentationProgressFeedbackAsInstructor(instructorId, id, input),
+      deletePresentationProgress: (id) => deleteStudentPresentationProgressFeedbackAsInstructor(instructorId, id),
+    }),
+    [instructorId]
+  );
 
   function handleSelectStudent(studentId: string) {
     setSelectedStudentId(studentId);
@@ -252,10 +271,7 @@ export function InstructorTraineeProgressSection({
     <div className="flex flex-col gap-4">
       <div>
         <h2 className="text-lg font-bold text-card-foreground">מעקב חניכים</h2>
-        <p className="text-sm text-muted-foreground">
-          משובים אישיים על רכיבה ולונג׳ ללא רוכב. הדרכת מתקדמים והתנסויות מתחילים מנוהלות במסכים הייעודיים
-          שלהן.
-        </p>
+        <p className="text-sm text-muted-foreground">מעקב ומשובים מלא לחניך/ה - זהה לתצוגה שרואה המנהלת.</p>
       </div>
 
       {selectedStudent ? (
@@ -349,48 +365,13 @@ export function InstructorTraineeProgressSection({
       )}
 
       {selectedStudent && (
-        <>
-          <div className="rounded-xl border border-border bg-card p-4">
-            <h3 className="mb-3 text-sm font-bold text-card-foreground">רכיבה</h3>
-            {ridingRows === null ? (
-              <p className="text-sm text-muted-foreground">טוען...</p>
-            ) : (
-              <RidingProgressFeedbackList
-                studentId={selectedStudent.id}
-                rows={ridingRows}
-                onChanged={refreshRiding}
-                actions={{
-                  create: (studentId, input) =>
-                    createStudentRidingProgressFeedbackAsInstructor(instructorId, studentId, input),
-                  update: (id, input) =>
-                    updateStudentRidingProgressFeedbackAsInstructor(instructorId, id, input),
-                  delete: (id) => deleteStudentRidingProgressFeedbackAsInstructor(instructorId, id),
-                }}
-              />
-            )}
-          </div>
-
-          <div className="rounded-xl border border-border bg-card p-4">
-            <h3 className="text-sm font-bold text-card-foreground">לונג׳</h3>
-            <p className="mb-3 text-xs text-muted-foreground">משובי לונג׳ ללא רוכב, להזנה ידנית.</p>
-            {lungeRows === null ? (
-              <p className="text-sm text-muted-foreground">טוען...</p>
-            ) : (
-              <LungeProgressFeedbackList
-                studentId={selectedStudent.id}
-                rows={lungeRows}
-                onChanged={refreshLunge}
-                actions={{
-                  create: (studentId, input) =>
-                    createStudentLungeProgressFeedbackAsInstructor(instructorId, studentId, input),
-                  update: (id, input) =>
-                    updateStudentLungeProgressFeedbackAsInstructor(instructorId, id, input),
-                  delete: (id) => deleteStudentLungeProgressFeedbackAsInstructor(instructorId, id),
-                }}
-              />
-            )}
-          </div>
-        </>
+        <TraineeProgressDetail
+          key={selectedStudent.id}
+          student={{ ...selectedStudent, isActive: true }}
+          capabilities={capabilities}
+          actorInstructorId={instructorId}
+          dataSource={dataSource}
+        />
       )}
     </div>
   );

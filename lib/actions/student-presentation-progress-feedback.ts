@@ -42,6 +42,9 @@ export interface StudentPresentationProgressFeedbackRow {
   presentationType: string | null;
   createdByName: string | null;
   updatedByName: string | null;
+  // Same "view all, edit own" purpose as StudentRidingProgressFeedbackRow's
+  // own createdByInstructorId field - see that file's own comment.
+  createdByInstructorId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -80,6 +83,7 @@ function toRow(row: {
   presentationType: string | null;
   createdByName: string | null;
   updatedByName: string | null;
+  createdByInstructorId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }): StudentPresentationProgressFeedbackRow {
@@ -102,6 +106,7 @@ function toRow(row: {
     presentationType: row.presentationType,
     createdByName: row.createdByName,
     updatedByName: row.updatedByName,
+    createdByInstructorId: row.createdByInstructorId,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
