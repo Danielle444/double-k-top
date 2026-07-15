@@ -24,6 +24,14 @@ import {
 import { RidingProgressFeedbackList } from "@/lib/components/RidingProgressFeedbackSection";
 import { LungeProgressFeedbackList } from "@/lib/components/LungeProgressFeedbackSection";
 import {
+  createStudentGeneralNoteAsAdmin,
+  deleteStudentGeneralNoteAsAdmin,
+  getStudentGeneralNotesAsAdmin,
+  updateStudentGeneralNoteAsAdmin,
+  type StudentGeneralNoteRow,
+} from "@/lib/actions/student-general-notes";
+import { StudentGeneralNotesSection } from "@/lib/components/StudentGeneralNotesSection";
+import {
   createStudentPresentationProgressFeedbackAsAdmin,
   deleteStudentPresentationProgressFeedbackAsAdmin,
   listStudentPresentationProgressFeedbackForAdmin,
@@ -1156,6 +1164,7 @@ export function TraineeProgressClient({
   // already expanded above it - keeping it collapsed by default avoids
   // tripling the page's effective length for a trainee with a lot of
   // history, while still being one click away.
+  const [isGeneralNotesOpen, setIsGeneralNotesOpen] = useState(true);
   const [isRidingProgressOpen, setIsRidingProgressOpen] = useState(true);
   const [isLungeProgressOpen, setIsLungeProgressOpen] = useState(true);
   const [isPresentationProgressOpen, setIsPresentationProgressOpen] = useState(true);
@@ -1185,6 +1194,7 @@ export function TraineeProgressClient({
     [students, selectedStudentId]
   );
 
+  const [generalNoteRows, setGeneralNoteRows] = useState<StudentGeneralNoteRow[] | null>(null);
   const [ridingProgressRows, setRidingProgressRows] = useState<StudentRidingProgressFeedbackRow[] | null>(
     null
   );
@@ -1199,6 +1209,43 @@ export function TraineeProgressClient({
     null
   );
   const [, startTransition] = useTransition();
+
+  // Stage N2 - same cancellation-guard fetch shape as ridingProgressRows
+  // below (reset to null immediately on trainee change, ignore a stale
+  // response if the trainee changed again before it resolves) - so notes
+  // never leak between trainees during a fast switch. Never touches
+  // StudentRidingProgressFeedback/StudentLungeProgressFeedback/
+  // StudentPresentationProgressFeedback or any Teaching Practice/
+  // MessageTask/weekly-feedback model.
+  useEffect(() => {
+    if (!selectedStudentId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setGeneralNoteRows(null);
+      return;
+    }
+    let cancelled = false;
+    setGeneralNoteRows(null);
+    startTransition(async () => {
+      const result = await getStudentGeneralNotesAsAdmin(selectedStudentId);
+      if (!cancelled) {
+        setGeneralNoteRows(result ?? []);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedStudentId]);
+
+  // Manual refresh after a successful create/update/delete from
+  // StudentGeneralNotesSection - same reasoning as refreshRidingProgress
+  // below.
+  function refreshGeneralNotes() {
+    if (!selectedStudentId) return;
+    startTransition(async () => {
+      const result = await getStudentGeneralNotesAsAdmin(selectedStudentId);
+      setGeneralNoteRows(result ?? []);
+    });
+  }
 
   // Read-only fetch, re-run whenever a different trainee is selected - same
   // cancellation-guard shape as the riding/Teaching Practice effects below.
@@ -1607,6 +1654,44 @@ export function TraineeProgressClient({
               {getHorseDisplayInfo(selectedStudent).horseNameDisplay}
             </p>
           </div>
+
+          {/* Stage N2 - general trainee notes (StudentGeneralNote), placed
+              right after the header card and before every topic-specific
+              section, since a general note is often context an admin wants
+              before reading topic feedback. average is unused (no rating
+              scale here) - badge overrides it with a plain count instead,
+              same override slot ScoreAverageBadge already uses for
+              פרזנטציה. Deliberately not part of combinedTimelineItems/"כל
+              המשובים" - its own dedicated section only, per product
+              direction for this stage. */}
+          <TopicSection
+            title="הערות כלליות"
+            average={null}
+            badge={
+              <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                {generalNoteRows === null ? "…" : `${generalNoteRows.length} הערות`}
+              </span>
+            }
+            isOpen={isGeneralNotesOpen}
+            onToggle={() => setIsGeneralNotesOpen((v) => !v)}
+          >
+            {generalNoteRows === null ? (
+              <p className="text-sm text-muted-foreground">טוען...</p>
+            ) : (
+              <StudentGeneralNotesSection
+                key={selectedStudentId}
+                studentId={selectedStudent.id}
+                rows={generalNoteRows}
+                onChanged={refreshGeneralNotes}
+                actions={{
+                  create: (studentId, content) =>
+                    createStudentGeneralNoteAsAdmin({ studentId, content }),
+                  update: (noteId, content) => updateStudentGeneralNoteAsAdmin({ noteId, content }),
+                  delete: (noteId) => deleteStudentGeneralNoteAsAdmin(noteId),
+                }}
+              />
+            )}
+          </TopicSection>
 
           <TopicSection
             title="רכיבה"
