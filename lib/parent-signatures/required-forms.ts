@@ -21,21 +21,34 @@ export function requiredParentSignatureFormTypes(
   }
 }
 
-// SAFETY_INSTRUCTIONS applies to every active Teaching Practice child even
-// before they have any TeachingPracticeChildAssignment row - it's the one
-// form that doesn't depend on knowing a practiceType yet.
-const BASELINE_PARENT_SIGNATURE_FORM_TYPES: ParentSignatureFormTypeValue[] = ["SAFETY_INSTRUCTIONS"];
-
-// The single shared rule for "which forms does this child need right now" -
-// used by both the status list (lib/parent-signatures/status.ts) and the
-// submit guard (lib/actions/parent-signatures.ts) so the two can never drift
-// apart. Always includes the baseline above, even when practiceTypes is
-// empty (an active child with zero assignments) - practice-type-specific
-// consent forms are only ever added once the child actually has an
-// assignment of that type.
+// The forms a child is actually REQUIRED to have on file right now, derived
+// only from the practice types they're assigned to - used by both the status
+// list (lib/parent-signatures/status.ts) and the submit guard
+// (lib/actions/parent-signatures.ts) so the two can never drift apart. An
+// active child with zero TeachingPracticeChildAssignment rows has no
+// required forms yet (practiceTypes: [] correctly flatMaps to []) - see
+// optionalParentSignatureFormTypesForChild below for what such a child may
+// still collect in advance of scheduling.
 export function requiredParentSignatureFormTypesForChild(
   practiceTypes: TeachingPracticeTypeValue[]
 ): ParentSignatureFormTypeValue[] {
-  const fromPracticeTypes = practiceTypes.flatMap(requiredParentSignatureFormTypes);
-  return Array.from(new Set([...BASELINE_PARENT_SIGNATURE_FORM_TYPES, ...fromPracticeTypes]));
+  return Array.from(new Set(practiceTypes.flatMap(requiredParentSignatureFormTypes)));
+}
+
+// Every form a child with zero assignments may collect in advance, even
+// though none of them are required yet (see requiredParentSignatureFormTypesForChild
+// above, which returns [] for such a child). Once the child has any
+// assignment, nothing is "optional" anymore - every collectable form is
+// either required by requiredParentSignatureFormTypesForChild or not
+// applicable, so this returns [] in that case.
+const OPTIONAL_PARENT_SIGNATURE_FORM_TYPES_FOR_UNSCHEDULED_CHILD: ParentSignatureFormTypeValue[] = [
+  "SAFETY_INSTRUCTIONS",
+  "LUNGE_CONSENT",
+  "BEGINNER_LESSON_CONSENT",
+];
+
+export function optionalParentSignatureFormTypesForChild(
+  practiceTypes: TeachingPracticeTypeValue[]
+): ParentSignatureFormTypeValue[] {
+  return practiceTypes.length === 0 ? OPTIONAL_PARENT_SIGNATURE_FORM_TYPES_FOR_UNSCHEDULED_CHILD : [];
 }

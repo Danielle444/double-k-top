@@ -6,7 +6,10 @@
 // convention as lib/teaching-practice-rotation.ts and
 // lib/teaching-practice-schedule-check.ts.
 
-import { requiredParentSignatureFormTypesForChild } from "@/lib/parent-signatures/required-forms";
+import {
+  requiredParentSignatureFormTypesForChild,
+  optionalParentSignatureFormTypesForChild,
+} from "@/lib/parent-signatures/required-forms";
 import { getFormContent, CURRENT_FORM_VERSION, FORM_TYPE_SHORT_LABEL } from "@/lib/parent-signatures/form-definitions";
 import type { ParentSignatureFormTypeValue } from "@/lib/parent-signatures/types";
 import type { TeachingPracticeTypeValue } from "@/lib/teaching-practice-rotation";
@@ -51,6 +54,20 @@ export interface ParentSignatureRequiredFormStatus {
   signedFormId: string | null;
 }
 
+// A form that's collectable in advance but not yet required (currently only
+// ever populated for an unscheduled child - see
+// optionalParentSignatureFormTypesForChild). Deliberately a distinct
+// "UNSIGNED" status rather than reusing "MISSING": unlike a required form,
+// an unsigned optional form must never read as "חסר" (missing) or count
+// toward isCleared/missingCount.
+export interface ParentSignatureOptionalFormStatus {
+  formType: ParentSignatureFormTypeValue;
+  title: string;
+  status: "SIGNED" | "UNSIGNED";
+  signedAt: string | null;
+  signedFormId: string | null;
+}
+
 // One compact "which lesson/trainees" navigation hint for the status list
 // (see buildTeachingPracticeContexts below) - display-only, never read by
 // the signed form viewer or printed form, which only ever reconstruct from
@@ -72,12 +89,17 @@ export interface ParentSignatureChildStatusRow {
   practiceTypes: TeachingPracticeTypeValue[];
   assignments: ParentSignatureAssignmentContext[];
   requiredForms: ParentSignatureRequiredFormStatus[];
+  // Forms collectable in advance but not required yet - see
+  // optionalParentSignatureFormTypesForChild. Always [] once the child has
+  // any assignment.
+  optionalForms: ParentSignatureOptionalFormStatus[];
   isCleared: boolean;
   missingCount: number;
   teachingPracticeContexts: ParentSignatureTeachingPracticeContext[];
   // True when this child has zero TeachingPracticeChildAssignment rows (not
   // yet placed on any generated lesson) - drives the "ללא שיבוץ" badge and
-  // the baseline-only required-forms rule in requiredParentSignatureFormTypesForChild.
+  // the required/optional split in requiredParentSignatureFormTypesForChild/
+  // optionalParentSignatureFormTypesForChild.
   isUnscheduled: boolean;
 }
 
@@ -145,25 +167,50 @@ function buildTeachingPracticeContexts(
   return contexts;
 }
 
+// Resolves one formType's title + matching ACTIVE signed form (if any) -
+// shared by the required- and optional-forms mapping below so the two never
+// diverge in how they look up a signature.
+function resolveFormLookup(
+  formType: ParentSignatureFormTypeValue,
+  activeSignedForms: ParentSignatureActiveFormLookup[]
+): { title: string; signed: ParentSignatureActiveFormLookup | null } {
+  const signed = activeSignedForms.find((f) => f.formType === formType) ?? null;
+  const content = getFormContent(formType, CURRENT_FORM_VERSION[formType]);
+  return { title: content ? FORM_TYPE_SHORT_LABEL[formType] : formType, signed };
+}
+
 // Merges required forms across every one of a child's assignments (e.g. a
 // child with both a LUNGE and a BEGINNER_GROUP assignment needs
 // SAFETY_INSTRUCTIONS + LUNGE_CONSENT + BEGINNER_LESSON_CONSENT, not the
-// same SAFETY_INSTRUCTIONS counted twice) and resolves each against that
+// same SAFETY_INSTRUCTIONS counted twice), resolves each against that
 // child's ACTIVE signed forms (already pre-filtered to the current
-// courseCycle by the caller).
+// courseCycle by the caller), and separately resolves any forms collectable
+// in advance for an unscheduled child (optionalForms - never counted toward
+// missingCount/isCleared).
 export function buildParentSignatureChildStatus(
   input: ParentSignatureChildInput
 ): ParentSignatureChildStatusRow {
   const practiceTypes = Array.from(new Set(input.assignments.map((a) => a.practiceType)));
   const requiredTypes = requiredParentSignatureFormTypesForChild(practiceTypes);
+  const optionalTypes = optionalParentSignatureFormTypesForChild(practiceTypes);
 
   const requiredForms: ParentSignatureRequiredFormStatus[] = requiredTypes.map((formType) => {
-    const signed = input.activeSignedForms.find((f) => f.formType === formType) ?? null;
-    const content = getFormContent(formType, CURRENT_FORM_VERSION[formType]);
+    const { title, signed } = resolveFormLookup(formType, input.activeSignedForms);
     return {
       formType,
-      title: content ? FORM_TYPE_SHORT_LABEL[formType] : formType,
+      title,
       status: signed ? "SIGNED" : "MISSING",
+      signedAt: signed ? signed.signedAt.toISOString() : null,
+      signedFormId: signed ? signed.id : null,
+    };
+  });
+
+  const optionalForms: ParentSignatureOptionalFormStatus[] = optionalTypes.map((formType) => {
+    const { title, signed } = resolveFormLookup(formType, input.activeSignedForms);
+    return {
+      formType,
+      title,
+      status: signed ? "SIGNED" : "UNSIGNED",
       signedAt: signed ? signed.signedAt.toISOString() : null,
       signedFormId: signed ? signed.id : null,
     };
@@ -180,6 +227,7 @@ export function buildParentSignatureChildStatus(
     practiceTypes,
     assignments: input.assignments,
     requiredForms,
+    optionalForms,
     isCleared: missingCount === 0,
     missingCount,
     teachingPracticeContexts: buildTeachingPracticeContexts(input.assignments),

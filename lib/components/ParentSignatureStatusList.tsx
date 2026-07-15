@@ -21,6 +21,65 @@ interface SigningTarget {
   formType: ParentSignatureFormTypeValue;
 }
 
+// One form row, shared by the required- and optional-forms sections below -
+// only the unsigned label/color differs between them ("חסר"/warning for a
+// required form still missing vs. "לא מולא"/neutral for an optional form
+// nobody has gotten to yet - an optional form must never look as urgent as a
+// missing required one).
+function ParentSignatureFormRow({
+  title,
+  status,
+  signedAt,
+  signedFormId,
+  onSign,
+  onView,
+}: {
+  title: string;
+  status: "SIGNED" | "MISSING" | "UNSIGNED";
+  signedAt: string | null;
+  signedFormId: string | null;
+  onSign: () => void;
+  onView: (signedFormId: string) => void;
+}) {
+  const unsignedLabel = status === "MISSING" ? "חסר" : "לא מולא";
+  const unsignedColorClass = status === "MISSING" ? "text-warning" : "text-muted-foreground";
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 px-4 py-3">
+      <span
+        className={`text-sm font-semibold md:text-base ${
+          status === "SIGNED" ? "text-success" : unsignedColorClass
+        }`}
+      >
+        {title} · {status === "SIGNED" ? "חתום" : unsignedLabel}
+      </span>
+      {status !== "SIGNED" ? (
+        <button
+          type="button"
+          onClick={onSign}
+          className="shrink-0 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 md:text-base"
+        >
+          חתימה
+        </button>
+      ) : (
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="text-xs text-muted-foreground">
+            {signedAt ? new Date(signedAt).toLocaleDateString("he-IL") : ""}
+          </span>
+          {signedFormId && (
+            <button
+              type="button"
+              onClick={() => onView(signedFormId)}
+              className="rounded-lg border border-border px-4 py-2.5 text-sm font-semibold text-card-foreground hover:bg-muted md:text-base"
+            >
+              צפייה בטופס חתום
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Compact "label · d.m · HH:MM · חניכים: ..." navigation hint - status-list
 // display only, entirely separate from the signed form/printed form (which
 // never read this). Any piece missing (no lesson time yet, no participants
@@ -159,34 +218,31 @@ export function ParentSignatureStatusList({
                     </div>
                   )}
                 </div>
-                <span
-                  className={`shrink-0 rounded-full px-3 py-1.5 text-sm font-bold ${
-                    child.isCleared
-                      ? "bg-success-muted text-success"
-                      : "bg-warning-muted text-warning"
-                  }`}
-                >
-                  {child.isCleared ? "חתום" : `חסרים ${child.missingCount}`}
-                </span>
+                {child.requiredForms.length > 0 && (
+                  <span
+                    className={`shrink-0 rounded-full px-3 py-1.5 text-sm font-bold ${
+                      child.isCleared
+                        ? "bg-success-muted text-success"
+                        : "bg-warning-muted text-warning"
+                    }`}
+                  >
+                    {child.isCleared ? "חתום" : `חסרים ${child.missingCount}`}
+                  </span>
+                )}
               </div>
 
-              <div className="mt-4 flex flex-col gap-3">
-                {child.requiredForms.map((form) => (
-                  <div
-                    key={form.formType}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 px-4 py-3"
-                  >
-                    <span
-                      className={`text-sm font-semibold md:text-base ${
-                        form.status === "SIGNED" ? "text-success" : "text-warning"
-                      }`}
-                    >
-                      {form.title} · {form.status === "SIGNED" ? "חתום" : "חסר"}
-                    </span>
-                    {form.status === "MISSING" ? (
-                      <button
-                        type="button"
-                        onClick={() =>
+              {child.requiredForms.length > 0 && (
+                <div className="mt-4 flex flex-col gap-2">
+                  <p className="text-xs font-semibold text-muted-foreground">טופס חובה:</p>
+                  <div className="flex flex-col gap-3">
+                    {child.requiredForms.map((form) => (
+                      <ParentSignatureFormRow
+                        key={form.formType}
+                        title={form.title}
+                        status={form.status}
+                        signedAt={form.signedAt}
+                        signedFormId={form.signedFormId}
+                        onSign={() =>
                           setSigningTarget({
                             childId: child.childId,
                             childName: child.childName,
@@ -196,29 +252,40 @@ export function ParentSignatureStatusList({
                             formType: form.formType,
                           })
                         }
-                        className="shrink-0 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90 md:text-base"
-                      >
-                        חתימה
-                      </button>
-                    ) : (
-                      <div className="flex shrink-0 items-center gap-3">
-                        <span className="text-xs text-muted-foreground">
-                          {form.signedAt ? new Date(form.signedAt).toLocaleDateString("he-IL") : ""}
-                        </span>
-                        {form.signedFormId && (
-                          <button
-                            type="button"
-                            onClick={() => setViewingFormId(form.signedFormId)}
-                            className="rounded-lg border border-border px-4 py-2.5 text-sm font-semibold text-card-foreground hover:bg-muted md:text-base"
-                          >
-                            צפייה בטופס חתום
-                          </button>
-                        )}
-                      </div>
-                    )}
+                        onView={(id) => setViewingFormId(id)}
+                      />
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
+              )}
+
+              {child.optionalForms.length > 0 && (
+                <div className="mt-4 flex flex-col gap-2">
+                  <p className="text-xs font-semibold text-muted-foreground">טפסים נוספים לפי צורך:</p>
+                  <div className="flex flex-col gap-3">
+                    {child.optionalForms.map((form) => (
+                      <ParentSignatureFormRow
+                        key={form.formType}
+                        title={form.title}
+                        status={form.status}
+                        signedAt={form.signedAt}
+                        signedFormId={form.signedFormId}
+                        onSign={() =>
+                          setSigningTarget({
+                            childId: child.childId,
+                            childName: child.childName,
+                            childAge: child.childAge,
+                            parentName: child.parentName,
+                            parentPhone: child.parentPhone,
+                            formType: form.formType,
+                          })
+                        }
+                        onView={(id) => setViewingFormId(id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>

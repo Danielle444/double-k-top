@@ -7,7 +7,10 @@ import { dateKey } from "@/lib/dates";
 import { getSupabaseClient, PARENT_SIGNATURES_BUCKET } from "@/lib/supabase";
 import { CURRENT_TEACHING_PRACTICE_COURSE_CYCLE } from "@/lib/parent-signatures/course-cycle";
 import { buildParentSignatureImagePath } from "@/lib/parent-signatures/storage-path";
-import { requiredParentSignatureFormTypesForChild } from "@/lib/parent-signatures/required-forms";
+import {
+  requiredParentSignatureFormTypesForChild,
+  optionalParentSignatureFormTypesForChild,
+} from "@/lib/parent-signatures/required-forms";
 import { getFormContent, CURRENT_FORM_VERSION } from "@/lib/parent-signatures/form-definitions";
 import type { ParentSignatureFormContent, ParentSignatureFormTypeValue } from "@/lib/parent-signatures/types";
 import type { ActionResult } from "@/lib/actions/students";
@@ -46,16 +49,18 @@ async function getInstructorForSignatureRead(instructorId: string) {
 
 // Loads every active TeachingPracticeChild (not just ones with a generated
 // lesson assignment - an active child may exist in the system before ever
-// being scheduled, and still needs SAFETY_INSTRUCTIONS collectible), plus
-// every active child's Teaching Practice assignments (all lessons, published
-// or not - this is an internal staff readiness view, not the trainee-facing
-// surface), groups the latter per child, and resolves each child's required
-// forms against their ACTIVE TeachingPracticeSignedForm rows for the current
-// course cycle. A child with no assignments simply gets an empty
-// assignments array (never a fake one) - see buildParentSignatureChildStatus/
-// requiredParentSignatureFormTypesForChild for how that yields
-// SAFETY_INSTRUCTIONS-only. Shared by both the admin and instructor entry
-// points below - the permission check happens before this is ever called.
+// being scheduled, and their parent's forms may still need collecting in
+// advance), plus every active child's Teaching Practice assignments (all
+// lessons, published or not - this is an internal staff readiness view, not
+// the trainee-facing surface), groups the latter per child, and resolves
+// each child's required and optionally-collectable forms against their
+// ACTIVE TeachingPracticeSignedForm rows for the current course cycle. A
+// child with no assignments simply gets an empty assignments array (never a
+// fake one) - see buildParentSignatureChildStatus/
+// requiredParentSignatureFormTypesForChild/optionalParentSignatureFormTypesForChild
+// for how that yields zero required forms and all three as optional. Shared
+// by both the admin and instructor entry points below - the permission
+// check happens before this is ever called.
 async function loadParentSignatureStatusInternal(): Promise<ParentSignatureStatusResult> {
   const courseCycle = CURRENT_TEACHING_PRACTICE_COURSE_CYCLE;
 
@@ -284,22 +289,27 @@ async function submitParentSignatureInternal(
     return { success: false, error: "הילד/ה לא נמצא/ת" };
   }
 
-  // formType must actually be required for this child right now - derived
-  // fresh from their current assignments (never trusted from the client,
-  // including any "unscheduled" flag the client might send), through the
-  // same shared rule buildParentSignatureChildStatus (lib/parent-signatures/
-  // status.ts) uses for the status list, so a form can never be signed here
-  // that wouldn't even show up as required there. A child with zero
-  // assignments still requires (and permits) SAFETY_INSTRUCTIONS via that
-  // rule's baseline - practice-specific consent forms stay rejected until an
-  // assignment of the matching practiceType actually exists.
+  // formType must be either required or optionally-collectable for this
+  // child right now - derived fresh from their current assignments (never
+  // trusted from the client, including any "unscheduled"/"optional" flag the
+  // client might send), through the same two shared rules
+  // buildParentSignatureChildStatus (lib/parent-signatures/status.ts) uses
+  // for the status list, so a form can never be signed here that wouldn't
+  // even show up there. A child with zero assignments may sign any of the
+  // three forms in advance (all optional, none required yet); once an
+  // assignment exists, optionalParentSignatureFormTypesForChild returns []
+  // and only the practice-type-derived required set is ever allowed again -
+  // e.g. a LUNGE-only child still can't sign BEGINNER_LESSON_CONSENT.
   const assignments = await prisma.teachingPracticeChildAssignment.findMany({
     where: { childId: child.id },
     select: { lesson: { select: { practiceType: true } } },
   });
   const practiceTypes = Array.from(new Set(assignments.map((a) => a.lesson.practiceType)));
-  const requiredFormTypes = new Set(requiredParentSignatureFormTypesForChild(practiceTypes));
-  if (!requiredFormTypes.has(formType)) {
+  const allowedFormTypes = new Set([
+    ...requiredParentSignatureFormTypesForChild(practiceTypes),
+    ...optionalParentSignatureFormTypesForChild(practiceTypes),
+  ]);
+  if (!allowedFormTypes.has(formType)) {
     return { success: false, error: "טופס זה אינו נדרש עבור ילד/ה זו" };
   }
 
