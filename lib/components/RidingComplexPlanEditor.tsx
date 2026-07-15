@@ -36,6 +36,15 @@ import {
   type RidingSlotComplexStationSaveInput,
   type RidingSlotComplexPlanActionResult,
 } from "@/lib/actions/riding-slot-complex";
+import {
+  getComplexRidingPlanPublicationStatusForAdmin,
+  getComplexRidingPlanPublicationStatusForInstructor,
+  publishComplexRidingPlanAsAdmin,
+  publishComplexRidingPlanAsInstructor,
+  unpublishComplexRidingPlanAsAdmin,
+  type ComplexRidingPlanPublicationStatus,
+  type ComplexRidingPlanPublicationStatusLabel,
+} from "@/lib/actions/riding-slot-complex-publications";
 
 type InstructorOption = { id: string; fullName: string };
 
@@ -127,6 +136,31 @@ function reorderComplexBlocks(
     : reorderRidingSlotComplexBlocksAsInstructor(actor.instructorId, ridingSlotId, orderedBlockIds);
 }
 
+// RIDING-COMPLEX-PUBLICATION P7B - status reading has no permission gate
+// beyond being an active instructor (matches every other read helper above),
+// so both branches are always attempted; the admin branch never actually
+// resolves null, only the instructor one can (inactive/nonexistent
+// instructor). There is no unpublish routing helper - unpublish is
+// admin-only with no instructor variant to route to, called directly at its
+// one call site instead (same convention as handleDeletePlan below).
+function readComplexPublicationStatus(
+  actor: RidingComplexPlanEditorActor,
+  ridingSlotId: string
+): Promise<ComplexRidingPlanPublicationStatus | null> {
+  return actor.type === "admin"
+    ? getComplexRidingPlanPublicationStatusForAdmin(ridingSlotId)
+    : getComplexRidingPlanPublicationStatusForInstructor(actor.instructorId, ridingSlotId);
+}
+
+function publishComplexPlan(
+  actor: RidingComplexPlanEditorActor,
+  ridingSlotId: string
+): ReturnType<typeof publishComplexRidingPlanAsAdmin> {
+  return actor.type === "admin"
+    ? publishComplexRidingPlanAsAdmin(ridingSlotId)
+    : publishComplexRidingPlanAsInstructor(actor.instructorId, ridingSlotId);
+}
+
 type LoadStatus = "loading" | "loaded" | "not-found" | "error";
 
 // Navigation state for the three-level hierarchy (time blocks -> coach
@@ -202,6 +236,257 @@ function stationWarningBadges(station: RidingSlotComplexStationRow): string[] {
   const missingHorse = station.pairs.filter((p) => p.trainee1Id && !p.horseName).length;
   if (missingHorse > 0) badges.push(`${missingHorse} ללא סוס`);
   return badges;
+}
+
+// RIDING-COMPLEX-PUBLICATION P7B
+const PUBLICATION_STATUS_LABELS: Record<ComplexRidingPlanPublicationStatusLabel, string> = {
+  UNPUBLISHED: "לא פורסם לחניכים",
+  CURRENT: "פורסם לחניכים · עדכני",
+  STALE: "פורסם לחניכים · קיימים שינויים שלא פורסמו",
+};
+
+const PUBLICATION_STATUS_BADGE_CLASS: Record<ComplexRidingPlanPublicationStatusLabel, string> = {
+  UNPUBLISHED: "bg-secondary text-secondary-foreground",
+  CURRENT: "bg-success-muted text-success",
+  STALE: "bg-warning-muted text-warning",
+};
+
+// Plan-wide warning summary for the publish confirmation modal - reuses the
+// exact same underlying predicates as blockStationWarningBadges/
+// stationWarningBadges above (no second, independently-drifting validation
+// system), just aggregated across every block/station/pair in the plan
+// instead of one block or station at a time. Informational only, never a
+// publish blocker - the one real hard blocker (zero blocks) is handled
+// separately by never opening this modal at all (see openPublishModal).
+function buildPlanPublishWarnings(blocks: RidingSlotComplexBlockRow[]): string[] {
+  const warnings: string[] = [];
+
+  const blocksWithNoStations = blocks.filter((b) => b.stations.length === 0).length;
+  if (blocksWithNoStations > 0) warnings.push(`${blocksWithNoStations} טווח/י שעות ללא תחנות`);
+
+  const allStations = blocks.flatMap((b) => b.stations);
+  const noCoach = allStations.filter((s) => !s.instructorId).length;
+  if (noCoach > 0) warnings.push(`${noCoach} תחנות ללא מאמן/ת`);
+  const noArena = allStations.filter((s) => !s.arena).length;
+  if (noArena > 0) warnings.push(`${noArena} תחנות ללא מגרש`);
+  const zeroPairs = allStations.filter((s) => s.pairs.length === 0).length;
+  if (zeroPairs > 0) warnings.push(`${zeroPairs} תחנות ללא זוגות`);
+
+  const allPairs = allStations.flatMap((s) => s.pairs);
+  const missingTrainee2 = allPairs.filter((p) => p.trainee1Id && !p.trainee2Id).length;
+  if (missingTrainee2 > 0) warnings.push(`${missingTrainee2} זוג/ות ללא בן/בת זוג שני/ה`);
+  const missingHorse = allPairs.filter((p) => p.trainee1Id && !p.horseName).length;
+  if (missingHorse > 0) warnings.push(`${missingHorse} זוג/ות ללא סוס`);
+
+  return warnings;
+}
+
+// Compact publication-status card - only ever rendered in the root
+// block-list view (never inside a block/station sub-view), per product
+// decision. Status text/badge/action buttons are all driven by the
+// server-returned status DTO only - status/hasBlocks are never guessed or
+// recomputed client-side. canPublish already reflects the actor's real
+// server-checked permission (canEdit) - this component never derives
+// permission from anything else.
+function PublicationStatusPanel({
+  status,
+  loading,
+  error,
+  canPublish,
+  canUnpublish,
+  hasBlocks,
+  onOpenPublish,
+  onOpenUnpublish,
+}: {
+  status: ComplexRidingPlanPublicationStatus | null;
+  loading: boolean;
+  error: string | null;
+  canPublish: boolean;
+  canUnpublish: boolean;
+  hasBlocks: boolean;
+  onOpenPublish: () => void;
+  onOpenUnpublish: () => void;
+}) {
+  return (
+    <div className="flex shrink-0 flex-col gap-1.5 rounded-lg border border-border bg-card p-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          {!status && loading && <span className="text-xs text-muted-foreground">טוען מצב פרסום...</span>}
+          {status && (
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${PUBLICATION_STATUS_BADGE_CLASS[status.status]}`}
+            >
+              {PUBLICATION_STATUS_LABELS[status.status]}
+            </span>
+          )}
+          {status && status.status !== "UNPUBLISHED" && status.updatedByName && (
+            <span className="text-[11px] text-muted-foreground">
+              עודכן ע&quot;י {status.updatedByName}
+              {status.updatedAt ? ` · ${formatHebrewDateTime(new Date(status.updatedAt))}` : ""}
+            </span>
+          )}
+        </div>
+        {canPublish && status && status.status !== "CURRENT" && (
+          <>
+            {hasBlocks ? (
+              <Button variant="secondary" className="!px-2 !py-1 !text-xs" onClick={onOpenPublish}>
+                {status.status === "UNPUBLISHED" ? "פרסום לחניכים" : "עדכון הפרסום לחניכים"}
+              </Button>
+            ) : (
+              <span className="text-[11px] text-muted-foreground">לא ניתן לפרסם תכנון ללא טווחי שעות</span>
+            )}
+          </>
+        )}
+        {canPublish && status && status.status === "CURRENT" && (
+          <Button variant="secondary" className="!px-2 !py-1 !text-xs" disabled>
+            הפרסום עדכני
+          </Button>
+        )}
+      </div>
+      {canUnpublish && status && status.status !== "UNPUBLISHED" && (
+        <div className="flex justify-end">
+          <Button variant="ghost" className="!px-2 !py-1 !text-xs text-danger" onClick={onOpenUnpublish}>
+            ביטול פרסום לחניכים
+          </Button>
+        </div>
+      )}
+      {error && <p className="text-xs text-danger">{error}</p>}
+    </div>
+  );
+}
+
+// Confirmation modal for both first publish and republish - copy differs
+// only by isRepublish (product-approved bullet copy: UNPUBLISHED -> first-
+// publish wording, STALE -> republish wording). Warnings are informational
+// only (buildPlanPublishWarnings above) - this modal is never opened at all
+// when the plan has zero blocks (see openPublishModal), so there is no
+// separate "zero blocks" branch to render here.
+function PublishConfirmModal({
+  open,
+  isRepublish,
+  warnings,
+  isPending,
+  error,
+  onConfirm,
+  onClose,
+}: {
+  open: boolean;
+  isRepublish: boolean;
+  warnings: string[];
+  isPending: boolean;
+  error: string | null;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const explanationLines = isRepublish
+    ? [
+        "הפרסום הקודם יוחלף בשיבוץ הנוכחי",
+        "החניכים יראו את הגרסה החדשה לאחר האישור",
+        "השינויים נשמרים כטיוטה עד ללחיצה על עדכון הפרסום",
+      ]
+    : [
+        "החניכים יוכלו לראות את השיבוץ האישי שפורסם עבורם",
+        "הפרסום כולל שעות, מאמן/ת, מגרש, בן/בת זוג וסוס",
+        "הערות פנימיות אינן מוצגות לחניכים",
+        "שינויים עתידיים בטיוטה לא יוצגו עד לפרסום מחדש",
+      ];
+
+  return (
+    <Modal
+      open={open}
+      title={isRepublish ? "עדכון הפרסום לחניכים" : "פרסום התכנון לחניכים"}
+      onClose={() => {
+        // Keep the modal open while a publish is in flight - never dismiss
+        // mid-submit via backdrop click or the header X.
+        if (isPending) return;
+        onClose();
+      }}
+    >
+      <div className="flex flex-col gap-3">
+        <ul className="flex flex-col gap-1 text-sm text-card-foreground">
+          {explanationLines.map((line) => (
+            <li key={line} className="flex gap-1.5">
+              <span className="text-muted-foreground">·</span>
+              <span>{line}</span>
+            </li>
+          ))}
+        </ul>
+
+        {warnings.length > 0 && (
+          <div className="rounded-lg border border-warning/40 bg-warning-muted/30 p-2.5 text-sm text-warning">
+            <p className="font-semibold">שימו לב, התכנון עדיין לא מלא:</p>
+            {warnings.map((w) => (
+              <p key={w}>{w}</p>
+            ))}
+          </div>
+        )}
+
+        {error && <p className="text-sm text-danger">{error}</p>}
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onClose} disabled={isPending}>
+            ביטול
+          </Button>
+          <Button type="button" onClick={onConfirm} disabled={isPending}>
+            {isPending ? "מפרסם..." : isRepublish ? "עדכון הפרסום" : "פרסום לחניכים"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Admin-only confirmation modal (see openUnpublishModal's own guard - this
+// is never opened for an instructor actor).
+function UnpublishConfirmModal({
+  open,
+  isPending,
+  error,
+  onConfirm,
+  onClose,
+}: {
+  open: boolean;
+  isPending: boolean;
+  error: string | null;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      open={open}
+      title="ביטול פרסום לחניכים"
+      onClose={() => {
+        if (isPending) return;
+        onClose();
+      }}
+    >
+      <div className="flex flex-col gap-3">
+        <ul className="flex flex-col gap-1 text-sm text-card-foreground">
+          {[
+            "החניכים לא יקבלו יותר את השיבוץ המפורסם",
+            "הטיוטה והתכנון המורכב לא יימחקו",
+            "ניתן לפרסם שוב בהמשך",
+          ].map((line) => (
+            <li key={line} className="flex gap-1.5">
+              <span className="text-muted-foreground">·</span>
+              <span>{line}</span>
+            </li>
+          ))}
+        </ul>
+
+        {error && <p className="text-sm text-danger">{error}</p>}
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onClose} disabled={isPending}>
+            ביטול
+          </Button>
+          <Button type="button" variant="danger" onClick={onConfirm} disabled={isPending}>
+            {isPending ? "מבטל..." : "ביטול פרסום"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
 }
 
 // Single-select, searchable, group/subgroup-grouped trainee picker for one
@@ -1525,6 +1810,32 @@ export function RidingComplexPlanEditor({
   const [isDeletingPlan, startDeletePlanTransition] = useTransition();
   const [deletePlanError, setDeletePlanError] = useState<string | null>(null);
 
+  // RIDING-COMPLEX-PUBLICATION P7B - publication status/publish/unpublish
+  // state. Kept entirely separate from the `status`/`editing` load-state
+  // machine above (publicationStatusLoading is its own flag) so a slow
+  // status fetch never blocks the rest of the editor from rendering.
+  const [publicationStatus, setPublicationStatus] = useState<ComplexRidingPlanPublicationStatus | null>(null);
+  const [publicationStatusLoading, setPublicationStatusLoading] = useState(false);
+  const [publicationStatusError, setPublicationStatusError] = useState<string | null>(null);
+  // Monotonically increasing token, bumped on every fetch start (whether
+  // from the target-keyed load effect below or a post-mutation/post-publish
+  // refresh) - a resolving fetch only applies its result if it's still the
+  // most recent one requested. This is what makes a slow status fetch safe
+  // against a later ridingSlotId switch, a later mutation-triggered refresh,
+  // or a publish/unpublish completing while an earlier fetch is still
+  // in-flight - the same stale-response problem the main plan load effect's
+  // `cancelled` flag solves, generalized to also cover refreshes triggered
+  // outside that effect.
+  const publicationStatusGenerationRef = useRef(0);
+  const [publishModalOpen, setPublishModalOpen] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [isPublishing, startPublishTransition] = useTransition();
+  const isPublishingRef = useRef(false);
+  const [unpublishModalOpen, setUnpublishModalOpen] = useState(false);
+  const [unpublishError, setUnpublishError] = useState<string | null>(null);
+  const [isUnpublishing, startUnpublishTransition] = useTransition();
+  const isUnpublishingRef = useRef(false);
+
   const anyBlockActionPending = isReorderingBlocks || isDuplicatingBlock || isDeletingBlock;
   const anyStationActionPending = isReorderingStations || isDeletingStation;
 
@@ -1571,8 +1882,61 @@ export function RidingComplexPlanEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, ridingSlotId]);
 
+  // RIDING-COMPLEX-PUBLICATION P7B - reusable status (re)fetch, guarded by
+  // publicationStatusGenerationRef (see that ref's own comment) rather than
+  // a per-call `cancelled` closure, since this is called both from the
+  // target-keyed effect below AND from several later, independent call
+  // sites (post-mutation refresh, post-publish/unpublish refresh) that each
+  // need the exact same staleness guard. showLoading is false for a
+  // background refresh (status is already showing something useful) and
+  // true only for the initial per-target load, so a background refresh
+  // never flashes "טוען..." over an already-displayed badge.
+  function loadPublicationStatus(showLoading: boolean) {
+    publicationStatusGenerationRef.current += 1;
+    const generation = publicationStatusGenerationRef.current;
+    setPublicationStatusError(null);
+    if (showLoading) setPublicationStatusLoading(true);
+
+    readComplexPublicationStatus(actor, ridingSlotId)
+      .then((result) => {
+        if (publicationStatusGenerationRef.current !== generation) return;
+        setPublicationStatus(result);
+        if (!result) setPublicationStatusError("לא הצלחנו לטעון את מצב הפרסום");
+      })
+      .catch(() => {
+        if (publicationStatusGenerationRef.current !== generation) return;
+        setPublicationStatusError("לא הצלחנו לטעון את מצב הפרסום");
+      })
+      .finally(() => {
+        if (publicationStatusGenerationRef.current !== generation) return;
+        setPublicationStatusLoading(false);
+      });
+  }
+
+  // Same target-keyed reset/cancel convention as the main plan load effect
+  // above (deliberately not keyed on `actor`, for the identical reason that
+  // effect's own comment gives) - resets to a clean "nothing loaded yet"
+  // state on every open/ridingSlotId change so a previous plan's status can
+  // never flash before the fresh fetch resolves.
+  useEffect(() => {
+    if (!open) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPublicationStatus(null);
+    setPublicationStatusError(null);
+    loadPublicationStatus(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, ridingSlotId]);
+
   function refreshPlan(plan: RidingSlotComplexPlanRow) {
     setEditing((prev) => (prev ? { ...prev, plan } : prev));
+    // RIDING-COMPLEX-PUBLICATION P7B - every block/station/pair mutation's
+    // success path already calls refreshPlan (see every handle* function
+    // below), so hooking the post-mutation status refresh in here once is
+    // sufficient to cover all of them without touching each handler
+    // individually. A background refresh (showLoading=false) - the status
+    // area already shows something, this only updates it once the server
+    // confirms the new version (e.g. UNPUBLISHED/CURRENT -> STALE).
+    loadPublicationStatus(false);
   }
 
   function handleBlockTimeSaved(
@@ -1740,6 +2104,84 @@ export function RidingComplexPlanEditor({
     });
   }
 
+  // RIDING-COMPLEX-PUBLICATION P7B - publish/republish. canEdit already
+  // reflects the server-checked permission (admin, or an active instructor
+  // with canEditRidingNotes) - this only adds the client-side "never open a
+  // misleading confirmation for a zero-block plan" guard; the server action
+  // remains the sole authority on every actual permission/hard-block check.
+  function openPublishModal() {
+    if (!canEdit || !plan || plan.blocks.length === 0 || isPublishingRef.current) return;
+    setPublishError(null);
+    setPublishModalOpen(true);
+  }
+
+  function closePublishModal() {
+    if (isPublishingRef.current) return;
+    setPublishModalOpen(false);
+  }
+
+  function handleConfirmPublish() {
+    if (isPublishingRef.current) return;
+    isPublishingRef.current = true;
+    setPublishError(null);
+    startPublishTransition(async () => {
+      const result = await publishComplexPlan(actor, ridingSlotId);
+      isPublishingRef.current = false;
+      if (!result.success) {
+        setPublishError(result.error ?? "לא הצלחנו לפרסם את התכנון");
+        return;
+      }
+      setPublishModalOpen(false);
+      // The publish action returns its own just-computed, server-authoritative
+      // status object - using it directly avoids an extra round trip and is
+      // never a client computation (it's exactly what the transaction that
+      // just committed produced). Falling back to a refetch only guards the
+      // (never actually expected) case of a successful result with no status.
+      if (result.status) {
+        setPublicationStatus(result.status);
+        setPublicationStatusError(null);
+      } else {
+        loadPublicationStatus(false);
+      }
+    });
+  }
+
+  // Admin-only - never rendered/reachable for an instructor actor (see
+  // PublicationStatusPanel's canUnpublish prop, always false for
+  // actor.type === "instructor" below), same belt-and-suspenders guard
+  // convention as handleDeletePlan above.
+  function openUnpublishModal() {
+    if (actor.type !== "admin" || !publicationStatus || publicationStatus.status === "UNPUBLISHED") return;
+    if (isUnpublishingRef.current) return;
+    setUnpublishError(null);
+    setUnpublishModalOpen(true);
+  }
+
+  function closeUnpublishModal() {
+    if (isUnpublishingRef.current) return;
+    setUnpublishModalOpen(false);
+  }
+
+  function handleConfirmUnpublish() {
+    if (actor.type !== "admin" || isUnpublishingRef.current) return;
+    isUnpublishingRef.current = true;
+    setUnpublishError(null);
+    startUnpublishTransition(async () => {
+      const result = await unpublishComplexRidingPlanAsAdmin(ridingSlotId);
+      isUnpublishingRef.current = false;
+      if (!result.success) {
+        setUnpublishError(result.error ?? "לא הצלחנו לבטל את הפרסום");
+        return;
+      }
+      // Handles the "already unpublished" case gracefully too - either way
+      // the true current state is UNPUBLISHED, so a plain refetch (rather
+      // than trusting a client-guessed status) is the correct, simplest
+      // outcome for both branches of alreadyUnpublished.
+      setUnpublishModalOpen(false);
+      loadPublicationStatus(false);
+    });
+  }
+
   const plan = editing?.plan ?? null;
   const scheduleMeta = editing?.scheduleMeta ?? null;
   // Server-returned, never a client-side assumption - always true for admin
@@ -1796,6 +2238,17 @@ export function RidingComplexPlanEditor({
 
             {view.type === "blockList" && (
               <>
+                <PublicationStatusPanel
+                  status={publicationStatus}
+                  loading={publicationStatusLoading}
+                  error={publicationStatusError}
+                  canPublish={canEdit}
+                  canUnpublish={actor.type === "admin"}
+                  hasBlocks={plan.blocks.length > 0}
+                  onOpenPublish={openPublishModal}
+                  onOpenUnpublish={openUnpublishModal}
+                />
+
                 <div className="flex shrink-0 items-center justify-between gap-2">
                   <p className="text-sm font-semibold text-card-foreground">טווחי שעות</p>
                   {canEdit && (
@@ -1973,6 +2426,23 @@ export function RidingComplexPlanEditor({
           </>
         )}
       </div>
+
+      <PublishConfirmModal
+        open={publishModalOpen}
+        isRepublish={publicationStatus?.status === "STALE"}
+        warnings={plan ? buildPlanPublishWarnings(plan.blocks) : []}
+        isPending={isPublishing}
+        error={publishError}
+        onConfirm={handleConfirmPublish}
+        onClose={closePublishModal}
+      />
+      <UnpublishConfirmModal
+        open={unpublishModalOpen}
+        isPending={isUnpublishing}
+        error={unpublishError}
+        onConfirm={handleConfirmUnpublish}
+        onClose={closeUnpublishModal}
+      />
     </Modal>
   );
 }
