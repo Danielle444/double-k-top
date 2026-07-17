@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import type { ActionResult } from "@/lib/actions/students";
+import { requireAdmin } from "@/lib/auth/require-admin";
 
 const emailSchema = z.object({
   email: z.string().trim().toLowerCase().email("כתובת אימייל לא תקינה"),
@@ -11,6 +12,7 @@ const emailSchema = z.object({
 });
 
 export async function addAdminEmail(formData: FormData): Promise<ActionResult> {
+  await requireAdmin();
   const parsed = emailSchema.safeParse({
     email: formData.get("email"),
     name: formData.get("name") || undefined,
@@ -33,6 +35,7 @@ export async function setAdminEmailActive(
   adminEmailId: string,
   isActive: boolean
 ): Promise<ActionResult> {
+  await requireAdmin();
   await prisma.adminEmail.update({ where: { id: adminEmailId }, data: { isActive } });
   revalidatePath("/admin/admins");
   return { success: true };
