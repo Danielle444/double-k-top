@@ -1,6 +1,7 @@
 "use server";
 
 import { Workbook, type Row, type Worksheet } from "exceljs";
+import { requireAdmin } from "@/lib/auth/require-admin";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { parseDateKey } from "@/lib/dates";
@@ -149,6 +150,7 @@ function scannedRowsDebugText(worksheet: Worksheet): string {
 export async function parseStudentsExcel(
   formData: FormData
 ): Promise<ParseStudentsExcelResult> {
+  await requireAdmin();
   const file = formData.get("file");
   if (!(file instanceof File)) {
     return { success: false, error: "לא נבחר קובץ" };
@@ -263,6 +265,7 @@ export async function commitStudentImport(
   selections: StudentImportSelection[],
   availabilityChoice: AvailabilityChoice
 ): Promise<CommitStudentImportResult> {
+  await requireAdmin();
   let createdCount = 0;
   let updatedCount = 0;
   const affectedStudentIds: string[] = [];
