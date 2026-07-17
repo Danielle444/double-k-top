@@ -51,12 +51,12 @@
 4. הוסיפו כתובות Redirect URI מורשות:
    - לפיתוח מקומי: `http://localhost:3000/api/auth/callback/google`
    - לפרודקשן: `https://<הדומיין שלכם>/api/auth/callback/google`
-5. העתיקו את ה-Client ID וה-Client Secret לתוך `.env`:
+5. העתיקו את ה-Client ID וה-Client Secret לתוך `.env.local`:
    ```
    AUTH_GOOGLE_ID="..."
    AUTH_GOOGLE_SECRET="..."
    ```
-6. `AUTH_SECRET` כבר קיים ב-`.env` (נוצר אוטומטית בסשן הפיתוח); לסביבת production מומלץ ליצור ערך חדש: `openssl rand -base64 32`.
+6. ודאו שגם `AUTH_SECRET` מוגדר ב־`.env.local` בערך פיתוח מקומי נפרד. אין להשתמש בערך של Preview או Production.
 
 ## חתימת סשנים למדריכים/חניכים (SESSION_SECRET)
 
@@ -118,11 +118,11 @@ npm install
 2. בעמוד Project Settings -> Database -> Connection string, העתיקו:
    - את מחרוזת ה-**Transaction pooler** (פורט 6543) לתוך `DATABASE_URL`.
    - את מחרוזת ה-**Session/Direct** (פורט 5432) לתוך `DIRECT_URL`.
-3. עדכנו את הערכים בקובץ `.env` (הקובץ כבר קיים עם placeholders, מוחרג מ-git).
+3. העתיקו את `.env.example` ל־`.env.local` ועדכנו בו את הערכים. הקובץ `.env.local` מוחרג מ־Git ואין להכניס אליו ערכי Preview או Production.
 
 ### 3. הגדרת Google OAuth
 
-ראו "הגדרת Google OAuth" למעלה, ועדכנו את `AUTH_GOOGLE_ID`/`AUTH_GOOGLE_SECRET` ב-`.env`.
+ראו "הגדרת Google OAuth" למעלה, ועדכנו את `AUTH_GOOGLE_ID`/`AUTH_GOOGLE_SECRET` ב-`.env.local`.
 
 ### 4. יצירת הטבלאות
 
