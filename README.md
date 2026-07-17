@@ -58,6 +58,17 @@
    ```
 6. `AUTH_SECRET` כבר קיים ב-`.env` (נוצר אוטומטית בסשן הפיתוח); לסביבת production מומלץ ליצור ערך חדש: `openssl rand -base64 32`.
 
+## חתימת סשנים למדריכים/חניכים (SESSION_SECRET)
+
+`SESSION_SECRET` הוא מפתח החתימה (HMAC) לעוגיות ה-session ה-httpOnly של מדריכים/חניכים (`lib/auth/session.ts`). הוא **נפרד לחלוטין מ-`AUTH_SECRET`** (ש-`AUTH_SECRET` משמש את NextAuth לכניסת הניהול בלבד) — אין להשתמש באותו ערך לשני המשתנים.
+
+- **אורך מינימלי:** לפחות 32 בתים (UTF-8). ערך חסר או חלש גורם למינטינג המחמיר של הסשן לזרוק שגיאה, ועלול להכשיל כניסה תקינה אחרת.
+- **הפרדה בין סביבות:** יש להשתמש בערך שונה ומובחן ל-Development, ל-Preview ול-Production.
+- **פריסה מחדש:** הוספה או שינוי של המשתנה ב-Preview/Production מחייבת deployment חדש לאותה סביבה כדי שייכנס לתוקף. במידת האפשר, ב-Preview/Production השתמשו באפשרות ה-Sensitive של Vercel.
+- **הפעלה בפרודקשן נשלטת בשער נפרד:** עצם הוספת המשתנה אינה מאשרת פריסה לפרודקשן; ההשקה נשארת מגודרת בנפרד.
+
+ליצירת ערך מקומי (לתיעוד בלבד): `openssl rand -base64 32`. אין להדביק כאן, בצ'אט או בכל מסמך אחר ערך אמיתי, פלט סוד או צילום מסך.
+
 ## ייבוא נתונים
 
 - **סוגי תורנות מקובץ Word** (`/admin/duties`): כל תבליט ראשי במסמך הופך לשם תורנות, ותת-התבליטים מתחתיו הופכים לתיאור. מוצגת תצוגה מקדימה לעריכה, והתאמה לתורנויות קיימות (יצירה/עדכון/דילוג) לפי שם מנורמל.
@@ -150,7 +161,7 @@ npx tsc --noEmit    # בדיקת טיפוסים
 
 1. דחפו את הריפו ל-GitHub.
 2. ייבאו את הפרויקט ב-[Vercel](https://vercel.com/new).
-3. הגדירו משתני סביבה בפרויקט ב-Vercel: `DATABASE_URL`, `DIRECT_URL`, `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (ראו "חוברת קורס" למעלה לגבי יצירת ה-bucket).
+3. הגדירו משתני סביבה בפרויקט ב-Vercel: `DATABASE_URL`, `DIRECT_URL`, `AUTH_SECRET`, `SESSION_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (ראו "חוברת קורס" למעלה לגבי יצירת ה-bucket).
 4. הוסיפו את כתובת ה-production ל-Redirect URIs המורשות ב-Google Cloud Console (`https://<domain>/api/auth/callback/google`).
 5. פקודת ה-build (`npm run build`) כבר כוללת `prisma generate` לפני `next build`, כך שאין צורך בהגדרה נוספת.
 6. לפני עלייה לאוויר בפעם הראשונה, הריצו את המיגרציות מול מסד הנתונים של Production:
