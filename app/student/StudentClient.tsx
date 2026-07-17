@@ -8,8 +8,10 @@ import { BottomTabs, type MainTabId } from "@/lib/components/BottomTabs";
 import { CourseMaterialsSection } from "@/lib/components/CourseMaterialsSection";
 import {
   getStudentProfile,
+  logoutStudent,
   searchStudents,
   verifyStudentLogin,
+  type StudentProfile,
   type StudentSearchResult,
 } from "@/lib/actions/auth";
 import { getWeeklyScheduleSelectionForStudent } from "@/lib/actions/weekly-schedule";
@@ -244,28 +246,58 @@ export function StudentClient() {
     // subgroupNumber existed) would otherwise keep showing stale/missing data.
     if (!session) return;
     let cancelled = false;
-    getStudentProfile(session.id)
-      .then((profile) => {
-        if (cancelled) return;
-        if (!profile) {
-          // Account deactivated/deleted since it was last stored - the
-          // stale session must not keep rendering the full app, so it's
-          // cleared here rather than silently left in place.
+    const studentId = session.id;
+
+    // When the restored trainee is no longer valid/inactive/missing, route the
+    // cleanup through one controlled async helper: clear the (non-authoritative)
+    // trainee cookie FIRST (awaited), then tear down the local identity/UI state
+    // in `finally` so teardown still happens even if the cookie deletion throws.
+    // No cookie/secret detail is surfaced. This never clears the instructor
+    // cookie and never mints.
+    async function invalidateStudentSession() {
+      try {
+        await logoutStudent();
+      } finally {
+        if (!cancelled) {
           window.localStorage.removeItem(STORAGE_KEY);
           setSession(null);
           setSessionInvalidMessage("המשתמש/ת אינו/ה פעיל/ה יותר - יש להתחבר מחדש");
-          return;
         }
-        setRefreshError(null);
-        setSession(profile);
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
-      })
-      .catch(() => {
+      }
+    }
+
+    async function refreshStudentProfile() {
+      let profile: StudentProfile | null;
+      try {
+        profile = await getStudentProfile(studentId);
+      } catch {
         // Network/server hiccup - never log the user out for this; the
         // already-stored session keeps being used as-is.
-        if (cancelled) return;
-        setRefreshError("לא ניתן היה לרענן את פרטי המשתמש כרגע");
-      });
+        if (!cancelled) setRefreshError("לא ניתן היה לרענן את פרטי המשתמש כרגע");
+        return;
+      }
+      if (cancelled) return;
+      if (!profile) {
+        // Account deactivated/deleted since it was last stored - the stale
+        // session must not keep rendering the full app, so its cookie is
+        // cleared and its local state torn down here rather than silently
+        // left in place.
+        try {
+          await invalidateStudentSession();
+        } catch {
+          // The local teardown already ran in `finally`; a cookie-clear
+          // failure here is non-fatal and must never surface a cookie/secret
+          // detail or leave an unhandled rejection.
+        }
+        return;
+      }
+      setRefreshError(null);
+      setSession(profile);
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+    }
+
+    void refreshStudentProfile();
+
     return () => {
       cancelled = true;
     };
@@ -307,25 +339,44 @@ export function StudentClient() {
     const formData = new FormData(e.currentTarget);
     const identityNumber = String(formData.get("identityNumber"));
     startTransition(async () => {
-      const result = await verifyStudentLogin(selected.id, identityNumber);
-      if (!result.success || !result.student) {
-        setLoginError(result.error ?? "מספר תעודת זהות שגוי");
-        return;
+      try {
+        const result = await verifyStudentLogin(selected.id, identityNumber);
+        if (!result.success || !result.student) {
+          setLoginError(result.error ?? "מספר תעודת זהות שגוי");
+          return;
+        }
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(result.student));
+        setSession(result.student);
+        setSessionInvalidMessage(null);
+      } catch {
+        // A thrown login action (e.g. the server cookie mint failing closed)
+        // must NOT persist the trainee, set a verified session, or fall back
+        // to a client-only login. Show a safe generic message without exposing
+        // the underlying error, and never touch instructor state.
+        setLoginError("לא ניתן להתחבר כרגע. יש לנסות שוב.");
       }
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(result.student));
-      setSession(result.student);
-      setSessionInvalidMessage(null);
     });
   }
 
-  function handleSwitchStudent() {
-    window.localStorage.removeItem(STORAGE_KEY);
-    setSession(null);
-    setSelected(null);
-    setQuery("");
-    setActiveTab("today");
-    setSessionInvalidMessage(null);
-    setRefreshError(null);
+  async function handleSwitchStudent() {
+    // Clear the (non-authoritative) trainee cookie FIRST, awaited, then run the
+    // existing local teardown in `finally` so the UI/session reset still
+    // happens even if the cookie deletion throws. No cookie/secret detail is
+    // shown to the user; the instructor cookie is never touched.
+    try {
+      await logoutStudent();
+    } catch {
+      // intentionally ignore cookie-clear failure because the cookie is
+      // non-authoritative and local teardown must continue
+    } finally {
+      window.localStorage.removeItem(STORAGE_KEY);
+      setSession(null);
+      setSelected(null);
+      setQuery("");
+      setActiveTab("today");
+      setSessionInvalidMessage(null);
+      setRefreshError(null);
+    }
   }
 
   function startEditingHorseName() {
@@ -627,7 +678,7 @@ export function StudentClient() {
                 <span className="text-muted-foreground">‹</span>
               </button>
             ))}
-            <Button variant="secondary" onClick={handleSwitchStudent} className="!py-3 !text-base">
+            <Button variant="secondary" onClick={() => void handleSwitchStudent()} className="!py-3 !text-base">
               התנתקות
             </Button>
           </div>
@@ -732,7 +783,7 @@ export function StudentClient() {
                 ))}
             </div>
             <StudentPushSection studentId={session.id} />
-            <Button variant="secondary" onClick={handleSwitchStudent} className="!py-3 !text-base">
+            <Button variant="secondary" onClick={() => void handleSwitchStudent()} className="!py-3 !text-base">
               החלפת חניך/ה
             </Button>
           </div>
