@@ -21,6 +21,7 @@ function fullNameOf(firstName: string, lastName: string): string {
 }
 
 export async function createInstructor(formData: FormData): Promise<ActionResult> {
+  await requireAdmin();
   const parsed = instructorSchema.safeParse({
     firstName: formData.get("firstName"),
     lastName: formData.get("lastName"),
@@ -56,6 +57,7 @@ export async function updateInstructor(
   instructorId: string,
   formData: FormData
 ): Promise<ActionResult> {
+  await requireAdmin();
   const parsed = instructorSchema.safeParse({
     firstName: formData.get("firstName"),
     lastName: formData.get("lastName"),
@@ -92,6 +94,7 @@ export async function setInstructorActive(
   instructorId: string,
   isActive: boolean
 ): Promise<ActionResult> {
+  await requireAdmin();
   await prisma.instructor.update({ where: { id: instructorId }, data: { isActive } });
   revalidatePath("/admin/instructors");
   return { success: true };

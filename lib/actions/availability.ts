@@ -38,6 +38,7 @@ export async function setAvailability(
   dateKeyStr: string,
   isAvailable: boolean
 ): Promise<ActionResult> {
+  await requireAdmin();
   const date = parseDateKey(dateKeyStr);
 
   await prisma.studentAvailability.upsert({
@@ -54,6 +55,7 @@ export async function setAvailabilityForAllStudents(
   dateKeyStr: string,
   isAvailable: boolean
 ): Promise<ActionResult> {
+  await requireAdmin();
   const date = parseDateKey(dateKeyStr);
   const students = await prisma.student.findMany({
     where: { isActive: true },
@@ -88,6 +90,7 @@ export async function setStudentAvailabilityScheme(
   studentId: string,
   scheme: StudentAvailabilityScheme
 ): Promise<ActionResult> {
+  await requireAdmin();
   const settings = await prisma.courseSettings.findUnique({ where: { id: 1 } });
   if (!settings) {
     return { success: false, error: "יש להגדיר תחילה את תאריכי הקורס" };

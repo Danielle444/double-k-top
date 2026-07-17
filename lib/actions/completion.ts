@@ -2,6 +2,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { requireAdmin } from "@/lib/auth/require-admin";
 import type { ActionResult } from "@/lib/actions/students";
 
 export async function markDutyCompleted(
@@ -29,6 +30,7 @@ export async function adminSetCompletion(
   assignmentId: string,
   isCompleted: boolean
 ): Promise<ActionResult> {
+  await requireAdmin();
   await prisma.dutyAssignment.update({
     where: { id: assignmentId },
     data: { isCompleted, completedAt: isCompleted ? new Date() : null },

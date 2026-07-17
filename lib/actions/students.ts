@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { requireAdmin } from "@/lib/auth/require-admin";
 
 const studentSchema = z.object({
   firstName: z.string().trim().min(1, "יש להזין שם פרטי"),
@@ -26,6 +27,7 @@ function fullNameOf(firstName: string, lastName: string): string {
 }
 
 export async function createStudent(formData: FormData): Promise<ActionResult> {
+  await requireAdmin();
   const parsed = studentSchema.safeParse({
     firstName: formData.get("firstName"),
     lastName: formData.get("lastName"),
@@ -66,6 +68,7 @@ export async function updateStudent(
   studentId: string,
   formData: FormData
 ): Promise<ActionResult> {
+  await requireAdmin();
   const parsed = studentSchema.safeParse({
     firstName: formData.get("firstName"),
     lastName: formData.get("lastName"),
@@ -106,6 +109,7 @@ export async function setStudentActive(
   studentId: string,
   isActive: boolean
 ): Promise<ActionResult> {
+  await requireAdmin();
   await prisma.student.update({ where: { id: studentId }, data: { isActive } });
   revalidatePath("/admin/students");
   revalidatePath("/admin");
