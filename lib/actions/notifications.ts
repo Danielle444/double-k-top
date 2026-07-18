@@ -3,6 +3,12 @@
 import { prisma } from "@/lib/prisma";
 import { getCurrentInstructor, getCurrentTrainee } from "@/lib/auth/actor";
 import { authorizeSelfActingClientId } from "@/lib/auth/self-actor-authorization";
+import {
+  studentNotificationsWhere,
+  instructorNotificationsWhere,
+  studentUnreadNotificationsWhere,
+  instructorUnreadNotificationsWhere,
+} from "@/lib/auth/notification-push-scope";
 import type { ActionResult } from "@/lib/actions/students";
 import type { AttendanceStatusValue } from "@/lib/actions/attendance";
 import type { CourseMaterialVisibilityValue } from "@/lib/actions/materials";
@@ -34,22 +40,39 @@ function toNotificationRow(n: {
   };
 }
 
-// Read-only, unrestricted - same "no NextAuth session for students/
-// instructors" convention as every other student/instructor-facing read in
-// this app (e.g. getStudentMessages, getRidingSlotStudentNotes). The
-// studentId/instructorId filter is what actually scopes the result, not any
-// caller-side trust.
+// Recipient identity is server-derived from the signed session via
+// getCurrentTrainee()/getCurrentInstructor(). The public signatures are
+// unchanged (the caller still passes studentId/instructorId), but that value is
+// NOT trusted as authority: it is only compared against the authenticated actor
+// id, and the query below is scoped by recipientRole AND the SERVER-derived
+// actor id, so one recipient can never read another's notifications - not
+// across trainees, not across instructors, and not across the trainee/
+// instructor audience boundary (a wrong-audience session yields a null actor).
+// A missing/invalid/wrong-audience/inactive session (actor === null) and a
+// mismatched client-supplied id both fail safely to an empty list, revealing
+// nothing about whether any notification exists. Ordering and the
+// NotificationRow[] output shape are preserved unchanged.
 export async function getNotificationsForStudent(studentId: string): Promise<NotificationRow[]> {
+  const actor = await getCurrentTrainee();
+  const authorization = authorizeSelfActingClientId(actor?.id, studentId);
+  if (!authorization.authorized) {
+    return [];
+  }
   const rows = await prisma.notification.findMany({
-    where: { recipientRole: "STUDENT", studentId },
+    where: studentNotificationsWhere(authorization.actorId),
     orderBy: { createdAt: "desc" },
   });
   return rows.map(toNotificationRow);
 }
 
 export async function getNotificationsForInstructor(instructorId: string): Promise<NotificationRow[]> {
+  const actor = await getCurrentInstructor();
+  const authorization = authorizeSelfActingClientId(actor?.id, instructorId);
+  if (!authorization.authorized) {
+    return [];
+  }
   const rows = await prisma.notification.findMany({
-    where: { recipientRole: "INSTRUCTOR", instructorId },
+    where: instructorNotificationsWhere(authorization.actorId),
     orderBy: { createdAt: "desc" },
   });
   return rows.map(toNotificationRow);
@@ -57,17 +80,31 @@ export async function getNotificationsForInstructor(instructorId: string): Promi
 
 // Cheap existence checks for the "עוד" tab / "עדכונים" menu-row unread dot -
 // a count query instead of fetching full rows, since the caller only needs a
-// boolean.
+// boolean. Same server-derived actor scoping as the list reads above: the
+// client-supplied id is compared only, the count is scoped by recipientRole AND
+// the SERVER-derived actor id, and any missing/mismatched/wrong-audience actor
+// fails safely to `false` (no unread dot, nothing leaked about another
+// recipient's unread state).
 export async function hasUnreadNotificationsForStudent(studentId: string): Promise<boolean> {
+  const actor = await getCurrentTrainee();
+  const authorization = authorizeSelfActingClientId(actor?.id, studentId);
+  if (!authorization.authorized) {
+    return false;
+  }
   const count = await prisma.notification.count({
-    where: { recipientRole: "STUDENT", studentId, readAt: null },
+    where: studentUnreadNotificationsWhere(authorization.actorId),
   });
   return count > 0;
 }
 
 export async function hasUnreadNotificationsForInstructor(instructorId: string): Promise<boolean> {
+  const actor = await getCurrentInstructor();
+  const authorization = authorizeSelfActingClientId(actor?.id, instructorId);
+  if (!authorization.authorized) {
+    return false;
+  }
   const count = await prisma.notification.count({
-    where: { recipientRole: "INSTRUCTOR", instructorId, readAt: null },
+    where: instructorUnreadNotificationsWhere(authorization.actorId),
   });
   return count > 0;
 }

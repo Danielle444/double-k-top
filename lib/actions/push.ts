@@ -4,6 +4,7 @@ import webpush, { WebPushError } from "web-push";
 import { prisma } from "@/lib/prisma";
 import { getCurrentTrainee } from "@/lib/auth/actor";
 import { authorizeSelfActingClientId } from "@/lib/auth/self-actor-authorization";
+import { studentPushUnsubscribeWhere } from "@/lib/auth/notification-push-scope";
 import type { ActionResult } from "@/lib/actions/students";
 
 const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
@@ -61,17 +62,31 @@ export async function subscribeStudentToPush(
   return { success: true };
 }
 
+// Trainee identity is server-derived from the signed session via
+// getCurrentTrainee(). The public signature is unchanged (the caller still
+// passes studentId), but that value is NOT trusted as authority: it is only
+// compared against the authenticated actor id, and the delete below is scoped
+// to the SERVER-derived actor id. `endpoint` is globally @unique, so a
+// subscription belongs to exactly one Student; scoping the delete by BOTH
+// endpoint and the actor's studentId (recipientRole STUDENT) removes the row
+// only when it belongs to this trainee, and never another trainee's
+// subscription - even if a caller supplies someone else's endpoint. A
+// missing/invalid/wrong-audience/inactive session (actor === null) and a
+// mismatched client-supplied id both delete nothing. The idempotent
+// user-visible result is preserved: this always resolves { success: true },
+// exactly as before (deleteMany is a no-op on a zero match and never throws).
 export async function unsubscribeStudentFromPush(
   studentId: string,
   endpoint: string
 ): Promise<ActionResult> {
-  const subscription = await prisma.pushSubscription.findUnique({ where: { endpoint } });
-  if (!subscription || subscription.studentId !== studentId) {
-    // Already gone, or never belonged to this student - either way there's
-    // nothing left for this student's unsubscribe request to do.
+  const actor = await getCurrentTrainee();
+  const authorization = authorizeSelfActingClientId(actor?.id, studentId);
+  if (!authorization.authorized) {
     return { success: true };
   }
-  await prisma.pushSubscription.delete({ where: { endpoint } });
+  await prisma.pushSubscription.deleteMany({
+    where: studentPushUnsubscribeWhere(authorization.actorId, endpoint),
+  });
   return { success: true };
 }
 
