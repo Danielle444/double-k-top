@@ -185,21 +185,50 @@ test("toDateKeyUTC: formats a @db.Date UTC-midnight value without tz shift", () 
   assert.equal(toDateKeyUTC(new Date("2026-12-31T00:00:00.000Z")), "2026-12-31");
 });
 
-test("identifyDbTarget: production ref detected, credentials never exposed", () => {
-  const prodUrl = `postgresql://postgres:SECRETPW@${PRODUCTION_PROJECT_REF}.pooler.supabase.com:6543/postgres`;
-  const prod = identifyDbTarget(prodUrl);
-  assert.equal(prod.isProduction, true);
-  assert.equal(prod.projectRef, PRODUCTION_PROJECT_REF);
-  assert.ok(!prod.display.includes("SECRETPW"), "display must not contain the password");
-  assert.ok(!prod.host.includes("SECRETPW"), "host must not contain the password");
-  assert.ok(prod.display.includes("[PRODUCTION]"));
+// Realistic Supabase pooler URLs carry the project ref in the USERNAME
+// ("postgres.<ref>") while the host is the shared regional pooler
+// ("aws-0-<region>.pooler.supabase.com"). Synthetic passwords only.
+test("identifyDbTarget: REAL transaction-pooler URL (6543) resolves the locked production ref", () => {
+  const url = `postgresql://postgres.${PRODUCTION_PROJECT_REF}:SYNTH_PW@aws-0-eu-west-3.pooler.supabase.com:6543/postgres`;
+  const t = identifyDbTarget(url);
+  assert.equal(t.isProduction, true);
+  assert.equal(t.projectRef, PRODUCTION_PROJECT_REF); // NOT "aws-0-eu-west-3"
+  assert.ok(!t.display.includes("SYNTH_PW"), "display must not contain the password");
+  assert.ok(!t.host.includes("SYNTH_PW"), "host must not contain the password");
+  assert.ok(t.display.includes("[PRODUCTION]"));
 });
 
-test("identifyDbTarget: non-production dev URL", () => {
-  const dev = identifyDbTarget("postgresql://postgres:pw@devref123.pooler.supabase.com:6543/postgres");
+test("identifyDbTarget: REAL session-pooler URL (5432) resolves the locked production ref", () => {
+  const url = `postgresql://postgres.${PRODUCTION_PROJECT_REF}:SYNTH_PW@aws-0-eu-west-3.pooler.supabase.com:5432/postgres`;
+  const t = identifyDbTarget(url);
+  assert.equal(t.isProduction, true);
+  assert.equal(t.projectRef, PRODUCTION_PROJECT_REF); // NOT "aws-0-eu-west-3"
+  assert.ok(!t.display.includes("SYNTH_PW"));
+});
+
+test("identifyDbTarget: DIRECT db.<ref>.supabase.co URL still resolves the ref", () => {
+  const url = `postgresql://postgres:SYNTH_PW@db.${PRODUCTION_PROJECT_REF}.supabase.co:5432/postgres`;
+  const t = identifyDbTarget(url);
+  assert.equal(t.isProduction, true);
+  assert.equal(t.projectRef, PRODUCTION_PROJECT_REF);
+  assert.ok(!t.display.includes("SYNTH_PW"));
+});
+
+test("identifyDbTarget: unrelated AWS pooler host WITHOUT postgres.<ref> does NOT resolve to the production ref", () => {
+  // Plain "postgres" username, regional pooler host, no ref anywhere in the URL.
+  const url = "postgresql://postgres:SYNTH_PW@aws-0-eu-west-3.pooler.supabase.com:6543/postgres";
+  const t = identifyDbTarget(url);
+  assert.equal(t.isProduction, false);
+  assert.notEqual(t.projectRef, PRODUCTION_PROJECT_REF);
+  assert.equal(t.projectRef, "aws-0-eu-west-3"); // hostname-label fallback
+  assert.ok(!t.display.includes("[PRODUCTION]"));
+});
+
+test("identifyDbTarget: non-production dev pooler URL (username form)", () => {
+  const dev = identifyDbTarget("postgresql://postgres.devref123:SYNTH_PW@aws-0-eu-west-3.pooler.supabase.com:6543/postgres");
   assert.equal(dev.isProduction, false);
   assert.equal(dev.projectRef, "devref123");
-  assert.ok(!dev.display.includes("pw@"));
+  assert.ok(!dev.display.includes("SYNTH_PW"));
 });
 
 test("identifyDbTarget: missing/blank URL is handled safely", () => {
