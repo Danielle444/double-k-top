@@ -806,7 +806,7 @@ export function StudentClient() {
         {activeTab === "notifications" && (
           <NotificationsList
             fetchNotifications={() => getNotificationsForStudent(session.id)}
-            onMarkRead={(notificationId) => markNotificationReadAsStudent(notificationId, session.id)}
+            onMarkRead={(notificationId) => markNotificationReadAsStudent(notificationId)}
             fetchMessagePreview={() => getStudentMessages(session.id).then(toMessagePreview)}
             onOpenMessages={() => setActiveTab("messages")}
             onUnreadChange={setHasUnreadNotifications}

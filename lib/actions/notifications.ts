@@ -1,6 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
+import { getCurrentTrainee } from "@/lib/auth/actor";
 import type { ActionResult } from "@/lib/actions/students";
 import type { AttendanceStatusValue } from "@/lib/actions/attendance";
 import type { CourseMaterialVisibilityValue } from "@/lib/actions/materials";
@@ -70,20 +71,30 @@ export async function hasUnreadNotificationsForInstructor(instructorId: string):
   return count > 0;
 }
 
-// Students/instructors have no NextAuth session, so ownership is re-verified
-// by re-reading the row and comparing studentId/instructorId before writing -
-// never trusted from client-supplied state, same convention as
-// markMessageRead/markDutyCompleted.
+// Trainee identity is server-derived from the signed session via
+// getCurrentTrainee() (Stage 0B first-wave enforcement) - the client no longer
+// supplies studentId, so it can never be used as identity. Unauthenticated,
+// missing, and cross-owner cases all return the same generic failure so the
+// response never reveals whether the notification exists or whom it belongs to.
+// Ownership is verified atomically in a single ownership-scoped findFirst before
+// any write, and first-read semantics are preserved (an already-read row keeps
+// its original timestamp).
 export async function markNotificationReadAsStudent(
-  notificationId: string,
-  studentId: string
+  notificationId: string
 ): Promise<ActionResult> {
-  const notification = await prisma.notification.findUnique({ where: { id: notificationId } });
-  if (!notification || notification.recipientRole !== "STUDENT" || notification.studentId !== studentId) {
+  const actor = await getCurrentTrainee();
+  if (actor === null) {
+    return { success: false, error: "העדכון לא נמצא" };
+  }
+  const notification = await prisma.notification.findFirst({
+    where: { id: notificationId, recipientRole: "STUDENT", studentId: actor.id },
+    select: { id: true, readAt: true },
+  });
+  if (!notification) {
     return { success: false, error: "העדכון לא נמצא" };
   }
   if (!notification.readAt) {
-    await prisma.notification.update({ where: { id: notificationId }, data: { readAt: new Date() } });
+    await prisma.notification.update({ where: { id: notification.id }, data: { readAt: new Date() } });
   }
   return { success: true };
 }
