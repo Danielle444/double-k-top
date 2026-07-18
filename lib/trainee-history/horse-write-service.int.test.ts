@@ -191,11 +191,24 @@ function runChildLifecycle(): ReturnType<typeof spawnSync> {
     env: childEnv,
     encoding: "utf8",
     maxBuffer: 10 * 1024 * 1024,
+    timeout: 60_000,
   });
+}
+
+// A child that exceeds the bounded timeout is terminated by spawnSync (killSignal
+// SIGTERM) and reported via an ETIMEDOUT error; a clean run exits with signal
+// null, so any kill-signal termination here is the timeout. Detection returns a
+// boolean only — the surfaced message is fixed and never carries the URL, host,
+// username, password, project ref, child env, or any credential.
+function childTimedOut(result: ReturnType<typeof spawnSync>): boolean {
+  const err = result.error as NodeJS.ErrnoException | undefined;
+  if (err && err.code === "ETIMEDOUT") return true;
+  return result.signal === "SIGTERM";
 }
 
 test("integration/horse: isolated child-process lifecycle", { skip }, () => {
   const result = runChildLifecycle();
+  assert.ok(!childTimedOut(result), "integration child timed out after 60s");
   assert.equal(result.error, undefined, "child process failed to spawn");
   assert.equal(
     result.status,
