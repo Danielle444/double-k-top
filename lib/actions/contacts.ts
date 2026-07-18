@@ -1,6 +1,11 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
+import { getCurrentInstructor, getCurrentTrainee } from "@/lib/auth/actor";
+import {
+  mayAccessStudentContactDirectory,
+  mayAccessInstructorContactDirectory,
+} from "@/lib/auth/contact-directory-access";
 
 export interface StudentContactRow {
   id: string;
@@ -11,10 +16,22 @@ export interface StudentContactRow {
   phone: string | null;
 }
 
-// Read-only, no permission gate - same convention as getHorseAssignments,
-// since instructors have no NextAuth session in this app. View-only by
-// design: there is no corresponding write action for instructors here.
+// Audience-gated (Stage 0A3): the STUDENT contact directory carries trainee
+// PII (names + phone numbers), so it is served ONLY to an authenticated
+// instructor derived server-side from the signed session via
+// getCurrentInstructor(). A missing/invalid/wrong-audience/inactive session
+// yields a null actor (see actor-core deriveInstructorActor), and a trainee
+// cookie can never satisfy this gate, so no anonymous or trainee caller
+// receives any student data. The no-arg signature is unchanged (no
+// client-supplied id is trusted or even accepted), so callers need no edits,
+// and the ordering + StudentContactRow[] output shape are preserved unchanged.
+// While only one CourseOffering is active the directory stays global; no
+// per-offering scoping is added in this stage.
 export async function getStudentContacts(): Promise<StudentContactRow[]> {
+  const instructor = await getCurrentInstructor();
+  if (!mayAccessStudentContactDirectory(instructor?.id)) {
+    return [];
+  }
   const students = await prisma.student.findMany({
     where: { isActive: true },
     orderBy: [{ groupName: "asc" }, { subgroupNumber: "asc" }, { lastName: "asc" }],
@@ -36,10 +53,25 @@ export interface InstructorContactRow {
   phone: string | null;
 }
 
-// Read-only, no permission gate - same convention as getStudentContacts,
-// since students have no NextAuth session in this app either. View-only by
-// design: students have no way to edit instructor phone numbers.
+// Audience-gated (Stage 0A3): the INSTRUCTOR contact directory is shown to
+// BOTH audiences - trainees (StudentInstructorContactsSection) and instructors
+// (InstructorRidingSlotsSection roster picker) - so it is served to either an
+// authenticated instructor OR an authenticated trainee, both derived
+// server-side from the signed session. The instructor lookup is tried first and
+// the trainee lookup is skipped when an instructor is already present. Only when
+// no trustworthy actor of either audience exists (anonymous, invalid,
+// wrong-audience, or inactive → null upstream) is access denied, so no
+// anonymous caller receives any instructor data. The no-arg signature is
+// unchanged (no client-supplied id is trusted or accepted), callers need no
+// edits, and the ordering + InstructorContactRow[] output shape are preserved.
+// While only one CourseOffering is active the directory stays global; no
+// per-offering scoping is added in this stage.
 export async function getInstructorContacts(): Promise<InstructorContactRow[]> {
+  const instructor = await getCurrentInstructor();
+  const trainee = instructor === null ? await getCurrentTrainee() : null;
+  if (!mayAccessInstructorContactDirectory(instructor?.id, trainee?.id)) {
+    return [];
+  }
   const instructors = await prisma.instructor.findMany({
     where: { isActive: true },
     orderBy: { fullName: "asc" },
