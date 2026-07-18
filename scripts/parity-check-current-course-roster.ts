@@ -27,6 +27,11 @@ import {
 } from "@/lib/course/current-offering";
 import { getCurrentCourseEnrollmentRoster } from "@/lib/course/current-enrollments";
 import { compareRosters, type LegacyRosterRow } from "@/lib/course/enrollment-view";
+import {
+  toActiveTraineeDirectoryRows,
+  compareActiveTraineeDirectory,
+  type LegacyDirectoryRow,
+} from "@/lib/course/active-trainee-directory";
 import { identifyDbTarget } from "./backfill-course-offering.plan";
 
 /** Cap how many sample ids are printed per mismatch category (safe ids only). */
@@ -157,9 +162,88 @@ async function run(): Promise<void> {
     console.log("ORDERING OBSERVATION: MATCH");
   }
 
-  // Exit code follows DATA PARITY ONLY: 1 on data FAIL, 0 when data passes even
-  // if ordering differs.
-  process.exitCode = report.ok ? 0 : 1;
+  // 5. Read-only ACTIVE DIRECTORY parity for the exact availability /
+  //    daily-tracking page contract (W5C0). This compares the FOUR-key page
+  //    projection (id/fullName/groupName/subgroupNumber, fullName-ordered) built
+  //    by toActiveTraineeDirectoryRows against the legacy page query. It reuses
+  //    the SAME already-loaded enrollmentRoster (same asOf) - no extra roster
+  //    read. The legacy query orders by fullName exactly as the pages do; the
+  //    selected fullName is used ONLY by PostgreSQL for ordering and is dropped
+  //    before comparison, so no name ever reaches the comparison or the output.
+  console.log("--- ACTIVE DIRECTORY parity (availability / daily-tracking page contract) ---");
+  let directoryDataOk = false;
+  try {
+    const legacyDirectory = await prisma.student.findMany({
+      where: { isActive: true },
+      orderBy: { fullName: "asc" },
+      select: { id: true, fullName: true, groupName: true, subgroupNumber: true },
+    });
+    // Drop fullName immediately - it never enters the pure comparison or output.
+    const legacyDirectoryRows: LegacyDirectoryRow[] = legacyDirectory.map((row) => ({
+      id: row.id,
+      groupName: row.groupName,
+      subgroupNumber: row.subgroupNumber,
+    }));
+    const directoryRows = toActiveTraineeDirectoryRows(enrollmentRoster);
+    const dirReport = compareActiveTraineeDirectory(legacyDirectoryRows, directoryRows);
+
+    console.log(`legacy directory count:           ${dirReport.legacyCount}`);
+    console.log(`directory (enrollment) count:     ${dirReport.directoryCount}`);
+    console.log(`missing from directory:           ${dirReport.missingFromDirectory.length}`);
+    console.log(`extra in directory:               ${dirReport.extraInDirectory.length}`);
+    console.log(`duplicate legacy ids:             ${dirReport.duplicateLegacyIds.length}`);
+    console.log(`duplicate directory ids:          ${dirReport.duplicateDirectoryIds.length}`);
+    console.log(`group mismatches:                 ${dirReport.groupMismatches.length}`);
+    console.log(`subgroup mismatches:              ${dirReport.subgroupMismatches.length}`);
+
+    if (!dirReport.ok) {
+      console.error("--- ACTIVE DIRECTORY data-parity mismatch detail (safe ids only) ---");
+      printSample("missingFromDirectory", dirReport.missingFromDirectory);
+      printSample("extraInDirectory", dirReport.extraInDirectory);
+      printSample("duplicateLegacyIds", dirReport.duplicateLegacyIds);
+      printSample("duplicateDirectoryIds", dirReport.duplicateDirectoryIds);
+      printSample("groupMismatches", dirReport.groupMismatches);
+      printSample("subgroupMismatches", dirReport.subgroupMismatches);
+    }
+
+    directoryDataOk = dirReport.ok;
+
+    // Conclusion A': HARD data-parity verdict for the page contract.
+    console.log(`ACTIVE DIRECTORY DATA PARITY: ${dirReport.ok ? "PASS" : "FAIL"}`);
+
+    // Conclusion B': ordering is an OBSERVATION only, never part of the verdict.
+    // The legacy directory is ordered by PostgreSQL collation (fullName); the
+    // enrollment directory by JavaScript localeCompare("he"). A difference does
+    // NOT mean the data is wrong and NEVER affects the exit code.
+    if (dirReport.orderMismatch) {
+      console.log("ACTIVE DIRECTORY ORDERING OBSERVATION: DIFFERENT");
+      console.log(`  first divergence index: ${dirReport.orderFirstDivergenceIndex}`);
+      if (dirReport.orderFirstDivergenceIndex !== null) {
+        const i = dirReport.orderFirstDivergenceIndex;
+        const legacyId = i < legacyDirectoryRows.length ? legacyDirectoryRows[i].id : "(none)";
+        const directoryId = i < directoryRows.length ? directoryRows[i].id : "(none)";
+        console.log(`  legacy id at index:     ${legacyId}`);
+        console.log(`  directory id at index:  ${directoryId}`);
+      }
+      console.log(
+        "  NOTE: may result from PostgreSQL-vs-JavaScript(he) collation; requires " +
+          "human review before W5C1 wiring. Does NOT affect ACTIVE DIRECTORY DATA PARITY.",
+      );
+    } else {
+      console.log("ACTIVE DIRECTORY ORDERING OBSERVATION: MATCH");
+    }
+  } catch {
+    // A projection refusal (anomaly / duplicate id) is itself a data-parity
+    // failure. Suppress the message body to avoid leaking any raw error content.
+    console.error(
+      "ACTIVE DIRECTORY DATA PARITY: FAIL (directory projection refused; details suppressed)",
+    );
+    directoryDataOk = false;
+  }
+
+  // Exit code follows DATA PARITY ONLY (both roster and directory): 1 on any data
+  // FAIL, 0 when data passes even if either ordering observation differs.
+  process.exitCode = report.ok && directoryDataOk ? 0 : 1;
 }
 
 (async (): Promise<void> => {
