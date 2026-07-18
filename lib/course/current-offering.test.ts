@@ -1,0 +1,87 @@
+/**
+ * MULTI-COURSE W5B0 - executable tests for the PURE current-offering cardinality
+ * core.
+ *
+ * Run with: npx tsx --test lib/course/current-offering.test.ts
+ * PURE: no Prisma, no DB, no clock, no randomness.
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  resolveCurrentCourseOfferingFromRows,
+  NoCurrentCourseOfferingError,
+  AmbiguousCourseOfferingError,
+  IncompleteCourseOfferingError,
+  type CourseOfferingRow,
+} from "./current-offering-core";
+
+function row(id: string, overrides: Partial<CourseOfferingRow> = {}): CourseOfferingRow {
+  return {
+    id,
+    activityYearId: "year-1",
+    name: "קורס מדריכים ומאמנים – רמה 1",
+    level: 1,
+    startDate: new Date("2026-07-05T00:00:00.000Z"),
+    endDate: new Date("2026-07-31T00:00:00.000Z"),
+    status: "PLANNED",
+    ...overrides,
+  };
+}
+
+test("zero rows throws NoCurrentCourseOfferingError", () => {
+  assert.throws(() => resolveCurrentCourseOfferingFromRows([]), NoCurrentCourseOfferingError);
+});
+
+test("one row returns the stable view model", () => {
+  const result = resolveCurrentCourseOfferingFromRows([row("offer-1")]);
+  assert.deepEqual(result, {
+    id: "offer-1",
+    activityYearId: "year-1",
+    name: "קורס מדריכים ומאמנים – רמה 1",
+    level: 1,
+    startDate: new Date("2026-07-05T00:00:00.000Z"),
+    endDate: new Date("2026-07-31T00:00:00.000Z"),
+    status: "PLANNED",
+  });
+});
+
+test("two rows throws AmbiguousCourseOfferingError with both ids", () => {
+  assert.throws(
+    () => resolveCurrentCourseOfferingFromRows([row("offer-1"), row("offer-2")]),
+    (err: unknown) => {
+      assert.ok(err instanceof AmbiguousCourseOfferingError);
+      assert.deepEqual(err.offeringIds, ["offer-1", "offer-2"]);
+      return true;
+    },
+  );
+});
+
+test("more than two rows is still treated as ambiguous", () => {
+  assert.throws(
+    () => resolveCurrentCourseOfferingFromRows([row("a"), row("b"), row("c")]),
+    AmbiguousCourseOfferingError,
+  );
+});
+
+test("single row missing dates throws IncompleteCourseOfferingError", () => {
+  assert.throws(
+    () => resolveCurrentCourseOfferingFromRows([row("offer-1", { startDate: null })]),
+    IncompleteCourseOfferingError,
+  );
+  assert.throws(
+    () => resolveCurrentCourseOfferingFromRows([row("offer-1", { endDate: null })]),
+    IncompleteCourseOfferingError,
+  );
+});
+
+test("never returns the first of several (ambiguity beats selection)", () => {
+  // Guards the core invariant: two valid rows must throw, never silently pick row 0.
+  let returned = false;
+  try {
+    resolveCurrentCourseOfferingFromRows([row("first"), row("second")]);
+    returned = true;
+  } catch {
+    // expected
+  }
+  assert.equal(returned, false);
+});
