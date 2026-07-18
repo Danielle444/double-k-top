@@ -30,6 +30,19 @@ export const MAIN_TABS: { id: MainTabId; label: string }[] = [
   { id: "profile", label: "פרופיל" },
 ];
 
+// Single source of truth for the responsive max-width ladder shared by the
+// page shell (app/instructor/page.tsx, app/student/page.tsx) and this fixed
+// bottom nav's own maxWidthClassName. Keeping it in one place is what
+// guarantees the bar can never drift to a different width than the content
+// above it - four independent copies of this string previously had to be
+// kept in sync by hand, and any mismatch showed up as the fixed nav looking
+// narrower/wider than the page on tablet and landscape. Mobile portrait
+// keeps max-w-lg; each larger tier caps at that breakpoint's own viewport
+// width (px arbitrary values, since this Tailwind v4 project ships no
+// max-w-3xl/4xl or max-w-screen-* scale).
+export const NAV_MAX_WIDTH_CLASSNAME =
+  "max-w-lg sm:max-w-[640px] md:max-w-[768px] lg:max-w-[1024px] xl:max-w-[1280px]";
+
 // One simple stroke icon per tab, so the bar is scannable at a glance and
 // not just a row of similar-looking text buttons. MainTabId is a small
 // closed union, so a plain Record covers every case with no runtime

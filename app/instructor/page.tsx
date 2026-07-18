@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { InstructorClient } from "@/app/instructor/InstructorClient";
+import { NAV_MAX_WIDTH_CLASSNAME } from "@/lib/components/BottomTabs";
 
 export const dynamic = "force-dynamic";
 
@@ -50,7 +51,7 @@ export default async function InstructorPage() {
     // bar is showing - that mismatch is what made the fixed BottomTabs
     // appear to float/detach from the true bottom edge as the bar
     // animates in/out. 100dvh tracks the real visible viewport instead.
-    <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col bg-background sm:max-w-[640px] md:max-w-[768px] lg:max-w-[1024px] xl:max-w-[1280px]">
+    <div className={`mx-auto flex min-h-dvh w-full flex-col bg-background ${NAV_MAX_WIDTH_CLASSNAME}`}>
       <InstructorClient
         students={students}
         dutyTypes={dutyTypes}

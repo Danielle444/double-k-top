@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
 import { Logo } from "@/lib/components/Logo";
 import { WeekDayPicker, type WeekOption } from "@/lib/components/WeekDayPicker";
-import { BottomTabs, type MainTabId } from "@/lib/components/BottomTabs";
+import { BottomTabs, NAV_MAX_WIDTH_CLASSNAME, type MainTabId } from "@/lib/components/BottomTabs";
 import { CourseMaterialsSection } from "@/lib/components/CourseMaterialsSection";
 import {
   getStudentProfile,
@@ -823,8 +823,9 @@ export function StudentClient() {
           ...(hasUnreadNotifications || hasOpenWeeklyFeedback ? (["more"] as MainTabId[]) : []),
         ]}
         // Matches the widened shell in app/student/page.tsx so the fixed
-        // bottom nav's width tracks the content above it at every breakpoint.
-        maxWidthClassName="max-w-lg sm:max-w-[640px] md:max-w-[768px] lg:max-w-[1024px] xl:max-w-[1280px]"
+        // bottom nav's width tracks the content above it at every breakpoint -
+        // both read from the same NAV_MAX_WIDTH_CLASSNAME source of truth.
+        maxWidthClassName={NAV_MAX_WIDTH_CLASSNAME}
       />
     </div>
   );
