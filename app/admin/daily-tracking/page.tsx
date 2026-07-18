@@ -3,6 +3,7 @@ import { DailyTrackingTabs } from "@/app/admin/daily-tracking/DailyTrackingTabs"
 import { getAttendanceTrackingForAdmin } from "@/lib/actions/attendance";
 import { dateKey, enumerateDateKeys, todayDateKey } from "@/lib/dates";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { getActiveTraineeDirectory } from "@/lib/course/active-trainee-directory";
 
 export const dynamic = "force-dynamic";
 
@@ -26,11 +27,7 @@ export default async function DailyTrackingPage() {
   // pages already fetch - neither of those pages' own code is touched.
   const [initialRows, students, presets, availabilityRows, dutyAssignments] = await Promise.all([
     getAttendanceTrackingForAdmin(defaultDateKey, defaultDateKey),
-    prisma.student.findMany({
-      where: { isActive: true },
-      orderBy: { fullName: "asc" },
-      select: { id: true, fullName: true, groupName: true, subgroupNumber: true },
-    }),
+    getActiveTraineeDirectory(),
     prisma.availabilityRangePreset.findMany({ orderBy: { startDate: "asc" } }),
     settings
       ? prisma.studentAvailability.findMany({

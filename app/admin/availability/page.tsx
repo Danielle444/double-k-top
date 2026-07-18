@@ -4,6 +4,7 @@ import { AvailabilityFilterableGrid } from "@/app/admin/availability/Availabilit
 import { PresetsClient } from "@/app/admin/availability/PresetsClient";
 import { dateKey, enumerateDateKeys } from "@/lib/dates";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { getActiveTraineeDirectory } from "@/lib/course/active-trainee-directory";
 
 export const dynamic = "force-dynamic";
 
@@ -11,11 +12,7 @@ export default async function AvailabilityPage() {
   await requireAdmin();
   const [settings, students, presets] = await Promise.all([
     prisma.courseSettings.findUnique({ where: { id: 1 } }),
-    prisma.student.findMany({
-      where: { isActive: true },
-      orderBy: { fullName: "asc" },
-      select: { id: true, fullName: true, groupName: true, subgroupNumber: true },
-    }),
+    getActiveTraineeDirectory(),
     prisma.availabilityRangePreset.findMany({ orderBy: { startDate: "asc" } }),
   ]);
 
