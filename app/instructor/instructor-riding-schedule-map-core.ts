@@ -76,3 +76,55 @@ export function buildScheduleItemActivityMap<T extends ScheduleMappableActivity>
 
   return map;
 }
+
+// Resolves a rendered schedule card's own id back to its configured riding
+// activity, given the per-atomic-id lookup that buildScheduleItemActivityMap
+// backs. A card's id may be a "+"-joined COMPOSITE of several atomic
+// ScheduleItem ids: the instructor timegrid merges same-time א/ב cards and
+// coalesces contiguous same-title rows into one displayed card whose id is
+// `${a.id}+${b.id}` (see mergeSameActivityItems / coalesceAdjacentSameActivity).
+// The activity map is keyed by ATOMIC ids only, so a composite id never hits it
+// directly - this inverts that by splitting the card id into its atomic parts
+// and resolving each through the same lookup.
+//
+// Fails closed to null unless the WHOLE card resolves cleanly to exactly one
+// activity:
+// - the card id must be a string with at least one non-empty (post-trim) part
+// - EVERY non-empty part must resolve (a composite mixing a known part with an
+//   unknown one is null - a configured merged riding activity is expected to
+//   own all of its atomic scheduleItemIds, so a partial match is treated as a
+//   mismatch, never a lucky hit)
+// - all resolved parts must reference the same activity (parts pointing at two
+//   different activities are ambiguous -> null)
+// - duplicate atomic parts that resolve to the same activity are fine
+//
+// Pure and deterministic: reads only its arguments, mutates nothing, and (like
+// the builder above) has no React/Prisma/server/DB dependency.
+export function resolveActivityForScheduleCardId<T>(
+  lookup: ((scheduleItemId: string) => T | null) | undefined,
+  cardId: string
+): T | null {
+  if (!lookup || typeof cardId !== "string") return null;
+
+  const parts = cardId
+    .split("+")
+    .map((part) => part.trim())
+    .filter((part) => part !== "");
+  if (parts.length === 0) return null;
+
+  let found: T | null = null;
+  for (const part of parts) {
+    const activity = lookup(part);
+    // Any unresolved part fails the whole card closed - never a partial match.
+    if (activity === null || activity === undefined) return null;
+    if (found === null) {
+      found = activity;
+    } else if (found !== activity) {
+      // Two atomic parts of one displayed card own two different activities ->
+      // ambiguous -> null, same fail-closed philosophy as the builder's
+      // collision rule.
+      return null;
+    }
+  }
+  return found;
+}

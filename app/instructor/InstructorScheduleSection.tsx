@@ -12,6 +12,7 @@ import { todayDateKey } from "@/lib/dates";
 import { cleanScheduleTitle } from "@/lib/schedule-title";
 import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
+import { resolveActivityForScheduleCardId } from "@/app/instructor/instructor-riding-schedule-map-core";
 
 function isItemActiveNow(item: InstructorScheduleItem, now: Date): boolean {
   const todayKey = now.toISOString().slice(0, 10);
@@ -229,7 +230,11 @@ export function InstructorScheduleSection({
                     item,
                     isItemActiveNow(item, now),
                     true,
-                    resolveRidingActivity?.(item.id) ?? null,
+                    // item.id may be a "+"-joined composite of atomic ScheduleItem
+                    // ids (merged/coalesced cards); the activity map is keyed by
+                    // atomic ids, so resolve through the composite-aware helper
+                    // rather than looking the composite up directly.
+                    resolveActivityForScheduleCardId(resolveRidingActivity, item.id),
                     onOpenRidingActivity
                   )
                 }

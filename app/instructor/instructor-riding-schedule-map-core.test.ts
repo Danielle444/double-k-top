@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildScheduleItemActivityMap,
+  resolveActivityForScheduleCardId,
   type ScheduleMappableActivity,
 } from "./instructor-riding-schedule-map-core";
 
@@ -134,4 +135,119 @@ test("the input activities and their id arrays are not mutated", () => {
   assert.deepEqual(a, { ridingSlot: { id: "slot-1" }, scheduleItemIds: ["si-1", "si-2"] });
   assert.deepEqual(b, { ridingSlot: { id: "slot-2" }, scheduleItemIds: ["si-1"] });
   assert.equal(input.length, 2);
+});
+
+// --- resolveActivityForScheduleCardId ---------------------------------------
+// The schedule cards render a possibly "+"-joined composite id (merged/coalesced
+// timegrid cards); the map above is keyed by atomic ids only. This resolver
+// bridges the two, failing closed whenever the whole card does not map cleanly
+// to exactly one activity.
+
+// A lookup backed by the real atomic-keyed map - exactly what
+// InstructorScheduleSection passes in (its resolveRidingActivity prop).
+function lookupFor(activities: ScheduleMappableActivity[]) {
+  const map = buildScheduleItemActivityMap(activities);
+  return (scheduleItemId: string): ScheduleMappableActivity | null =>
+    map.get(scheduleItemId) ?? null;
+}
+
+test("resolve: an atomic card id resolves normally", () => {
+  const a = activity("slot-1", ["si-1"]);
+  const lookup = lookupFor([a]);
+  assert.equal(resolveActivityForScheduleCardId(lookup, "si-1"), a);
+});
+
+test("resolve: a two-part composite resolves to the shared activity", () => {
+  const a = activity("slot-1", ["si-1", "si-2"]);
+  const lookup = lookupFor([a]);
+  assert.equal(resolveActivityForScheduleCardId(lookup, "si-1+si-2"), a);
+});
+
+test("resolve: a multi-part composite resolves to the shared activity", () => {
+  const a = activity("slot-1", ["si-1", "si-2", "si-3"]);
+  const lookup = lookupFor([a]);
+  assert.equal(resolveActivityForScheduleCardId(lookup, "si-1+si-2+si-3"), a);
+});
+
+test("resolve: duplicate atomic parts resolving to the same activity are allowed", () => {
+  const a = activity("slot-1", ["si-1"]);
+  const lookup = lookupFor([a]);
+  assert.equal(resolveActivityForScheduleCardId(lookup, "si-1+si-1+si-1"), a);
+});
+
+test("resolve: an unknown atomic id is null", () => {
+  const a = activity("slot-1", ["si-1"]);
+  const lookup = lookupFor([a]);
+  assert.equal(resolveActivityForScheduleCardId(lookup, "si-unknown"), null);
+});
+
+test("resolve: a composite mixing a known and an unknown part fails closed to null", () => {
+  const a = activity("slot-1", ["si-1"]);
+  const lookup = lookupFor([a]);
+  // Even though si-1 alone would resolve, the unknown si-2 poisons the whole
+  // card - a configured merged activity is expected to own all of its ids.
+  assert.equal(resolveActivityForScheduleCardId(lookup, "si-1+si-2"), null);
+});
+
+test("resolve: parts pointing at two different activities are null", () => {
+  const a = activity("slot-1", ["si-1"]);
+  const b = activity("slot-2", ["si-2"]);
+  const lookup = lookupFor([a, b]);
+  assert.equal(resolveActivityForScheduleCardId(lookup, "si-1+si-2"), null);
+});
+
+test("resolve: empty/whitespace parts around valid ids are ignored", () => {
+  const a = activity("slot-1", ["si-1", "si-2"]);
+  const lookup = lookupFor([a]);
+  assert.equal(resolveActivityForScheduleCardId(lookup, "  si-1  + + si-2 "), a);
+  assert.equal(resolveActivityForScheduleCardId(lookup, "+si-1+si-2+"), a);
+});
+
+test("resolve: an all-empty / whitespace-only card id is null", () => {
+  const a = activity("slot-1", ["si-1"]);
+  const lookup = lookupFor([a]);
+  assert.equal(resolveActivityForScheduleCardId(lookup, ""), null);
+  assert.equal(resolveActivityForScheduleCardId(lookup, "   "), null);
+  assert.equal(resolveActivityForScheduleCardId(lookup, "+ + +"), null);
+});
+
+test("resolve: a missing lookup is null", () => {
+  assert.equal(resolveActivityForScheduleCardId(undefined, "si-1"), null);
+});
+
+test("resolve: a malformed (non-string) runtime card id is null", () => {
+  const a = activity("slot-1", ["si-1"]);
+  const lookup = lookupFor([a]);
+  assert.equal(
+    resolveActivityForScheduleCardId(lookup, null as unknown as string),
+    null
+  );
+  assert.equal(
+    resolveActivityForScheduleCardId(lookup, undefined as unknown as string),
+    null
+  );
+  assert.equal(
+    resolveActivityForScheduleCardId(lookup, 42 as unknown as string),
+    null
+  );
+});
+
+test("resolve: neither the activities nor the map are mutated", () => {
+  const a = activity("slot-1", ["si-1", "si-2"]);
+  const b = activity("slot-2", ["si-3"]);
+  const map = buildScheduleItemActivityMap([a, b]);
+  const sizeBefore = map.size;
+  const lookup = (scheduleItemId: string): ScheduleMappableActivity | null =>
+    map.get(scheduleItemId) ?? null;
+
+  resolveActivityForScheduleCardId(lookup, "si-1+si-2");
+  resolveActivityForScheduleCardId(lookup, "si-1+si-3");
+  resolveActivityForScheduleCardId(lookup, "si-unknown");
+
+  assert.equal(map.size, sizeBefore);
+  assert.equal(map.get("si-1"), a);
+  assert.equal(map.get("si-2"), a);
+  assert.equal(map.get("si-3"), b);
+  assert.deepEqual(a, { ridingSlot: { id: "slot-1" }, scheduleItemIds: ["si-1", "si-2"] });
+  assert.deepEqual(b, { ridingSlot: { id: "slot-2" }, scheduleItemIds: ["si-3"] });
 });
