@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { dateKey, formatHebrewDate, formatHebrewWeekday } from "@/lib/dates";
 import { cleanScheduleTitle } from "@/lib/schedule-title";
+import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
 import type { ActionResult } from "@/lib/actions/students";
 
 export type WeeklyFeedbackStatusValue = "DRAFT" | "PUBLISHED" | "CLOSED";
@@ -910,25 +911,42 @@ export async function getWeeklyFeedbackResults(formId: string): Promise<WeeklyFe
     notSubmittedCount: activeStudents.length - activeSubmittedCount,
   };
 
+  // W6D3-HOTFIX: group/subgroup for this past week must reflect the group each
+  // trainee was in DURING THE FEEDBACK WEEK, not the current Student mirror. The
+  // representative date is the form's weeklySchedule.startDate (the week the
+  // feedback covers). Fail closed to null (no current-mirror fallback). The
+  // active-roster COUNT (denominator) still uses the currently-active roster.
+  const weekStart = form.weeklySchedule.startDate;
+  const historical = await loadHistoricalTraineeState([
+    ...form.responses.map((r) => r.studentId),
+    ...activeStudents.map((s) => s.id),
+  ]);
+
   const submittedTrainees: WeeklyFeedbackSubmittedTrainee[] = form.responses
-    .map((r) => ({
-      studentId: r.studentId,
-      fullName: r.student.fullName,
-      groupName: r.student.groupName,
-      subgroupNumber: r.student.subgroupNumber,
-      submittedAt: r.submittedAt.toISOString(),
-      isActive: r.student.isActive,
-    }))
+    .map((r) => {
+      const group = historical.groupAt(r.studentId, weekStart);
+      return {
+        studentId: r.studentId,
+        fullName: r.student.fullName,
+        groupName: group.ok ? group.value.groupName : null,
+        subgroupNumber: group.ok ? group.value.subgroupNumber : null,
+        submittedAt: r.submittedAt.toISOString(),
+        isActive: r.student.isActive,
+      };
+    })
     .sort((a, b) => a.fullName.localeCompare(b.fullName, "he"));
 
   const notSubmittedTrainees: WeeklyFeedbackNotSubmittedTrainee[] = activeStudents
     .filter((s) => !submittedStudentIds.has(s.id))
-    .map((s) => ({
-      studentId: s.id,
-      fullName: s.fullName,
-      groupName: s.groupName,
-      subgroupNumber: s.subgroupNumber,
-    }));
+    .map((s) => {
+      const group = historical.groupAt(s.id, weekStart);
+      return {
+        studentId: s.id,
+        fullName: s.fullName,
+        groupName: group.ok ? group.value.groupName : null,
+        subgroupNumber: group.ok ? group.value.subgroupNumber : null,
+      };
+    });
 
   const answersByQuestionId = new Map<string, { response: (typeof form.responses)[number]; answer: (typeof form.responses)[number]["answers"][number] }[]>();
   for (const response of form.responses) {

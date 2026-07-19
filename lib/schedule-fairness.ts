@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
 
 export interface StudentDutyCounts {
   studentId: string;
@@ -15,14 +16,28 @@ export interface FairnessReport {
   averageTotal: number;
 }
 
+// Nulls-last Hebrew-aware ordering (matches the prior DB group ordering) applied
+// after resolving the effective-dated group.
+function compareGroupName(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a.localeCompare(b, "he");
+}
+function compareSubgroupNumber(a: number | null, b: number | null): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a - b;
+}
+
 // Read-only - counts already-generated assignments in the range, grouped by
 // student and duty type. Never generates, deletes, or modifies anything.
 export async function buildFairnessReport(startDate: Date, endDate: Date): Promise<FairnessReport> {
   const [students, dutyTypes, assignments] = await Promise.all([
     prisma.student.findMany({
       where: { isActive: true },
-      orderBy: [{ groupName: "asc" }, { subgroupNumber: "asc" }, { lastName: "asc" }],
-      select: { id: true, fullName: true, groupName: true, subgroupNumber: true },
+      select: { id: true, fullName: true, lastName: true },
     }),
     prisma.dutyType.findMany({ where: { isActive: true }, orderBy: { name: "asc" } }),
     prisma.dutyAssignment.findMany({
@@ -38,18 +53,44 @@ export async function buildFairnessReport(startDate: Date, endDate: Date): Promi
     m.set(a.dutyTypeId, (m.get(a.dutyTypeId) ?? 0) + 1);
   }
 
-  const students_: StudentDutyCounts[] = students.map((s) => {
-    const countByDutyType = countsByStudent.get(s.id) ?? new Map<string, number>();
-    const total = [...countByDutyType.values()].reduce((sum, n) => sum + n, 0);
-    return {
-      studentId: s.id,
-      fullName: s.fullName,
-      groupName: s.groupName,
-      subgroupNumber: s.subgroupNumber,
-      countByDutyType,
-      total,
-    };
-  });
+  // W6D3-HOTFIX: the per-student group label/ordering must reflect the effective-
+  // dated group, not the current Student mirror. This is a per-student aggregate
+  // over a date range, so group is resolved AS OF the report's endDate (the state
+  // at the end of the reported window); the duty COUNTS themselves are group-
+  // independent and unchanged. Fail closed to null (no current-mirror fallback),
+  // then re-sort by the resolved group.
+  const historical = await loadHistoricalTraineeState(students.map((s) => s.id));
+  const students_: StudentDutyCounts[] = students
+    .map((s) => {
+      const countByDutyType = countsByStudent.get(s.id) ?? new Map<string, number>();
+      const total = [...countByDutyType.values()].reduce((sum, n) => sum + n, 0);
+      const group = historical.groupAt(s.id, endDate);
+      return {
+        studentId: s.id,
+        fullName: s.fullName,
+        lastName: s.lastName,
+        groupName: group.ok ? group.value.groupName : null,
+        subgroupNumber: group.ok ? group.value.subgroupNumber : null,
+        countByDutyType,
+        total,
+      };
+    })
+    .sort(
+      (a, b) =>
+        compareGroupName(a.groupName, b.groupName) ||
+        compareSubgroupNumber(a.subgroupNumber, b.subgroupNumber) ||
+        a.lastName.localeCompare(b.lastName, "he"),
+    )
+    .map(
+      ({ studentId, fullName, groupName, subgroupNumber, countByDutyType, total }): StudentDutyCounts => ({
+        studentId,
+        fullName,
+        groupName,
+        subgroupNumber,
+        countByDutyType,
+        total,
+      }),
+    );
 
   const averageTotal =
     students_.length > 0 ? students_.reduce((sum, s) => sum + s.total, 0) / students_.length : 0;

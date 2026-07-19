@@ -31,6 +31,11 @@ interface AssignmentRow {
   dateKey: string;
   studentId: string;
   studentName: string;
+  // W6D3-HOTFIX: the group the trainee was in ON THIS DUTY'S DATE (effective-
+  // dated, resolved server-side), NOT the current Student mirror. null when no
+  // single membership covers the date (fail closed; the row still renders).
+  groupName: string | null;
+  subgroupNumber: number | null;
   dutyTypeId: string;
   dutyTypeName: string;
   isManual: boolean;
@@ -227,10 +232,15 @@ export function ScheduleClient({
     return false;
   }
 
+  // W6D3-HOTFIX: group filter options come from the assignments' effective-dated
+  // groups (each resolved as of its own duty date), so a past duty's group is
+  // filterable even if the trainee has since moved groups.
   const groups = useMemo(
     () =>
-      Array.from(new Set(students.map((s) => s.groupName).filter((g): g is string => Boolean(g)))).sort(),
-    [students]
+      Array.from(
+        new Set(assignments.map((a) => a.groupName).filter((g): g is string => Boolean(g)))
+      ).sort(),
+    [assignments]
   );
 
   const filtered = useMemo(() => {
@@ -238,7 +248,7 @@ export function ScheduleClient({
       if (filterDate && a.dateKey !== filterDate) return false;
       if (filterStudent && a.studentId !== filterStudent) return false;
       if (filterDuty && a.dutyTypeId !== filterDuty) return false;
-      if (filterGroup && studentById.get(a.studentId)?.groupName !== filterGroup) return false;
+      if (filterGroup && a.groupName !== filterGroup) return false;
       if (!matchesSearchQuery(a)) return false;
       return true;
     });
@@ -746,10 +756,10 @@ export function ScheduleClient({
                       </select>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
-                      {studentById.get(a.studentId)?.groupName ?? "-"}
+                      {a.groupName ?? "-"}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
-                      {studentById.get(a.studentId)?.subgroupNumber ?? "-"}
+                      {a.subgroupNumber ?? "-"}
                     </td>
                     <td className="px-4 py-3">
                       <span

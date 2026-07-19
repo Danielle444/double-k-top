@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { dateKey, enumerateDateKeys } from "@/lib/dates";
 import { computeCoverageByDate, type DateCoverage } from "@/lib/schedule-coverage";
 import { formatSubgroupLabel, subgroupKey } from "@/lib/subgroup-identity";
+import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
 
 export type CoverageStatus = "תקין" | "חסר" | "עודף";
 
@@ -58,12 +59,20 @@ export async function buildScheduleDiagnostics(
     prisma.dutyType.findMany({ where: { isActive: true } }),
     prisma.dutyAssignment.findMany({
       where: { date: { gte: startDate, lte: endDate } },
-      include: { student: true },
+      select: { studentId: true, dutyTypeId: true, date: true },
     }),
     prisma.noDutyDate.findMany({ where: { date: { gte: startDate, lte: endDate } } }),
   ]);
 
   const noDutyDateKeys = new Set(noDutyDates.map((n) => dateKey(n.date)));
+
+  // W6D3-HOTFIX: bucket each assignment under the subgroup the trainee was in ON
+  // THE DUTY'S OWN DATE (effective-dated GroupMembership), not the current Student
+  // mirror — otherwise a past date's subgroup coverage is computed against the
+  // trainee's new subgroup. Fail closed (skip the subgroup bucket) when no single
+  // membership covers the date. `activeSubgroups` below (the set of subgroups
+  // coverage is REPORTED for) stays the current active roster by design.
+  const historical = await loadHistoricalTraineeState(assignments.map((a) => a.studentId));
 
   const cellByStudentAndDate = new Map<string, Map<string, true>>();
   const countByDateDuty = new Map<string, number>();
@@ -78,8 +87,9 @@ export async function buildScheduleDiagnostics(
     const ddKey = `${dk}|${a.dutyTypeId}`;
     countByDateDuty.set(ddKey, (countByDateDuty.get(ddKey) ?? 0) + 1);
 
-    if (a.student.subgroupNumber != null) {
-      const sdKey = `${dk}|${a.dutyTypeId}|${subgroupKey(a.student.groupName, a.student.subgroupNumber)}`;
+    const group = historical.groupAt(a.studentId, a.date);
+    if (group.ok && group.value.subgroupNumber != null) {
+      const sdKey = `${dk}|${a.dutyTypeId}|${subgroupKey(group.value.groupName, group.value.subgroupNumber)}`;
       countByDateDutySubgroup.set(sdKey, (countByDateDutySubgroup.get(sdKey) ?? 0) + 1);
     }
   }

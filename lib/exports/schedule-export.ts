@@ -1,5 +1,21 @@
 import { prisma } from "@/lib/prisma";
 import { dateKey, enumerateDateKeys, parseDateKey } from "@/lib/dates";
+import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
+
+// Nulls-last Hebrew-aware ordering used to re-sort export rows by the
+// effective-dated (not current-mirror) group they resolved to.
+function compareGroupName(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a.localeCompare(b, "he");
+}
+function compareSubgroupNumber(a: number | null, b: number | null): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a - b;
+}
 
 export interface ExportStudentRow {
   id: string;
@@ -36,11 +52,10 @@ export async function buildScheduleGridExport(
 ): Promise<ScheduleGridExport> {
   const dateKeys = enumerateDateKeys(startDate, endDate);
 
-  const [students, assignments, noDutyDates, dutyTypes] = await Promise.all([
+  const [studentRows, assignments, noDutyDates, dutyTypes] = await Promise.all([
     prisma.student.findMany({
       where: { isActive: true },
-      orderBy: [{ groupName: "asc" }, { subgroupNumber: "asc" }, { lastName: "asc" }],
-      select: { id: true, fullName: true, groupName: true, subgroupNumber: true },
+      select: { id: true, fullName: true, lastName: true },
     }),
     prisma.dutyAssignment.findMany({
       where: { date: { gte: startDate, lte: endDate } },
@@ -49,6 +64,32 @@ export async function buildScheduleGridExport(
     prisma.noDutyDate.findMany({ where: { date: { gte: startDate, lte: endDate } } }),
     prisma.dutyType.findMany({ where: { isActive: true }, select: { id: true } }),
   ]);
+
+  // W6D3-HOTFIX: the grid's per-student group column must reflect the effective-
+  // dated group, NOT the current Student mirror. A grid spans a date range and
+  // shows ONE group per student, so it is resolved AS OF the export's endDate
+  // (the state at the end of the exported window); the per-cell duties below are
+  // unaffected. Fail closed to null (no current-mirror fallback), then re-sort by
+  // the resolved group so ordering matches the labels.
+  const historical = await loadHistoricalTraineeState(studentRows.map((s) => s.id));
+  const students: ExportStudentRow[] = studentRows
+    .map((s) => {
+      const group = historical.groupAt(s.id, endDate);
+      return {
+        id: s.id,
+        fullName: s.fullName,
+        lastName: s.lastName,
+        groupName: group.ok ? group.value.groupName : null,
+        subgroupNumber: group.ok ? group.value.subgroupNumber : null,
+      };
+    })
+    .sort(
+      (a, b) =>
+        compareGroupName(a.groupName, b.groupName) ||
+        compareSubgroupNumber(a.subgroupNumber, b.subgroupNumber) ||
+        a.lastName.localeCompare(b.lastName, "he"),
+    )
+    .map((s) => ({ id: s.id, fullName: s.fullName, groupName: s.groupName, subgroupNumber: s.subgroupNumber }));
 
   const cellByStudentAndDate = new Map<string, Map<string, ExportCell>>();
   for (const a of assignments) {
@@ -97,22 +138,42 @@ export async function buildScheduleDayExport(
   const assignments = await prisma.dutyAssignment.findMany({
     where: { date },
     include: { student: true, dutyType: true },
-    orderBy: [
-      { student: { groupName: "asc" } },
-      { student: { subgroupNumber: "asc" } },
-      { student: { lastName: "asc" } },
-    ],
   });
+
+  // W6D3-HOTFIX: a day export is a single historical date, so each row's group is
+  // resolved from the effective-dated GroupMembership covering that day — never
+  // the current Student mirror. Fail closed to null (no fallback); then sort by
+  // the resolved group (the DB group-ordering is dropped as it used the mirror).
+  const historical = await loadHistoricalTraineeState(assignments.map((a) => a.studentId));
+  const rows = assignments
+    .map((a) => {
+      const group = historical.groupAt(a.studentId, date);
+      return {
+        studentName: a.student.fullName,
+        lastName: a.student.lastName,
+        groupName: group.ok ? group.value.groupName : null,
+        subgroupNumber: group.ok ? group.value.subgroupNumber : null,
+        dutyTypeName: a.dutyType.name,
+        isCompleted: a.isCompleted,
+        isPublished: a.isPublished,
+      };
+    })
+    .sort(
+      (a, b) =>
+        compareGroupName(a.groupName, b.groupName) ||
+        compareSubgroupNumber(a.subgroupNumber, b.subgroupNumber) ||
+        a.lastName.localeCompare(b.lastName, "he"),
+    );
 
   return {
     title,
-    rows: assignments.map((a) => ({
-      studentName: a.student.fullName,
-      groupName: a.student.groupName,
-      subgroupNumber: a.student.subgroupNumber,
-      dutyTypeName: a.dutyType.name,
-      isCompleted: a.isCompleted,
-      isPublished: a.isPublished,
+    rows: rows.map((r) => ({
+      studentName: r.studentName,
+      groupName: r.groupName,
+      subgroupNumber: r.subgroupNumber,
+      dutyTypeName: r.dutyTypeName,
+      isCompleted: r.isCompleted,
+      isPublished: r.isPublished,
     })),
   };
 }

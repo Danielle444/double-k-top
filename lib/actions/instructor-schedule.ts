@@ -8,6 +8,7 @@ import {
   parseDateKey,
 } from "@/lib/dates";
 import { cleanScheduleTitle } from "@/lib/schedule-title";
+import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
 
 export interface InstructorScheduleItem {
   id: string;
@@ -183,19 +184,29 @@ export async function getDutyAssignmentsForInstructor(
     orderBy: [{ date: "asc" }],
   });
 
-  return assignments.map((a) => ({
-    id: a.id,
-    dateKey: dateKey(a.date),
-    dateLabel: formatHebrewDate(a.date),
-    dayLabel: formatHebrewWeekday(a.date),
-    studentId: a.studentId,
-    studentName: a.student.fullName,
-    studentGroupName: a.student.groupName,
-    studentSubgroupNumber: a.student.subgroupNumber,
-    studentPhone: a.student.phone,
-    dutyTypeId: a.dutyTypeId,
-    dutyTypeName: a.dutyType.name,
-    isCompleted: a.isCompleted,
-    isPublished: a.isPublished,
-  }));
+  // W6D3-HOTFIX: a duty's group must reflect the group the trainee was in ON THE
+  // DUTY'S OWN DATE, not the current Student mirror (which would relabel past
+  // duty weeks after a group change). Resolve group from the effective-dated
+  // GroupMembership covering each row's date; fail closed to null (no current-
+  // mirror fallback) when no single interval covers it — the record still shows.
+  const historical = await loadHistoricalTraineeState(assignments.map((a) => a.studentId));
+
+  return assignments.map((a) => {
+    const group = historical.groupAt(a.studentId, a.date);
+    return {
+      id: a.id,
+      dateKey: dateKey(a.date),
+      dateLabel: formatHebrewDate(a.date),
+      dayLabel: formatHebrewWeekday(a.date),
+      studentId: a.studentId,
+      studentName: a.student.fullName,
+      studentGroupName: group.ok ? group.value.groupName : null,
+      studentSubgroupNumber: group.ok ? group.value.subgroupNumber : null,
+      studentPhone: a.student.phone,
+      dutyTypeId: a.dutyTypeId,
+      dutyTypeName: a.dutyType.name,
+      isCompleted: a.isCompleted,
+      isPublished: a.isPublished,
+    };
+  });
 }

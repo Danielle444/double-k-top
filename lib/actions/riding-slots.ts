@@ -8,6 +8,7 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 import { dateKey, parseDateKey } from "@/lib/dates";
 import { buildScheduleSlots } from "@/lib/schedule-grouping";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
+import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
 import { getKnownHorseNames } from "@/lib/actions/horse-feeding";
 import type { ActionResult } from "@/lib/actions/students";
 import type { AttendanceStatusValue } from "@/lib/actions/attendance";
@@ -1141,6 +1142,14 @@ async function buildStudentRidingHistory(studentId: string): Promise<StudentRidi
     orderBy: { updatedAt: "desc" },
   });
 
+  // W6D3-HOTFIX: each historical row must reflect the group/horse effective on
+  // the lesson's OWN date (the linked ScheduleItem.date), not the current Student
+  // mirror. Resolve from the effective-dated GroupMembership / TraineeHorseAssignment
+  // history; fail closed (no current-mirror fallback) when no single interval
+  // covers the date. The sessionHorseName per-session override still wins, and
+  // the current-profile header below stays the current mirror by design.
+  const historical = await loadHistoricalTraineeState([studentId]);
+
   const rows: RidingHistoryRow[] = [];
   for (const n of notes) {
     if (!hasMeaningfulRidingLessonNote(n)) continue;
@@ -1150,16 +1159,26 @@ async function buildStudentRidingHistory(studentId: string): Promise<StudentRidi
     const first = scheduleItems[0];
     const last = scheduleItems[scheduleItems.length - 1];
 
+    const group = historical.groupAt(studentId, first.date);
+    const histGroupName = group.ok ? group.value.groupName : null;
+    const histSubgroupNumber = group.ok ? group.value.subgroupNumber : null;
+
     const assignment = findAssignmentForStudent(
       n.ridingSlot.assignments,
-      student.groupName,
-      student.subgroupNumber
+      histGroupName,
+      histSubgroupNumber
     );
 
     const sessionHorse = n.sessionHorseName?.trim();
-    const horseDisplay = sessionHorse
-      ? `סוס בשיעור: ${sessionHorse}`
-      : `סוס: ${getHorseDisplayInfo(student).horseNameDisplay}`;
+    let horseDisplay: string;
+    if (sessionHorse) {
+      horseDisplay = `סוס בשיעור: ${sessionHorse}`;
+    } else {
+      const horse = historical.horseAt(studentId, first.date);
+      horseDisplay = horse.ok
+        ? `סוס: ${getHorseDisplayInfo(horse.value).horseNameDisplay}`
+        : "סוס: לא ידוע";
+    }
 
     rows.push({
       ridingSlotId: n.ridingSlotId,
@@ -1167,8 +1186,8 @@ async function buildStudentRidingHistory(studentId: string): Promise<StudentRidi
       startTime: first.startTime,
       endTime: last.endTime,
       title: first.title,
-      groupName: student.groupName,
-      subgroupNumber: student.subgroupNumber,
+      groupName: histGroupName,
+      subgroupNumber: histSubgroupNumber,
       instructorName: assignment ? formatInstructorNames(getAssignmentInstructors(assignment).map((i) => i.fullName)) : null,
       arena: assignment?.arena ?? null,
       horseDisplay,

@@ -3,6 +3,7 @@ import { ScheduleClient } from "@/app/admin/schedule/ScheduleClient";
 import { dateKey } from "@/lib/dates";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { blockedGroupsForDayPlan } from "@/lib/duty-constraints";
+import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
 
 export const dynamic = "force-dynamic";
 
@@ -58,21 +59,33 @@ export default async function SchedulePage() {
     }
   }
 
+  // W6D3-HOTFIX: each assignment's displayed/filtered group must reflect the
+  // group the trainee was in ON THE DUTY'S OWN DATE (effective-dated
+  // GroupMembership), not the current Student mirror. The reassign picker and the
+  // cell-editor blocked-group check below intentionally keep using the current
+  // roster (`students`) — those are current editing aids, not historical labels.
+  const historical = await loadHistoricalTraineeState(assignments.map((a) => a.studentId));
+
   return (
     <div className="flex flex-col gap-4">
       <h1 className="text-xl font-bold text-card-foreground">שיבוץ תורנויות</h1>
       <ScheduleClient
-        assignments={assignments.map((a) => ({
-          id: a.id,
-          dateKey: dateKey(a.date),
-          studentId: a.studentId,
-          studentName: a.student.fullName,
-          dutyTypeId: a.dutyTypeId,
-          dutyTypeName: a.dutyType.name,
-          isManual: a.isManual,
-          isPublished: a.isPublished,
-          isCompleted: a.isCompleted,
-        }))}
+        assignments={assignments.map((a) => {
+          const group = historical.groupAt(a.studentId, a.date);
+          return {
+            id: a.id,
+            dateKey: dateKey(a.date),
+            studentId: a.studentId,
+            studentName: a.student.fullName,
+            groupName: group.ok ? group.value.groupName : null,
+            subgroupNumber: group.ok ? group.value.subgroupNumber : null,
+            dutyTypeId: a.dutyTypeId,
+            dutyTypeName: a.dutyType.name,
+            isManual: a.isManual,
+            isPublished: a.isPublished,
+            isCompleted: a.isCompleted,
+          };
+        })}
         students={students}
         dutyTypes={dutyTypes}
         courseRange={
