@@ -23,6 +23,7 @@ const NAV_ITEMS = [
   { href: "/admin/teaching-practice", label: "התנסויות מתחילים" },
   { href: "/admin/parent-signatures", label: "חתימות הורים" },
   { href: "/admin/admins", label: "מנהלים מורשים" },
+  { href: "/admin/courses", label: "קורסים" },
   { href: "/admin/help", label: "מדריך שימוש" },
 ];
 
