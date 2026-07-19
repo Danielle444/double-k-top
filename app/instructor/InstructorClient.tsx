@@ -44,7 +44,15 @@ import {
   hasUnreadNotificationsForInstructor,
 } from "@/lib/actions/notifications";
 import { getMessageTasksForInstructorView } from "@/lib/actions/messages";
-import { getKnownRidingLessonTopics, getKnownRidingHorseNames } from "@/lib/actions/riding-slots";
+import {
+  getKnownRidingLessonTopics,
+  getKnownRidingHorseNames,
+  getInstructorRidingSlots,
+  type WeeklyRidingActivity,
+} from "@/lib/actions/riding-slots";
+import { getRidingSlotComplexPlanForInstructor } from "@/lib/actions/riding-slot-complex";
+import { getRidingSlotHorseListForInstructor } from "@/lib/actions/riding-slot-horses";
+import { buildScheduleItemActivityMap } from "@/app/instructor/instructor-riding-schedule-map-core";
 import {
   formatHebrewDate,
   formatHebrewWeekday,
@@ -160,6 +168,27 @@ interface InstructorOption {
   fullName: string;
 }
 
+// Per-RidingSlot mode detection for slots surfaced by the schedule cards.
+// Intentionally identical in behavior to InstructorRidingSlotsSection's own
+// private detectInstructorRidingSlotMode: it is NOT exported there and that
+// file is out of scope for this change, so rather than widen its surface the
+// same two existing reads are composed here (complex plan first - a single
+// cheap read that returns null fast when absent - then the simple horse list),
+// so a schedule-opened riding session picks its initial "צפייה בחניכים" tab
+// exactly as a riding-tab-opened one does. No new server action, no new read,
+// no broadened authorization: both reads already back the instructor riding
+// surface and re-check the caller is a real, active instructor server-side.
+async function detectScheduleRidingSlotMode(
+  instructorId: string,
+  ridingSlotId: string
+): Promise<InstructorSlotMode> {
+  const complexPlan = await getRidingSlotComplexPlanForInstructor(instructorId, ridingSlotId);
+  if (complexPlan) return "complex";
+  const horseList = await getRidingSlotHorseListForInstructor(instructorId, ridingSlotId);
+  if (horseList?.listId) return "simple";
+  return "none";
+}
+
 export function InstructorClient({
   students,
   dutyTypes,
@@ -203,6 +232,15 @@ export function InstructorClient({
   const [modeByRidingSlotId, setModeByRidingSlotId] = useState<Record<string, InstructorSlotMode>>({});
   const [knownLessonTopics, setKnownLessonTopics] = useState<string[]>([]);
   const [knownHorseNames, setKnownHorseNames] = useState<string[]>([]);
+  // Schedule-card (real ScheduleItem id) -> configured riding activity lookup
+  // for whichever schedule surface is active (today / full schedule). Rebuilt
+  // from ONE getInstructorRidingSlots read per selected range (never per card),
+  // and reset whenever the range or tab changes so a card can never open an
+  // activity from a previously-selected week. An id absent from this map means
+  // that card is not a configured riding session and stays non-interactive.
+  const [scheduleActivityMap, setScheduleActivityMap] = useState<Map<string, WeeklyRidingActivity>>(
+    () => new Map()
+  );
 
   // Same load/guard as the riding section's previous loadKnownValues; gated on
   // the riding tab being active so the query timing matches the section's prior
@@ -278,6 +316,93 @@ export function InstructorClient({
     const interval = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(interval);
   }, []);
+
+  // A per-day string that only changes across a real local-day rollover (not
+  // every minute like `now`), so keying the schedule-activities effect below on
+  // it never refetches mid-day yet still moves to the new day if left open past
+  // midnight.
+  const nowDayKey = getLocalDateKey(now);
+
+  // Loads the configured riding activities for whichever schedule surface is
+  // active (today or the full schedule), builds the schedule-card lookup, and
+  // detects each slot's mode - so a schedule card opens the single shared
+  // riding-students popup exactly like a riding-tab card. Runs ONLY for those
+  // two surfaces (no unrelated tab triggers a load), makes ONE bounded
+  // activities read per selected range (no per-card N+1), writes nothing, and
+  // reuses the same reads the riding surface already uses.
+  useEffect(() => {
+    if (!session) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setScheduleActivityMap(new Map());
+      return;
+    }
+    // Range of the active schedule surface: today shows only today's items
+    // (and only when a week actually covers today); the full schedule shows
+    // the whole selected week.
+    let rangeStart: string | null = null;
+    let rangeEnd: string | null = null;
+    if (activeTab === "today") {
+      const todayWk = weeks?.find((w) => w.startDate <= nowDayKey && nowDayKey <= w.endDate) ?? null;
+      if (todayWk) {
+        rangeStart = nowDayKey;
+        rangeEnd = nowDayKey;
+      }
+    } else if (activeTab === "schedule") {
+      const week = weeks?.find((w) => w.id === selectedWeekId) ?? null;
+      if (week) {
+        rangeStart = week.startDate;
+        rangeEnd = week.endDate;
+      }
+    }
+
+    // Any non-schedule tab (or a surface with no resolvable range) clears the
+    // map and loads nothing - a stale mapping must never linger where a current
+    // card could open a previous range's activity.
+    if (!rangeStart || !rangeEnd) {
+      setScheduleActivityMap(new Map());
+      return;
+    }
+
+    let cancelled = false;
+    // Replace the previous range's mapping up front so no card resolves against
+    // stale data while this reload is in flight.
+    setScheduleActivityMap(new Map());
+    getInstructorRidingSlots(rangeStart, rangeEnd)
+      .then((days) => {
+        if (cancelled) return;
+        const activities = days.flatMap((d) => d.activities);
+        setScheduleActivityMap(buildScheduleItemActivityMap(activities));
+        // Detect mode per real riding slot (same behavior as the riding tab),
+        // merging into the shared modeByRidingSlotId the cards/controller
+        // already read. A slot's mode is a stable property, so merging rather
+        // than resetting never fights the riding section's own detection.
+        const ridingSlotIds = Array.from(
+          new Set(
+            activities
+              .map((a) => a.ridingSlot?.id)
+              .filter((id): id is string => Boolean(id))
+          )
+        );
+        for (const ridingSlotId of ridingSlotIds) {
+          detectScheduleRidingSlotMode(session.id, ridingSlotId)
+            .then((detected) => {
+              if (cancelled) return;
+              setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: detected }));
+            })
+            .catch(() => {
+              if (cancelled) return;
+              setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: "error" }));
+            });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setScheduleActivityMap(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id, activeTab, selectedWeekId, weeks, nowDayKey]);
 
   // Client version AWARENESS only (Stage 0B-1). Detects when this open bundle
   // is older than the currently-served one and offers a guarded full reload.
@@ -458,6 +583,17 @@ export function InstructorClient({
       setSessionInvalidMessage(null);
       setRefreshError(null);
     }
+  }
+
+  // Opens the single shared riding-students popup for a schedule-card-resolved
+  // activity, mirroring InstructorRidingSlotsSection's own onOpenRidingStudents:
+  // read the slot's already-detected mode from the shared modeByRidingSlotId and
+  // hand it to the one controller, which alone decides the initial tab
+  // (complex -> "schedule", else -> "list") via the committed
+  // resolveInitialStudentsTab. No second modal, no duplicated save path.
+  function openScheduleRidingActivity(activity: WeeklyRidingActivity) {
+    if (!activity.ridingSlot) return;
+    ridingStudentsModalRef.current?.open(activity, modeByRidingSlotId[activity.ridingSlot.id]);
   }
 
   if (!hydrated) return null;
@@ -695,6 +831,10 @@ export function InstructorClient({
                   instructorId={session.id}
                   weeklyScheduleId={todayWeek.id}
                   dayFilter={todayKey}
+                  resolveRidingActivity={(scheduleItemId) =>
+                    scheduleActivityMap.get(scheduleItemId) ?? null
+                  }
+                  onOpenRidingActivity={openScheduleRidingActivity}
                 />
               </div>
             ) : (
@@ -747,6 +887,10 @@ export function InstructorClient({
                 instructorId={session.id}
                 weeklyScheduleId={selectedWeekId}
                 dayFilter={dayFilter}
+                resolveRidingActivity={(scheduleItemId) =>
+                  scheduleActivityMap.get(scheduleItemId) ?? null
+                }
+                onOpenRidingActivity={openScheduleRidingActivity}
               />
             </div>
           </div>

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import {
   getScheduleForInstructor,
   type InstructorScheduleFilter,
   type InstructorScheduleItem,
   type InstructorScheduleResult,
 } from "@/lib/actions/instructor-schedule";
+import type { WeeklyRidingActivity } from "@/lib/actions/riding-slots";
 import { todayDateKey } from "@/lib/dates";
 import { cleanScheduleTitle } from "@/lib/schedule-title";
 import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
@@ -22,13 +23,48 @@ function isItemActiveNow(item: InstructorScheduleItem, now: Date): boolean {
   return nowMinutes >= sh * 60 + sm && nowMinutes < eh * 60 + em;
 }
 
-function renderScheduleCard(item: InstructorScheduleItem, active: boolean, compact = false) {
+function renderScheduleCard(
+  item: InstructorScheduleItem,
+  active: boolean,
+  compact: boolean,
+  // The configured riding activity this exact card's id resolves to, or null.
+  // Clickability comes ONLY from a successful id -> real-activity mapping here,
+  // never from the (Hebrew) title text - so meals, duties, lessons and any
+  // unconfigured riding item stay non-interactive with their styling, layout
+  // and text untouched.
+  ridingActivity: WeeklyRidingActivity | null,
+  onOpenRidingActivity: ((activity: WeeklyRidingActivity) => void) | undefined
+) {
+  const clickable = Boolean(ridingActivity && ridingActivity.ridingSlot && onOpenRidingActivity);
+  // The card has no nested interactive elements, so a single handler on the
+  // card can never be reached twice for one activation and needs no
+  // stopPropagation; the outer ScheduleTimeGrid wrapper is layout-only and
+  // binds no click handler of its own.
+  const open = clickable ? () => onOpenRidingActivity!(ridingActivity!) : undefined;
+
   return (
     <div
       key={item.id}
+      // Interactive attributes are added ONLY for a clickable riding card, so an
+      // ordinary card renders byte-for-byte as before (no role, no tabIndex, no
+      // handlers). role="button" + tabIndex + Enter/Space keep the card
+      // reachable and activatable by keyboard, not just pointer.
+      {...(clickable
+        ? {
+            role: "button" as const,
+            tabIndex: 0,
+            onClick: open,
+            onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                open?.();
+              }
+            },
+          }
+        : {})}
       className={`rounded-xl border-2 ${compact ? "p-2.5" : "p-4"} ${
         active ? "border-accent bg-secondary" : `border-border ${getScheduleGroupColorClass(item.groupName)}`
-      }`}
+      }${clickable ? " cursor-pointer transition-colors hover:border-primary/50 active:bg-black/5" : ""}`}
     >
       <div className="mb-1 flex flex-wrap items-center justify-between gap-1.5">
         <span
@@ -62,6 +98,16 @@ function renderScheduleCard(item: InstructorScheduleItem, active: boolean, compa
           מתקיים עכשיו
         </span>
       )}
+      {/* Subtle, addition-only affordance shown solely on a clickable riding
+          card - it does not alter any existing card's text or layout. */}
+      {clickable && (
+        <span
+          className={`mt-2 block font-medium text-primary ${compact ? "text-xs" : "text-sm"}`}
+          aria-hidden="true"
+        >
+          צפייה בחניכים ›
+        </span>
+      )}
     </div>
   );
 }
@@ -70,10 +116,21 @@ export function InstructorScheduleSection({
   instructorId,
   weeklyScheduleId,
   dayFilter,
+  resolveRidingActivity,
+  onOpenRidingActivity,
 }: {
   instructorId: string;
   weeklyScheduleId: string | null;
   dayFilter: string | "all";
+  // Read-only lookup from a rendered card's own real ScheduleItem id to the
+  // configured riding activity behind it (or null). Supplied by InstructorClient
+  // from its single shared per-range activities read; when omitted, no card is
+  // interactive and this section behaves exactly as before.
+  resolveRidingActivity?: (scheduleItemId: string) => WeeklyRidingActivity | null;
+  // Opens the single shared riding-students popup (owned by InstructorClient)
+  // for a resolved activity. Same controller both existing riding-tab entry
+  // paths already use - no second modal, no second save path.
+  onOpenRidingActivity?: (activity: WeeklyRidingActivity) => void;
 }) {
   // Defaults to the full schedule ("כל הלו"ז") rather than the
   // instructor's own lessons - not persisted anywhere, so every mount
@@ -167,7 +224,15 @@ export function InstructorScheduleSection({
               </div>
               <ScheduleTimeGrid
                 items={items}
-                renderCard={(item) => renderScheduleCard(item, isItemActiveNow(item, now), true)}
+                renderCard={(item) =>
+                  renderScheduleCard(
+                    item,
+                    isItemActiveNow(item, now),
+                    true,
+                    resolveRidingActivity?.(item.id) ?? null,
+                    onOpenRidingActivity
+                  )
+                }
               />
             </div>
           ))}
