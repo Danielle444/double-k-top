@@ -1879,20 +1879,36 @@ model TraineeGroupMembership {
 // Student first release; this table records their dated history from cutover).
 // Nullable fields preserve exact current values. onDelete: Restrict; no
 // cascade. @@unique([studentId, effectiveFrom]) provides the index.
+//
+// MULTI-COURSE W8A-1 - additive first stage of enrollment-scoped horse
+// assignments. courseEnrollmentId is nullable and UNPOPULATED in this stage:
+// studentId stays the identity/lineage anchor and the existing Student lock
+// root, and the @@unique([studentId, effectiveFrom]) constraint is UNCHANGED
+// (no enrollment-scoped uniqueness is introduced yet). No backfill runs and no
+// reader/writer is rewired this stage - the runtime still reads/writes the
+// Student compatibility horse columns exactly as before. onDelete: Restrict on
+// the enrollment edge matches the studentId edge and the rest of the multi-
+// course spine: deleting a CourseEnrollment must never silently erase horse
+// history. A separate @@unique([courseEnrollmentId, effectiveFrom]) is
+// deliberately NOT added yet - that belongs to a later stage once the column
+// is populated.
 model TraineeHorseAssignment {
-  id                String    @id @default(cuid())
-  studentId         String
-  assignedHorseName String?
-  hasPrivateHorse   Boolean   @default(false)
-  privateHorseName  String?
-  effectiveFrom     DateTime  @db.Date
-  effectiveTo       DateTime? @db.Date
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id                 String    @id @default(cuid())
+  studentId          String
+  courseEnrollmentId String?
+  assignedHorseName  String?
+  hasPrivateHorse    Boolean   @default(false)
+  privateHorseName   String?
+  effectiveFrom      DateTime  @db.Date
+  effectiveTo        DateTime? @db.Date
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  student Student @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  student          Student           @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  courseEnrollment CourseEnrollment? @relation(fields: [courseEnrollmentId], references: [id], onDelete: Restrict)
 
   @@unique([studentId, effectiveFrom])
+  @@index([courseEnrollmentId])
   @@map("trainee_horse_assignments")
 }
 
@@ -2023,9 +2039,27 @@ model CourseEnrollment {
   createdAt        DateTime               @default(now())
   updatedAt        DateTime               @updatedAt
 
-  student        Student           @relation(fields: [studentId], references: [id], onDelete: Restrict)
-  courseOffering CourseOffering    @relation(fields: [courseOfferingId], references: [id], onDelete: Restrict)
-  memberships    GroupMembership[]
+  // MULTI-COURSE W8A-1 - additive enrollment-scoped current-horse cache
+  // fields, mirroring the Student compatibility horse columns
+  // (hasPrivateHorse/privateHorseName/assignedHorseName). Additive only:
+  // defaults preserve existing rows (hasPrivateHorse=false, name fields null)
+  // and NO runtime reader/writer populates or reads these yet - the Student
+  // columns remain the authoritative current-state source this stage. These
+  // are a per-enrollment current-state cache; the dated history still lives in
+  // TraineeHorseAssignment (see its horseAssignments back-relation below).
+  hasPrivateHorse   Boolean @default(false)
+  privateHorseName  String?
+  assignedHorseName String?
+
+  student          Student                  @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  courseOffering   CourseOffering           @relation(fields: [courseOfferingId], references: [id], onDelete: Restrict)
+  memberships      GroupMembership[]
+  // MULTI-COURSE W8A-1 - back-relation for TraineeHorseAssignment.courseEnrollment
+  // (nullable FK, onDelete: Restrict). No relation-name ambiguity: this is the
+  // only relation between CourseEnrollment and TraineeHorseAssignment, so
+  // Prisma's implicit relation name is unambiguous and no @relation("...") is
+  // needed.
+  horseAssignments TraineeHorseAssignment[]
 
   @@unique([studentId, courseOfferingId])
   @@index([courseOfferingId])
