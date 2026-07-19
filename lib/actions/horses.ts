@@ -136,6 +136,13 @@ export async function updateStudentHorseInfo(
 // permission check here re-reads canEditHorseAssignments from the DB by
 // instructorId on every call - it never trusts a client-supplied boolean.
 // This is the only gate; the UI hiding edit controls is not relied upon.
+//
+// W8A-6: rescoped onto the same enrollment-scoped write service the admin action
+// uses. It no longer touches Student directly; the single service transaction
+// maintains the dated TraineeHorseAssignment history (linked to the current
+// offering's enrollment), the CourseEnrollment horse cache, and the Student
+// compatibility mirror, and fails closed on any three-way parity anomaly. The
+// public signature and the permission model are unchanged.
 export async function updateStudentHorseInfoAsInstructor(
   instructorId: string,
   studentId: string,
@@ -147,14 +154,54 @@ export async function updateStudentHorseInfoAsInstructor(
     return { success: false, error: "אין הרשאה לערוך חלוקת סוסים" };
   }
 
-  await prisma.student.update({
-    where: { id: studentId },
-    data: {
+  // Trusted explicit server instant; the pure service derives Israel-local today
+  // from it. This action has no client-supplied effective date - the change takes
+  // effect on today's Israel-local calendar day, matching the prior behavior when
+  // it wrote the caches directly (cutover == effectiveFrom == today).
+  const now = new Date();
+  const today = israelDateKeyFromInstant(now);
+
+  // Resolve the current CourseOffering SERVER-SIDE (never client-supplied) and
+  // convert only the three KNOWN structural offering failures into a safe Hebrew
+  // ActionResult, exactly as the admin writer does. Any other error propagates.
+  let courseOfferingId: string;
+  try {
+    const offering = await resolveCurrentCourseOffering();
+    courseOfferingId = offering.id;
+  } catch (err) {
+    if (isKnownCurrentOfferingError(err)) {
+      return { success: false, error: CURRENT_OFFERING_UNAVAILABLE_MESSAGE };
+    }
+    throw err;
+  }
+
+  // Instructor policy: horse domain, no future effective dates, and NO
+  // field-level restriction - preserving this action's prior capability to set
+  // all three horse fields (assignedHorseName, hasPrivateHorse, privateHorseName)
+  // exactly as it did before. No instructor permission is broadened.
+  const policy: WritePolicy = {
+    actorKind: "instructor",
+    allowFutureEffectiveDates: false,
+    allowedDomain: "horse",
+    cutover: today,
+  };
+
+  const outcome = await writeTraineeHorseAssignment(
+    {
+      studentId,
+      courseOfferingId,
+      effectiveFrom: today,
+      assignedHorseName: data.assignedHorseName,
       hasPrivateHorse: data.hasPrivateHorse,
-      privateHorseName: data.privateHorseName?.trim() || null,
-      assignedHorseName: data.assignedHorseName?.trim() || null,
+      privateHorseName: data.privateHorseName,
     },
-  });
+    policy,
+    now
+  );
+
+  if (!outcome.ok) {
+    return { success: false, error: horseWriteErrorMessage(outcome.code) };
+  }
 
   revalidatePath("/admin/horses");
   return { success: true };

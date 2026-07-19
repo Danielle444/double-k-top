@@ -107,6 +107,11 @@ const randomUUID = cryptoMod.randomUUID || (cryptoMod.default && cryptoMod.defau
 const TODAY = "2026-07-18";
 const NOW = new Date("2026-07-18T09:00:00.000Z");
 const adminPolicy = { actorKind: "admin", allowFutureEffectiveDates: false, allowedDomain: "horse", cutover: TODAY };
+// W8A-6: the instructor action reuses this SAME service with an instructor policy
+// and NO field-level restriction (its prior capability was all three horse
+// fields). No allowedHorseFields key => no field restriction, like admin.
+const instructorPolicy = { actorKind: "instructor", allowFutureEffectiveDates: false, allowedDomain: "horse", cutover: TODAY };
+const FUTURE = "2026-07-25";
 
 const EMPTY = { hasPrivateHorse: false, privateHorseName: null, assignedHorseName: null };
 const BELLA = { hasPrivateHorse: false, privateHorseName: null, assignedHorseName: "Bella" };
@@ -451,6 +456,54 @@ try {
     const st = await fetchState(sid, eid);
     assertTrue(st.rows.length === 1, "T17 no history row written on forbidden field change");
     sameHorse(st.rows[0], EMPTY, "T17 history unchanged");
+  }
+
+  // ---- T18 (W8A-6): instructor policy writes all three fields via SAME service.
+  // Proves the instructor path (no field restriction) maintains dated history
+  // linked to the resolved enrollment plus both caches, identically to admin.
+  {
+    const off = await makeOffering();
+    const sid = await makeStudent(EMPTY, true);
+    const eid = await makeEnrollment(sid, off, "ACTIVE", EMPTY);
+    await seedHistory(sid, eid, "2026-07-01", null, EMPTY);
+
+    // assigned-name path
+    const r1 = await write({ studentId: sid, courseOfferingId: off, effectiveFrom: TODAY, hasPrivateHorse: BELLA.hasPrivateHorse, privateHorseName: BELLA.privateHorseName, assignedHorseName: BELLA.assignedHorseName }, instructorPolicy, NOW);
+    assertTrue(r1.ok === true && r1.resolvedTodayChanged === true, "T18 instructor assigned-name write ok");
+    let st = await fetchState(sid, eid);
+    const cur1 = st.rows[st.rows.length - 1];
+    assertTrue(cur1.courseEnrollmentId === eid, "T18 instructor inserted row linked to resolved enrollment");
+    sameHorse(cur1, BELLA, "T18 instructor history value");
+    sameHorse(st.stu, BELLA, "T18 instructor student cache updated");
+    sameHorse(st.enr, BELLA, "T18 instructor enrollment cache updated");
+    sameHorse(st.stu, st.enr, "T18 instructor caches identical");
+
+    // private-horse path (same-day correction), proving hasPrivateHorse +
+    // privateHorseName are also permitted for the instructor policy.
+    const r2 = await write({ studentId: sid, courseOfferingId: off, effectiveFrom: TODAY, hasPrivateHorse: STAR.hasPrivateHorse, privateHorseName: STAR.privateHorseName, assignedHorseName: STAR.assignedHorseName }, instructorPolicy, NOW);
+    assertTrue(r2.ok === true, "T18 instructor private-horse write ok");
+    st = await fetchState(sid, eid);
+    sameHorse(st.rows[st.rows.length - 1], STAR, "T18 instructor private-horse history value");
+    sameHorse(st.stu, STAR, "T18 instructor private-horse student cache");
+    sameHorse(st.enr, STAR, "T18 instructor private-horse enrollment cache");
+  }
+
+  // ---- T19 (W8A-6): instructor future effective date is denied, zero writes. ---
+  // The action never sends a future date, but this pins the policy invariant that
+  // an instructor future write fails closed with its dedicated code.
+  {
+    const off = await makeOffering();
+    const sid = await makeStudent(EMPTY, true);
+    const eid = await makeEnrollment(sid, off, "ACTIVE", EMPTY);
+    await seedHistory(sid, eid, "2026-07-01", null, EMPTY);
+
+    const res = await write({ studentId: sid, courseOfferingId: off, effectiveFrom: FUTURE, hasPrivateHorse: BELLA.hasPrivateHorse, privateHorseName: BELLA.privateHorseName, assignedHorseName: BELLA.assignedHorseName }, instructorPolicy, NOW);
+    assertTrue(res.ok === false && res.code === "INSTRUCTOR_FUTURE_CHANGE", "T19 instructor future date -> INSTRUCTOR_FUTURE_CHANGE");
+    const st = await fetchState(sid, eid);
+    assertTrue(st.rows.length === 1, "T19 no history row written");
+    sameHorse(st.rows[0], EMPTY, "T19 history unchanged");
+    sameHorse(st.stu, EMPTY, "T19 student cache unchanged");
+    sameHorse(st.enr, EMPTY, "T19 enrollment cache unchanged");
   }
 
   process.stdout.write("CHILD_RESULT_OK\n");
