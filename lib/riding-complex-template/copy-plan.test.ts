@@ -311,3 +311,144 @@ test("deterministic: identical input yields deep-equal output twice", () => {
   const b: DestinationPlanCreate = copyPlanForTemplate(source, ACTIVE, ROSTER);
   assert.deepEqual(a, b);
 });
+
+// ---------------------------------------------------------------------------
+// Stage 2 - block-scoped cross-pair trainee dedup
+// ---------------------------------------------------------------------------
+
+test("Stage 2: same trainee in two pairs of one station - the later pair is dropped", () => {
+  const source: SourcePlanTree = {
+    blocks: [
+      {
+        startTime: "09:00",
+        endTime: "10:00",
+        stations: [
+          {
+            instructorId: "coach-1",
+            arena: "A",
+            pairs: [
+              { trainee1Id: "t-1", trainee2Id: null, horseName: "H1", note: null },
+              { trainee1Id: "t-1", trainee2Id: null, horseName: "H2", note: null },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const pairs = copyPlanForTemplate(source, ACTIVE, ROSTER).blocks[0].stations[0].pairs;
+  assert.equal(pairs.length, 1);
+  assert.equal(pairs[0].trainee1Id, "t-1");
+  assert.equal(pairs[0].horseName, "H1");
+  assert.equal(pairs[0].sortOrder, 0);
+});
+
+test("Stage 2: same trainee across two stations of one block - the later station drops it", () => {
+  const source: SourcePlanTree = {
+    blocks: [
+      {
+        startTime: "09:00",
+        endTime: "10:00",
+        stations: [
+          { instructorId: "coach-1", arena: "A", pairs: [{ trainee1Id: "t-2", trainee2Id: null, horseName: "H1", note: null }] },
+          { instructorId: "coach-2", arena: "B", pairs: [{ trainee1Id: "t-2", trainee2Id: null, horseName: "H2", note: null }] },
+        ],
+      },
+    ],
+  };
+  const stations = copyPlanForTemplate(source, ACTIVE, ROSTER).blocks[0].stations;
+  // The station itself is preserved even though its only pair was dropped.
+  assert.equal(stations.length, 2);
+  assert.equal(stations[0].pairs.length, 1);
+  assert.equal(stations[0].pairs[0].trainee1Id, "t-2");
+  assert.deepEqual(stations[1].pairs, []);
+});
+
+test("Stage 2: a duplicated trainee1 is removed while a still-unused trainee2 is promoted", () => {
+  const source: SourcePlanTree = {
+    blocks: [
+      {
+        startTime: "09:00",
+        endTime: "10:00",
+        stations: [
+          {
+            instructorId: "coach-1",
+            arena: "A",
+            pairs: [
+              { trainee1Id: "t-1", trainee2Id: null, horseName: "H1", note: null },
+              // t-1 already used -> dropped; t-3 still unused -> promoted to slot 1.
+              { trainee1Id: "t-1", trainee2Id: "t-3", horseName: "H2", note: "keep" },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const pairs = copyPlanForTemplate(source, ACTIVE, ROSTER).blocks[0].stations[0].pairs;
+  assert.equal(pairs.length, 2);
+  assert.equal(pairs[1].trainee1Id, "t-3");
+  assert.equal(pairs[1].trainee2Id, null);
+  assert.equal(pairs[1].horseName, "H2");
+  assert.equal(pairs[1].note, "keep");
+  assert.deepEqual(pairs.map((p) => p.sortOrder), [0, 1]);
+});
+
+test("Stage 2: a pair is dropped when every surviving trainee was already used in the block", () => {
+  const source: SourcePlanTree = {
+    blocks: [
+      {
+        startTime: "09:00",
+        endTime: "10:00",
+        stations: [
+          {
+            instructorId: "coach-1",
+            arena: "A",
+            pairs: [
+              { trainee1Id: "t-1", trainee2Id: "t-2", horseName: "H1", note: null },
+              // Both t-1 and t-2 already used -> the whole pair is dropped.
+              { trainee1Id: "t-1", trainee2Id: "t-2", horseName: "H2", note: null },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const pairs = copyPlanForTemplate(source, ACTIVE, ROSTER).blocks[0].stations[0].pairs;
+  assert.equal(pairs.length, 1);
+  assert.equal(pairs[0].trainee1Id, "t-1");
+  assert.equal(pairs[0].trainee2Id, "t-2");
+});
+
+test("Stage 2: the same trainee may appear again in a DIFFERENT block", () => {
+  const source: SourcePlanTree = {
+    blocks: [
+      { startTime: "09:00", endTime: "10:00", stations: [{ instructorId: "coach-1", arena: "A", pairs: [{ trainee1Id: "t-1", trainee2Id: null, horseName: "H1", note: null }] }] },
+      { startTime: "10:00", endTime: "11:00", stations: [{ instructorId: "coach-2", arena: "B", pairs: [{ trainee1Id: "t-1", trainee2Id: null, horseName: "H2", note: null }] }] },
+    ],
+  };
+  const out = copyPlanForTemplate(source, ACTIVE, ROSTER);
+  assert.equal(out.blocks[0].stations[0].pairs[0].trainee1Id, "t-1");
+  assert.equal(out.blocks[1].stations[0].pairs[0].trainee1Id, "t-1");
+});
+
+test("Stage 2: source is not mutated and output is deterministic under dedup", () => {
+  const source: SourcePlanTree = {
+    blocks: [
+      {
+        startTime: "09:00",
+        endTime: "10:00",
+        stations: [
+          { instructorId: "coach-1", arena: "A", pairs: [{ trainee1Id: "t-1", trainee2Id: "t-2", horseName: "H1", note: null }] },
+          { instructorId: "coach-2", arena: "B", pairs: [{ trainee1Id: "t-1", trainee2Id: "t-3", horseName: "H2", note: null }] },
+        ],
+      },
+    ],
+  };
+  const snapshot = JSON.parse(JSON.stringify(source));
+  const a = copyPlanForTemplate(source, ACTIVE, ROSTER);
+  const b = copyPlanForTemplate(source, ACTIVE, ROSTER);
+  assert.deepEqual(source, snapshot);
+  assert.deepEqual(a, b);
+  // Second station: t-1 already used in station 0 -> dropped, t-3 promoted.
+  assert.equal(a.blocks[0].stations[1].pairs[0].trainee1Id, "t-3");
+  assert.equal(a.blocks[0].stations[1].pairs[0].trainee2Id, null);
+});

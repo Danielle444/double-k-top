@@ -34,6 +34,26 @@
 //  - Empty blocks/stations present in the source structure are preserved.
 //  - Source objects and both Sets are never mutated; deterministic; never
 //    throws for ordinary null/missing optional references.
+//
+// STAGE 2 - cross-pair trainee dedup, scoped to a whole BLOCK (across every one
+// of its stations), applied in deterministic source order AFTER roster
+// filtering/collapse:
+//  - A trainee may appear at most once anywhere in one copied block.
+//  - A position whose trainee was already used earlier in the same block is
+//    removed; if only the second position survives it is promoted to trainee1;
+//    if neither survives the pair is dropped. Never the same trainee in both
+//    positions.
+//  - Pair sortOrder still regenerates sequentially (per station) AFTER this.
+//
+// TRUST BOUNDARY (Stage 2): only TRAINEE uniqueness is re-enforced here, as
+// defence-in-depth - a copy source is not guaranteed to have passed save-time
+// validation (legacy rows, repair scripts, or a future template-of-a-template),
+// so a source could carry the same trainee in two pairs. HORSE-name and
+// INSTRUCTOR block-uniqueness are deliberately NOT re-deduped: those invariants
+// are maintained on the persisted source by saveComplexStationInternal
+// (DUPLICATE_HORSE_IN_BLOCK / DUPLICATE_INSTRUCTOR_IN_BLOCK) and are trusted
+// here; re-deduping them would risk silently dropping legitimately-distinct
+// content and is out of Stage-2 scope.
 
 import type {
   DestinationBlockCreate,
@@ -88,11 +108,39 @@ function resolveTrainees(
   return null;
 }
 
+/**
+ * Stage 2 - apply BLOCK-scoped cross-pair trainee dedup to an already
+ * within-pair-sanitized `{ trainee1Id, trainee2Id }`. Any position whose
+ * trainee was already used earlier in THIS block is removed; if only the second
+ * position survives it is promoted into position 1; if neither survives the
+ * pair is dropped (null). Never returns the same trainee in both positions
+ * (the input already guarantees trainee1Id !== trainee2Id). `usedInBlock` is
+ * only READ here - the caller records the retained ids after a pair is kept.
+ */
+function dedupAgainstBlock(
+  resolved: { readonly trainee1Id: string; readonly trainee2Id: string | null },
+  usedInBlock: ReadonlySet<string>
+): { readonly trainee1Id: string; readonly trainee2Id: string | null } | null {
+  const first = usedInBlock.has(resolved.trainee1Id) ? null : resolved.trainee1Id;
+  const rawSecond = resolved.trainee2Id;
+  const second = rawSecond !== null && !usedInBlock.has(rawSecond) ? rawSecond : null;
+
+  if (first === null && second === null) {
+    return null;
+  }
+  if (first === null) {
+    // Only the second position survived - promote it into position 1.
+    return { trainee1Id: second as string, trainee2Id: null };
+  }
+  return { trainee1Id: first, trainee2Id: second };
+}
+
 function copyStation(
   station: SourcePlanStation,
   sortOrder: number,
   activeInstructorIds: ReadonlySet<string>,
-  roster: ReadonlySet<string>
+  roster: ReadonlySet<string>,
+  usedInBlock: Set<string>
 ): DestinationStationCreate {
   const rawInstructorId = station.instructorId;
   const instructorId =
@@ -111,13 +159,23 @@ function copyStation(
       // Neither trainee is rostered - drop the pair.
       continue;
     }
+    // Stage 2 - a trainee may appear at most once anywhere in the block.
+    const deduped = dedupAgainstBlock(resolved, usedInBlock);
+    if (deduped === null) {
+      // Every surviving trainee was already used earlier in this block.
+      continue;
+    }
+    usedInBlock.add(deduped.trainee1Id);
+    if (deduped.trainee2Id !== null) {
+      usedInBlock.add(deduped.trainee2Id);
+    }
     pairs.push(
       Object.freeze({
-        trainee1Id: resolved.trainee1Id,
-        trainee2Id: resolved.trainee2Id,
+        trainee1Id: deduped.trainee1Id,
+        trainee2Id: deduped.trainee2Id,
         horseName: asNullableString(sourcePair.horseName),
         note: asNullableString(sourcePair.note),
-        // Regenerated sequentially AFTER filtering/collapse.
+        // Regenerated sequentially AFTER filtering/collapse/dedup.
         sortOrder: pairs.length,
       })
     );
@@ -139,13 +197,19 @@ function copyBlock(
 ): DestinationBlockCreate {
   const sourceStations = Array.isArray(block.stations) ? block.stations : [];
   const stations: DestinationStationCreate[] = [];
+  // Stage 2 - trainee dedup is scoped to the WHOLE block (across all of its
+  // stations), so the used-set lives here and is threaded through every station
+  // in deterministic source order. Fresh per block: the same trainee may
+  // legitimately reappear in a different block.
+  const usedInBlock = new Set<string>();
   for (const sourceStation of sourceStations) {
     if (!sourceStation) {
       continue;
     }
     // Stations are preserved even when they end up with zero retained pairs -
-    // only pairs with no valid trainee are dropped, never the station itself.
-    stations.push(copyStation(sourceStation, stations.length, activeInstructorIds, roster));
+    // only pairs with no valid trainee (or an already-used one) are dropped,
+    // never the station itself.
+    stations.push(copyStation(sourceStation, stations.length, activeInstructorIds, roster, usedInBlock));
   }
 
   return Object.freeze({

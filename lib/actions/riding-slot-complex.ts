@@ -12,6 +12,11 @@ import { getKnownRidingHorseNames } from "@/lib/actions/riding-slots";
 // reduced candidate shape. One-way dependency only (riding-slot-horses.ts
 // imports nothing from this file) - see buildHorseCandidates's own comment.
 import { buildHorseCandidates, type RidingHorseCandidate } from "@/lib/actions/riding-slot-horses";
+// Fix 3, Stage 2 - transaction-scoped template lookup/sanitize (READ side).
+// The WRITE side (creating the fresh destination blocks/stations/pairs) stays
+// here because it needs the just-created plan id. resolveTemplateForNewPlan
+// takes the interactive `tx` and issues NO global-prisma query.
+import { resolveTemplateForNewPlan } from "@/lib/actions/riding-complex-template-lookup";
 
 const NOT_FOUND_RIDING_SLOT = 'ניהול הרכיבה לא נמצא. נסי לרענן את העמוד.';
 const NOT_FOUND_COMPLEX_PLAN = "תכנון הרכיבה המורכבת לא נמצא. ייתכן שטרם נוצר - נסי לרענן את העמוד.";
@@ -393,6 +398,21 @@ async function createComplexPlanInternal(ridingSlotId: string, actor: ComplexPla
 
   const actorData = actorWriteFields(actor);
 
+  // Fix 3, Stage 2 - the destination candidate roster is derived through
+  // buildHorseCandidates, which uses the GLOBAL prisma client
+  // (getRidingSlotStudentNotes + assignments), so it MUST be read here, before
+  // the transaction opens - never from inside the tx callback, where a
+  // global-prisma query would escape the advisory lock. We keep only the
+  // candidate student ids; they are re-validated against ACTIVE Student rows
+  // INSIDE the transaction below. A failure of this read is deliberately NOT
+  // caught or mapped: it propagates through the same generic failure path as
+  // any other unexpected DB error (only a real P2028 lock timeout is mapped to
+  // LOCK_TIMEOUT, below), and since the transaction has not opened, no plan is
+  // created. The roster is never broadened to all active students.
+  const candidateStudentIds = Array.from(
+    new Set((await buildHorseCandidates(ridingSlotId)).map((candidate) => candidate.studentId))
+  );
+
   // Waiting on the advisory lock below counts against this transaction's
   // normal interactive-transaction timeout (Prisma default 5000ms) - it is
   // in-body wait time, not connection-acquisition wait time. No custom
@@ -420,7 +440,10 @@ async function createComplexPlanInternal(ridingSlotId: string, actor: ComplexPla
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${ridingSlotId}))`;
 
       const existingPlan = await tx.ridingSlotComplexPlan.findUnique({ where: { ridingSlotId } });
-      if (existingPlan) return { ok: true as const }; // idempotent - the caller re-reads below regardless
+      // Idempotent: a genuinely-existing plan is never recopied. A second
+      // concurrent caller waits on the advisory lock, then lands here and
+      // returns without performing ANY template copy.
+      if (existingPlan) return { ok: true as const }; // the caller re-reads below regardless
 
       const simpleList = await tx.ridingSlotHorseList.findUnique({
         where: { ridingSlotId },
@@ -430,7 +453,79 @@ async function createComplexPlanInternal(ridingSlotId: string, actor: ComplexPla
         return { ok: false as const };
       }
 
-      await tx.ridingSlotComplexPlan.create({ data: { ridingSlotId, ...actorData } });
+      // Genuine-create branch (the ONLY branch that copies a template). Create
+      // the fresh EMPTY plan first and capture its id; version stays at its
+      // schema default (1) and is never bumped during initial creation.
+      const createdPlan = await tx.ridingSlotComplexPlan.create({ data: { ridingSlotId, ...actorData } });
+
+      // Re-validate the pre-read candidate ids against ACTIVE Student rows
+      // inside the transaction. Small race boundary: buildHorseCandidates was
+      // read before the tx, so a student could have gone inactive in the gap -
+      // this in-tx active recheck contains it (only ids still active right now
+      // form the roster). Never falls back to all active students.
+      const rosterTraineeIds =
+        candidateStudentIds.length > 0
+          ? new Set(
+              (
+                await tx.student.findMany({
+                  where: { id: { in: candidateStudentIds }, isActive: true },
+                  select: { id: true },
+                })
+              ).map((student) => student.id)
+            )
+          : new Set<string>();
+
+      // Optional template: sanitized create tree of a previous same-group
+      // earlier plan, or null when none applies (ineligible anchor, no eligible
+      // source, or a source that vanished/emptied). copyPlanForTemplate (inside
+      // this helper) is the only payload sanitizer; the helper issues no
+      // global-prisma query and never mutates a source row.
+      const template = await resolveTemplateForNewPlan(tx, {
+        destinationRidingSlotId: ridingSlotId,
+        destinationRosterTraineeIds: rosterTraineeIds,
+      });
+
+      if (template) {
+        // Explicitly create fresh blocks -> stations -> pairs under the new
+        // plan id: fresh ids (DB), fresh parent FKs (from the just-created
+        // rows), fresh sequential sortOrder (from the pure core). Any child
+        // write error throws and rolls back this whole transaction - including
+        // the plan create above - so the result is all-or-nothing, never a
+        // partial or silently-emptied plan. No publication row is created.
+        for (const block of template.blocks) {
+          const createdBlock = await tx.ridingSlotComplexBlock.create({
+            data: {
+              planId: createdPlan.id,
+              startTime: block.startTime,
+              endTime: block.endTime,
+              sortOrder: block.sortOrder,
+            },
+          });
+          for (const station of block.stations) {
+            const createdStation = await tx.ridingSlotComplexStation.create({
+              data: {
+                blockId: createdBlock.id,
+                instructorId: station.instructorId,
+                arena: station.arena,
+                sortOrder: station.sortOrder,
+              },
+            });
+            if (station.pairs.length > 0) {
+              await tx.ridingSlotComplexPair.createMany({
+                data: station.pairs.map((pair) => ({
+                  stationId: createdStation.id,
+                  trainee1Id: pair.trainee1Id,
+                  trainee2Id: pair.trainee2Id,
+                  horseName: pair.horseName,
+                  note: pair.note,
+                  sortOrder: pair.sortOrder,
+                })),
+              });
+            }
+          }
+        }
+      }
+
       return { ok: true as const };
     });
   } catch (err) {
