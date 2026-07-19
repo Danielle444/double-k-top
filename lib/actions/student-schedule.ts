@@ -41,19 +41,33 @@ export interface ScheduleItemView {
   groupName: string | null;
   instructorName: string | null;
   location: string | null;
-  // Null for non-riding items, or for riding items where no field is
-  // currently visible to students - the card should render no info box at
-  // all in that case, not an empty one.
+  // True when this is a complex-mode riding slot - i.e. its RidingSlot has a
+  // complexPlan relation. Presence of that row IS the canonical complex
+  // signal (see RidingSlotComplexPlan's schema comment); never inferred from
+  // the item title or from publication state (an unpublished complex slot is
+  // still complex). Always false for non-riding items and simple-mode riding
+  // slots. Drives the student-facing title ("תרגול הדרכה" vs "רכיבה") and the
+  // suppression of ridingInfo below.
+  isComplex: boolean;
+  // Null for non-riding items, for a complex-mode riding slot (its
+  // coach/arena come only from the published complex plan below, never from
+  // the generic assignment box - see the isComplex suppression in the
+  // mapper), or for a simple-mode riding slot where no field is currently
+  // visible to students - the card should render no info box at all in that
+  // case, not an empty one.
   ridingInfo: ScheduleItemRidingInfo | null;
-  // RIDING-COMPLEX-PUBLICATION P7C - a separate field/variant from
-  // ridingInfo above, never a replacement for it: simple-mode riding slots
-  // (ridingInfo) and complex-mode riding slots (this field) are mutually
-  // exclusive by construction (a RidingSlot has either a horseList or a
-  // complexPlan, never both - see RidingSlotComplexPlan's own schema
-  // comment), so a given item only ever populates one of the two. Non-null
-  // only for a complex-mode riding slot that currently has a publication;
-  // null for a simple-mode slot, a complex-mode slot with no publication
-  // yet, and every non-riding item - never inferred from the live draft.
+  // RIDING-COMPLEX-PUBLICATION P7C - a separate field/variant from ridingInfo
+  // above, never a replacement for it. For a complex-mode slot, ridingInfo is
+  // suppressed (null) and coach/arena come only from here; for a simple-mode
+  // slot this stays null and coach/arena come only from ridingInfo - so the
+  // two never both populate for one item. (This non-overlap is enforced by
+  // the isComplex suppression in the mapper, not by storage shape: a
+  // RidingSlot's independent RidingSlotAssignment rows would otherwise still
+  // build a generic ridingInfo for a complex slot, which is exactly the
+  // duplicate this suppression prevents.) Non-null only for a complex-mode
+  // riding slot that currently has a publication; null for a simple-mode
+  // slot, a complex-mode slot with no publication yet, and every non-riding
+  // item - never inferred from the live draft.
   publishedComplexRidingPlan: PublishedComplexRidingPlanForStudent | null;
 }
 
@@ -122,6 +136,10 @@ export async function getScheduleForStudent(
                       instructors: { include: { instructor: true }, orderBy: { createdAt: "asc" } },
                     },
                   },
+                  // Relation presence only - the canonical complex signal. No
+                  // extra query: this rides along the existing week include,
+                  // and selecting just `id` keeps it to a presence check.
+                  complexPlan: { select: { id: true } },
                 },
               },
             },
@@ -166,9 +184,17 @@ export async function getScheduleForStudent(
     weekName: week.name,
     items: items.map((i) => {
       const ridingSlot = i.ridingSlotLink?.ridingSlot ?? null;
-      const ridingInfo = ridingSlot
-        ? buildRidingInfoForStudent(ridingSlot, student.groupName, student.subgroupNumber)
-        : null;
+      // Canonical complex signal: presence of the complexPlan relation, never
+      // the title text or publication state (an unpublished complex slot is
+      // still complex).
+      const isComplex = ridingSlot?.complexPlan != null;
+      // Single data-layer choke point: a complex slot never carries the
+      // generic assignment coach/arena box - that info comes only from its
+      // published complex plan, so building ridingInfo here would double it.
+      const ridingInfo =
+        ridingSlot && !isComplex
+          ? buildRidingInfoForStudent(ridingSlot, student.groupName, student.subgroupNumber)
+          : null;
       return {
         id: i.id,
         dateKey: dateKey(i.date),
@@ -184,6 +210,7 @@ export async function getScheduleForStudent(
         // ridingInfo, gated by the slot's own visibility flags.
         instructorName: ridingSlot ? null : i.instructorName,
         location: ridingSlot ? null : i.location,
+        isComplex,
         ridingInfo,
         publishedComplexRidingPlan: ridingSlot ? (complexPlansByRidingSlotId.get(ridingSlot.id) ?? null) : null,
       };

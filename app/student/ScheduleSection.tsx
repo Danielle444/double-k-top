@@ -9,7 +9,7 @@ import {
 } from "@/lib/actions/student-schedule";
 import type { PublishedComplexRidingPlanForStudent } from "@/lib/actions/riding-slot-complex-publications";
 import { todayDateKey } from "@/lib/dates";
-import { getStudentScheduleTitle } from "@/lib/schedule-title";
+import { resolveStudentRidingPresentation } from "./student-riding-presentation";
 import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { coalesceAdjacentSameActivity } from "@/lib/schedule-grouping";
@@ -190,7 +190,8 @@ function ComplexRidingPlanSection({
 }
 
 // Students must never see instructorName here, and titles always go through
-// the student-facing shortening rule (e.g. "רכיבה - ישיבה יציבה" -> "רכיבה").
+// the student-facing shortening rule (e.g. "רכיבה - ישיבה יציבה" -> "רכיבה"),
+// except complex-mode riding slots, which show COMPLEX_RIDING_TITLE.
 // A real component (not a plain helper function) specifically so its own
 // isExpanded state (for the published-complex-plan section) can live here,
 // scoped per card by React's own key-based reconciliation - every call site
@@ -211,6 +212,7 @@ function ScheduleCard({
   studentId: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const ridingPresentation = resolveStudentRidingPresentation(item);
 
   return (
     <div
@@ -231,14 +233,14 @@ function ScheduleCard({
         </span>
       </div>
       <p className={`font-bold text-card-foreground ${compact ? "text-base" : "text-lg"}`}>
-        {getStudentScheduleTitle(item.title)}
+        {ridingPresentation.title}
       </p>
       {item.location && (
         <p className={`mt-1 text-muted-foreground ${compact ? "text-xs" : "text-sm"}`}>
           מיקום: {item.location}
         </p>
       )}
-      {item.ridingInfo && (
+      {ridingPresentation.showGenericRidingInfo && item.ridingInfo && (
         <div
           className={`mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-muted-foreground ${
             compact ? "text-xs" : "text-sm"
@@ -254,7 +256,7 @@ function ScheduleCard({
           מתקיים עכשיו
         </span>
       )}
-      {item.publishedComplexRidingPlan && (
+      {ridingPresentation.showComplexPlan && item.publishedComplexRidingPlan && (
         <ComplexRidingPlanSection
           plan={item.publishedComplexRidingPlan}
           studentId={studentId}
