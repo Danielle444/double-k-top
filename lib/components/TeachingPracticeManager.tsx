@@ -32,6 +32,7 @@ import {
   type TeachingPracticeTypeValue,
 } from "@/lib/teaching-practice-rotation";
 import { hasMeaningfulTeachingPracticeFeedback } from "@/lib/teaching-practice-feedback";
+import { decideTeachingPracticeRatingBadge } from "@/lib/teaching-practice-rating-badge-core";
 import {
   buildParentKeyByChildId,
   buildSameParentOtherNamesByChildId,
@@ -334,6 +335,25 @@ function SameParentBadge({ otherNames, onClick }: { otherNames: string[]; onClic
       title={`${SAME_PARENT_BADGE_TITLE_PREFIX}${otherNames.join(", ")}`}
     >
       אותו הורה
+    </span>
+  );
+}
+
+// Small read-only rating indicator shown beside a beginner trainee's name -
+// visually mirrors the riding feedback rating pill (compact success-colored
+// bg-success-muted/text-success pill). Rating value only (e.g. "3", "4.5") -
+// never any feedback free-text or ids. Presentational only: the caller
+// decides whether it may render at all via decideTeachingPracticeRatingBadge
+// (server redaction stays authoritative; this is defense-in-depth). shrink-0
+// keeps it from wrapping/expanding the horizontally-scrollable table column.
+function TeachingPracticeRatingBadge({ value }: { value: string }) {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center rounded-full bg-success-muted px-1.5 py-0.5 text-[10px] font-medium text-success"
+      aria-label={`דירוג: ${value}`}
+      title={`דירוג: ${value}`}
+    >
+      {value}
     </span>
   );
 }
@@ -5344,6 +5364,8 @@ export function TeachingPracticeManager({
                                   canEdit={effectiveCanEdit}
                                   canEditHorseFields={effectiveCanEditHorseFields}
                                   canEditFeedback={canEditFeedback}
+                                  role={role}
+                                  canEditTeachingPracticeFeedback={canEditTeachingPracticeFeedback}
                                   isPending={isLessonActionPending}
                                   savingCellKey={savingLessonCellKey}
                                   instructors={instructors}
@@ -5381,6 +5403,8 @@ export function TeachingPracticeManager({
                                   canEdit={effectiveCanEdit}
                                   canEditHorseFields={effectiveCanEditHorseFields}
                                   canEditFeedback={canEditFeedback}
+                                  role={role}
+                                  canEditTeachingPracticeFeedback={canEditTeachingPracticeFeedback}
                                   isPending={isLessonActionPending}
                                   savingCellKey={savingLessonCellKey}
                                   instructors={instructors}
@@ -5418,6 +5442,8 @@ export function TeachingPracticeManager({
                                   canEdit={effectiveCanEdit}
                                   canEditHorseFields={effectiveCanEditHorseFields}
                                   canEditFeedback={canEditFeedback}
+                                  role={role}
+                                  canEditTeachingPracticeFeedback={canEditTeachingPracticeFeedback}
                                   isPending={isLessonActionPending}
                                   savingCellKey={savingLessonCellKey}
                                   instructors={instructors}
@@ -7242,6 +7268,7 @@ function TraineeAssignmentCell({
   sticky,
   highlightedTraineeId,
   onToggleHighlight,
+  trailing,
 }: {
   value: string;
   // Resolved display name for the currently-assigned trainee (or "—") -
@@ -7273,6 +7300,12 @@ function TraineeAssignmentCell({
   // works wherever a caller doesn't wire highlighting in.
   highlightedTraineeId?: string | null;
   onToggleHighlight?: (traineeId: string, traineeName: string) => void;
+  // Optional presentational content rendered inline beside the editable
+  // trainee <select> (only used by the generated-lessons table's rating
+  // badge). Purely additive: callers that omit it get the exact same markup
+  // as before. Never rendered in the read-only branch, so no other call site
+  // is affected.
+  trailing?: ReactNode;
 }) {
   if (!editable) {
     // Only a real, assigned trainee (non-empty value) is clickable - "—"
@@ -7324,14 +7357,33 @@ function TraineeAssignmentCell({
       className={`max-w-[150px] px-2 py-2 ${sticky ? "sticky right-0 z-10 bg-card" : ""}`}
       onClick={(e) => e.stopPropagation()}
     >
-      <SearchableSelect
-        value={value}
-        options={options}
-        onChange={onAssign}
-        disabled={disabled}
-        placeholder="בחרו חניך/ה"
-        className="!px-2 !py-1 text-xs"
-      />
+      {trailing ? (
+        // Keep the select and the badge on one row without letting the badge
+        // widen the capped column - the select flexes, the badge stays its
+        // natural compact size (shrink-0 on the badge itself).
+        <div className="flex items-center gap-1">
+          <div className="min-w-0 flex-1">
+            <SearchableSelect
+              value={value}
+              options={options}
+              onChange={onAssign}
+              disabled={disabled}
+              placeholder="בחרו חניך/ה"
+              className="!px-2 !py-1 text-xs"
+            />
+          </div>
+          {trailing}
+        </div>
+      ) : (
+        <SearchableSelect
+          value={value}
+          options={options}
+          onChange={onAssign}
+          disabled={disabled}
+          placeholder="בחרו חניך/ה"
+          className="!px-2 !py-1 text-xs"
+        />
+      )}
     </td>
   );
 }
@@ -7707,6 +7759,8 @@ function LessonGroupTable({
   canEdit,
   canEditHorseFields,
   canEditFeedback,
+  role,
+  canEditTeachingPracticeFeedback,
   isPending,
   savingCellKey,
   instructors,
@@ -7729,6 +7783,12 @@ function LessonGroupTable({
   // (an instructor can have assignment permission without horse permission).
   canEditHorseFields: boolean;
   canEditFeedback: boolean;
+  // Raw role + capability (not the combined canEditFeedback above) - passed
+  // straight through to LessonTableRow so the pure rating-badge decision core
+  // can distinguish admin (always permitted) from instructor (permitted only
+  // when the capability is exactly true).
+  role: Role;
+  canEditTeachingPracticeFeedback: boolean;
   isPending: boolean;
   // Which single inline cell (if any) is currently saving - see
   // savingLessonCellKey in TeachingPracticeManager.
@@ -7818,6 +7878,8 @@ function LessonGroupTable({
                 canEdit={canEdit}
                 canEditHorseFields={canEditHorseFields}
                 canEditFeedback={canEditFeedback}
+                role={role}
+                canEditTeachingPracticeFeedback={canEditTeachingPracticeFeedback}
                 isPending={isPending}
                 savingCellKey={savingCellKey}
                 instructors={instructors}
@@ -7987,6 +8049,8 @@ function LessonTableRow({
   canEdit,
   canEditHorseFields,
   canEditFeedback,
+  role,
+  canEditTeachingPracticeFeedback,
   isPending,
   savingCellKey,
   instructors,
@@ -8014,6 +8078,12 @@ function LessonTableRow({
   // participant/child/horse editing (see TeachingPracticeManager's
   // canEditFeedback comment for why this must stay its own permission).
   canEditFeedback: boolean;
+  // Raw role + capability feeding the pure rating-badge decision core - kept
+  // separate from the combined canEditFeedback above so the core can apply its
+  // own admin-vs-instructor rule (admin always permitted; instructor only when
+  // the capability is exactly true).
+  role: Role;
+  canEditTeachingPracticeFeedback: boolean;
   isPending: boolean;
   savingCellKey: string | null;
   instructors: InstructorOption[];
@@ -8171,7 +8241,20 @@ function LessonTableRow({
 
   return (
     <Fragment>
-      {displayRows.map((row, i) => (
+      {displayRows.map((row, i) => {
+        // Beginner rating badge decision for this participant row. Pure /
+        // DB-free: beginner practice types only, permitted viewers only
+        // (admin, or instructor with the exact capability), valid in-range
+        // integer rating only - otherwise hidden. Reads the rating that the
+        // server already redacted for unauthorized viewers, so this is
+        // defense-in-depth on top of the authoritative server gate.
+        const ratingBadge = decideTeachingPracticeRatingBadge({
+          role,
+          canEditTeachingPracticeFeedback,
+          practiceType: lesson.practiceType,
+          ratingHalfPoints: row.participant?.feedback?.ratingHalfPoints,
+        });
+        return (
         <tr
           key={[lesson.id, row.participant?.participantId ?? "no-participant", row.child?.id ?? "no-child", i].join(
             "-"
@@ -8196,22 +8279,32 @@ function LessonTableRow({
               editable
               disabled={savingCellKey === `lesson-${lesson.id}-participant-${i}`}
               onAssign={(traineeId) => onInlineUpdateParticipant(lesson, roleSlots, i, { traineeId })}
+              trailing={
+                ratingBadge.visible && ratingBadge.displayValue !== null ? (
+                  <TeachingPracticeRatingBadge value={ratingBadge.displayValue} />
+                ) : undefined
+              }
             />
           ) : (
             <td className="px-2 py-2">
-              {row.participant &&
-              canEditFeedback &&
-              isFeedbackEligibleRole(lesson.practiceType, row.participant.role) ? (
-                <button
-                  type="button"
-                  onClick={() => onOpenFeedback(row.participant!.participantId)}
-                  className="text-primary underline decoration-dotted underline-offset-2 hover:opacity-80"
-                >
-                  {row.participant.traineeName}
-                </button>
-              ) : (
-                (row.participant?.traineeName ?? "—")
-              )}
+              <span className="inline-flex items-center gap-1">
+                {row.participant &&
+                canEditFeedback &&
+                isFeedbackEligibleRole(lesson.practiceType, row.participant.role) ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenFeedback(row.participant!.participantId)}
+                    className="text-primary underline decoration-dotted underline-offset-2 hover:opacity-80"
+                  >
+                    {row.participant.traineeName}
+                  </button>
+                ) : (
+                  (row.participant?.traineeName ?? "—")
+                )}
+                {ratingBadge.visible && ratingBadge.displayValue !== null && (
+                  <TeachingPracticeRatingBadge value={ratingBadge.displayValue} />
+                )}
+              </span>
             </td>
           )}
           {canEdit && i < roleSlots.length ? (
@@ -8411,7 +8504,8 @@ function LessonTableRow({
             </td>
           )}
         </tr>
-      ))}
+        );
+      })}
       {isEditing && (
         <tr className="border-t border-border bg-muted/30">
           <td colSpan={colSpan} className="px-2 py-3">
