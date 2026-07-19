@@ -709,6 +709,7 @@ export function InstructorClient({
                 dayFilter={todayKey}
                 students={students}
                 dutyTypes={dutyTypes}
+                studentHorseInfo={studentHorseInfo}
               />
             </div>
           </div>
@@ -773,6 +774,7 @@ export function InstructorClient({
               dayFilter={dayFilter}
               students={students}
               dutyTypes={dutyTypes}
+              studentHorseInfo={studentHorseInfo}
             />
           </div>
         )}

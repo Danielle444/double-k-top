@@ -7,6 +7,7 @@ import {
 } from "@/lib/actions/instructor-schedule";
 import { getNoDutyStatusForRange } from "@/lib/actions/no-duty-dates";
 import { getPhoneHref, getWhatsAppHref } from "@/lib/phone-format";
+import { getHorseDisplayInfo, type HorseBadgeType } from "@/lib/horse-info";
 
 interface StudentOption {
   id: string;
@@ -15,9 +16,27 @@ interface StudentOption {
   subgroupNumber: number | null;
 }
 
+// Narrowest readonly shape needed to reuse getHorseDisplayInfo - the trainee's
+// CURRENT horse state (not horse-as-of-duty-date). Passed down from
+// InstructorClient's already-fetched studentHorseInfo; this component never
+// fetches it. Merged only by studentId, and a missing entry fails closed
+// (the horse line is omitted) rather than fabricating an assignment.
+interface StudentHorseInfoOption {
+  readonly id: string;
+  readonly hasPrivateHorse: boolean;
+  readonly privateHorseName: string | null;
+  readonly assignedHorseName: string | null;
+}
+
 interface DutyTypeOption {
   id: string;
   name: string;
+}
+
+function horseBadgeClass(badgeType: HorseBadgeType): string {
+  if (badgeType === "private") return "bg-success-muted text-success";
+  if (badgeType === "assigned") return "bg-secondary text-secondary-foreground";
+  return "bg-muted text-muted-foreground";
 }
 
 export function InstructorDutiesSection({
@@ -25,11 +44,13 @@ export function InstructorDutiesSection({
   dayFilter,
   students,
   dutyTypes,
+  studentHorseInfo,
 }: {
   weeklyScheduleId: string | null;
   dayFilter: string | "all";
   students: StudentOption[];
   dutyTypes: DutyTypeOption[];
+  studentHorseInfo: readonly StudentHorseInfoOption[];
 }) {
   const [studentFilter, setStudentFilter] = useState("");
   const [dutyTypeFilter, setDutyTypeFilter] = useState("");
@@ -73,6 +94,14 @@ export function InstructorDutiesSection({
       cancelled = true;
     };
   }, [weeklyScheduleId, dayFilter, studentFilter, dutyTypeFilter]);
+
+  // Deterministic studentId -> current-horse-info lookup, built once from the
+  // already-fetched studentHorseInfo prop (no server call, no N+1). Duty rows
+  // merge into this by their own studentId only.
+  const horseInfoByStudentId = useMemo(
+    () => new Map(studentHorseInfo.map((h) => [h.id, h])),
+    [studentHorseInfo]
+  );
 
   const groupedByDay = useMemo(() => {
     if (!rows) return [];
@@ -191,6 +220,32 @@ export function InstructorDutiesSection({
                         .filter(Boolean)
                         .join(" · ")}
                     </p>
+                    {(() => {
+                      // Current horse for this trainee. Merge miss (no matching
+                      // studentId in the current-horse map) fails closed: omit
+                      // the line entirely rather than fabricate an assignment.
+                      const horse = horseInfoByStudentId.get(row.studentId);
+                      if (!horse) return null;
+                      const info = getHorseDisplayInfo(horse);
+                      return (
+                        <p className="mt-1 flex flex-wrap items-center gap-2">
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-xs font-medium ${horseBadgeClass(
+                              info.badgeType
+                            )}`}
+                          >
+                            {info.badgeLabel}
+                          </span>
+                          <span
+                            className={`text-sm font-semibold ${
+                              info.horseName ? "text-card-foreground" : "italic text-muted-foreground"
+                            }`}
+                          >
+                            {info.horseNameDisplay}
+                          </span>
+                        </p>
+                      );
+                    })()}
                     <p className="mt-2 text-base font-semibold text-card-foreground">
                       {row.dutyTypeName}
                     </p>
