@@ -7,6 +7,8 @@ import type { ActionResult } from "@/lib/actions/students";
 import { writeTraineeHorseAssignment } from "@/lib/trainee-history/horse-write-service";
 import { israelDateKeyFromInstant } from "@/lib/trainee-history/israel-date";
 import type { PublicErrorCode, WritePolicy } from "@/lib/trainee-history/apply-plan";
+import { resolveCurrentCourseOffering } from "@/lib/course/current-offering";
+import { isKnownCurrentOfferingError } from "@/lib/course/create-trainee-enrollment-core";
 
 export interface HorseAssignmentRow {
   id: string;
@@ -48,6 +50,13 @@ export interface HorseInfoUpdate {
   assignedHorseName: string | null;
 }
 
+// Single safe, generic message for ANY known current-offering structural failure
+// (no offering / ambiguous / incomplete). Deliberately reveals no offering count,
+// id, dates, class name, or Prisma detail - the manager is told only that the
+// horse update is unavailable and to contact system management.
+const CURRENT_OFFERING_UNAVAILABLE_MESSAGE =
+  "לא ניתן לעדכן חלוקת סוסים כעת עקב בעיה בהגדרת הקורס הנוכחי. יש לפנות לניהול המערכת";
+
 // Map an effective-dated write failure code to a clear, user-facing Hebrew
 // message. Never surfaces internal DB/transaction details; unmapped codes fall
 // back to a generic failure message.
@@ -80,6 +89,21 @@ export async function updateStudentHorseInfo(
   // GH2A1 date helper) so effectiveFrom == cutover passes the cutover gate.
   const today = israelDateKeyFromInstant(now);
 
+  // Resolve the current CourseOffering SERVER-SIDE (never client-supplied) and
+  // convert only the three KNOWN structural failures (no / ambiguous /
+  // incomplete offering) into a safe Hebrew ActionResult, reusing the shared
+  // classifier so this action never rejects on them. Any other error propagates.
+  let courseOfferingId: string;
+  try {
+    const offering = await resolveCurrentCourseOffering();
+    courseOfferingId = offering.id;
+  } catch (err) {
+    if (isKnownCurrentOfferingError(err)) {
+      return { success: false, error: CURRENT_OFFERING_UNAVAILABLE_MESSAGE };
+    }
+    throw err;
+  }
+
   const policy: WritePolicy = {
     actorKind: "admin",
     allowFutureEffectiveDates: false,
@@ -90,6 +114,7 @@ export async function updateStudentHorseInfo(
   const outcome = await writeTraineeHorseAssignment(
     {
       studentId,
+      courseOfferingId,
       effectiveFrom: today,
       assignedHorseName: data.assignedHorseName,
       hasPrivateHorse: data.hasPrivateHorse,
