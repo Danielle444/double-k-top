@@ -339,8 +339,8 @@ function SameParentBadge({ otherNames, onClick }: { otherNames: string[]; onClic
   );
 }
 
-// Small read-only rating indicator shown beside a beginner trainee's name -
-// visually mirrors the riding feedback rating pill (compact success-colored
+// Small read-only rating indicator shown beside a Teaching Practice trainee's
+// name - visually mirrors the riding feedback rating pill (compact success-colored
 // bg-success-muted/text-success pill). Rating value only (e.g. "3", "4.5") -
 // never any feedback free-text or ids. Presentational only: the caller
 // decides whether it may render at all via decideTeachingPracticeRatingBadge
@@ -8242,12 +8242,13 @@ function LessonTableRow({
   return (
     <Fragment>
       {displayRows.map((row, i) => {
-        // Beginner rating badge decision for this participant row. Pure /
-        // DB-free: beginner practice types only, permitted viewers only
-        // (admin, or instructor with the exact capability), valid in-range
-        // integer rating only - otherwise hidden. Reads the rating that the
-        // server already redacted for unauthorized viewers, so this is
-        // defense-in-depth on top of the authoritative server gate.
+        // Rating badge decision for this participant row. Pure / DB-free:
+        // feedback-eligible Teaching Practice types only (LUNGE,
+        // BEGINNER_PRIVATE, BEGINNER_GROUP), permitted viewers only (admin, or
+        // instructor with the exact capability), valid in-range integer rating
+        // only - otherwise hidden. Reads the rating that the server already
+        // redacted for unauthorized viewers, so this is defense-in-depth on
+        // top of the authoritative server gate.
         const ratingBadge = decideTeachingPracticeRatingBadge({
           role,
           canEditTeachingPracticeFeedback,

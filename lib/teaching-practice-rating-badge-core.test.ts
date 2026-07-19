@@ -75,13 +75,62 @@ test("admin -> visible regardless of the capability flag", () => {
   }
 });
 
-test("LUNGE -> hidden even for a permitted role and valid rating", () => {
+test("authorized instructor + LUNGE + rating 8 -> visible '4'", () => {
   const decision = decideTeachingPracticeRatingBadge({
-    ...baseInput(),
+    role: "instructor",
+    canEditTeachingPracticeFeedback: true,
     practiceType: "LUNGE",
+    ratingHalfPoints: 8,
+  });
+  assert.equal(decision.visible, true);
+  assert.equal(decision.displayValue, "4");
+});
+
+test("authorized instructor + LUNGE + rating 9 -> visible '4.5'", () => {
+  const decision = decideTeachingPracticeRatingBadge({
+    role: "instructor",
+    canEditTeachingPracticeFeedback: true,
+    practiceType: "LUNGE",
+    ratingHalfPoints: 9,
+  });
+  assert.equal(decision.visible, true);
+  assert.equal(decision.displayValue, "4.5");
+});
+
+test("admin + LUNGE -> visible", () => {
+  const decision = decideTeachingPracticeRatingBadge({
+    role: "admin",
+    canEditTeachingPracticeFeedback: false,
+    practiceType: "LUNGE",
+    ratingHalfPoints: 8,
+  });
+  assert.equal(decision.visible, true);
+  assert.equal(decision.displayValue, "4");
+});
+
+test("unauthorized instructor + LUNGE -> hidden", () => {
+  const decision = decideTeachingPracticeRatingBadge({
+    role: "instructor",
+    canEditTeachingPracticeFeedback: false,
+    practiceType: "LUNGE",
+    ratingHalfPoints: 8,
   });
   assert.equal(decision.visible, false);
   assert.equal(decision.displayValue, null);
+});
+
+test("null / invalid LUNGE rating -> hidden", () => {
+  const invalid: unknown[] = [null, undefined, 0, 1, 11, 4.5, NaN, "8"];
+  for (const rating of invalid) {
+    const decision = decideTeachingPracticeRatingBadge({
+      role: "instructor",
+      canEditTeachingPracticeFeedback: true,
+      practiceType: "LUNGE",
+      ratingHalfPoints: rating as unknown as number,
+    });
+    assert.equal(decision.visible, false, `LUNGE rating ${String(rating)} must be hidden`);
+    assert.equal(decision.displayValue, null);
+  }
 });
 
 test("unknown practice type -> hidden", () => {

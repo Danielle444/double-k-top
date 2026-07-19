@@ -14,11 +14,12 @@
 // the server redaction remains authoritative.
 //
 // Fail closed by construction: `visible` is true only for an
-// explicitly-permitted role, an exact beginner practice type, and a valid
-// in-range integer rating. Every other input (LUNGE, unknown type, unknown
-// role, missing permission, null/NaN/out-of-range/non-integer rating) hides
-// the badge. Deterministic and non-mutating: the same input always yields an
-// equal decision and no argument is ever written to.
+// explicitly-permitted role, an exact feedback-eligible Teaching Practice
+// lesson type (LUNGE, BEGINNER_PRIVATE, BEGINNER_GROUP), and a valid in-range
+// integer rating. Every other input (unknown type, unknown role, missing
+// permission, null/NaN/out-of-range/non-integer rating) hides the badge.
+// Deterministic and non-mutating: the same input always yields an equal
+// decision and no argument is ever written to.
 
 export type TeachingPracticeRatingBadgeRole = "admin" | "instructor" | "unknown";
 
@@ -29,8 +30,9 @@ export interface TeachingPracticeRatingBadgeInput {
   // The instructor feedback-edit capability. Only the exact boolean `true`
   // grants an instructor visibility - see isPermittedRole.
   canEditTeachingPracticeFeedback: boolean;
-  // The row's actual lesson practice type. Only the two beginner types get a
-  // badge; LUNGE and anything else never do. Kept as a plain string so this
+  // The row's actual lesson practice type. Only the three feedback-eligible
+  // Teaching Practice types (LUNGE, BEGINNER_PRIVATE, BEGINNER_GROUP) get a
+  // badge; any other/unknown value never does. Kept as a plain string so this
   // core does not depend on the teaching-practice enum type.
   practiceType: string;
   // The stored rating in half-points (2..10 == 1.0..5.0), or null/absent.
@@ -51,9 +53,11 @@ const HIDDEN: TeachingPracticeRatingBadgeDecision = Object.freeze({
   displayValue: null,
 });
 
-// Exactly the two beginner practice types are eligible. LUNGE and any unknown
-// type are absent, so they hide the badge.
-const BADGE_PRACTICE_TYPES: ReadonlySet<string> = new Set(["BEGINNER_PRIVATE", "BEGINNER_GROUP"]);
+// The three feedback-eligible Teaching Practice lesson types are eligible for
+// the badge. Any other/unknown type is absent, so it hides the badge. LUNGE
+// shares the same TeachingPracticeFeedback.ratingHalfPoints field and the same
+// server permission boundary as the beginner types, so it is included here.
+const BADGE_PRACTICE_TYPES: ReadonlySet<string> = new Set(["LUNGE", "BEGINNER_PRIVATE", "BEGINNER_GROUP"]);
 
 // 1.0-5.0 in 0.5 steps stored as ratingHalfPoints 2-10 - same convention as
 // FEEDBACK_RATING_OPTIONS / RidingLessonNote.ratingHalfPoints. Anything outside
