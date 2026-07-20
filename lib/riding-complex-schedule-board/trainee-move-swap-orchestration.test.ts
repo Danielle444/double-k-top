@@ -320,11 +320,13 @@ const TRAINEE_NAMES = new Map<string, string>([
   ["occ2", "רותם"],
   ["occ3", "יעל"],
 ]);
-const STATION_LABELS = new Map<string, string>([
-  ["p1", "מאמן א׳"],
-  ["p2", "מאמן ב׳"],
-  ["p3", "מאמן ג׳"],
-  ["p4", "מאמן ד׳"],
+// Per-pair station/time CONTEXT strings - used ONLY to disambiguate two otherwise-
+// identical position labels (distinct here so a disambiguation would be visible).
+const PAIR_CONTEXTS = new Map<string, string>([
+  ["p1", "מגרש 1"],
+  ["p2", "מגרש 2"],
+  ["p3", "מגרש 3"],
+  ["p4", "מגרש 4"],
 ]);
 
 // Every internal id that must never surface in a rendered string.
@@ -338,7 +340,7 @@ function assertNoIds(...strings: string[]): void {
   }
 }
 
-test("MOVE proposal labels + view model: names only, no id, no horse/note in command", () => {
+test("MOVE proposal labels + view model: position = partner name, no id, no horse/note in command", () => {
   const index = buildTraineePlacementIndex(basePlan());
   const decision = decideFullListTraineeClick({
     index,
@@ -354,22 +356,36 @@ test("MOVE proposal labels + view model: names only, no id, no horse/note in com
     blockId: "b1",
     candidateTraineeName: TRAINEE_NAMES.get("occ1") ?? null,
     traineeNames: TRAINEE_NAMES,
-    stationLabels: STATION_LABELS,
+    pairContexts: PAIR_CONTEXTS,
   });
   assert.equal(labels.candidateTraineeName, "דנה");
   assert.equal(labels.occupantTraineeName, null);
-  assert.equal(labels.sourceStationLabel, "מאמן א׳");
-  assert.equal(labels.destinationStationLabel, "מאמן ב׳");
+  // Source p1 partner = occ2 (רותם); dest p2 partner (the existing occupant occ3).
+  assert.equal(labels.sourcePositionLabel, "זוג עם רותם");
+  assert.equal(labels.destinationPositionLabel, "זוג עם יעל");
+  // Distinct base labels -> NO context appended (concise).
+  assert.ok(!labels.sourcePositionLabel!.includes("מגרש"));
 
   const vm = buildProposalViewModel(proposal, labels);
-  assertNoIds(vm.title, vm.before, vm.after, vm.confirmLabel, vm.cancelLabel);
-  assert.ok(vm.before.includes("דנה"));
-  assert.ok(vm.after.includes("מאמן ב׳"));
+  const allStrings = [
+    vm.title,
+    vm.confirmLabel,
+    vm.cancelLabel,
+    vm.sections.beforeHeading,
+    vm.sections.afterHeading,
+    vm.sections.stableNote,
+    ...vm.sections.beforeRows.flatMap((r) => [r.heading, r.detail]),
+    ...vm.sections.afterRows.flatMap((r) => [r.heading, r.detail]),
+  ];
+  assertNoIds(...allStrings);
+  // Source clearly shown before, destination clearly shown after.
+  assert.deepEqual(vm.sections.beforeRows, [{ heading: "דנה", detail: "זוג עם רותם" }]);
+  assert.deepEqual(vm.sections.afterRows, [{ heading: "השיבוץ של דנה", detail: "זוג עם יעל" }]);
   // The command carries only trainee seats - never horse or note.
   assert.deepEqual(Object.keys(vm.command).sort(), ["destination", "expectedVersion", "op", "source"].sort());
 });
 
-test("SWAP proposal labels (from an explicit-seat dropdown swap) resolve the occupant; view model has no id", () => {
+test("SWAP proposal: two distinct before placements, reversed after; occupant resolved; no id", () => {
   const index = buildTraineePlacementIndex(basePlan());
   // A SWAP comes from the EXPLICIT dropdown seat (the full list refuses a full pair).
   const decision = decideTraineeSelection({
@@ -387,14 +403,67 @@ test("SWAP proposal labels (from an explicit-seat dropdown swap) resolve the occ
     blockId: "b1",
     candidateTraineeName: TRAINEE_NAMES.get("occ3") ?? null,
     traineeNames: TRAINEE_NAMES,
-    stationLabels: STATION_LABELS,
+    pairContexts: PAIR_CONTEXTS,
   });
   assert.equal(labels.candidateTraineeName, "יעל");
   // occupant is occ2 (p1 seat 2).
   assert.equal(labels.occupantTraineeName, "רותם");
+  // Source pair p2 has no other occupant -> partnerless; dest pair p1 partner = occ1.
+  assert.equal(labels.sourcePositionLabel, "ללא בן/בת זוג");
+  assert.equal(labels.destinationPositionLabel, "זוג עם דנה");
 
   const vm = buildProposalViewModel(proposal, labels);
-  assertNoIds(vm.title, vm.before, vm.after);
-  assert.ok(vm.before.includes("יעל") && vm.before.includes("רותם"));
+  assertNoIds(
+    vm.title,
+    ...vm.sections.beforeRows.flatMap((r) => [r.heading, r.detail]),
+    ...vm.sections.afterRows.flatMap((r) => [r.heading, r.detail])
+  );
+  // Two distinct BEFORE placements (candidate + occupant), REVERSED AFTER.
+  assert.deepEqual(vm.sections.beforeRows, [
+    { heading: "יעל", detail: "ללא בן/בת זוג" },
+    { heading: "רותם", detail: "זוג עם דנה" },
+  ]);
+  assert.deepEqual(vm.sections.afterRows, [
+    { heading: "השיבוץ של יעל", detail: "זוג עם דנה" },
+    { heading: "השיבוץ של רותם", detail: "ללא בן/בת זוג" },
+  ]);
   assert.deepEqual(Object.keys(vm.command).sort(), ["a", "b", "expectedVersion", "op"].sort());
+});
+
+test("identical position base labels get station/time disambiguation when available", () => {
+  // A block with the moving trainee alone in p_a and an empty p_b - both positions
+  // would read "ללא בן/בת זוג", so available context must be appended to distinguish.
+  const plan: PlacementPlanInput = {
+    blocks: [
+      {
+        id: "bd",
+        stations: [{ id: "sd", pairs: [{ id: "pa", trainee1Id: "lone", trainee2Id: null }, { id: "pb", trainee1Id: null, trainee2Id: null }] }],
+      },
+    ],
+  };
+  const index = buildTraineePlacementIndex(plan);
+  const decision = decideFullListTraineeClick({
+    index,
+    blockId: "bd",
+    candidateTraineeId: "lone",
+    destinationPairId: "pb",
+    expectedVersion: VERSION,
+  });
+  const proposal = decisionToProposalInput(decision);
+  assert.ok(proposal && proposal.kind === "move");
+  const contexts = new Map<string, string>([
+    ["pa", "מאמן/ת רון, מגרש 1, 16:00–17:00"],
+    ["pb", "מאמן/ת רון, מגרש 2, 16:00–17:00"],
+  ]);
+  const labels = buildMoveSwapProposalLabels(proposal, {
+    index,
+    blockId: "bd",
+    candidateTraineeName: "לוני",
+    traineeNames: new Map([["lone", "לוני"]]),
+    pairContexts: contexts,
+  });
+  // Both bases were "ללא בן/בת זוג" -> context appended so they remain distinct.
+  assert.equal(labels.sourcePositionLabel, "ללא בן/בת זוג, מאמן/ת רון, מגרש 1, 16:00–17:00");
+  assert.equal(labels.destinationPositionLabel, "ללא בן/בת זוג, מאמן/ת רון, מגרש 2, 16:00–17:00");
+  assert.notEqual(labels.sourcePositionLabel, labels.destinationPositionLabel);
 });

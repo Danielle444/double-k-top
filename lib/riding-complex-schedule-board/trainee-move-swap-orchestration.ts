@@ -167,11 +167,15 @@ export function decisionToProposalInput(decision: FullListTraineeDecision): Prop
 }
 
 // ---------------------------------------------------------------------------
-// (4) Safe display labels for the confirmation view model. Reads ONLY
-// caller-supplied, already-visible names (a trainee-name map, a station-label
-// map) and the clicked candidate's name - never an id. The swap occupant is
-// resolved from the destination seat via the placement index (an id lookup used
-// purely to find the OTHER trainee's NAME; the id itself is never emitted).
+// (4) Safe display labels for the confirmation view model. Reads ONLY caller-
+// supplied, already-visible names (a trainee-name map) and safe per-pair station
+// context strings (a pair-context map) - never an id. A POSITION label identifies
+// the PAIR, not the moving trainee: it is "זוג עם {the OTHER occupant of that
+// pair}" (resolved from the placement index purely to find that trainee's NAME;
+// the id itself is never emitted), or "ללא בן/בת זוג" when the pair has no other
+// seat filled. When the two positions would read identically (same partner name /
+// both partnerless), available station/time context is appended so they stay
+// distinguishable. The swap occupant's name is resolved the same way.
 // ---------------------------------------------------------------------------
 
 export interface MoveSwapLabelInputs {
@@ -181,42 +185,82 @@ export interface MoveSwapLabelInputs {
   readonly candidateTraineeName: string | null;
   /** studentId -> already-visible trainee name (never emitted as an id). */
   readonly traineeNames: ReadonlyMap<string, string>;
-  /** pairId -> an already-visible station label (coach / arena / time range). */
-  readonly stationLabels: ReadonlyMap<string, string>;
+  /** pairId -> a safe, id-free station/time context string (coach / arena / time
+   *  range), used only to DISAMBIGUATE two otherwise-identical position labels. */
+  readonly pairContexts: ReadonlyMap<string, string>;
 }
 
+/** The occupant id of the OTHER seat of a pair (the one that is NOT the move/swap
+ *  slot) - i.e. the partner who stays in that pair. null when unknown/empty. */
+function partnerOccupantId(occupants: PairOccupants | null, slot: "trainee1" | "trainee2"): string | null {
+  if (!occupants) return null;
+  return slot === "trainee1" ? occupants.trainee2Id : occupants.trainee1Id;
+}
+
+/** The occupant id sitting IN the given seat (the swap occupant). */
 function seatOccupantId(occupants: PairOccupants | null, slot: "trainee1" | "trainee2"): string | null {
   if (!occupants) return null;
   return slot === "trainee1" ? occupants.trainee1Id : occupants.trainee2Id;
 }
 
+/** The base position label for a pair: "זוג עם {partner name}", or "ללא בן/בת זוג"
+ *  when the pair has no other occupant. null when the pair itself is unresolvable
+ *  (stale/ambiguous) so the view model falls back to its generic pair label. */
+function basePositionLabel(
+  occupants: PairOccupants | null,
+  slot: "trainee1" | "trainee2",
+  traineeNames: ReadonlyMap<string, string>
+): string | null {
+  if (occupants === null) return null;
+  const partnerId = partnerOccupantId(occupants, slot);
+  const partnerName = partnerId !== null ? (traineeNames.get(partnerId) ?? null) : null;
+  return partnerName !== null ? `זוג עם ${partnerName}` : "ללא בן/בת זוג";
+}
+
 /**
- * Build the safe Hebrew ProposalDisplayLabels for a prepared Move/Swap proposal.
- * Pure and deterministic. Every value is a caller-supplied name / label or a
- * generic fallback resolved inside buildProposalViewModel - NO id, version, or
- * other internal reference is ever placed in the returned labels.
+ * Build the safe Hebrew ProposalDisplayLabels for a prepared trainee Move/Swap
+ * proposal. Pure and deterministic. Every value is a caller-supplied name / a
+ * derived position label / null (the view model applies the generic fallback) -
+ * NO id, version, slot, or other internal reference is ever placed in the result.
  */
 export function buildMoveSwapProposalLabels(
   proposal: ProposalInput,
   inputs: MoveSwapLabelInputs
 ): ProposalDisplayLabels {
-  if (proposal.kind === "move") {
-    const { source, destination } = proposal.command;
-    return {
-      candidateTraineeName: inputs.candidateTraineeName ?? null,
-      occupantTraineeName: null,
-      sourceStationLabel: inputs.stationLabels.get(source.pairId) ?? null,
-      destinationStationLabel: inputs.stationLabels.get(destination.pairId) ?? null,
-    };
+  // Resolve the source/destination pair refs uniformly from the command (a MOVE's
+  // source/destination, a SWAP's a/b).
+  const { source, destination } =
+    proposal.kind === "move"
+      ? { source: proposal.command.source, destination: proposal.command.destination }
+      : { source: proposal.command.a, destination: proposal.command.b };
+
+  const sourceOccupants = resolvePairOccupants(inputs.index, inputs.blockId, source.pairId);
+  const destOccupants = resolvePairOccupants(inputs.index, inputs.blockId, destination.pairId);
+
+  let sourcePositionLabel = basePositionLabel(sourceOccupants, source.slot, inputs.traineeNames);
+  let destinationPositionLabel = basePositionLabel(destOccupants, destination.slot, inputs.traineeNames);
+
+  // Disambiguate two identical, present base labels (same partner / both
+  // partnerless) with whatever safe station/time context is available.
+  if (sourcePositionLabel !== null && sourcePositionLabel === destinationPositionLabel) {
+    const sourceContext = inputs.pairContexts.get(source.pairId) ?? null;
+    const destContext = inputs.pairContexts.get(destination.pairId) ?? null;
+    if (sourceContext) sourcePositionLabel = `${sourcePositionLabel}, ${sourceContext}`;
+    if (destContext) destinationPositionLabel = `${destinationPositionLabel}, ${destContext}`;
   }
 
-  const { a, b } = proposal.command;
-  const destOccupants = resolvePairOccupants(inputs.index, inputs.blockId, b.pairId);
-  const occupantId = seatOccupantId(destOccupants, b.slot);
+  // The swap occupant (the trainee currently IN the destination seat) - a name
+  // only, for the second confirmation card. null / absent for a MOVE.
+  let occupantTraineeName: string | null = null;
+  if (proposal.kind === "swap") {
+    const occupantId = seatOccupantId(destOccupants, destination.slot);
+    occupantTraineeName = occupantId !== null ? (inputs.traineeNames.get(occupantId) ?? null) : null;
+  }
+
   return {
     candidateTraineeName: inputs.candidateTraineeName ?? null,
-    occupantTraineeName: occupantId !== null ? (inputs.traineeNames.get(occupantId) ?? null) : null,
-    sourceStationLabel: inputs.stationLabels.get(a.pairId) ?? null,
-    destinationStationLabel: inputs.stationLabels.get(b.pairId) ?? null,
+    occupantTraineeName,
+    sourcePositionLabel,
+    destinationPositionLabel,
   };
 }

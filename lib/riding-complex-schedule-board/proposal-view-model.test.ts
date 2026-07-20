@@ -35,61 +35,91 @@ const SWAP: ProposalInput = {
   },
 };
 
-test("move: safe Hebrew before/after copy from supplied labels", () => {
+const STABLE_NOTE = "הסוסים וההערות נשארים עם הזוגים ואינם עוברים עם החניכים.";
+
+test("move: structured before/after with position labels; pipe-free; stable note", () => {
   const vm = buildProposalViewModel(MOVE, {
     candidateTraineeName: "דנה",
-    sourceStationLabel: "עמדת רוני",
-    destinationStationLabel: "עמדת יוסי",
+    sourcePositionLabel: "זוג עם רון",
+    destinationPositionLabel: "זוג עם יוסי",
   });
   assert.equal(vm.kind, "move");
-  assert.equal(vm.title, "העברת חניכ/ה");
-  assert.ok(vm.before.includes("דנה") && vm.before.includes("עמדת רוני"));
-  assert.ok(vm.after.includes("דנה") && vm.after.includes("עמדת יוסי"));
+  assert.equal(vm.title, "העברת חניך/ה");
+  assert.equal(vm.sections.beforeHeading, "לפני ההעברה");
+  assert.equal(vm.sections.afterHeading, "אחרי ההעברה");
+  // Before: the trainee at their CURRENT position (heading = name, detail = pos).
+  assert.deepEqual(vm.sections.beforeRows, [{ heading: "דנה", detail: "זוג עם רון" }]);
+  // After: "השיבוץ של {name}" -> destination position.
+  assert.deepEqual(vm.sections.afterRows, [{ heading: "השיבוץ של דנה", detail: "זוג עם יוסי" }]);
+  assert.equal(vm.sections.stableNote, STABLE_NOTE);
   assert.equal(vm.confirmLabel, "אישור העברה");
   assert.equal(vm.cancelLabel, "ביטול");
+  // No dense pipe copy anywhere.
+  assert.ok(!vm.before.includes("|") && !vm.after.includes("|"));
 });
 
-test("swap: safe Hebrew before/after copy naming both trainees", () => {
+test("swap: two DISTINCT before placements and REVERSED after placements; pipe-free", () => {
   const vm = buildProposalViewModel(SWAP, {
     candidateTraineeName: "דנה",
     occupantTraineeName: "מיה",
-    sourceStationLabel: "עמדת רוני",
-    destinationStationLabel: "עמדת יוסי",
+    sourcePositionLabel: "זוג עם רון",
+    destinationPositionLabel: "זוג עם יוסי",
   });
   assert.equal(vm.kind, "swap");
   assert.equal(vm.title, "החלפת חניכים");
-  assert.ok(vm.before.includes("דנה") && vm.before.includes("מיה"));
-  assert.ok(vm.after.includes("דנה") && vm.after.includes("מיה"));
-  // Before: דנה at source, מיה at destination. After: they exchange.
-  assert.ok(vm.before.includes("עמדת רוני") && vm.before.includes("עמדת יוסי"));
-  assert.ok(vm.after.includes("עמדת רוני") && vm.after.includes("עמדת יוסי"));
+  // Before: דנה at source, מיה at destination - two distinct placements.
+  assert.deepEqual(vm.sections.beforeRows, [
+    { heading: "דנה", detail: "זוג עם רון" },
+    { heading: "מיה", detail: "זוג עם יוסי" },
+  ]);
+  // After: they exchange - דנה takes destination, מיה takes source.
+  assert.deepEqual(vm.sections.afterRows, [
+    { heading: "השיבוץ של דנה", detail: "זוג עם יוסי" },
+    { heading: "השיבוץ של מיה", detail: "זוג עם רון" },
+  ]);
+  assert.equal(vm.sections.stableNote, STABLE_NOTE);
   assert.equal(vm.confirmLabel, "אישור החלפה");
   assert.equal(vm.cancelLabel, "ביטול");
+  // The name is the heading; the position is the detail - never confused.
+  assert.notEqual(vm.sections.beforeRows[0].heading, vm.sections.beforeRows[0].detail);
+  // No pipe-delimited dense copy.
+  for (const s of [vm.before, vm.after]) assert.ok(!s.includes("|"), s);
 });
 
-test("generic safe fallback labels when a display name is absent", () => {
+test("generic safe fallback labels when a display name/position is absent", () => {
   const move = buildProposalViewModel(MOVE, {});
-  assert.ok(move.before.includes("חניכ/ה"));
-  assert.ok(move.before.includes("העמדה הנוכחית"));
-  assert.ok(move.after.includes("העמדה הנבחרת"));
+  assert.equal(move.sections.beforeRows[0].heading, "חניכ/ה");
+  assert.equal(move.sections.beforeRows[0].detail, "הזוג הנוכחי");
+  assert.equal(move.sections.afterRows[0].detail, "הזוג הנבחר");
 
   const swap = buildProposalViewModel(SWAP, {
     candidateTraineeName: "   ", // whitespace-only -> fallback
     occupantTraineeName: null,
   });
-  assert.ok(swap.before.includes("חניכ/ה"));
-  assert.ok(swap.before.includes("חניכ/ה אחר/ת"));
+  assert.equal(swap.sections.beforeRows[0].heading, "חניכ/ה");
+  assert.equal(swap.sections.beforeRows[1].heading, "חניכ/ה אחר/ת");
 });
 
-test("no raw ids (pair ids / version) are reflected into any display string", () => {
+test("no raw ids/version/op/slot are reflected into any display string", () => {
   const displayStrings = (input: ProposalInput): string[] => {
     const vm = buildProposalViewModel(input, {
       candidateTraineeName: "דנה",
       occupantTraineeName: "מיה",
-      sourceStationLabel: "עמדת רוני",
-      destinationStationLabel: "עמדת יוסי",
+      sourcePositionLabel: "זוג עם רון",
+      destinationPositionLabel: "זוג עם יוסי",
     });
-    return [vm.title, vm.before, vm.after, vm.confirmLabel, vm.cancelLabel];
+    return [
+      vm.title,
+      vm.before,
+      vm.after,
+      vm.confirmLabel,
+      vm.cancelLabel,
+      vm.sections.beforeHeading,
+      vm.sections.afterHeading,
+      vm.sections.stableNote,
+      ...vm.sections.beforeRows.flatMap((r) => [r.heading, r.detail]),
+      ...vm.sections.afterRows.flatMap((r) => [r.heading, r.detail]),
+    ];
   };
   const forbidden = [
     "PAIR_SRC_ZZZ",
@@ -100,6 +130,8 @@ test("no raw ids (pair ids / version) are reflected into any display string", ()
     "9191",
     "trainee1",
     "trainee2",
+    "MOVE_TRAINEE",
+    "SWAP_TRAINEES",
   ];
   for (const input of [MOVE, SWAP]) {
     for (const s of displayStrings(input)) {
@@ -115,9 +147,13 @@ test("the command is retained verbatim in the non-display field for execution", 
   assert.deepEqual(vm.command, MOVE.command);
 });
 
-test("view model is frozen (module convention)", () => {
+test("view model (and its sections/rows) is frozen (module convention)", () => {
   assert.equal(Object.isFrozen(buildProposalViewModel(MOVE, {})), true);
-  assert.equal(Object.isFrozen(buildProposalViewModel(SWAP, {})), true);
+  const swap = buildProposalViewModel(SWAP, {});
+  assert.equal(Object.isFrozen(swap), true);
+  assert.equal(Object.isFrozen(swap.sections), true);
+  assert.equal(Object.isFrozen(swap.sections.beforeRows), true);
+  assert.equal(Object.isFrozen(swap.sections.beforeRows[0]), true);
 });
 
 test("success -> APPLIED: reload plan, close dialog, return to board, no retry", () => {

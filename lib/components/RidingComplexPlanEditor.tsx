@@ -16,6 +16,7 @@ import { decideTraineeSelection } from "@/lib/riding-complex-schedule-board/trai
 import {
   buildProposalViewModel,
   decideProposalActionResult,
+  type ProposalPlacementRow,
   type ProposalViewModel,
 } from "@/lib/riding-complex-schedule-board/proposal-view-model";
 import {
@@ -24,6 +25,30 @@ import {
   decisionToProposalInput,
   type FullListTraineeDecision,
 } from "@/lib/riding-complex-schedule-board/trainee-move-swap-orchestration";
+import {
+  buildHorsePlacementIndex,
+  horseKey,
+  horseStore,
+  resolvePairHorse,
+} from "@/lib/riding-complex-schedule-board/horse-placement-index";
+import { decideHorseSelection } from "@/lib/riding-complex-schedule-board/horse-selection-decision";
+import {
+  buildInstructorPlacementIndex,
+  resolveStationInstructor,
+} from "@/lib/riding-complex-schedule-board/instructor-placement-index";
+import { decideInstructorSelection } from "@/lib/riding-complex-schedule-board/instructor-selection-decision";
+import {
+  buildHorseProposalViewModel,
+  buildInstructorProposalViewModel,
+  type ResourceProposalViewModel,
+} from "@/lib/riding-complex-schedule-board/resource-proposal-view-model";
+import {
+  isHorseProposalDirty,
+  isInstructorProposalDirty,
+  isTraineeProposalDirty,
+  shouldProcessHorseCommit,
+  type HorseCommitSource,
+} from "@/lib/riding-complex-schedule-board/resource-move-swap-orchestration";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
 import { SuggestInput } from "@/lib/components/SuggestInput";
@@ -92,6 +117,16 @@ import {
 } from "@/lib/actions/riding-slot-complex-publications";
 
 type InstructorOption = { id: string; fullName: string };
+
+// RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.3c) - the ONE prepared Move/Swap
+// confirmation view model, capable of a trainee, horse, or instructor proposal.
+// All three share the identical display surface (title / before / after / confirm
+// / cancel) and a non-display `command` field; only the `kind` discriminant and
+// the command's op differ. The single moveSwapProposal state holds whichever is
+// pending so there is one proposal state, one confirm path, and one reload path
+// across every resource. `command` is always one member of
+// ComplexPlanMoveSwapCommand, so the one actor-routed action consumes it unchanged.
+type MoveSwapProposalViewModel = ProposalViewModel | ResourceProposalViewModel;
 
 // Narrow discriminated actor - lets this editor be reused unchanged by both
 // the admin and instructor screens. Every P5b operation has an admin/
@@ -1263,6 +1298,7 @@ function PairRowEditor({
   onPickFromList,
   disabledTraineeIds,
   onOccupiedTraineeSelect,
+  onHorseCommit,
 }: {
   pair: PairDraft;
   candidates: RidingSlotComplexTraineeCandidate[];
@@ -1287,6 +1323,12 @@ function PairRowEditor({
   // (1 or 2) so the parent can offer an atomic Move/Swap instead of a local draft
   // edit. Omitted in CREATE mode and the legacy editor.
   onOccupiedTraineeSelect?: (slot: TraineeSlot, studentId: string) => void;
+  // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.3c, schedule-board pair dialog): an
+  // EXPLICIT horse-commit gesture routes here so the parent can run one occupancy
+  // check and offer a horse Move/Swap. Omitted in the legacy editor, whose horse
+  // field stays a plain local free-text edit (quick-horse buttons just set the
+  // draft, and the SuggestInput has no commit callback).
+  onHorseCommit?: (source: HorseCommitSource, value: string) => void;
 }) {
   const [showNote, setShowNote] = useState(Boolean(pair.note));
   const horseInputRef = useRef<{ focus: () => void } | null>(null);
@@ -1332,7 +1374,11 @@ function PairRowEditor({
               type="button"
               variant="secondary"
               className="!px-2 !py-1 !text-xs"
-              onClick={() => onChange({ ...pair, horseName: h })}
+              // An explicit commit gesture: in the schedule-board dialog it routes
+              // through the one occupancy check (a free horse becomes a local draft
+              // edit; one occupied elsewhere becomes a Move/Swap proposal). In the
+              // legacy editor (no onHorseCommit) it just sets the draft as before.
+              onClick={() => (onHorseCommit ? onHorseCommit("quick", h) : onChange({ ...pair, horseName: h }))}
             >
               {h}
             </Button>
@@ -1355,6 +1401,10 @@ function PairRowEditor({
             onChange={(v) => onChange({ ...pair, horseName: v })}
             suggestions={knownHorseNames}
             placeholder="סוס"
+            // Typing (onChange) only updates the local draft; a suggestion click,
+            // Enter, or blur is an EXPLICIT commit routed to the parent's one
+            // occupancy check. Absent in the legacy editor (plain free text).
+            onCommit={onHorseCommit ? (v, source) => onHorseCommit(source, v) : undefined}
           />
         </div>
         <Button type="button" variant="ghost" className="!px-2 !py-1 !text-xs" onClick={() => setShowNote((v) => !v)}>
@@ -2102,6 +2152,85 @@ function InlineStationMetaEditor({
   );
 }
 
+// RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.3c) - the ONE shared Move/Swap
+// confirmation presentation. Renders ONLY the view-model's already-safe display
+// fields (title lives on the enclosing Modal); it never touches a command, id, or
+// version. Used by BOTH the pair dialog's body-swap (trainee + horse proposals)
+// and the instructor proposal Modal, so the confirmation UI and its confirm/
+// cancel affordances exist in exactly one place.
+function MoveSwapProposalBody({
+  proposal,
+  submitting,
+  error,
+  onConfirm,
+  onCancel,
+}: {
+  proposal: MoveSwapProposalViewModel;
+  submitting: boolean;
+  error: string | null;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      {"sections" in proposal ? (
+        // Trainee proposal: structured, immediately-understandable before/after
+        // blocks (one card per trainee) + the mandatory "horses/notes stay" note.
+        // No dense "name — label | name — label" sentence, no pipes.
+        <div className="flex flex-col gap-3 text-sm">
+          <ProposalSection heading={proposal.sections.beforeHeading} rows={proposal.sections.beforeRows} tone="before" />
+          <ProposalSection heading={proposal.sections.afterHeading} rows={proposal.sections.afterRows} tone="after" />
+          <p className="text-xs text-muted-foreground">{proposal.sections.stableNote}</p>
+        </div>
+      ) : (
+        // Horse / instructor proposal: the existing flat before/after copy
+        // (unchanged - these builders live in resource-proposal-view-model.ts).
+        <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3 text-sm">
+          <p className="text-card-foreground">{proposal.before}</p>
+          <p className="font-medium text-card-foreground">{proposal.after}</p>
+        </div>
+      )}
+      {error && <p className="text-sm text-danger">{error}</p>}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="secondary" disabled={submitting} onClick={onCancel}>
+          {proposal.cancelLabel}
+        </Button>
+        <Button type="button" disabled={submitting} onClick={onConfirm}>
+          {submitting ? "מבצע..." : proposal.confirmLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// One labeled placement block (before / after) of the structured trainee Move/Swap
+// confirmation: a heading and one card per trainee (heading = trainee name or
+// "השיבוץ של {name}", detail = the pair/position label). Renders ONLY the already-
+// safe view-model strings - never an id, version, op, or slot token.
+function ProposalSection({
+  heading,
+  rows,
+  tone,
+}: {
+  heading: string;
+  rows: readonly ProposalPlacementRow[];
+  tone: "before" | "after";
+}) {
+  const cardClass =
+    tone === "after" ? "rounded-lg border border-primary/30 bg-primary/5 p-2.5" : "rounded-lg border border-border bg-muted/40 p-2.5";
+  return (
+    <section className="flex flex-col gap-1.5">
+      <h4 className="text-xs font-semibold text-muted-foreground">{heading}</h4>
+      {rows.map((r) => (
+        <div key={`${r.heading}|${r.detail}`} className={cardClass}>
+          <p className="font-medium text-card-foreground">{r.heading}</p>
+          <p className="text-muted-foreground">{r.detail}</p>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 2B) - focused pair sub-dialog. A nested
 // Modal (the same nested-Modal pattern this file already uses for the publish/
 // unpublish confirmations), reusing the exact PairRowEditor field editors
@@ -2149,6 +2278,7 @@ function InlinePairDialog({
   onClose,
   onOccupiedTraineeSelect,
   onOccupiedListClick,
+  onHorseCommit,
   proposal,
   proposalSubmitting,
   proposalError,
@@ -2174,9 +2304,15 @@ function InlinePairDialog({
   // trainees stay disabled (CREATE mode / legacy behavior).
   onOccupiedTraineeSelect?: (slot: TraineeSlot, studentId: string) => void;
   onOccupiedListClick?: (studentId: string) => void;
+  // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.3c): an EXPLICIT horse-commit gesture
+  // (quick-horse button / suggestion / Enter / exact-occupied blur) routes here so
+  // the parent can offer an atomic horse Move/Swap or a normal local draft edit.
+  onHorseCommit?: (source: HorseCommitSource, value: string) => void;
   // The prepared Move/Swap confirmation view model, or null when no proposal is
   // pending. When set, the body renders the confirmation instead of the editor.
-  proposal?: ProposalViewModel | null;
+  // A trainee OR horse proposal renders here (both live in the pair dialog); an
+  // instructor proposal renders in its own Modal from the station-meta editor.
+  proposal?: MoveSwapProposalViewModel | null;
   proposalSubmitting?: boolean;
   proposalError?: string | null;
   onConfirmProposal?: () => void;
@@ -2208,28 +2344,16 @@ function InlinePairDialog({
       }}
     >
       {proposal ? (
-        // Confirmation body: renders ONLY the Stage 3C.1 view-model display
-        // fields. No id/version appears in any text, attribute, or key.
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3 text-sm">
-            <p className="text-card-foreground">{proposal.before}</p>
-            <p className="font-medium text-card-foreground">{proposal.after}</p>
-          </div>
-          {proposalError && <p className="text-sm text-danger">{proposalError}</p>}
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={proposalSubmitting}
-              onClick={() => onCancelProposal?.()}
-            >
-              {proposal.cancelLabel}
-            </Button>
-            <Button type="button" disabled={proposalSubmitting} onClick={() => onConfirmProposal?.()}>
-              {proposalSubmitting ? "מבצע..." : proposal.confirmLabel}
-            </Button>
-          </div>
-        </div>
+        // Confirmation body: the ONE shared proposal presentation (also used by
+        // the instructor proposal Modal). Renders ONLY the view-model display
+        // fields - no id/version in any text, attribute, or key.
+        <MoveSwapProposalBody
+          proposal={proposal}
+          submitting={Boolean(proposalSubmitting)}
+          error={proposalError ?? null}
+          onConfirm={() => onConfirmProposal?.()}
+          onCancel={() => onCancelProposal?.()}
+        />
       ) : selectorOpen ? (
         <div className="flex max-h-[70vh] min-h-0 flex-1 flex-col gap-2">
           {error && <p className="shrink-0 text-sm text-danger">{error}</p>}
@@ -2257,6 +2381,7 @@ function InlinePairDialog({
             onPickFromList={() => setSelectorOpen(true)}
             disabledTraineeIds={usedTraineeIds}
             onOccupiedTraineeSelect={onOccupiedTraineeSelect}
+            onHorseCommit={onHorseCommit}
           />
           {issues.length > 0 && (
             <div className="rounded-lg border border-warning/40 bg-warning-muted/30 p-2.5 text-sm text-warning">
@@ -2342,10 +2467,20 @@ export function RidingComplexPlanEditor({
   // interferes), its own error, and a board-level notice shown after a
   // reload-closing outcome. Set only from a saved-pair dialog occupied-trainee
   // click; the pair dialog stays open (inlineEdit set) beneath the confirmation.
-  const [moveSwapProposal, setMoveSwapProposal] = useState<ProposalViewModel | null>(null);
+  const [moveSwapProposal, setMoveSwapProposal] = useState<MoveSwapProposalViewModel | null>(null);
   const [moveSwapError, setMoveSwapError] = useState<string | null>(null);
   const [isApplyingMoveSwap, startMoveSwapTransition] = useTransition();
   const isApplyingMoveSwapRef = useRef(false);
+  // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.3c) - a SYNCHRONOUS mirror of "a
+  // proposal is open", guarding proposal CREATION (not action submission - that
+  // stays isApplyingMoveSwapRef). moveSwapProposal is React state, so an Enter or
+  // suggestion commit that opens a proposal unmounts the horse input and triggers
+  // an immediate blur BEFORE the state closure updates; this ref is flipped true
+  // synchronously right before the proposal state write, so that blur (and any
+  // second gesture) sees the open proposal at once and never runs the decision a
+  // second time. Always mutated together with the state via clearMoveSwapProposal
+  // / the open sites, so the two never diverge.
+  const moveSwapProposalOpenRef = useRef(false);
   const [boardNotice, setBoardNotice] = useState<string | null>(null);
   const [lastOverlapWarning, setLastOverlapWarning] = useState<string | null>(null);
   const [lastStationWarnings, setLastStationWarnings] = useState<RidingSlotComplexSaveWarnings | null>(null);
@@ -2409,8 +2544,7 @@ export function RidingComplexPlanEditor({
     setBoardView(initialBoardView());
     setInlineEdit(null);
     setInlineError(null);
-    setMoveSwapProposal(null);
-    setMoveSwapError(null);
+    clearMoveSwapProposal();
     setBoardNotice(null);
     setLastOverlapWarning(null);
     setLastStationWarnings(null);
@@ -2646,8 +2780,7 @@ export function RidingComplexPlanEditor({
     if (isInlineSavingRef.current || isApplyingMoveSwapRef.current) return;
     setInlineEdit(null);
     setInlineError(null);
-    setMoveSwapProposal(null);
-    setMoveSwapError(null);
+    clearMoveSwapProposal();
   }
 
   // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.2 - trainee Move/Swap) --------------
@@ -2662,28 +2795,115 @@ export function RidingComplexPlanEditor({
     return plan ? buildTraineePlacementIndex(plan) : null;
   }
 
-  // studentId -> already-visible name; pairId -> an already-visible station label
-  // (coach / arena / time range). Names only - never an id - so the proposal copy
-  // stays id-free.
-  function moveSwapLabelMaps(): { traineeNames: Map<string, string>; stationLabels: Map<string, string> } {
+  // studentId -> already-visible name; pairId -> a safe, id-free station/time
+  // CONTEXT string (coach / arena / time range), used only to disambiguate two
+  // otherwise-identical trainee position labels. Names/labels only - never an id -
+  // so the proposal copy stays id-free.
+  function moveSwapLabelMaps(): { traineeNames: Map<string, string>; pairContexts: Map<string, string> } {
     const traineeNames = new Map<string, string>();
     for (const c of editing?.candidates ?? []) traineeNames.set(c.studentId, c.studentName);
-    const stationLabels = new Map<string, string>();
+    const pairContexts = new Map<string, string>();
     if (plan) {
       for (const block of plan.blocks) {
         for (const station of block.stations) {
-          const label = station.instructor?.fullName ?? station.arena ?? `${block.startTime}–${block.endTime}`;
-          for (const pair of station.pairs) stationLabels.set(pair.id, label);
+          const parts: string[] = [];
+          if (station.instructor?.fullName) parts.push(`מאמן/ת ${station.instructor.fullName}`);
+          if (station.arena) parts.push(`מגרש ${station.arena}`);
+          parts.push(`${block.startTime}–${block.endTime}`);
+          const context = parts.join(", ");
+          for (const pair of station.pairs) pairContexts.set(pair.id, context);
         }
       }
     }
-    return { traineeNames, stationLabels };
+    return { traineeNames, pairContexts };
   }
 
   // Generic, non-PII Hebrew guidance for a decision that cannot become a
   // proposal. No id, name, or note.
   function moveSwapUnavailableMessage(): string {
     return "לא ניתן לבצע את הפעולה על החניכ/ה הזה. רעננו ונסו שוב.";
+  }
+
+  // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.3c) - generic, resource-neutral safe
+  // guidance for a horse/instructor decision that cannot become a proposal
+  // (ambiguous, unavailable, or a view-model that failed to build). No id, name,
+  // horse, arena, or note.
+  const RESOURCE_MOVE_SWAP_UNAVAILABLE = "לא ניתן לבצע את הפעולה. רעננו ונסו שוב.";
+  // The shared dirty-draft refusal: a Move/Swap would reload the plan and discard
+  // the current draft, so it is blocked while unrelated fields are unsaved. No id
+  // or private value.
+  const DIRTY_DRAFT_MESSAGE =
+    "יש לשמור או לבטל את השינויים בשדות האחרים לפני ביצוע העברה או החלפה.";
+
+  // The authoritative loaded pair for the active pair edit (EDIT mode only), used
+  // by the dirty-draft guards. null in CREATE mode or if the pair vanished.
+  function loadedPairForActiveEdit(): {
+    trainee1Id: string | null;
+    trainee2Id: string | null;
+    horseName: string | null;
+    note: string | null;
+  } | null {
+    if (!plan || inlineEdit?.kind !== "pair" || inlineEdit.pairId === null) return null;
+    const row = plan.blocks
+      .find((b) => b.id === inlineEdit.blockId)
+      ?.stations.find((s) => s.id === inlineEdit.stationId)
+      ?.pairs.find((p) => p.id === inlineEdit.pairId);
+    if (!row) return null;
+    return { trainee1Id: row.trainee1Id, trainee2Id: row.trainee2Id, horseName: row.horseName, note: row.note };
+  }
+
+  // The authoritative loaded station for the active station-meta edit, used by the
+  // instructor dirty-draft guard and proposal labels. null if it vanished.
+  function loadedStationForActiveEdit(): { instructorId: string | null; arena: string | null } | null {
+    if (!plan || inlineEdit?.kind !== "stationMeta") return null;
+    const station = plan.blocks
+      .find((b) => b.id === inlineEdit.blockId)
+      ?.stations.find((s) => s.id === inlineEdit.stationId);
+    if (!station) return null;
+    return { instructorId: station.instructorId, arena: station.arena };
+  }
+
+  // pairId -> an already-visible, id-free label (its trainee names, else the
+  // station's arena/coach/time). Used for horse-proposal source/destination pair
+  // labels so two pairs of the same station are still distinguishable.
+  function pairDisplayLabels(): Map<string, string> {
+    const traineeNames = new Map<string, string>();
+    for (const c of editing?.candidates ?? []) traineeNames.set(c.studentId, c.studentName);
+    const labels = new Map<string, string>();
+    if (!plan) return labels;
+    for (const block of plan.blocks) {
+      for (const station of block.stations) {
+        const stationLabel = station.arena ?? station.instructor?.fullName ?? `${block.startTime}–${block.endTime}`;
+        for (const pair of station.pairs) {
+          const names = [pair.trainee1Id, pair.trainee2Id]
+            .filter((id): id is string => Boolean(id))
+            .map((id) => traineeNames.get(id))
+            .filter((n): n is string => Boolean(n));
+          labels.set(pair.id, names.length > 0 ? names.join(" · ") : stationLabel);
+        }
+      }
+    }
+    return labels;
+  }
+
+  // stationId -> an already-visible, id-free label (arena, else the block's time
+  // range). The coach is deliberately NOT used here - it is the moving resource.
+  function stationDisplayLabels(): Map<string, string> {
+    const labels = new Map<string, string>();
+    if (!plan) return labels;
+    for (const block of plan.blocks) {
+      for (const station of block.stations) {
+        labels.set(station.id, station.arena ?? `${block.startTime}–${block.endTime}`);
+      }
+    }
+    return labels;
+  }
+
+  // instructorId -> already-visible full name (never an id). From the instructors
+  // prop list, so a stale/absent id resolves to null (generic fallback in copy).
+  function instructorDisplayName(instructorId: string | null): string | null {
+    if (!instructorId) return null;
+    return instructors.find((i) => i.id === instructorId)?.fullName ?? null;
   }
 
   // Turn a decision into UI: MOVE/SWAP -> prepare the confirmation; NO_CHANGE ->
@@ -2694,23 +2914,41 @@ export function RidingComplexPlanEditor({
   function dispatchTraineeDecision(decision: FullListTraineeDecision, candidateTraineeId: string) {
     if (inlineEdit?.kind !== "pair") return;
     if (decision.kind === "MOVE_PROPOSAL" || decision.kind === "SWAP_PROPOSAL") {
+      // One proposal at a time (synchronous guard - see moveSwapProposalOpenRef).
+      if (moveSwapProposalOpenRef.current) return;
+      // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.3c) - dirty-draft guard (retrofit).
+      // A confirmed Move/Swap reloads the plan and discards this pair draft, so
+      // refuse when an UNRELATED field is unsaved. The targeted seat (the command's
+      // destination/`b` slot) is the intended resource and is excluded; the other
+      // seat, the horse, and the note must match the loaded pair.
+      const targetSlot =
+        decision.kind === "MOVE_PROPOSAL" ? decision.command.destination.slot : decision.command.b.slot;
+      const loaded = loadedPairForActiveEdit();
+      if (loaded && isTraineeProposalDirty(loaded, inlineEdit.draft, targetSlot)) {
+        setInlineError(DIRTY_DRAFT_MESSAGE);
+        return;
+      }
       const proposalInput = decisionToProposalInput(decision);
       const index = currentPlacementIndex();
       if (!proposalInput || !index) return;
-      const { traineeNames, stationLabels } = moveSwapLabelMaps();
+      const { traineeNames, pairContexts } = moveSwapLabelMaps();
       const labels = buildMoveSwapProposalLabels(proposalInput, {
         index,
         blockId: inlineEdit.blockId,
         candidateTraineeName: traineeNames.get(candidateTraineeId) ?? null,
         traineeNames,
-        stationLabels,
+        pairContexts,
       });
+      // Claim the ref BEFORE the state mutation: only after a valid view model
+      // exists, so a rejected/dirty/invalid decision never leaves it claimed.
+      const vm = buildProposalViewModel(proposalInput, labels);
+      moveSwapProposalOpenRef.current = true;
       setMoveSwapError(null);
-      setMoveSwapProposal(buildProposalViewModel(proposalInput, labels));
+      setMoveSwapProposal(vm);
       return;
     }
     if (decision.kind === "STALE_TARGET") {
-      reloadPlanAndClosePairUI("העמדה השתנתה. רעננו את התצוגה.");
+      reloadPlanAndCloseInlineUI("העמדה השתנתה. רעננו את התצוגה.");
       return;
     }
     if (decision.kind === "EXPLICIT_SLOT_REQUIRED") {
@@ -2758,12 +2996,27 @@ export function RidingComplexPlanEditor({
   }
 
   // The ONE authoritative reload-and-close path for a Move/Swap outcome that
-  // discards the pair dialog (APPLIED / STALE_RELOAD / STALE_TARGET): reload via
-  // the committed reader, close the proposal + pair dialog, clear the now-stale
-  // draft, and surface an optional board notice. Never auto-retries.
-  function reloadPlanAndClosePairUI(notice: string | null) {
+  // The ONE place a pending proposal is intentionally cleared: releases the
+  // synchronous open-guard ref FIRST, then clears the proposal state and its
+  // error. Every deliberate clear path (Cancel, backdrop/X, APPLIED/STALE reload-
+  // close, inline cancel, open-reset) routes through here so the ref can never be
+  // left claimed after the proposal is gone (which would otherwise wedge the UI
+  // against ever opening another). NOT called on FAILED - there the proposal
+  // deliberately stays open and the ref stays claimed.
+  function clearMoveSwapProposal() {
+    moveSwapProposalOpenRef.current = false;
     setMoveSwapProposal(null);
     setMoveSwapError(null);
+  }
+
+  // The ONE authoritative reload-and-close path for a Move/Swap outcome that
+  // discards the active inline draft (APPLIED / STALE_RELOAD / STALE_TARGET),
+  // shared by trainee, horse, and instructor proposals: reload via the committed
+  // reader, close the proposal AND whichever inline editor is open (pair dialog or
+  // station-meta editor - setInlineEdit(null) covers both), clear the now-stale
+  // draft, and surface an optional board notice. Never auto-retries.
+  function reloadPlanAndCloseInlineUI(notice: string | null) {
+    clearMoveSwapProposal();
     setInlineEdit(null);
     setInlineError(null);
     setBoardNotice(notice);
@@ -2791,11 +3044,11 @@ export function RidingComplexPlanEditor({
       isApplyingMoveSwapRef.current = false;
       const directive = decideProposalActionResult({ success: result.success, reason: result.reason });
       if (directive.outcome === "APPLIED") {
-        reloadPlanAndClosePairUI(null);
+        reloadPlanAndCloseInlineUI(null);
         return;
       }
       if (directive.outcome === "STALE_RELOAD") {
-        reloadPlanAndClosePairUI("התכנון עודכן בינתיים. רעננו ונסו שוב.");
+        reloadPlanAndCloseInlineUI("התכנון עודכן בינתיים. רעננו ונסו שוב.");
         return;
       }
       // FAILED: keep the proposal open with a generic message; never retry.
@@ -2804,11 +3057,168 @@ export function RidingComplexPlanEditor({
   }
 
   // Cancel the pending proposal: zero action, zero write, no draft mutation -
-  // returns to the pair dialog / selector exactly as it was.
+  // returns to the pair dialog / selector / station-meta editor exactly as it was.
   function cancelMoveSwapProposal() {
     if (isApplyingMoveSwapRef.current) return;
-    setMoveSwapProposal(null);
+    clearMoveSwapProposal();
+  }
+
+  // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.3c - horse Move/Swap) ---------------
+  // Every EXPLICIT horse-commit gesture (quick-horse / suggestion / Enter / exact-
+  // occupied blur) from the pair dialog routes here. Arbitrary typing NEVER does
+  // (it is a local draft edit only). One occupancy check runs over the CURRENTLY
+  // LOADED authoritative plan via the committed horse decision core; nothing here
+  // re-derives a business rule. A horse Move/Swap changes horseName ONLY - trainees
+  // and the note stay with their pairs (the Stage 3A core enforces this).
+
+  // horseKey set of every horse occupying a pair anywhere in the block - the gate
+  // a blur commit must exactly match to be treated as an explicit commit.
+  function blockOccupiedHorseKeys(blockId: string): Set<string> {
+    const keys = new Set<string>();
+    if (!plan) return keys;
+    const block = plan.blocks.find((b) => b.id === blockId);
+    if (!block) return keys;
+    for (const station of block.stations) {
+      for (const pair of station.pairs) {
+        const key = horseKey(pair.horseName);
+        if (key !== null) keys.add(key);
+      }
+    }
+    return keys;
+  }
+
+  function handleHorseCommit(source: HorseCommitSource, value: string) {
+    if (!plan || inlineEdit?.kind !== "pair") return;
+    // One proposal at a time - the SYNCHRONOUS ref (not the async state) so that an
+    // Enter/suggestion commit which opens a proposal and unmounts the horse input
+    // is not re-run by the immediate blur that follows, before the state closure
+    // updates (see moveSwapProposalOpenRef).
+    if (moveSwapProposalOpenRef.current) return;
+    const { blockId, pairId } = inlineEdit;
+    // Only an explicit commit runs the occupancy check; a non-exact blur (arbitrary
+    // typing) stays a local draft edit already applied via the field's onChange.
+    if (!shouldProcessHorseCommit({ source, value, occupiedHorseKeys: blockOccupiedHorseKeys(blockId) })) {
+      return;
+    }
+    const index = buildHorsePlacementIndex(plan);
+    const decision = decideHorseSelection({
+      index,
+      blockId,
+      destinationPairId: pairId,
+      selectedHorseName: value,
+      expectedVersion: plan.version,
+    });
+    if (decision.kind === "LOCAL_SELECTION") {
+      // A free / blank horse: a normal local draft edit (normalized, case preserved).
+      setInlineError(null);
+      setInlineEdit((prev) =>
+        prev?.kind === "pair" ? { ...prev, draft: { ...prev.draft, horseName: decision.horseName ?? "" } } : prev
+      );
+      return;
+    }
+    if (decision.kind === "NO_CHANGE") return; // the pair's own current horse.
+    if (decision.kind === "STALE_TARGET") {
+      reloadPlanAndCloseInlineUI("העמדה השתנתה. רעננו את התצוגה.");
+      return;
+    }
+    if (decision.kind === "AMBIGUOUS" || decision.kind === "UNAVAILABLE") {
+      // Includes CREATE_MODE (an occupied horse on a not-yet-saved pair): never
+      // auto-save then move. Safe guidance; draft untouched.
+      setInlineError(RESOURCE_MOVE_SWAP_UNAVAILABLE);
+      return;
+    }
+    // MOVE_PROPOSAL / SWAP_PROPOSAL. Guard unrelated unsaved edits (trainees/note);
+    // the horse itself is the intended resource and may differ.
+    const loaded = loadedPairForActiveEdit();
+    if (loaded && isHorseProposalDirty(loaded, inlineEdit.draft)) {
+      setInlineError(DIRTY_DRAFT_MESSAGE);
+      return;
+    }
+    const isMove = decision.kind === "MOVE_PROPOSAL";
+    const sourcePairId = isMove ? decision.command.sourcePairId : decision.command.aPairId;
+    const destinationPairId = isMove ? decision.command.destinationPairId : decision.command.bPairId;
+    const pairLabels = pairDisplayLabels();
+    const vm = buildHorseProposalViewModel(decision.command, {
+      selectedHorseName: horseStore(value),
+      destinationHorseName: resolvePairHorse(index, blockId, destinationPairId)?.horseName ?? null,
+      sourcePairLabel: pairLabels.get(sourcePairId) ?? null,
+      destinationPairLabel: pairLabels.get(destinationPairId) ?? null,
+    });
+    if (!vm) {
+      setInlineError(RESOURCE_MOVE_SWAP_UNAVAILABLE);
+      return;
+    }
+    // Claim the ref BEFORE the state mutation, only once a valid VM exists.
+    moveSwapProposalOpenRef.current = true;
     setMoveSwapError(null);
+    setMoveSwapProposal(vm);
+  }
+
+  // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.3c - instructor Move/Swap) ----------
+  // Every instructor selection in the schedule-board station-meta editor routes
+  // here (the legacy StationEditorForm keeps its plain onChange). One occupancy
+  // check runs over the loaded plan: a free instructor is a normal local draft
+  // edit; one occupied elsewhere becomes an atomic proposal WITHOUT first writing
+  // it into the draft. An instructor Move/Swap changes instructorId ONLY - the
+  // arena and every pair stay with their stations (the Stage 3A core enforces it).
+  function handleInstructorSelect(instructorId: string) {
+    if (!plan || inlineEdit?.kind !== "stationMeta") return;
+    // One proposal at a time (synchronous guard - shared invariant with the horse/
+    // trainee paths, though only horse has the concrete blur race).
+    if (moveSwapProposalOpenRef.current) return;
+    const { blockId, stationId } = inlineEdit;
+    const index = buildInstructorPlacementIndex(plan);
+    const decision = decideInstructorSelection({
+      index,
+      blockId,
+      destinationStationId: stationId,
+      selectedInstructorId: instructorId,
+      expectedVersion: plan.version,
+    });
+    if (decision.kind === "LOCAL_SELECTION") {
+      // Free / cleared instructor: an ordinary local instructorId draft update.
+      setInlineError(null);
+      setInlineEdit((prev) =>
+        prev?.kind === "stationMeta" ? { ...prev, instructorId: decision.instructorId ?? "" } : prev
+      );
+      return;
+    }
+    if (decision.kind === "NO_CHANGE") return; // the station's own current instructor.
+    if (decision.kind === "STALE_TARGET") {
+      reloadPlanAndCloseInlineUI("התחנה השתנתה. רעננו את התצוגה.");
+      return;
+    }
+    if (decision.kind === "AMBIGUOUS" || decision.kind === "UNAVAILABLE") {
+      setInlineError(RESOURCE_MOVE_SWAP_UNAVAILABLE);
+      return;
+    }
+    // MOVE_PROPOSAL / SWAP_PROPOSAL. Guard an unsaved arena edit; do NOT write the
+    // selected instructor into the draft first - the proposal leaves instructorId
+    // (and arena) exactly as loaded.
+    const loaded = loadedStationForActiveEdit();
+    if (loaded && isInstructorProposalDirty(loaded.arena, inlineEdit.arena)) {
+      setInlineError(DIRTY_DRAFT_MESSAGE);
+      return;
+    }
+    const isMove = decision.kind === "MOVE_PROPOSAL";
+    const sourceStationId = isMove ? decision.command.sourceStationId : decision.command.aStationId;
+    const destinationStationId = isMove ? decision.command.destinationStationId : decision.command.bStationId;
+    const stationLabels = stationDisplayLabels();
+    const destinationInstructorId = resolveStationInstructor(index, blockId, destinationStationId)?.instructorId ?? null;
+    const vm = buildInstructorProposalViewModel(decision.command, {
+      selectedInstructorName: instructorDisplayName(instructorId),
+      destinationInstructorName: instructorDisplayName(destinationInstructorId),
+      sourceStationLabel: stationLabels.get(sourceStationId) ?? null,
+      destinationStationLabel: stationLabels.get(destinationStationId) ?? null,
+    });
+    if (!vm) {
+      setInlineError(RESOURCE_MOVE_SWAP_UNAVAILABLE);
+      return;
+    }
+    // Claim the ref BEFORE the state mutation, only once a valid VM exists.
+    moveSwapProposalOpenRef.current = true;
+    setMoveSwapError(null);
+    setMoveSwapProposal(vm);
   }
 
   function saveInlineBlockTime() {
@@ -3328,9 +3738,10 @@ export function RidingComplexPlanEditor({
         issues={inlineStationMetaIssues}
         saving={isInlineSaving}
         error={inlineError}
-        onChangeInstructor={(id) =>
-          setInlineEdit((prev) => (prev?.kind === "stationMeta" ? { ...prev, instructorId: id } : prev))
-        }
+        // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.3c): every instructor selection
+        // runs the one occupancy check - a free instructor updates the draft; one
+        // occupied elsewhere opens a Move/Swap proposal WITHOUT mutating the draft.
+        onChangeInstructor={handleInstructorSelect}
         onChangeArena={(a) => setInlineEdit((prev) => (prev?.kind === "stationMeta" ? { ...prev, arena: a } : prev))}
         onSave={saveInlineStationMeta}
         onCancel={cancelInlineEdit}
@@ -3702,12 +4113,39 @@ export function RidingComplexPlanEditor({
           // auto-saved then moved.
           onOccupiedTraineeSelect={activePairEdit.pairId === null ? undefined : handleOccupiedDropdownSelect}
           onOccupiedListClick={activePairEdit.pairId === null ? undefined : handleOccupiedListClick}
+          // Horse Move/Swap is wired in BOTH create and edit mode: the decision
+          // core makes an occupied horse UNAVAILABLE in create mode (no auto-save),
+          // and offers a Move/Swap only on a saved pair.
+          onHorseCommit={handleHorseCommit}
           proposal={moveSwapProposal}
           proposalSubmitting={isApplyingMoveSwap}
           proposalError={moveSwapError}
           onConfirmProposal={confirmMoveSwapProposal}
           onCancelProposal={cancelMoveSwapProposal}
         />
+      )}
+      {/* RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.3c) - the instructor Move/Swap
+          confirmation. The station-meta editor is inline on the board (not a
+          Modal), so an instructor proposal is presented in its own Modal using the
+          ONE shared MoveSwapProposalBody + the ONE confirm/cancel/reload path.
+          Only ever open while a station-meta edit is active. */}
+      {inlineEdit?.kind === "stationMeta" && moveSwapProposal && (
+        <Modal
+          open
+          title={moveSwapProposal.title}
+          size="wide"
+          onClose={() => {
+            if (!isApplyingMoveSwap) cancelMoveSwapProposal();
+          }}
+        >
+          <MoveSwapProposalBody
+            proposal={moveSwapProposal}
+            submitting={isApplyingMoveSwap}
+            error={moveSwapError}
+            onConfirm={confirmMoveSwapProposal}
+            onCancel={cancelMoveSwapProposal}
+          />
+        </Modal>
       )}
     </Modal>
   );

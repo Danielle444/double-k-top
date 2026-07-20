@@ -46,19 +46,46 @@ export type ProposalInput =
  * Safe, already-visible display labels supplied by the caller. Every field is
  * optional/nullable; a missing (or whitespace-only) value falls back to a
  * generic Hebrew label. These are the ONLY sources of names in the output.
+ *
+ * A POSITION label identifies a PAIR/seat, not the trainee - e.g. "זוג עם {other
+ * trainee}" (optionally with coach/arena/time context). It must never be merely a
+ * repeat of the moving trainee's own name; the caller (the orchestration) builds
+ * it from the pair's OTHER occupant + safe station context.
  */
 export interface ProposalDisplayLabels {
   /** The trainee being moved/swapped. */
   readonly candidateTraineeName?: string | null;
   /** The trainee currently in the destination seat (swap only). */
   readonly occupantTraineeName?: string | null;
-  /** A label for where the candidate currently sits. */
-  readonly sourceStationLabel?: string | null;
-  /** A label for where the candidate is moving to. */
-  readonly destinationStationLabel?: string | null;
+  /** A POSITION label for the pair the candidate currently sits in. */
+  readonly sourcePositionLabel?: string | null;
+  /** A POSITION label for the pair the candidate is moving/swapping into. */
+  readonly destinationPositionLabel?: string | null;
 }
 
-/** The safe confirmation view model. `command` is a NON-DISPLAY field. */
+/** One placement line: a heading (a trainee name, or "השיבוץ של {name}") and the
+ *  position detail (a pair/position label). Never carries an id. */
+export interface ProposalPlacementRow {
+  readonly heading: string;
+  readonly detail: string;
+}
+
+/** The structured, immediately-understandable confirmation body for a trainee
+ *  Move/Swap: a labeled "before" block, a labeled "after" block, and the mandatory
+ *  domain note that horses/notes stay with their pairs. Rendered as headings +
+ *  cards - NEVER as a dense "name — label | name — label" sentence. */
+export interface ProposalSections {
+  readonly beforeHeading: string;
+  readonly afterHeading: string;
+  readonly beforeRows: readonly ProposalPlacementRow[];
+  readonly afterRows: readonly ProposalPlacementRow[];
+  /** Mandatory: a trainee-only Move/Swap changes seats only. */
+  readonly stableNote: string;
+}
+
+/** The safe confirmation view model. `command` is a NON-DISPLAY field. `sections`
+ *  is the structured presentation the renderer prefers; `before`/`after` are kept
+ *  as a flat, pipe-free fallback/accessibility summary. */
 export interface ProposalViewModel {
   readonly kind: "move" | "swap";
   readonly title: string;
@@ -66,6 +93,7 @@ export interface ProposalViewModel {
   readonly after: string;
   readonly confirmLabel: string;
   readonly cancelLabel: string;
+  readonly sections: ProposalSections;
   /** Non-display: retained solely so Stage 3C.2 can execute the confirmed
    *  proposal. May contain internal ids; never rendered. */
   readonly command: MoveTraineeCommand | SwapTraineesCommand;
@@ -73,36 +101,53 @@ export interface ProposalViewModel {
 
 const TRAINEE_FALLBACK = "חניכ/ה";
 const OCCUPANT_FALLBACK = "חניכ/ה אחר/ת";
-const SOURCE_STATION_FALLBACK = "העמדה הנוכחית";
-const DEST_STATION_FALLBACK = "העמדה הנבחרת";
+const SOURCE_POSITION_FALLBACK = "הזוג הנוכחי";
+const DEST_POSITION_FALLBACK = "הזוג הנבחר";
 const CANCEL_LABEL = "ביטול";
+// Essential domain copy: the trainee Move/Swap command changes trainee SEATS only.
+const STABLE_NOTE = "הסוסים וההערות נשארים עם הזוגים ואינם עוברים עם החניכים.";
 
 /** A caller label if it is a non-blank string, else the generic fallback. */
 function safeLabel(value: string | null | undefined, fallback: string): string {
   return typeof value === "string" && value.trim() !== "" ? value : fallback;
 }
 
+function row(heading: string, detail: string): ProposalPlacementRow {
+  return Object.freeze({ heading, detail });
+}
+
 /**
- * Build safe Hebrew confirmation copy for a Move/Swap proposal. Pure and
- * deterministic; returns a frozen view model. Only the supplied display labels
- * (or their generic fallbacks) appear in the copy - never any id from `command`.
+ * Build safe Hebrew confirmation copy for a trainee Move/Swap proposal. Pure and
+ * deterministic; returns a deeply-frozen view model. Only the supplied display
+ * labels (or their generic fallbacks) appear in the copy - never any id, version,
+ * op, or slot token from `command`. The structured `sections` are the primary
+ * presentation (headings + one card per trainee); `before`/`after` remain as a
+ * flat, PIPE-FREE fallback line. Both MOVE and SWAP always carry the mandatory
+ * "horses and notes stay with their pairs" note.
  */
 export function buildProposalViewModel(
   proposal: ProposalInput,
   labels: ProposalDisplayLabels
 ): ProposalViewModel {
   const candidate = safeLabel(labels.candidateTraineeName, TRAINEE_FALLBACK);
-  const source = safeLabel(labels.sourceStationLabel, SOURCE_STATION_FALLBACK);
-  const destination = safeLabel(labels.destinationStationLabel, DEST_STATION_FALLBACK);
+  const sourcePosition = safeLabel(labels.sourcePositionLabel, SOURCE_POSITION_FALLBACK);
+  const destinationPosition = safeLabel(labels.destinationPositionLabel, DEST_POSITION_FALLBACK);
 
   if (proposal.kind === "move") {
     return Object.freeze({
       kind: "move",
-      title: "העברת חניכ/ה",
-      before: `כעת: ${candidate} — ${source}`,
-      after: `לאחר האישור: ${candidate} — ${destination}`,
+      title: "העברת חניך/ה",
+      before: `${candidate}: ${sourcePosition}`,
+      after: `השיבוץ של ${candidate}: ${destinationPosition}`,
       confirmLabel: "אישור העברה",
       cancelLabel: CANCEL_LABEL,
+      sections: Object.freeze({
+        beforeHeading: "לפני ההעברה",
+        afterHeading: "אחרי ההעברה",
+        beforeRows: Object.freeze([row(candidate, sourcePosition)]),
+        afterRows: Object.freeze([row(`השיבוץ של ${candidate}`, destinationPosition)]),
+        stableNote: STABLE_NOTE,
+      }),
       command: proposal.command,
     });
   }
@@ -111,10 +156,22 @@ export function buildProposalViewModel(
   return Object.freeze({
     kind: "swap",
     title: "החלפת חניכים",
-    before: `כעת: ${candidate} — ${source} | ${occupant} — ${destination}`,
-    after: `לאחר האישור: ${candidate} — ${destination} | ${occupant} — ${source}`,
+    before: `${candidate}: ${sourcePosition}; ${occupant}: ${destinationPosition}`,
+    after: `השיבוץ של ${candidate}: ${destinationPosition}; השיבוץ של ${occupant}: ${sourcePosition}`,
     confirmLabel: "אישור החלפה",
     cancelLabel: CANCEL_LABEL,
+    sections: Object.freeze({
+      beforeHeading: "לפני ההחלפה",
+      afterHeading: "אחרי ההחלפה",
+      // Before: each trainee at their CURRENT pair. After: they exchange - the
+      // candidate takes the destination position, the occupant takes the source.
+      beforeRows: Object.freeze([row(candidate, sourcePosition), row(occupant, destinationPosition)]),
+      afterRows: Object.freeze([
+        row(`השיבוץ של ${candidate}`, destinationPosition),
+        row(`השיבוץ של ${occupant}`, sourcePosition),
+      ]),
+      stableNote: STABLE_NOTE,
+    }),
     command: proposal.command,
   });
 }
