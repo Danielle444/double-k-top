@@ -38,6 +38,11 @@ import {
 } from "@/lib/actions/riding-slot-complex";
 import { ComplexPlanScheduleBoard } from "@/lib/components/ComplexPlanScheduleBoard";
 import {
+  boardEditTargetExists,
+  resolveScheduleEditReturn,
+  type EditOrigin,
+} from "@/lib/riding-complex-schedule-board/edit-navigation";
+import {
   getComplexRidingPlanPublicationStatusForAdmin,
   getComplexRidingPlanPublicationStatusForInstructor,
   publishComplexRidingPlanAsAdmin,
@@ -1800,6 +1805,17 @@ export function RidingComplexPlanEditor({
   // `view` state machine, any draft, or any save path, so the editor's behavior
   // is identical whenever the board is off.
   const [boardView, setBoardView] = useState(false);
+  // RIDING-COMPLEX-SCHEDULE-BOARD (edit access) - when a block/station editor
+  // is opened from the schedule board, this records that origin so Save/Cancel
+  // returns to the board (focused on the just-edited card) instead of the
+  // step-by-step list. "list" is the default and preserves every existing
+  // return transition unchanged. This only steers navigation - it never touches
+  // any draft or the one save path. boardFocus* tell the board which card to
+  // bring back into view; they are source ids used only for that lookup and are
+  // never rendered.
+  const [editOrigin, setEditOrigin] = useState<EditOrigin>("list");
+  const [boardFocusBlockId, setBoardFocusBlockId] = useState<string | null>(null);
+  const [boardFocusStationId, setBoardFocusStationId] = useState<string | null>(null);
   const [lastOverlapWarning, setLastOverlapWarning] = useState<string | null>(null);
   const [lastStationWarnings, setLastStationWarnings] = useState<RidingSlotComplexSaveWarnings | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -1859,6 +1875,9 @@ export function RidingComplexPlanEditor({
     setEditing(null);
     setView({ type: "blockList" });
     setBoardView(false);
+    setEditOrigin("list");
+    setBoardFocusBlockId(null);
+    setBoardFocusStationId(null);
     setLastOverlapWarning(null);
     setLastStationWarnings(null);
     setListError(null);
@@ -1948,6 +1967,42 @@ export function RidingComplexPlanEditor({
     loadPublicationStatus(false);
   }
 
+  // RIDING-COMPLEX-SCHEDULE-BOARD (edit access) - return to the schedule board
+  // after a board-originated Save/Cancel, bringing the just-edited card back
+  // into view. Clears the origin so the next edit defaults to list behavior.
+  // Never calls a server action - pure navigation state.
+  function returnToBoard(focusBlockId: string | null, focusStationId: string | null) {
+    setEditOrigin("list");
+    setBoardFocusBlockId(focusBlockId);
+    setBoardFocusStationId(focusStationId);
+    setView({ type: "blockList" });
+    setBoardView(true);
+  }
+
+  // Open the EXISTING block-time editor from a schedule-board card. Guards a
+  // stale card (block vanished from a background refresh) rather than opening
+  // an editor onto a missing target. Records the board as the return origin.
+  function handleBoardEditBlock(blockId: string) {
+    if (!plan || !boardEditTargetExists(plan.blocks, blockId, null)) return;
+    setListError(null);
+    setLastOverlapWarning(null);
+    setEditOrigin("board");
+    setBoardView(false);
+    setView({ type: "editBlock", blockId });
+  }
+
+  // Open the EXISTING station editor from a schedule-board card (covers coach,
+  // arena, and every pair field). Same stale-target guard and board-origin
+  // recording as handleBoardEditBlock.
+  function handleBoardEditStation(blockId: string, stationId: string) {
+    if (!plan || !boardEditTargetExists(plan.blocks, blockId, stationId)) return;
+    setStationListError(null);
+    setLastStationWarnings(null);
+    setEditOrigin("board");
+    setBoardView(false);
+    setView({ type: "editStation", blockId, stationId });
+  }
+
   function handleBlockTimeSaved(
     plan: RidingSlotComplexPlanRow,
     overlapWarning: string | undefined,
@@ -1958,6 +2013,14 @@ export function RidingComplexPlanEditor({
     setLastOverlapWarning(overlapWarning ?? null);
     setStationListError(null);
     setLastStationWarnings(null);
+    // Board-originated block edits are always an existing block, so savedBlockId
+    // is its id - return to the board focused on it. The existing list-origin
+    // transitions below are untouched.
+    const ret = resolveScheduleEditReturn(editOrigin, { blockId: savedBlockId, stationId: null });
+    if (ret.kind === "board") {
+      returnToBoard(ret.focusBlockId, ret.focusStationId);
+      return;
+    }
     if (savedBlockId) {
       setView({ type: "stationList", blockId: savedBlockId });
       return;
@@ -1970,6 +2033,12 @@ export function RidingComplexPlanEditor({
   }
 
   function handleCancelBlockEdit() {
+    const blockId = view.type === "editBlock" ? view.blockId : null;
+    const ret = resolveScheduleEditReturn(editOrigin, { blockId, stationId: null });
+    if (ret.kind === "board") {
+      returnToBoard(ret.focusBlockId, ret.focusStationId);
+      return;
+    }
     setView({ type: "blockList" });
   }
 
@@ -2038,12 +2107,26 @@ export function RidingComplexPlanEditor({
   function handleStationSaved(plan: RidingSlotComplexPlanRow, warnings: RidingSlotComplexSaveWarnings) {
     refreshPlan(plan);
     setLastStationWarnings(warnings);
+    const target =
+      view.type === "editStation" ? { blockId: view.blockId, stationId: view.stationId } : { blockId: null, stationId: null };
+    const ret = resolveScheduleEditReturn(editOrigin, target);
+    if (ret.kind === "board") {
+      returnToBoard(ret.focusBlockId, ret.focusStationId);
+      return;
+    }
     if (view.type === "editStation") {
       setView({ type: "stationList", blockId: view.blockId });
     }
   }
 
   function handleCancelStationEdit() {
+    const target =
+      view.type === "editStation" ? { blockId: view.blockId, stationId: view.stationId } : { blockId: null, stationId: null };
+    const ret = resolveScheduleEditReturn(editOrigin, target);
+    if (ret.kind === "board") {
+      returnToBoard(ret.focusBlockId, ret.focusStationId);
+      return;
+    }
     if (view.type === "editStation") {
       setView({ type: "stationList", blockId: view.blockId });
     } else {
@@ -2267,14 +2350,30 @@ export function RidingComplexPlanEditor({
                   variant={boardView ? "ghost" : "secondary"}
                   aria-pressed={boardView}
                   className={`!flex-1 !py-1 !text-xs ${boardView ? "!bg-card !shadow-sm" : ""}`}
-                  onClick={() => setBoardView(true)}
+                  onClick={() => {
+                    // Manual switch to the board should not auto-scroll to a
+                    // previously-edited card; only a post-edit return does.
+                    setBoardFocusBlockId(null);
+                    setBoardFocusStationId(null);
+                    setBoardView(true);
+                  }}
                 >
                   תצוגת לוז
                 </Button>
               </div>
             )}
 
-            {boardView && <ComplexPlanScheduleBoard plan={plan} candidates={editing.candidates} />}
+            {boardView && (
+              <ComplexPlanScheduleBoard
+                plan={plan}
+                candidates={editing.candidates}
+                canEdit={canEdit}
+                onEditBlock={handleBoardEditBlock}
+                onEditStation={handleBoardEditStation}
+                focusBlockId={boardFocusBlockId}
+                focusStationId={boardFocusStationId}
+              />
+            )}
 
             {!boardView && view.type === "blockList" && (
               <>

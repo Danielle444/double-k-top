@@ -30,6 +30,10 @@ export interface ScheduleBoardPairInput {
 }
 
 export interface ScheduleBoardStationInput {
+  // Source station id, carried only for internal edit-routing (see the VM's
+  // stationId below). Optional so read-only/test callers may omit it; the real
+  // RidingSlotComplexStationRow supplies it. NEVER rendered.
+  id?: string;
   instructor: { fullName: string } | null;
   arena: string | null;
   sortOrder: number;
@@ -37,6 +41,10 @@ export interface ScheduleBoardStationInput {
 }
 
 export interface ScheduleBoardBlockInput {
+  // Source block id, carried only for internal edit-routing (see the VM's
+  // blockId below). Optional; the real RidingSlotComplexBlockRow supplies it.
+  // NEVER rendered.
+  id?: string;
   startTime: string;
   endTime: string;
   sortOrder: number;
@@ -66,16 +74,26 @@ export interface ScheduleBoardPairVM {
 // One coach station within a time block. instructorName/arena are passed
 // through as null when missing (renderer supplies the Hebrew fallback label),
 // so an incomplete plan still renders safely and clearly.
+//
+// stationId is the source station's database id, carried ONLY so the board's
+// (optional) edit control can route back to the existing station editor. It is
+// used exclusively in React state/click handlers and MUST NEVER be rendered
+// into text, attributes, accessible labels, or keys - the rendering `key`
+// above stays the index-derived value. null when the source row omitted an id.
 export interface ScheduleBoardStationVM {
   key: string;
+  stationId: string | null;
   instructorName: string | null;
   arena: string | null;
   pairs: ScheduleBoardPairVM[];
 }
 
-// One time block - the primary vertical unit of the board.
+// One time block - the primary vertical unit of the board. blockId is the
+// source block's database id, carried for the same internal edit-routing
+// purpose (and under the same never-rendered rule) as stationId above.
 export interface ScheduleBoardBlockVM {
   key: string;
+  blockId: string | null;
   startTime: string;
   endTime: string;
   stations: ScheduleBoardStationVM[];
@@ -142,7 +160,7 @@ function projectStation(
   const instructorName = station.instructor?.fullName?.trim() || null;
   const arena = station.arena?.trim() || null;
 
-  return { key, instructorName, arena, pairs };
+  return { key, stationId: station.id ?? null, instructorName, arena, pairs };
 }
 
 function projectBlock(
@@ -156,7 +174,7 @@ function projectBlock(
     .sort((a, b) => a.sortOrder - b.sortOrder)
     .map((station, index) => projectStation(station, `${key}-s${index}`, candidatesById));
 
-  return { key, startTime: block.startTime, endTime: block.endTime, stations };
+  return { key, blockId: block.id ?? null, startTime: block.startTime, endTime: block.endTime, stations };
 }
 
 // Flatten the plan tree into a deterministic schedule-board view model.

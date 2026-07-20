@@ -227,7 +227,7 @@ test("empty blocks and empty stations render safely (no pairs/stations, no throw
   assert.equal(vm.blocks[1].stations[0].instructorName, "רוני");
 });
 
-test("output view model exposes no database ids or internal metadata", () => {
+test("output view model exposes no studentId, sortOrder, or audit metadata", () => {
   const vm = projectScheduleBoard(
     {
       blocks: [
@@ -241,8 +241,35 @@ test("output view model exposes no database ids or internal metadata", () => {
   const serialized = JSON.stringify(vm);
   // Keys are index-derived, never leaked db ids.
   assert.match(serialized, /"key":"b0"/);
-  assert.doesNotMatch(serialized, /sortOrder|updatedAt|updatedByName|"id"/);
+  // Internal ordering/audit metadata is never carried into the VM. (The VM
+  // does carry a source blockId/stationId for internal edit-routing - see the
+  // dedicated test below - but those are the block/station identity only,
+  // never studentId, sortOrder, or update-audit fields, and never rendered.)
+  assert.doesNotMatch(serialized, /sortOrder|updatedAt|updatedByName/);
   assert.doesNotMatch(serialized, /s1/); // no studentId leaked (only resolved name)
+});
+
+test("source block/station ids are carried through for internal edit-routing", () => {
+  const vm = projectScheduleBoard(
+    {
+      blocks: [
+        block({
+          id: "block-77",
+          stations: [
+            station({ id: "station-3", instructor: { fullName: "רוני" }, pairs: [pair({ trainee1Id: "s1" })] }),
+          ],
+        }),
+        // An id-less source (e.g. a not-yet-persisted / test row) resolves to
+        // null rather than throwing, so the board simply shows no edit control.
+        block({ startTime: "10:00", endTime: "11:00", stations: [station({ instructor: { fullName: "דנה" } })] }),
+      ],
+    },
+    candidates
+  );
+  assert.equal(vm.blocks[0].blockId, "block-77");
+  assert.equal(vm.blocks[0].stations[0].stationId, "station-3");
+  assert.equal(vm.blocks[1].blockId, null);
+  assert.equal(vm.blocks[1].stations[0].stationId, null);
 });
 
 test("null array elements are skipped defensively", () => {
