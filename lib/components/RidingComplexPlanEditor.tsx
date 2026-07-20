@@ -40,6 +40,7 @@ import { ComplexPlanScheduleBoard } from "@/lib/components/ComplexPlanScheduleBo
 import { boardEditTargetExists } from "@/lib/riding-complex-schedule-board/edit-navigation";
 import {
   canOpenInlineTarget,
+  canUnpublishComplexPlan,
   initialBoardView,
   isEditorActionBlocked,
   stationPairExists,
@@ -62,6 +63,7 @@ import {
   publishComplexRidingPlanAsAdmin,
   publishComplexRidingPlanAsInstructor,
   unpublishComplexRidingPlanAsAdmin,
+  unpublishComplexRidingPlanAsInstructor,
   type ComplexRidingPlanPublicationStatus,
   type ComplexRidingPlanPublicationStatusLabel,
 } from "@/lib/actions/riding-slot-complex-publications";
@@ -160,9 +162,7 @@ function reorderComplexBlocks(
 // beyond being an active instructor (matches every other read helper above),
 // so both branches are always attempted; the admin branch never actually
 // resolves null, only the instructor one can (inactive/nonexistent
-// instructor). There is no unpublish routing helper - unpublish is
-// admin-only with no instructor variant to route to, called directly at its
-// one call site instead (same convention as handleDeletePlan below).
+// instructor).
 function readComplexPublicationStatus(
   actor: RidingComplexPlanEditorActor,
   ridingSlotId: string
@@ -179,6 +179,20 @@ function publishComplexPlan(
   return actor.type === "admin"
     ? publishComplexRidingPlanAsAdmin(ridingSlotId)
     : publishComplexRidingPlanAsInstructor(actor.instructorId, ridingSlotId);
+}
+
+// RIDING-COMPLEX-PUBLICATION - unpublish routes by actor exactly like publish
+// above (admin vs instructor variant, instructorId first for the instructor
+// one). Both server actions re-check the caller's capability independently; the
+// wrapper only picks which one to call for the actor that is already rendered
+// this editor.
+function unpublishComplexPlan(
+  actor: RidingComplexPlanEditorActor,
+  ridingSlotId: string
+): ReturnType<typeof unpublishComplexRidingPlanAsAdmin> {
+  return actor.type === "admin"
+    ? unpublishComplexRidingPlanAsAdmin(ridingSlotId)
+    : unpublishComplexRidingPlanAsInstructor(actor.instructorId, ridingSlotId);
 }
 
 type LoadStatus = "loading" | "loaded" | "not-found" | "error";
@@ -475,8 +489,9 @@ function PublishConfirmModal({
   );
 }
 
-// Admin-only confirmation modal (see openUnpublishModal's own guard - this
-// is never opened for an instructor actor).
+// Unpublish confirmation modal - shared by admin and authorized-instructor
+// actors alike (see openUnpublishModal's capability guard); actor-neutral copy,
+// never naming who is unpublishing.
 function UnpublishConfirmModal({
   open,
   isPending,
@@ -2798,12 +2813,14 @@ export function RidingComplexPlanEditor({
     });
   }
 
-  // Admin-only - never rendered/reachable for an instructor actor (see
-  // PublicationStatusPanel's canUnpublish prop, always false for
-  // actor.type === "instructor" below), same belt-and-suspenders guard
-  // convention as handleDeletePlan above.
+  // RIDING-COMPLEX-PUBLICATION - unpublish is now available to an admin OR an
+  // authorized instructor (canEdit, the server-checked isActive &&
+  // canEditRidingNotes read - see canUnpublishComplexPlan), matching the
+  // publish/republish trust tier. Same belt-and-suspenders guard convention as
+  // openPublishModal above; the server actions remain the sole authority.
   function openUnpublishModal() {
-    if (actor.type !== "admin" || !publicationStatus || publicationStatus.status === "UNPUBLISHED") return;
+    if (!canUnpublishComplexPlan(actor.type === "admin", canEdit)) return;
+    if (!publicationStatus || publicationStatus.status === "UNPUBLISHED") return;
     if (isUnpublishingRef.current) return;
     setUnpublishError(null);
     setUnpublishModalOpen(true);
@@ -2815,11 +2832,11 @@ export function RidingComplexPlanEditor({
   }
 
   function handleConfirmUnpublish() {
-    if (actor.type !== "admin" || isUnpublishingRef.current) return;
+    if (!canUnpublishComplexPlan(actor.type === "admin", canEdit) || isUnpublishingRef.current) return;
     isUnpublishingRef.current = true;
     setUnpublishError(null);
     startUnpublishTransition(async () => {
-      const result = await unpublishComplexRidingPlanAsAdmin(ridingSlotId);
+      const result = await unpublishComplexPlan(actor, ridingSlotId);
       isUnpublishingRef.current = false;
       if (!result.success) {
         setUnpublishError(result.error ?? "לא הצלחנו לבטל את הפרסום");
@@ -3041,7 +3058,7 @@ export function RidingComplexPlanEditor({
                 loading={publicationStatusLoading}
                 error={publicationStatusError}
                 canPublish={canEdit}
-                canUnpublish={actor.type === "admin"}
+                canUnpublish={canUnpublishComplexPlan(actor.type === "admin", canEdit)}
                 hasBlocks={plan.blocks.length > 0}
                 blockedByEdit={inlineEditActive}
                 onOpenPublish={openPublishModal}

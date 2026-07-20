@@ -53,6 +53,20 @@ export function isEditorActionBlocked(inlineActive: boolean, publicationPending:
   return inlineActive || publicationPending;
 }
 
+// RIDING-COMPLEX-PUBLICATION - who may see and use the Unpublish control.
+// Exactly the instructor publish/republish trust tier: an admin always may; an
+// instructor may only when the server-returned canEdit is true. canEdit itself
+// is a fresh server read of Instructor.isActive && canEditRidingNotes (see
+// getRidingSlotComplexPlanForInstructor) - never a client-authored flag. This
+// gate is presentation-only: it decides whether to render the control, while
+// unpublishComplexRidingPlanAs{Admin,Instructor} independently re-check the
+// same requirements server-side and remain the sole authority. A read-only
+// instructor (canEdit === false, isAdmin === false) and an unknown/no actor
+// alike resolve to false, so neither ever reaches an actionable control.
+export function canUnpublishComplexPlan(isAdmin: boolean, canEdit: boolean): boolean {
+  return isAdmin || canEdit;
+}
+
 // Duck-typed plan shapes for the staleness guards below.
 export interface InlinePairIdShape {
   id: string;

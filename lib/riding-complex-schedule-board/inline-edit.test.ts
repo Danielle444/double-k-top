@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 import {
   canOpenInlineTarget,
+  canUnpublishComplexPlan,
   initialBoardView,
   isEditorActionBlocked,
   stationPairExists,
@@ -27,6 +28,21 @@ import {
   type InlinePairRowWithId,
   type InlinePairFields,
 } from "./inline-edit";
+
+test("unpublish capability: admin always may; instructor only when server-checked canEdit is true", () => {
+  // Admin: may unpublish regardless of the canEdit value (admin is never gated
+  // on canEditRidingNotes).
+  assert.equal(canUnpublishComplexPlan(true, true), true);
+  assert.equal(canUnpublishComplexPlan(true, false), true);
+  // Active, editable instructor (canEdit === true, the server read of
+  // isActive && canEditRidingNotes): may unpublish.
+  assert.equal(canUnpublishComplexPlan(false, true), true);
+  // Read-only / inactive instructor (canEdit === false): denied.
+  assert.equal(canUnpublishComplexPlan(false, false), false);
+  // Unknown / no actor collapses to the same "not admin, cannot edit" inputs,
+  // so it too resolves to false - never an actionable control.
+  assert.equal(canUnpublishComplexPlan(false, false), false);
+});
 
 test("only one active target: opening is allowed only when nothing is active", () => {
   assert.equal(canOpenInlineTarget(null), true);

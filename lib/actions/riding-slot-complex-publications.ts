@@ -335,7 +335,7 @@ export async function publishComplexRidingPlanAsInstructor(
   return publishComplexRidingPlanInternal(ridingSlotId, instructorPublicationActor(instructor));
 }
 
-// ---------- Unpublish (write, admin-only) ----------
+// ---------- Unpublish (write) ----------
 
 export interface UnpublishComplexRidingPlanResult extends ActionResult {
   // true when there was nothing to unpublish (already unpublished, or the
@@ -345,16 +345,19 @@ export interface UnpublishComplexRidingPlanResult extends ActionResult {
   alreadyUnpublished?: boolean;
 }
 
-// Admin-only by design (no AsInstructor variant exists for this action) -
-// same trust tier as deleteRidingSlotComplexPlanAsAdmin's whole-plan
-// deletion, which is also admin-only regardless of canEditRidingNotes:
-// unpublish is the one action that actively removes trainee-visible
-// content, not merely edits the draft.
-export async function unpublishComplexRidingPlanAsAdmin(
+// Shared core of unpublishComplexRidingPlanAsAdmin/AsInstructor - the single
+// validated unpublish mutation, identical to the publish path's internal/thin-
+// wrapper split above. The two wrappers differ ONLY in how they authorize the
+// caller; once authorized, both remove exactly the same trainee-visible
+// publication snapshot here, so the two trust tiers can never drift into two
+// different unpublish behaviors.
+//
+// Only the publication snapshot is removed - the live editable complex plan
+// (RidingSlotComplexPlan and its blocks/stations/pairs) is never touched, so
+// unpublishing is always a reversible "hide from trainees", never data loss.
+async function unpublishComplexRidingPlanInternal(
   ridingSlotId: string
 ): Promise<UnpublishComplexRidingPlanResult> {
-  await requireAdmin();
-
   const trimmedId = ridingSlotId?.trim();
   if (!trimmedId) {
     return { success: true, alreadyUnpublished: true };
@@ -381,6 +384,33 @@ export async function unpublishComplexRidingPlanAsAdmin(
   revalidatePath("/student");
 
   return { success: true, alreadyUnpublished: deleted.count === 0 };
+}
+
+export async function unpublishComplexRidingPlanAsAdmin(
+  ridingSlotId: string
+): Promise<UnpublishComplexRidingPlanResult> {
+  await requireAdmin();
+  return unpublishComplexRidingPlanInternal(ridingSlotId);
+}
+
+// Same server-authoritative capability tier as
+// publishComplexRidingPlanAsInstructor (isActive && canEditRidingNotes,
+// re-read from the DB on every call - instructors have no NextAuth session, so
+// no client flag is ever trusted). Product decision: an authorized instructor
+// may unpublish under exactly the requirements that let them publish/republish;
+// a read-only or inactive instructor is denied via the same generic NO_PERMISSION
+// contract as publish, carrying no id/PII. Both wrappers then run the one shared
+// unpublishComplexRidingPlanInternal above, so the admin path and its return
+// contract are unchanged.
+export async function unpublishComplexRidingPlanAsInstructor(
+  instructorId: string,
+  ridingSlotId: string
+): Promise<UnpublishComplexRidingPlanResult> {
+  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
+  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
+    return { success: false, error: NO_PERMISSION };
+  }
+  return unpublishComplexRidingPlanInternal(ridingSlotId);
 }
 
 // ---------- Trainee-scoped read (read-only) ----------
