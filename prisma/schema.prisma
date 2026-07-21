@@ -2008,6 +2008,10 @@ model CourseOffering {
   activityYear ActivityYear       @relation(fields: [activityYearId], references: [id], onDelete: Restrict)
   enrollments  CourseEnrollment[]
   groups       CourseGroup[]
+  // MULTI-COURSE W0-CAP-2 - back-relation for CourseOfferingCapability.
+  // Sparse: an offering with no rows here has NO capabilities enabled. Nothing
+  // reads this relation at this stage.
+  capabilities CourseOfferingCapability[]
 
   @@unique([activityYearId, name])
   @@index([activityYearId])
@@ -2139,4 +2143,139 @@ model GroupMembership {
   @@unique([courseEnrollmentId, effectiveFrom])
   @@index([courseGroupId])
   @@map("group_memberships")
+}
+
+// MULTI-COURSE W0-CAP-2 - capability persistence foundation (CAP-1..CAP-3).
+//
+// PERSISTENCE STRUCTURE ONLY. At this layer nothing reads or writes these
+// models: there is no evaluator, no capability resolution, no missing-row
+// behaviour, no enforcement, no seed and no synchronization. Those are later
+// layers (W0-CAP-3 seed/drift-check, W0-CAP-4 resolution, W0-CAP-5
+// enforcement). Both tables are created EMPTY and stay empty at this stage.
+//
+// Persisted statuses are EXACTLY ENABLED and READ_ONLY (CAP-2). There is
+// deliberately NO 'DISABLED' member: DISABLED is represented by ROW ABSENCE,
+// which is what makes the storage sparse (CAP-1). Adding a DISABLED member
+// later would silently break that contract - a capability could then be
+// "disabled" in two different ways, and CAP-6's data-aware deactivation
+// (dependent with data -> READ_ONLY, without -> row REMOVED) would no longer
+// be coherent. READ_ONLY is the state that preserves history.
+enum CourseCapabilityStatus {
+  ENABLED
+  READ_ONLY
+}
+
+// The code-controlled catalog of capability keys (CAP-3). Rows mirror the
+// committed pure-code key set in lib/course/capabilities/capability-keys.ts;
+// reconciling the two is W0-CAP-3's job, and the code<->database drift check
+// (CAP-10) is defined there, not here.
+//
+// PRIMARY KEY: `key` is the primary key - a DELIBERATE, APPROVED EXCEPTION to
+// this schema's otherwise universal `String @id @default(cuid())` convention.
+// The capability key is a stable, code-controlled identifier that by design is
+// never renamed (CAP-3: "stable controlled keys"), so it has the immutability
+// a natural primary key requires. Making it the PK means
+// CourseOfferingCapability stores the literal key rather than an opaque
+// surrogate, so seed upserts, the future drift check, and manual inspection of
+// the database all operate directly on the meaningful value, and resolving an
+// offering's capabilities needs no join to recover a key the code already
+// knows. There is intentionally no surrogate `id` column.
+//
+// CODE-OWNED vs DB-OWNED: this table stores ONLY the editable label and the
+// retirement flag. Classification (CORE/OPTIONAL), the `defaultEnabled` seed
+// preset, and the dependency graph all remain CODE-OWNED in
+// lib/course/capabilities/capability-catalog.ts and are deliberately NOT
+// columns here. `defaultEnabled` in particular must never be persisted: it is
+// a preset that answers "which rows should be pre-created for a NEW offering",
+// and it must NEVER answer "what does a missing row mean" - that answer is
+// permanently DISABLED (CAP-1). Were it a column here, a future resolver could
+// plausibly be written as `COALESCE(status, catalog.defaultEnabled)`, which
+// would silently enable ATTENDANCE (the one optional default-on capability)
+// for every offering that never configured it. Keeping the column out makes
+// that query impossible to write. Persisting the dependency graph is likewise
+// excluded: "DB-editable role/capability maps" is on the handoff's explicit
+// deferred list, and CAP-5's invariant is not expressible as a DB constraint.
+//
+// RETIREMENT: `isActive` is the persisted retirement representation - a
+// capability is deprecated by clearing this flag, never by deleting the row
+// (CAP-3 "no hard-delete"). Note precisely what the FK on
+// CourseOfferingCapability does and does not do: onDelete: Restrict prevents
+// deleting a catalog row only WHILE referencing CourseOfferingCapability rows
+// exist. An UNREFERENCED catalog row could still technically be deleted
+// directly. So Restrict protects existing references, `isActive` provides the
+// retirement representation, and the universal "deprecate, never hard-delete"
+// rule remains an APPLICATION/WRITE-PATH INVARIANT to be enforced in a later
+// layer - it is not, and is not claimed to be, fully enforced by this schema.
+//
+// `label` is NOT NULL with no default (CAP-3 "changeable labels"): safe
+// because the table is created empty and is first populated by W0-CAP-3, which
+// authors the initial labels in the seed itself. There is deliberately no
+// `description` column - it is not required by the persistence foundation and
+// can be added later by a separate reviewed migration if a management UI
+// genuinely needs help text.
+model CapabilityCatalog {
+  key       String   @id
+  label     String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  offeringCapabilities CourseOfferingCapability[]
+
+  @@map("capability_catalog")
+}
+
+// Sparse per-offering capability state (CAP-1). ONE ROW = ONE
+// (CourseOffering, capability) PAIR; @@unique([courseOfferingId,
+// capabilityKey]) is what prevents a duplicate pair. A row's mere existence
+// carries meaning here - absence is DISABLED - so `status` has NO DEFAULT: a
+// row can never be created with an implied status, and every write must state
+// ENABLED or READ_ONLY explicitly.
+//
+// Surrogate cuid id (unlike CapabilityCatalog above, and matching every other
+// model): the pair is already uniquely constrained, and a stable row handle is
+// worth keeping for any later audit reference.
+//
+// onDelete: Restrict on BOTH edges, matching the uniform policy across the
+// multi-course spine - deleting a CourseOffering must never silently erase its
+// capability configuration, and see the CapabilityCatalog note above for the
+// precise (limited) protection Restrict gives on the catalog edge.
+//
+// INDEXES: the composite unique leads with courseOfferingId, so the primary
+// resolution query ("all capabilities for offering X") is already served as a
+// prefix scan of that index and NO separate @@index([courseOfferingId]) is
+// declared - same reasoning documented on GroupMembership above.
+// @@index([capabilityKey]) covers the reverse "which offerings have this
+// capability" lookup and supports the FK check. No partial unique index is
+// needed: unlike CourseGroup, neither unique-key column is nullable, so the
+// NULL-distinct hazard documented there does not arise here.
+//
+// The generated unique-index identifier
+// (course_offering_capabilities_courseOfferingId_capabilityKey_key) is exactly
+// 63 characters - PostgreSQL's identifier limit - so it is stored in full and
+// is NOT silently truncated. Any future rename of this table or either column
+// that lengthens the name would cross the limit and must then declare an
+// explicit shorter name via `map:` in both schema.prisma and the SQL.
+//
+// Effective dates are deliberately absent: the locked design models capability
+// state as sparse CURRENT-state rows plus READ_ONLY for history preservation
+// (CAP-2/CAP-6), NOT as a dated history like GroupMembership or
+// TraineeHorseAssignment. Adding effectiveFrom/effectiveTo here would change
+// what "missing row" means. Provenance/actor/notes columns are likewise
+// absent - CAP-6's impact preview and CAP-7's lifecycle warnings are runtime
+// behaviour and need no persisted actor at this layer.
+model CourseOfferingCapability {
+  id               String                 @id @default(cuid())
+  courseOfferingId String
+  capabilityKey    String
+  status           CourseCapabilityStatus
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  courseOffering CourseOffering    @relation(fields: [courseOfferingId], references: [id], onDelete: Restrict)
+  capability     CapabilityCatalog @relation(fields: [capabilityKey], references: [key], onDelete: Restrict)
+
+  @@unique([courseOfferingId, capabilityKey])
+  @@index([capabilityKey])
+  @@map("course_offering_capabilities")
 }
