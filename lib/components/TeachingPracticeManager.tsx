@@ -38,6 +38,7 @@ import {
   buildSameParentOtherNamesByChildId,
   type SameParentChildInput,
 } from "@/lib/teaching-practice-same-parent";
+import { filterChildren } from "@/lib/teaching-practice-child-search";
 import { timeBlockColorClasses } from "@/lib/teaching-practice-time-colors";
 import {
   bulkPublishFutureTeachingPracticeLessonsAsAdmin,
@@ -3050,6 +3051,15 @@ export function TeachingPracticeManager({
   const [createChildSuccess, setCreateChildSuccess] = useState<string | null>(null);
   const [isCreatingChild, startCreateChildTransition] = useTransition();
 
+  // Client-side search over the already-loaded children registry. Purely
+  // derived from the existing `children` state - no fetch, no server call.
+  const [childSearch, setChildSearch] = useState("");
+  const childSearchActive = childSearch.trim().length > 0;
+  const filteredChildren = useMemo(
+    () => (children ? filterChildren(children, childSearch) : []),
+    [children, childSearch],
+  );
+
   function handleCreateChild() {
     setCreateChildError(null);
     setCreateChildSuccess(null);
@@ -3065,6 +3075,8 @@ export function TeachingPracticeManager({
       }
       setNewChildForm(emptyChildForm());
       setCreateChildSuccess("הילד/ה נוסף/ה בהצלחה");
+      // Clear the search so the newly added child is visible after refresh.
+      setChildSearch("");
       await refreshChildren();
     });
   }
@@ -5772,7 +5784,37 @@ export function TeachingPracticeManager({
             </p>
           ) : (
             <div className="flex flex-col gap-3">
-              {children.map((child) => (
+              {/* Search bar - filters the already-loaded registry client-side */}
+              <div className="flex flex-col gap-1">
+                <div className="relative w-full sm:max-w-sm">
+                  <input
+                    type="search"
+                    value={childSearch}
+                    onChange={(e) => setChildSearch(e.target.value)}
+                    placeholder="חיפוש לפי שם ילד, שם הורה או טלפון"
+                    aria-label="חיפוש לפי שם ילד, שם הורה או טלפון"
+                    className="w-full rounded-lg border border-border py-2 pe-9 ps-3 text-sm"
+                  />
+                  {childSearch.length > 0 && (
+                    <button
+                      type="button"
+                      aria-label="נקה חיפוש"
+                      onClick={() => setChildSearch("")}
+                      className="absolute inset-y-0 end-2 flex items-center text-muted-foreground hover:text-foreground"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+                <p aria-live="polite" className="min-h-[1.25rem] text-sm text-muted-foreground">
+                  {childSearchActive
+                    ? filteredChildren.length === 0
+                      ? "לא נמצאו ילדים התואמים לחיפוש."
+                      : `נמצאו ${filteredChildren.length} מתוך ${children.length}`
+                    : ""}
+                </p>
+              </div>
+              {filteredChildren.map((child) => (
                 <div key={child.id} className="rounded-xl border border-border bg-card p-4">
                   {editingChildId === child.id ? (
                     <div className="flex flex-col gap-2">
