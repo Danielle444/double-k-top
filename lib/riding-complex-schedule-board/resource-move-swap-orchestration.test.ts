@@ -199,10 +199,11 @@ test("Correction 1: SuggestInput Enter preventDefault is GATED by onCommit", () 
 test("Correction 2: every proposal-open assigns the ref TRUE before setState", () => {
   const OPEN = "setMoveSwapProposal(vm)";
   const CLAIM = "moveSwapProposalOpenRef.current = true";
-  // There are three open sites (trainee / horse / instructor).
+  // There are four open sites (trainee / horse / instructor / whole-pair - the
+  // Stage 3D.2 pair Move/Swap added the fourth, honoring the same ref-first order).
   const openCount = EDITOR_SRC.split(OPEN).length - 1;
-  assert.equal(openCount, 3);
-  assert.equal(EDITOR_SRC.split(CLAIM).length - 1, 3);
+  assert.equal(openCount, 4);
+  assert.equal(EDITOR_SRC.split(CLAIM).length - 1, 4);
   // Each setMoveSwapProposal(vm) is immediately preceded (within a short window)
   // by the synchronous ref claim - the static ordering proof the review requires.
   let from = 0;
