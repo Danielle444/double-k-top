@@ -260,12 +260,26 @@ export async function getAttendanceTrackingForAdmin(
 // actions). The returned DTO and date-range behaviour are unchanged for a valid
 // active instructor. The pure gate + delegation lives in ./attendance-read-auth
 // so it is unit-testable without a session or a database.
+// ATT-3R: the read now ALSO requires the current CourseOffering's ATTENDANCE
+// capability to permit reads (canRead === true), injected as the parameterless
+// server-owned resolveCurrentAttendanceCapabilityAccess. It is an ADDITIONAL
+// restriction checked only AFTER the actor gate, so it never weakens the
+// existing authenticated-instructor boundary and no client-supplied offering
+// identity is accepted. ENABLED and READ_ONLY both read (canRead=true); DISABLED
+// and any fail-closed capability denial return the same safe empty [] and the
+// reader is never invoked; a resolver rejection (missing/ambiguous offering or
+// infrastructure failure) propagates unchanged. canRead (data read) is used, not
+// canView (navigation visibility, a later UI stage).
 export async function getAttendanceTrackingForInstructor(
   startDateKey: string,
   endDateKey: string
 ): Promise<AttendanceTrackingRow[]> {
   return loadInstructorAttendanceTrackingWithDeps(
-    { getCurrentInstructor, buildRows: buildAttendanceTrackingRows },
+    {
+      getCurrentInstructor,
+      resolveAttendanceAccess: resolveCurrentAttendanceCapabilityAccess,
+      buildRows: buildAttendanceTrackingRows,
+    },
     startDateKey,
     endDateKey
   );

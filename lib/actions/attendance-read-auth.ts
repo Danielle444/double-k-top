@@ -32,6 +32,7 @@ import type {
   AttendanceStatusValue,
   StudentAttendanceNotice,
 } from "./attendance";
+import type { AttendanceCapabilityAccess } from "@/lib/course/capabilities/attendance-capability-policy-core";
 
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -45,6 +46,14 @@ const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
  */
 export interface InstructorAttendanceTrackingDeps {
   getCurrentInstructor: () => Promise<{ id: string } | null>;
+  /**
+   * ATT-3R: parameterless, server-owned current-offering ATTENDANCE capability
+   * resolver (real wiring: resolveCurrentAttendanceCapabilityAccess). Called
+   * ONLY after the actor gate passes; a rejection (missing/ambiguous offering
+   * or infrastructure failure) propagates and is never converted into allowed
+   * access. Accepts no courseOfferingId / actor / date / client value.
+   */
+  resolveAttendanceAccess: () => Promise<AttendanceCapabilityAccess>;
   buildRows: (
     startDateKey: string,
     endDateKey: string,
@@ -53,16 +62,32 @@ export interface InstructorAttendanceTrackingDeps {
 
 /**
  * Gate the instructor tracking read on a trustworthy server-derived instructor
- * actor, THEN delegate to the unchanged range reader.
+ * actor, THEN require the current CourseOffering's ATTENDANCE read capability,
+ * THEN delegate to the unchanged range reader.
  *
  * Identity comes solely from deps.getCurrentInstructor(); there is no instructor
  * id parameter, so no client value can select or impersonate an instructor. A
- * null actor (unauthenticated / invalid / inactive) fails closed to [] and the
- * reader is never invoked. For a valid active instructor the returned DTO and
- * the date-range behaviour are exactly as before. Viewing intentionally does NOT
- * require canEditAttendance (that flag gates editing only - see
- * StudentAttendance/canEditAttendance schema note); this reader therefore checks
- * identity only, never a capability flag.
+ * null actor (unauthenticated / invalid / inactive) fails closed to [] and
+ * neither the capability resolver NOR the reader is invoked. The instructor
+ * read boundary is intentionally identity-only: viewing does NOT require
+ * canEditAttendance (that flag gates editing only - see StudentAttendance/
+ * canEditAttendance schema note), so this reader still checks no actor-level
+ * permission flag.
+ *
+ * ATT-3R: only AFTER the actor check passes is deps.resolveAttendanceAccess()
+ * called; the current CourseOffering's ATTENDANCE capability must yield
+ * canRead === true. READ_ONLY and ENABLED both permit the read (canRead=true);
+ * DISABLED and any fail-closed denial (DENIED_MISSING_CONTEXT /
+ * DENIED_UNKNOWN_STATUS, canRead=false) fail closed to the same [] the actor
+ * denial uses, and the reader is NEVER invoked. A resolver rejection (missing/
+ * ambiguous offering, or infrastructure failure) propagates unchanged and is
+ * never converted into an allowed or empty result. `canRead` (data read), not
+ * `canView` (navigation visibility), is used so this consumer expresses the
+ * operation it actually performs. The capability is a STRICT ADDITION checked
+ * only after the actor gate, so it can never open an actor-level denial and no
+ * client-supplied offering identity becomes authorization. For a valid active
+ * instructor whose offering permits reads the returned DTO and the date-range
+ * behaviour are exactly as before.
  */
 export async function loadInstructorAttendanceTrackingWithDeps(
   deps: InstructorAttendanceTrackingDeps,
@@ -71,6 +96,10 @@ export async function loadInstructorAttendanceTrackingWithDeps(
 ): Promise<AttendanceTrackingRow[]> {
   const instructor = await deps.getCurrentInstructor();
   if (!instructor) {
+    return [];
+  }
+  const access = await deps.resolveAttendanceAccess();
+  if (!access.canRead) {
     return [];
   }
   return deps.buildRows(startDateKey, endDateKey);
