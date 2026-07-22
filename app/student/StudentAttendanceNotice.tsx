@@ -13,29 +13,28 @@ const PARTIAL_MESSAGE =
 
 // Renders nothing until there's an actual ABSENT/PARTIAL exception for this
 // date - mirrors StudentMessagesSummary's "render nothing if there's nothing
-// to show" pattern. Read-only: no edit or clear control is offered here: the
-// server action already only ever returns this student's own record for
-// this one date, and only for ABSENT/PARTIAL (never PRESENT, never another
+// to show" pattern. Read-only: no edit or clear control is offered here.
+// ATT-SEC-1: no studentId is passed - the server action derives the current
+// trainee from the signed session and returns only that trainee's own record
+// for this one date, and only for ABSENT/PARTIAL (never PRESENT, never another
 // student).
 export function StudentAttendanceNotice({
-  studentId,
   dateKey,
 }: {
-  studentId: string;
   dateKey: string;
 }) {
   const [notice, setNotice] = useState<AttendanceNoticeDTO | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    getStudentAttendanceNotice(studentId, dateKey).then((n) => {
+    getStudentAttendanceNotice(dateKey).then((n) => {
       if (cancelled) return;
       setNotice(n);
     });
     return () => {
       cancelled = true;
     };
-  }, [studentId, dateKey]);
+  }, [dateKey]);
 
   if (!notice) return null;
 

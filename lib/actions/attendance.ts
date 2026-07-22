@@ -4,9 +4,14 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { getCurrentInstructor, getCurrentTrainee } from "@/lib/auth/actor";
 import { dateKey, parseDateKey, enumerateDateKeys } from "@/lib/dates";
 import { setAvailability } from "@/lib/actions/availability";
 import { syncAttendanceMarkedNotification } from "@/lib/actions/notifications";
+import {
+  loadInstructorAttendanceTrackingWithDeps,
+  loadStudentAttendanceNoticeWithDeps,
+} from "@/lib/actions/attendance-read-auth";
 import type { ActionResult } from "@/lib/actions/students";
 
 const attendanceStatusSchema = z.enum(["PRESENT", "ABSENT", "PARTIAL"]);
@@ -239,17 +244,26 @@ export async function getAttendanceTrackingForAdmin(
   return buildAttendanceTrackingRows(startDateKey, endDateKey);
 }
 
-// Instructors have no NextAuth session in this app - viewing attendance is
-// intentionally unrestricted here, mirroring the existing
-// getDutyAssignmentsForInstructor precedent (every instructor can already
-// see every student's duties/schedule this way). No student is exposed here
-// that isn't already visible to instructors elsewhere. Only editing is
-// gated - see updateAttendanceAsInstructor.
+// ATT-SEC-1: authenticated instructors only. Identity is derived from the
+// signed session via the canonical actor DAL (getCurrentInstructor) - never
+// from a client-supplied instructorId (there is no such parameter). A missing/
+// invalid/inactive/wrong-audience session yields a null actor and this fails
+// closed to [] (the same fail-closed read convention as getStudentContacts),
+// revealing nothing. Viewing is intentionally NOT gated on canEditAttendance:
+// per the StudentAttendance/canEditAttendance schema note, all instructors may
+// view attendance and that flag gates editing only (see the *AsInstructor write
+// actions). The returned DTO and date-range behaviour are unchanged for a valid
+// active instructor. The pure gate + delegation lives in ./attendance-read-auth
+// so it is unit-testable without a session or a database.
 export async function getAttendanceTrackingForInstructor(
   startDateKey: string,
   endDateKey: string
 ): Promise<AttendanceTrackingRow[]> {
-  return buildAttendanceTrackingRows(startDateKey, endDateKey);
+  return loadInstructorAttendanceTrackingWithDeps(
+    { getCurrentInstructor, buildRows: buildAttendanceTrackingRows },
+    startDateKey,
+    endDateKey
+  );
 }
 
 export interface StudentAttendanceNotice {
@@ -260,32 +274,35 @@ export interface StudentAttendanceNotice {
   notes: string | null;
 }
 
-// Students have no NextAuth session in this app - identical trust model to
-// getStudentProfile/getStudentMessages: studentId is trusted the same way a
-// logged-in student's own id always is, but the query itself is scoped to
-// exactly that studentId + date, so this can never return another student's
-// row. Returns null (no notice) for a missing record or a PRESENT status -
-// only ABSENT/PARTIAL are ever surfaced to the student, and only their own,
-// never the full tracking DTO (no group/duty/availability/warning fields).
+// ATT-SEC-1: the current trainee's OWN notice only. Identity is derived from
+// the signed session via the canonical actor DAL (getCurrentTrainee) - the
+// public signature no longer accepts a studentId, so a caller can never select
+// another trainee's row (the previous version trusted a client-supplied
+// studentId). The injected reader is scoped to exactly the authenticated
+// trainee's id + date. A missing/invalid/inactive/wrong-audience session yields
+// a null actor and returns null. Behaviour is otherwise unchanged: a missing
+// record or a PRESENT status returns null, only ABSENT/PARTIAL are surfaced, and
+// notes/time fields are preserved. The pure gate + shaping lives in
+// ./attendance-read-auth so it is unit-testable without a session or a database.
 export async function getStudentAttendanceNotice(
-  studentId: string,
   dateKeyStr: string
 ): Promise<StudentAttendanceNotice | null> {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKeyStr)) return null;
-
-  const record = await prisma.studentAttendance.findUnique({
-    where: { studentId_date: { studentId, date: parseDateKey(dateKeyStr) } },
-  });
-  if (!record) return null;
-  if (record.status === "PRESENT") return null;
-
-  return {
-    dateKey: dateKeyStr,
-    status: record.status,
-    arrivalTime: record.arrivalTime,
-    departureTime: record.departureTime,
-    notes: record.notes,
-  };
+  return loadStudentAttendanceNoticeWithDeps(
+    {
+      getCurrentTrainee,
+      readAttendanceRow: (studentId, dk) =>
+        prisma.studentAttendance.findUnique({
+          where: { studentId_date: { studentId, date: parseDateKey(dk) } },
+          select: {
+            status: true,
+            arrivalTime: true,
+            departureTime: true,
+            notes: true,
+          },
+        }),
+    },
+    dateKeyStr
+  );
 }
 
 function validateAttendanceInput(input: AttendanceInput): string | null {

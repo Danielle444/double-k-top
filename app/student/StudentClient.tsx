@@ -560,7 +560,7 @@ export function StudentClient() {
               </p>
             </div>
 
-            <StudentAttendanceNotice studentId={session.id} dateKey={todayKey} />
+            <StudentAttendanceNotice dateKey={todayKey} />
 
             <div className="grid grid-cols-3 gap-2">
               {STUDENT_QUICK_ACTIONS.map((action) => (
