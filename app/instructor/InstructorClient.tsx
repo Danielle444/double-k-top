@@ -36,6 +36,7 @@ import { InstructorChildSignaturesSection } from "@/app/instructor/InstructorChi
 import { InstructorTraineeProgressSection } from "@/app/instructor/InstructorTraineeProgressSection";
 import { canAccessTraineeProgress } from "@/lib/trainee-progress-permissions";
 import { filterInstructorAttendanceNavItems } from "@/lib/course/capabilities/instructor-attendance-nav-core";
+import { resolveEffectiveInstructorAttendanceEditability } from "@/lib/course/capabilities/instructor-attendance-write-ui-core";
 import { ContactsSection } from "@/lib/components/ContactsSection";
 import { HelpContent } from "@/lib/components/HelpContent";
 import { NotificationsList } from "@/lib/components/NotificationsList";
@@ -193,6 +194,7 @@ async function detectScheduleRidingSlotMode(
 export function InstructorClient({
   authenticated,
   canViewAttendance,
+  canWriteAttendance,
   students,
   dutyTypes,
   instructors,
@@ -206,12 +208,21 @@ export function InstructorClient({
   // is a render/teardown signal only - it authorizes nothing on its own.
   authenticated: boolean;
   // ATT-4V - server-owned ATTENDANCE navigation visibility (page.tsx, via the
-  // current-offering capability). The ONLY value that crosses from the capability
-  // layer into the client: a single canView boolean, never the full access object
-  // or its reason codes. It gates ONLY whether the attendance entry point appears
-  // in instructor navigation - it authorizes nothing. ATT-3R/ATT-3W enforce the
-  // actual attendance read/write on the server regardless of this flag.
+  // current-offering capability). One of the two booleans that cross from the
+  // capability layer into the client (never the full access object or its reason
+  // codes). It gates ONLY whether the attendance entry point appears in instructor
+  // navigation - it authorizes nothing. ATT-3R/ATT-3W enforce the actual
+  // attendance read/write on the server regardless of this flag.
   canViewAttendance: boolean;
+  // ATT-5WUI - server-owned ATTENDANCE write capability for the current offering
+  // (page.tsx, from the SAME single capability resolution as canViewAttendance).
+  // The second and last capability-layer boolean crossing into the client: it is
+  // AND-ed with the actor's session.canEditAttendance to form the effective
+  // editability handed to InstructorAttendanceSection as `canEdit`. It NEVER grants
+  // editing on its own - an actor without canEditAttendance stays read-only - and
+  // it authorizes nothing: ATT-3W is the authoritative server-side write boundary
+  // and rejects regardless of this flag.
+  canWriteAttendance: boolean;
   students: StudentOption[];
   dutyTypes: DutyTypeOption[];
   instructors: InstructorOption[];
@@ -1027,8 +1038,19 @@ export function InstructorClient({
         )}
 
         {activeTab === "attendance" && (
+          // ATT-5WUI - effective editability: the attendance UI is editable only
+          // when the actor carries canEditAttendance AND the current offering's
+          // ATTENDANCE capability permits writing (canWriteAttendance). Under
+          // READ_ONLY (canWriteAttendance=false) this resolves to false, so the
+          // section renders its existing complete read-only mode - every write
+          // surface (quick "mark absent", clear, details/edit open, modal
+          // submit/clear, week-grid cells) is gated on this one `canEdit` prop.
+          // ATT-3W still rejects any write server-side regardless.
           <InstructorAttendanceSection
-            canEdit={session.canEditAttendance}
+            canEdit={resolveEffectiveInstructorAttendanceEditability(
+              session.canEditAttendance,
+              canWriteAttendance,
+            )}
           />
         )}
 

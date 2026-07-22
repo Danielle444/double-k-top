@@ -3,7 +3,10 @@ import { getCurrentInstructor } from "@/lib/auth/actor";
 import { InstructorClient } from "@/app/instructor/InstructorClient";
 import { NAV_MAX_WIDTH_CLASSNAME } from "@/lib/components/BottomTabs";
 import { resolveCurrentAttendanceCapabilityAccess } from "@/lib/course/capabilities/current-attendance-capability";
-import { resolveInstructorAttendanceNavVisibilityWithDeps } from "@/lib/course/capabilities/instructor-attendance-nav-core";
+import {
+  resolveInstructorAttendanceUiAccessWithDeps,
+  type InstructorAttendanceUiAccess,
+} from "@/lib/course/capabilities/instructor-attendance-write-ui-core";
 
 export const dynamic = "force-dynamic";
 
@@ -26,22 +29,26 @@ export default async function InstructorPage() {
   const data =
     actor === null ? EMPTY_INSTRUCTOR_PAGE_DATA : await loadInstructorPageData();
 
-  // ATT-4V - server-owned ATTENDANCE navigation visibility. Only the single
-  // canView boolean crosses into the client shell; the full capability object
-  // and its internal reason codes never leave the server. Computed ONLY for an
-  // authenticated actor - an unauthenticated request renders the login form with
-  // no navigation, so its visibility is trivially false and the parameterless
-  // capability resolver is not consulted. resolveInstructorAttendanceNavVisibilityWithDeps
-  // reads only access.canView (ENABLED / READ_ONLY show it; DISABLED and every
-  // fail-closed denial hide it) and fails closed to hidden on any current-offering
-  // or capability-loader failure, scoped to this one optional nav item without
-  // breaking the rest of the shell. This is UI discoverability only: ATT-3R
-  // (canRead) and ATT-3W (canWrite) remain the authoritative server-side
-  // read/write boundaries and are untouched.
-  const canViewAttendance =
+  // ATT-4V / ATT-5WUI - server-owned ATTENDANCE UI access. The current offering's
+  // ATTENDANCE capability is resolved EXACTLY ONCE here and reduced to the two
+  // (and only two) booleans the client shell needs, both derived from the SAME
+  // resolved access object: canViewAttendance (ATT-4V nav discoverability) and
+  // canWriteAttendance (ATT-5WUI write-control gating). The full capability object,
+  // its status, and its internal reason codes never leave the server. Computed
+  // ONLY for an authenticated actor - an unauthenticated request renders the login
+  // form with no navigation and never touches the attendance UI, so both booleans
+  // are trivially false and the parameterless capability resolver is not consulted.
+  // resolveInstructorAttendanceUiAccessWithDeps reads only access.canView /
+  // access.canWrite (ENABLED -> view+write; READ_ONLY -> view only; DISABLED and
+  // every fail-closed denial -> neither) and fails closed to BOTH false on any
+  // current-offering or capability-loader failure, scoped to attendance without
+  // breaking the rest of the shell. This is UI gating only: ATT-3R (canRead) and
+  // ATT-3W (canWrite) remain the authoritative server-side read/write boundaries
+  // and are untouched.
+  const attendanceUiAccess: InstructorAttendanceUiAccess =
     actor === null
-      ? false
-      : await resolveInstructorAttendanceNavVisibilityWithDeps({
+      ? { canViewAttendance: false, canWriteAttendance: false }
+      : await resolveInstructorAttendanceUiAccessWithDeps({
           resolveAttendanceAccess: resolveCurrentAttendanceCapabilityAccess,
         });
 
@@ -68,7 +75,8 @@ export default async function InstructorPage() {
     <div className={`mx-auto flex min-h-dvh w-full flex-col bg-background ${NAV_MAX_WIDTH_CLASSNAME}`}>
       <InstructorClient
         authenticated={actor !== null}
-        canViewAttendance={canViewAttendance}
+        canViewAttendance={attendanceUiAccess.canViewAttendance}
+        canWriteAttendance={attendanceUiAccess.canWriteAttendance}
         students={data.students}
         dutyTypes={data.dutyTypes}
         instructors={data.instructors}
