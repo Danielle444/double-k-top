@@ -3,6 +3,13 @@
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
+// RS-SEC-1I-CP-RD - the canonical signed-session instructor resolver + the pure,
+// dependency-injected read boundary the instructor publication-status reader now
+// routes through. The client-supplied instructorId argument is gone; identity
+// comes only from the signed session (getCurrentInstructor), same convention as
+// riding-slot-complex-read-auth.ts. Publish/unpublish below are UNCHANGED.
+import { getCurrentInstructor } from "@/lib/auth/actor";
+import { loadComplexPublicationStatusForInstructorWithDeps } from "@/lib/actions/riding-slot-complex-read-auth";
 import type { ActionResult } from "@/lib/actions/students";
 
 const NOT_FOUND_COMPLEX_PLAN = "תכנון הרכיבה המורכבת לא נמצא. ייתכן שטרם נוצר - נסי לרענן את העמוד.";
@@ -120,19 +127,22 @@ export async function getComplexRidingPlanPublicationStatusForAdmin(
   return buildComplexPublicationStatus(ridingSlotId);
 }
 
-// instructorId is checked for existence/isActive only - NOT
-// canEditRidingNotes. Reading status has no permission-level gate beyond
-// being an active instructor, matching getRidingSlotComplexPlanForInstructor
-// and getInstructorHorsePublicationStatusForInstructor's identical read
-// convention; only publishing is gated. Returns null (not an error) for an
-// instructor who doesn't exist or isn't active.
+// RS-SEC-1I-CP-RD - identity comes ONLY from the signed session
+// (getCurrentInstructor), never a client-supplied instructorId (the parameter is
+// gone). Reading status has no permission-level gate beyond being a signed ACTIVE
+// instructor - NOT canEditRidingNotes - matching getRidingSlotComplexPlanFor-
+// Instructor's read convention; only publishing is gated. The gate + fail-closed-
+// to-null orchestration lives in the pure DI boundary
+// loadComplexPublicationStatusForInstructorWithDeps: a null/invalid/inactive/
+// wrong-audience session (or a thrown resolver) returns null WITHOUT running
+// buildComplexPublicationStatus, and a genuine reader error still propagates.
 export async function getComplexRidingPlanPublicationStatusForInstructor(
-  instructorId: string,
   ridingSlotId: string
 ): Promise<ComplexRidingPlanPublicationStatus | null> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive) return null;
-  return buildComplexPublicationStatus(ridingSlotId);
+  return loadComplexPublicationStatusForInstructorWithDeps(
+    { getCurrentInstructor, readStatus: buildComplexPublicationStatus },
+    ridingSlotId
+  );
 }
 
 // ---------- Publish / republish (write) ----------

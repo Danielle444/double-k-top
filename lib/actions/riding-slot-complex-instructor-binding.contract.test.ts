@@ -138,15 +138,78 @@ test("the create call site passes only ridingSlotId (no acting instructorId)", (
   );
 });
 
-// Scoping guard: the EXCLUDED instructor readers/publish/unpublish still take
-// actor.instructorId (they are out of scope for this stage and must be untouched).
-test("excluded reader/publish/unpublish branches are untouched (still pass actor.instructorId)", () => {
+// RS-SEC-1I-CP-RD - the two instructor complex-plan READERS are now bound to the
+// signed session too: the editor's instructor branches for both readers pass ONLY
+// ridingSlotId (no acting instructorId), matching the writer cutover above.
+test("the editor's two instructor reader branches pass NO acting instructorId", () => {
+  for (const name of [
+    "getRidingSlotComplexPlanForInstructor",
+    "getComplexRidingPlanPublicationStatusForInstructor",
+  ]) {
+    assert.ok(editorSrc.includes(`${name}(`), `editor must still route ${name}`);
+    assert.ok(
+      !editorSrc.includes(`${name}(actor.instructorId`),
+      `editor branch for ${name} must not pass actor.instructorId`,
+    );
+    assert.ok(
+      editorSrc.includes(`${name}(ridingSlotId)`),
+      `editor branch for ${name} must pass only ridingSlotId`,
+    );
+  }
+});
+
+// Scoping guard: the EXCLUDED publish/unpublish writers are the SEPARATE future
+// stage and remain untouched - they still take actor.instructorId. This proves
+// RS-SEC-1I-CP-RD bound only the two readers and did not over-reach into the
+// publication-writer stage. RidingComplexPlanEditorActor.instructorId is retained
+// precisely because these two branches still consume it.
+test("excluded publish/unpublish branches are untouched (still pass actor.instructorId)", () => {
   for (const excluded of [
-    "getRidingSlotComplexPlanForInstructor(actor.instructorId",
-    "getComplexRidingPlanPublicationStatusForInstructor(actor.instructorId",
     "publishComplexRidingPlanAsInstructor(actor.instructorId",
     "unpublishComplexRidingPlanAsInstructor(actor.instructorId",
   ]) {
     assert.ok(editorSrc.includes(excluded), `excluded branch must be unchanged: ${excluded}`);
   }
+  // The editor actor type still carries instructorId for those writers.
+  assert.ok(
+    /type RidingComplexPlanEditorActor =[\s\S]*instructorId: string/.test(editorSrc),
+    "RidingComplexPlanEditorActor.instructorId must remain for publish/unpublish",
+  );
+});
+
+// RS-SEC-1I-CP-RD - the two reader ACTIONS route through the new read boundary and
+// no longer re-read an Instructor by a client id (identity comes from the signed
+// session). Complements the behavioral evidence in riding-slot-complex-read-auth.test.ts.
+test("both reader actions are bound to the signed session via the read boundary", () => {
+  const pubSrc = read("./riding-slot-complex-publications.ts");
+
+  // Plan reader (riding-slot-complex.ts) - signature has no instructorId, routes
+  // through the read boundary.
+  const planSig = signature(complexSrc, "getRidingSlotComplexPlanForInstructor");
+  assert.ok(!/instructorId/.test(planSig), `plan reader signature must not accept instructorId (got: ${planSig})`);
+  const planBody = wrapperRegion(complexSrc, "getRidingSlotComplexPlanForInstructor");
+  assert.ok(
+    planBody.includes("loadComplexPlanForInstructorWithDeps"),
+    "plan reader must delegate to loadComplexPlanForInstructorWithDeps",
+  );
+  assert.ok(planBody.includes("getCurrentInstructor"), "plan reader must resolve identity via getCurrentInstructor");
+  assert.ok(
+    !planBody.includes("prisma.instructor.findUnique("),
+    "plan reader must not re-read Instructor by a client id",
+  );
+
+  // Status reader (riding-slot-complex-publications.ts) - same guarantees, using
+  // the shared slicing helpers (they operate on any source string).
+  const statusSig = signature(pubSrc, "getComplexRidingPlanPublicationStatusForInstructor");
+  const statusBody = wrapperRegion(pubSrc, "getComplexRidingPlanPublicationStatusForInstructor");
+  assert.ok(!/instructorId/.test(statusSig), `status reader signature must not accept instructorId (got: ${statusSig})`);
+  assert.ok(
+    statusBody.includes("loadComplexPublicationStatusForInstructorWithDeps"),
+    "status reader must delegate to loadComplexPublicationStatusForInstructorWithDeps",
+  );
+  assert.ok(statusBody.includes("getCurrentInstructor"), "status reader must resolve identity via getCurrentInstructor");
+  assert.ok(
+    !statusBody.includes("prisma.instructor.findUnique("),
+    "status reader must not re-read Instructor by a client id",
+  );
 });

@@ -13,6 +13,10 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 // riding-slots-write-auth.ts (RS-SEC-1I-W).
 import { getCurrentInstructor } from "@/lib/auth/actor";
 import { runComplexPlanInstructorWrite } from "@/lib/actions/riding-slot-complex-auth";
+// RS-SEC-1I-CP-RD - pure DI read boundary that binds the instructor complex-plan
+// reader to the signed session (identity only; canEditRidingNotes is threaded
+// into the returned canEdit, never gating the read).
+import { loadComplexPlanForInstructorWithDeps } from "@/lib/actions/riding-slot-complex-read-auth";
 import { dateKey } from "@/lib/dates";
 import type { ActionResult } from "@/lib/actions/students";
 import { getKnownRidingHorseNames } from "@/lib/actions/riding-slots";
@@ -538,18 +542,27 @@ export async function getRidingSlotComplexPlanForAdmin(
   return buildComplexPlanForEditing(ridingSlotId, { canEdit: true });
 }
 
-// instructorId is checked for existence/isActive only - NOT
-// canEditRidingNotes. Viewing has no permission-level gate, matching
-// getRidingSlotHorseListForInstructor's identical read convention; canEdit
-// is exposed to the caller so a read-only instructor's UI can hide edit
-// controls without a second permission check.
+// RS-SEC-1I-CP-RD - identity comes ONLY from the signed session
+// (getCurrentInstructor), never a client-supplied instructorId (the parameter is
+// gone; a caller can no longer borrow another instructor's identity or their
+// canEditRidingNotes). Viewing still has no permission-level gate - every signed
+// ACTIVE instructor may read, matching getRidingSlotHorseListForInstructor's read
+// convention - but the returned canEdit is now the SIGNED actor's
+// canEditRidingNotes (a read-only instructor reads the plan with canEdit=false).
+// The gate + fail-closed-to-null orchestration lives in the pure DI boundary
+// loadComplexPlanForInstructorWithDeps; a null/invalid/inactive/wrong-audience
+// session (or a thrown resolver) returns null WITHOUT running buildComplexPlan-
+// ForEditing, and a genuine reader error still propagates unchanged.
 export async function getRidingSlotComplexPlanForInstructor(
-  instructorId: string,
   ridingSlotId: string
 ): Promise<RidingSlotComplexPlanForEditing | null> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive) return null;
-  return buildComplexPlanForEditing(ridingSlotId, { canEdit: instructor.canEditRidingNotes });
+  return loadComplexPlanForInstructorWithDeps(
+    {
+      getCurrentInstructor,
+      readPlan: (slotId, canEdit) => buildComplexPlanForEditing(slotId, { canEdit }),
+    },
+    ridingSlotId
+  );
 }
 
 // ---------- Create plan (mutual-exclusivity gate) ----------

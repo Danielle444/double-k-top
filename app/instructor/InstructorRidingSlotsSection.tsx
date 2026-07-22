@@ -57,7 +57,7 @@ function isAssignedToInstructor(activity: WeeklyRidingActivity, instructorId: st
 // already return null for an inactive instructor (isActive re-checked
 // server-side on every call) - no extra handling needed here for that case.
 async function detectInstructorRidingSlotMode(instructorId: string, ridingSlotId: string): Promise<InstructorSlotMode> {
-  const complexPlan = await getRidingSlotComplexPlanForInstructor(instructorId, ridingSlotId);
+  const complexPlan = await getRidingSlotComplexPlanForInstructor(ridingSlotId);
   if (complexPlan) return "complex";
   const horseList = await getRidingSlotHorseListForInstructor(instructorId, ridingSlotId);
   if (horseList?.listId) return "simple";

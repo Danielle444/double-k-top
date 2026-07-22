@@ -181,7 +181,7 @@ function readComplexPlan(
 ): Promise<RidingSlotComplexPlanForEditing | null> {
   return actor.type === "admin"
     ? getRidingSlotComplexPlanForAdmin(ridingSlotId)
-    : getRidingSlotComplexPlanForInstructor(actor.instructorId, ridingSlotId);
+    : getRidingSlotComplexPlanForInstructor(ridingSlotId);
 }
 
 function saveComplexBlock(
@@ -285,7 +285,7 @@ function readComplexPublicationStatus(
 ): Promise<ComplexRidingPlanPublicationStatus | null> {
   return actor.type === "admin"
     ? getComplexRidingPlanPublicationStatusForAdmin(ridingSlotId)
-    : getComplexRidingPlanPublicationStatusForInstructor(actor.instructorId, ridingSlotId);
+    : getComplexRidingPlanPublicationStatusForInstructor(ridingSlotId);
 }
 
 function publishComplexPlan(

@@ -184,7 +184,7 @@ async function detectScheduleRidingSlotMode(
   instructorId: string,
   ridingSlotId: string
 ): Promise<InstructorSlotMode> {
-  const complexPlan = await getRidingSlotComplexPlanForInstructor(instructorId, ridingSlotId);
+  const complexPlan = await getRidingSlotComplexPlanForInstructor(ridingSlotId);
   if (complexPlan) return "complex";
   const horseList = await getRidingSlotHorseListForInstructor(instructorId, ridingSlotId);
   if (horseList?.listId) return "simple";

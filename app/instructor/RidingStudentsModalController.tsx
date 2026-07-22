@@ -1013,7 +1013,7 @@ export function RidingStudentsModalController({
     complexPlanFetchStartedForRef.current = ridingSlotId;
     let cancelled = false;
     setComplexPlanForFeedbackStatus("loading");
-    getRidingSlotComplexPlanForInstructor(instructorId, ridingSlotId)
+    getRidingSlotComplexPlanForInstructor(ridingSlotId)
       .then((result) => {
         if (cancelled) return;
         if (!result) {
