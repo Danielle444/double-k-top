@@ -2,6 +2,8 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentInstructor } from "@/lib/auth/actor";
 import { InstructorClient } from "@/app/instructor/InstructorClient";
 import { NAV_MAX_WIDTH_CLASSNAME } from "@/lib/components/BottomTabs";
+import { resolveCurrentAttendanceCapabilityAccess } from "@/lib/course/capabilities/current-attendance-capability";
+import { resolveInstructorAttendanceNavVisibilityWithDeps } from "@/lib/course/capabilities/instructor-attendance-nav-core";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +25,25 @@ export default async function InstructorPage() {
 
   const data =
     actor === null ? EMPTY_INSTRUCTOR_PAGE_DATA : await loadInstructorPageData();
+
+  // ATT-4V - server-owned ATTENDANCE navigation visibility. Only the single
+  // canView boolean crosses into the client shell; the full capability object
+  // and its internal reason codes never leave the server. Computed ONLY for an
+  // authenticated actor - an unauthenticated request renders the login form with
+  // no navigation, so its visibility is trivially false and the parameterless
+  // capability resolver is not consulted. resolveInstructorAttendanceNavVisibilityWithDeps
+  // reads only access.canView (ENABLED / READ_ONLY show it; DISABLED and every
+  // fail-closed denial hide it) and fails closed to hidden on any current-offering
+  // or capability-loader failure, scoped to this one optional nav item without
+  // breaking the rest of the shell. This is UI discoverability only: ATT-3R
+  // (canRead) and ATT-3W (canWrite) remain the authoritative server-side
+  // read/write boundaries and are untouched.
+  const canViewAttendance =
+    actor === null
+      ? false
+      : await resolveInstructorAttendanceNavVisibilityWithDeps({
+          resolveAttendanceAccess: resolveCurrentAttendanceCapabilityAccess,
+        });
 
   return (
     // Widens from tablet upward (mobile portrait keeps today's max-w-lg).
@@ -47,6 +68,7 @@ export default async function InstructorPage() {
     <div className={`mx-auto flex min-h-dvh w-full flex-col bg-background ${NAV_MAX_WIDTH_CLASSNAME}`}>
       <InstructorClient
         authenticated={actor !== null}
+        canViewAttendance={canViewAttendance}
         students={data.students}
         dutyTypes={data.dutyTypes}
         instructors={data.instructors}

@@ -35,6 +35,7 @@ import { InstructorTeachingPracticeSection } from "@/app/instructor/InstructorTe
 import { InstructorChildSignaturesSection } from "@/app/instructor/InstructorChildSignaturesSection";
 import { InstructorTraineeProgressSection } from "@/app/instructor/InstructorTraineeProgressSection";
 import { canAccessTraineeProgress } from "@/lib/trainee-progress-permissions";
+import { filterInstructorAttendanceNavItems } from "@/lib/course/capabilities/instructor-attendance-nav-core";
 import { ContactsSection } from "@/lib/components/ContactsSection";
 import { HelpContent } from "@/lib/components/HelpContent";
 import { NotificationsList } from "@/lib/components/NotificationsList";
@@ -191,6 +192,7 @@ async function detectScheduleRidingSlotMode(
 
 export function InstructorClient({
   authenticated,
+  canViewAttendance,
   students,
   dutyTypes,
   instructors,
@@ -203,6 +205,13 @@ export function InstructorClient({
   // stored session would render the authenticated shell over no data. This flag
   // is a render/teardown signal only - it authorizes nothing on its own.
   authenticated: boolean;
+  // ATT-4V - server-owned ATTENDANCE navigation visibility (page.tsx, via the
+  // current-offering capability). The ONLY value that crosses from the capability
+  // layer into the client: a single canView boolean, never the full access object
+  // or its reason codes. It gates ONLY whether the attendance entry point appears
+  // in instructor navigation - it authorizes nothing. ATT-3R/ATT-3W enforce the
+  // actual attendance read/write on the server regardless of this flag.
+  canViewAttendance: boolean;
   students: StudentOption[];
   dutyTypes: DutyTypeOption[];
   instructors: InstructorOption[];
@@ -768,6 +777,12 @@ export function InstructorClient({
     items.splice(helpIndex, 0, { id: "traineeProgress", label: "מעקב חניכים" });
     instructorMoreItems = items;
   }
+  // ATT-4V - omit the attendance entry ("נוכחות") from the "עוד" menu (and thus
+  // from instructorAllTabs, which the "more" screen renders) whenever the current
+  // offering's ATTENDANCE capability does not permit viewing (canView=false, incl.
+  // every fail-closed denial). Applied last so it never disturbs the ordering of
+  // the unrelated items above; ENABLED/READ_ONLY leave the entry exactly as before.
+  instructorMoreItems = filterInstructorAttendanceNavItems(instructorMoreItems, canViewAttendance);
   const instructorAllTabs = [...INSTRUCTOR_MAIN_TABS, ...instructorMoreItems];
 
   const activeTabLabel = instructorAllTabs.find((t) => t.id === activeTab)?.label ?? "";
@@ -778,10 +793,15 @@ export function InstructorClient({
   // message/task is not a separate shortcut here - permitted instructors send
   // from inside the "הודעות ומשימות" screen itself (gated there by
   // canSendMessages), so this list only ever links to that one screen once.
-  const homeShortcuts: { id: MainTabId; label: string }[] = [
-    ...INSTRUCTOR_ACTIVITY_SHORTCUTS,
-    ...INSTRUCTOR_INFO_SHORTCUTS,
-  ];
+  // ATT-4V - the "today" quick-nav grid exposes attendance via
+  // INSTRUCTOR_INFO_SHORTCUTS; the same server-owned canView boolean omits it
+  // here too, so both instructor entry points to attendance are hidden together
+  // when the capability does not permit viewing. Unrelated shortcuts and their
+  // order are untouched.
+  const homeShortcuts: { id: MainTabId; label: string }[] = filterInstructorAttendanceNavItems(
+    [...INSTRUCTOR_ACTIVITY_SHORTCUTS, ...INSTRUCTOR_INFO_SHORTCUTS],
+    canViewAttendance
+  );
 
   return (
     <div className="flex flex-1 flex-col">
