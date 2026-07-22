@@ -12,6 +12,10 @@ import {
   loadInstructorAttendanceTrackingWithDeps,
   loadStudentAttendanceNoticeWithDeps,
 } from "@/lib/actions/attendance-read-auth";
+import {
+  upsertInstructorAttendanceWithDeps,
+  clearInstructorAttendanceWithDeps,
+} from "@/lib/actions/attendance-write-auth";
 import type { ActionResult } from "@/lib/actions/students";
 
 const attendanceStatusSchema = z.enum(["PRESENT", "ABSENT", "PARTIAL"]);
@@ -370,19 +374,26 @@ export async function upsertAttendanceAsAdmin(input: AttendanceInput): Promise<A
   return upsertAttendanceRecord(input, admin.name ?? admin.email);
 }
 
-// Instructors have no NextAuth session in this app, so the permission check
-// re-reads canEditAttendance from the DB by instructorId on every call - it
-// never trusts a client-supplied boolean. This is the only gate; UI hiding
-// of edit controls is not relied upon.
+// ATT-SEC-2: authenticated instructors only. Identity is derived from the
+// signed session via the canonical actor DAL (getCurrentInstructor) - never
+// from a client-supplied instructorId (there is no such parameter anymore; the
+// previous version trusted a client id, letting a caller borrow another
+// instructor's edit permission and stamp that instructor's name as authorship).
+// A missing/invalid/inactive/wrong-audience/subject-mismatched session yields a
+// null actor and the write is rejected before any mutation; an authenticated
+// instructor whose canEditAttendance is false is likewise rejected. Authorship
+// (updatedByName) is the server-derived actor's own fullName. The existing
+// payload validation + upsert (and its unchanged success/error contract) run
+// only for an authorized actor. The pure gate + delegation lives in
+// ./attendance-write-auth so it is unit-testable without a session or database.
+// This stage does NOT add CourseOffering ATTENDANCE capability enforcement.
 export async function upsertAttendanceAsInstructor(
-  instructorId: string,
   input: AttendanceInput
 ): Promise<AttendanceActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditAttendance) {
-    return { success: false, error: "אין הרשאה לערוך נוכחות" };
-  }
-  return upsertAttendanceRecord(input, instructor.fullName);
+  return upsertInstructorAttendanceWithDeps(
+    { getCurrentInstructor, upsertRecord: upsertAttendanceRecord },
+    input
+  );
 }
 
 // Explicit, admin-initiated action for the future "סמני גם כלא זמין/ה
@@ -415,23 +426,38 @@ export async function clearAttendanceAsAdmin(
   return { success: true };
 }
 
-// Same behavior as clearAttendanceAsAdmin, gated the same way as
-// upsertAttendanceAsInstructor - re-reads isActive/canEditAttendance from
-// the DB by instructorId, never trusting a client-supplied boolean.
-export async function clearAttendanceAsInstructor(
-  instructorId: string,
+// Delete-then-revalidate mutator shared by the instructor clear path (the same
+// body clearAttendanceAsAdmin runs inline). Deliberately unauthenticated: it is
+// a private helper, never exported and never registered as a Server Action, and
+// is only reached after the caller has passed its own authorization gate.
+async function clearAttendanceRecord(
   studentId: string,
   dateKeyStr: string
 ): Promise<ActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditAttendance) {
-    return { success: false, error: "אין הרשאה לערוך נוכחות" };
-  }
-
   const date = parseDateKey(dateKeyStr);
   await prisma.studentAttendance.deleteMany({ where: { studentId, date } });
 
   revalidatePath("/admin/daily-tracking");
   revalidatePath("/instructor");
   return { success: true };
+}
+
+// ATT-SEC-2: same delete behavior as clearAttendanceAsAdmin, but the instructor
+// identity is now derived from the signed session via getCurrentInstructor -
+// never from a client-supplied instructorId (removed). A null actor
+// (unauthenticated / invalid / inactive / wrong-audience / subject-mismatched)
+// or an actor whose canEditAttendance is false is rejected before any delete.
+// studentId/dateKeyStr remain the client-supplied TARGET of the authorized
+// clear (not actor identity) and are passed through unchanged. The pure gate +
+// delegation lives in ./attendance-write-auth. This stage does NOT add
+// CourseOffering ATTENDANCE capability enforcement.
+export async function clearAttendanceAsInstructor(
+  studentId: string,
+  dateKeyStr: string
+): Promise<ActionResult> {
+  return clearInstructorAttendanceWithDeps(
+    { getCurrentInstructor, clearRecord: clearAttendanceRecord },
+    studentId,
+    dateKeyStr
+  );
 }

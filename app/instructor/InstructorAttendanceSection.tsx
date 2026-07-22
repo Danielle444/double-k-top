@@ -55,10 +55,8 @@ type WeekTab = "urgent" | "grouped";
 // this screen (instructors have no server-fetched course-settings prop), so
 // the date input is unbounded - a cosmetic difference only.
 export function InstructorAttendanceSection({
-  instructorId,
   canEdit,
 }: {
-  instructorId: string;
   canEdit: boolean;
 }) {
   const [viewMode, setViewMode] = useState<ViewMode>("day");
@@ -206,7 +204,7 @@ export function InstructorAttendanceSection({
   function handleQuickAbsent(row: AttendanceTrackingRow) {
     setPendingStudentId(row.studentId);
     startSaveTransition(async () => {
-      const result = await upsertAttendanceAsInstructor(instructorId, {
+      const result = await upsertAttendanceAsInstructor({
         studentId: row.studentId,
         dateKey: row.dateKey,
         status: "ABSENT",
@@ -226,7 +224,7 @@ export function InstructorAttendanceSection({
   function handleClear(row: AttendanceTrackingRow) {
     setPendingStudentId(row.studentId);
     startSaveTransition(async () => {
-      const result = await clearAttendanceAsInstructor(instructorId, row.studentId, row.dateKey);
+      const result = await clearAttendanceAsInstructor(row.studentId, row.dateKey);
       setPendingStudentId(null);
       if (!result.success) {
         setLoadError(result.error ?? "אירעה שגיאה");
@@ -259,7 +257,7 @@ export function InstructorAttendanceSection({
 
     const status = form.status;
     startSaveTransition(async () => {
-      const result = await upsertAttendanceAsInstructor(instructorId, {
+      const result = await upsertAttendanceAsInstructor({
         studentId: modalRow.studentId,
         dateKey: modalRow.dateKey,
         status,
@@ -282,7 +280,6 @@ export function InstructorAttendanceSection({
     setFormError(null);
     startSaveTransition(async () => {
       const result = await clearAttendanceAsInstructor(
-        instructorId,
         modalRow.studentId,
         modalRow.dateKey
       );

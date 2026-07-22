@@ -1008,7 +1008,6 @@ export function InstructorClient({
 
         {activeTab === "attendance" && (
           <InstructorAttendanceSection
-            instructorId={session.id}
             canEdit={session.canEditAttendance}
           />
         )}
