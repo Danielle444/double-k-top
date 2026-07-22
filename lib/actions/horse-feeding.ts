@@ -5,10 +5,15 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/app/generated/prisma/client";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { getCurrentInstructor } from "@/lib/auth/actor";
 import { parseDateKey, todayDateKey } from "@/lib/dates";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
 import type { ActionResult } from "@/lib/actions/students";
 import type { AttendanceStatusValue } from "@/lib/actions/attendance";
+import {
+  loadInstructorHorseFeedingOverviewWithDeps,
+  upsertInstructorHorseFeedingMealsWithDeps,
+} from "@/lib/actions/horse-feeding-auth";
 
 // Still no separate Horse table (see HorseFeedingMeal's own schema comment) -
 // horseName is the natural key everywhere here too, matched against whatever
@@ -157,8 +162,28 @@ export async function getHorseFeedingOverviewForAdmin(): Promise<HorseFeedingOve
   return buildHorseFeedingOverview();
 }
 
+// HF-SEC-1RW: the instructor overview read is now gated on a trustworthy
+// server-derived instructor actor via the canonical Actor DAL
+// (getCurrentInstructor) - it accepts NO client actor identity and no longer
+// relies on the parent page having authenticated the caller. A missing/invalid/
+// inactive/wrong-audience/subject-mismatched session yields a null actor and this
+// fails closed to [] (the same fail-closed convention as
+// getAttendanceTrackingForInstructor), so an unauthenticated caller or a
+// trainee/wrong-role actor receives nothing and buildHorseFeedingOverview is
+// never invoked. Viewing is intentionally NOT gated on canEditHorseFeeding (that
+// flag gates editing only - see the *AsInstructor write action) so every active
+// instructor keeps the committed "any instructor may view" behaviour, and the
+// returned DTO - including its attendance-derived operational fields - is
+// unchanged for a valid active instructor. NO ATTENDANCE capability / offering
+// gating is applied to the internal attendance-derived business-rule read. The
+// pure gate + delegation lives in ./horse-feeding-auth so it is unit-testable
+// without a session or a database. getHorseFeedingOverviewForAdmin below keeps
+// its own separate requireAdmin boundary and is not routed through here.
 export async function getHorseFeedingOverviewForInstructor(): Promise<HorseFeedingOverviewRow[]> {
-  return buildHorseFeedingOverview();
+  return loadInstructorHorseFeedingOverviewWithDeps({
+    getCurrentInstructor,
+    buildOverview: buildHorseFeedingOverview,
+  });
 }
 
 // Suggestions for the hay-type/concentrate-type inputs - never a closed
@@ -303,17 +328,26 @@ export async function upsertHorseFeedingMealsAsAdmin(
   return upsertHorseFeedingMeals(input, admin.name ?? admin.email);
 }
 
-// Instructors have no NextAuth session in this app, so the permission check
-// re-reads canEditHorseFeeding from the DB by instructorId on every call -
-// it never trusts a client-supplied boolean. This is the only gate; UI
-// hiding of edit controls is not relied upon.
+// HF-SEC-1RW: the acting instructor is now derived EXCLUSIVELY from the signed
+// session via the canonical Actor DAL (getCurrentInstructor) - the public
+// signature no longer accepts an instructorId, so a caller can never select the
+// permission-bearing row, borrow another instructor's canEditHorseFeeding, or
+// choose the persisted updatedByName. getCurrentInstructor returns null for every
+// unauthenticated/invalid/inactive/wrong-audience/subject-mismatched case (so the
+// active-status check is already enforced by the DAL) and null OR an actor whose
+// canEditHorseFeeding is false is rejected with the unchanged Hebrew permission
+// error BEFORE the mutation transaction runs (no DB write on denial). Authorship
+// (updatedByName) is taken from the server-derived actor's fullName only. The
+// pure gate + delegation lives in ./horse-feeding-auth so it is unit-testable
+// without a session or a database. UI hiding of edit controls is not relied upon.
 export async function upsertHorseFeedingMealsAsInstructor(
-  instructorId: string,
   input: HorseFeedingUpsertInput
 ): Promise<ActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditHorseFeeding) {
-    return { success: false, error: "אין הרשאה לערוך האכלות" };
-  }
-  return upsertHorseFeedingMeals(input, instructor.fullName);
+  return upsertInstructorHorseFeedingMealsWithDeps(
+    {
+      getCurrentInstructor,
+      upsertMeals: upsertHorseFeedingMeals,
+    },
+    input
+  );
 }

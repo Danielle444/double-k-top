@@ -188,7 +188,11 @@ export function InstructorHorsesSection({
   }
 
   function saveFeeding(input: HorseFeedingUpsertInput) {
-    return upsertHorseFeedingMealsAsInstructor(instructorId, input);
+    // HF-SEC-1RW: the writer derives the acting instructor from the signed
+    // session server-side and no longer accepts an instructorId - this passes
+    // only the validated feeding input. canEditFeeding stays a UI affordance
+    // (hides edit controls); it is NOT server authorization.
+    return upsertHorseFeedingMealsAsInstructor(input);
   }
 
   return (
