@@ -276,7 +276,11 @@ export function InstructorRidingSlotsSection({
     setChooseError(null);
     setCreatingComplexForId(ridingSlotId);
     startCreateComplexTransition(async () => {
-      const result = await createRidingSlotComplexPlanAsInstructor(instructorId, ridingSlotId);
+      // RS-SEC-1I-CP - identity comes from the signed session server-side; no
+      // client-supplied instructorId is passed. (The instructorId prop is still
+      // used elsewhere in this component for assignment filtering / mode
+      // detection / the excluded readers, so it is intentionally retained.)
+      const result = await createRidingSlotComplexPlanAsInstructor(ridingSlotId);
       setCreatingComplexForId(null);
       if (!result.success) {
         setChooseError({ ridingSlotId, message: result.error ?? "אירעה שגיאה" });

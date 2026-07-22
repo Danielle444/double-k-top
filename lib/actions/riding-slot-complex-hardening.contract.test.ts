@@ -204,7 +204,7 @@ test("the delete/reorder/duplicate wrappers take expectedVersion in their signat
 // Authorization preserved exactly (unchanged from the pre-hardening contract)
 // -------------------------------------------------------------------------
 
-test("every admin wrapper still calls requireAdmin(); every instructor wrapper still re-reads + gates the Instructor", () => {
+test("every admin wrapper still calls requireAdmin(); RS-SEC-1I-CP: every instructor wrapper binds to the signed session", () => {
   const adminWrappers = [
     "saveRidingSlotComplexBlockAsAdmin",
     "saveRidingSlotComplexStationAsAdmin",
@@ -234,11 +234,22 @@ test("every admin wrapper still calls requireAdmin(); every instructor wrapper s
     assert.ok(start > -1, `${fn} not found`);
     const nextExport = src.indexOf("export async function", start + 1);
     const r = src.slice(start, nextExport > start ? nextExport : undefined);
-    assert.ok(r.includes("prisma.instructor.findUnique("), `${fn}: must re-read the Instructor server-side`);
+    // RS-SEC-1I-CP: identity comes ONLY from the signed session via the shared
+    // boundary - never a re-read of a client-supplied instructorId.
     assert.ok(
-      /!instructor\.isActive/.test(r) && /!instructor\.canEditRidingNotes/.test(r),
-      `${fn}: must require isActive && canEditRidingNotes`
+      r.includes("runComplexPlanInstructorWrite("),
+      `${fn}: must route through the signed-session boundary`
     );
+    assert.ok(r.includes("getCurrentInstructor"), `${fn}: must resolve identity via getCurrentInstructor`);
+    assert.ok(
+      !r.includes("prisma.instructor.findUnique("),
+      `${fn}: must NOT re-read an Instructor by a client-supplied id`
+    );
+    // The signed actor still gates on canEditRidingNotes - now inside the shared
+    // boundary (runComplexPlanInstructorWrite), asserted behaviorally in
+    // riding-slot-complex-auth.test.ts.
+    const sig = src.slice(start, src.indexOf(")", start) + 1);
+    assert.ok(!/instructorId/.test(sig), `${fn}: public signature must not accept instructorId`);
   }
 });
 

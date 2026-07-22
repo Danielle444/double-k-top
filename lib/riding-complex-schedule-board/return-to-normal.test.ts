@@ -154,8 +154,12 @@ test("the deleteComplexPlan router selects the admin action for admin and the in
     "admin branch must call the admin delete action"
   );
   assert.ok(
-    routing.includes("deleteRidingSlotComplexPlanAsInstructor(actor.instructorId, ridingSlotId)"),
-    "instructor branch must call the instructor delete action"
+    routing.includes("deleteRidingSlotComplexPlanAsInstructor(ridingSlotId)"),
+    "instructor branch must call the instructor delete action with only ridingSlotId (RS-SEC-1I-CP signed-session identity)"
+  );
+  assert.ok(
+    !routing.includes("deleteRidingSlotComplexPlanAsInstructor(actor.instructorId"),
+    "instructor delete branch must not pass a client actor.instructorId"
   );
 });
 

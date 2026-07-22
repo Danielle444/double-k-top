@@ -33,17 +33,24 @@
 //      `version` in the same tx as its mutation, so any committed sibling change
 //      trips this guard.
 //
-// IDENTITY LIMITATION (known, deliberate): the instructor wrapper trusts the
-// client-asserted instructorId, then RE-READS that Instructor server-side and
-// requires isActive && canEditRidingNotes - the exact same established contract
-// as every sibling instructor writer in riding-slot-complex.ts. It is NOT a
-// cookie-auth actor. A partial cookie-auth cutover is explicitly out of scope
-// for this task; the whole complex-plan write surface shares this limitation and
-// must be migrated together, not one action at a time.
+// IDENTITY (RS-SEC-1I-CP): the instructor wrapper derives identity ONLY from the
+// signed session (getCurrentInstructor) and requires canEditRidingNotes - the
+// exact same established contract as every sibling instructor writer in
+// riding-slot-complex.ts, all migrated together in this stage. No client-asserted
+// instructorId is accepted. The admin wrapper still authenticates independently
+// via requireAdmin(); both then delegate to the one internal below with an
+// already-resolved, server-trusted actor.
 
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
+// RS-SEC-1I-CP - the canonical signed-session instructor resolver + the shared
+// pure authorization boundary. The instructor wrapper below no longer accepts a
+// client-supplied instructorId; identity + canEditRidingNotes come only from the
+// signed session, exactly like the nine sibling complex-plan writers in
+// riding-slot-complex.ts.
+import { getCurrentInstructor } from "@/lib/auth/actor";
+import { runComplexPlanInstructorWrite } from "@/lib/actions/riding-slot-complex-auth";
 import {
   applyComplexPlanMoveSwap,
   type ComplexPlanInput,
@@ -384,30 +391,29 @@ export async function applyComplexPlanMoveSwapAsAdmin(
 }
 
 // ---------------------------------------------------------------------------
-// Instructor wrapper: same established edit tier as every sibling complex-plan
-// write. Re-read the Instructor server-side; require isActive === true AND
-// canEditRidingNotes === true. NEVER trust a client canEdit flag. Then delegate
-// to the one internal. (See the IDENTITY LIMITATION note at the top of the file
-// re: the client-asserted instructorId this contract deliberately mirrors.)
+// RS-SEC-1I-CP - Instructor wrapper: same established edit tier as every sibling
+// complex-plan write, now bound to the signed session. Identity comes ONLY from
+// getCurrentInstructor (authenticated + active instructor of the instructor
+// audience, subject-bound); this wrapper additionally requires canEditRidingNotes.
+// No client-supplied instructorId is accepted or re-read, so another instructor's
+// permission can no longer be borrowed and the persisted updatedBy* can no longer
+// be forged. Authorization (and any thrown resolver) fails closed with the
+// unchanged NOT_AUTHORIZED contract, before the internal transaction is entered.
 // ---------------------------------------------------------------------------
 
 export async function applyComplexPlanMoveSwapAsInstructor(
-  instructorId: string,
   ridingSlotId: string,
   command: ComplexPlanMoveSwapCommand
 ): Promise<ComplexPlanMoveSwapActionResult> {
-  const trimmedInstructorId = typeof instructorId === "string" ? instructorId.trim() : "";
-  if (trimmedInstructorId.length === 0) {
-    return { success: false, error: NO_PERMISSION, reason: "NOT_AUTHORIZED" };
-  }
-  const instructor = await prisma.instructor.findUnique({ where: { id: trimmedInstructorId } });
-  if (!instructor || instructor.isActive !== true || instructor.canEditRidingNotes !== true) {
-    return { success: false, error: NO_PERMISSION, reason: "NOT_AUTHORIZED" };
-  }
-  return applyComplexPlanMoveSwapInternal(ridingSlotId, command, {
-    updatedByInstructorId: instructor.id,
-    updatedByAdminEmail: null,
-    updatedByAdminName: null,
-    updatedByName: instructor.fullName,
+  return runComplexPlanInstructorWrite({
+    getCurrentInstructor,
+    denied: { success: false, error: NO_PERMISSION, reason: "NOT_AUTHORIZED" },
+    onAuthorized: (actor) =>
+      applyComplexPlanMoveSwapInternal(ridingSlotId, command, {
+        updatedByInstructorId: actor.id,
+        updatedByAdminEmail: null,
+        updatedByAdminName: null,
+        updatedByName: actor.fullName,
+      }),
   });
 }

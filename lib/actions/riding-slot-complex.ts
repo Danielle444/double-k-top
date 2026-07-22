@@ -5,6 +5,14 @@ import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
+// RS-SEC-1I-CP - the canonical signed-session instructor resolver + the pure,
+// dependency-injected authorization boundary every instructor complex-plan
+// writer below now routes through. The client-supplied instructorId argument is
+// gone from all nine instructor wrappers; identity + canEditRidingNotes come only
+// from the signed session (getCurrentInstructor), same convention as
+// riding-slots-write-auth.ts (RS-SEC-1I-W).
+import { getCurrentInstructor } from "@/lib/auth/actor";
+import { runComplexPlanInstructorWrite } from "@/lib/actions/riding-slot-complex-auth";
 import { dateKey } from "@/lib/dates";
 import type { ActionResult } from "@/lib/actions/students";
 import { getKnownRidingHorseNames } from "@/lib/actions/riding-slots";
@@ -723,22 +731,26 @@ export async function createRidingSlotComplexPlanAsAdmin(
   return { success: true, plan: editing?.plan };
 }
 
-// Instructors have no NextAuth session in this app, so isActive/
-// canEditRidingNotes are re-read from the DB on every call - never trusted
-// from the client. Reuses the exact flag that already gates
+// RS-SEC-1I-CP - identity comes ONLY from the signed session (getCurrentInstructor,
+// which guarantees an authenticated + active instructor of the instructor
+// audience whose subject matches this row); this wrapper additionally requires
+// canEditRidingNotes. No client-supplied instructorId is accepted or re-read, so
+// another instructor's permission can no longer be borrowed and attribution can no
+// longer be forged. Reuses the exact flag that already gates
 // saveRidingSlotHorseListAsInstructor - no new permission introduced.
 export async function createRidingSlotComplexPlanAsInstructor(
-  instructorId: string,
   ridingSlotId: string
 ): Promise<RidingSlotComplexPlanActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
-    return { success: false, error: NO_PERMISSION };
-  }
-  const result = await createComplexPlanInternal(ridingSlotId, instructorActor(instructor));
-  if (!result.success) return result;
-  const editing = await buildComplexPlanForEditing(ridingSlotId, { canEdit: true });
-  return { success: true, plan: editing?.plan };
+  return runComplexPlanInstructorWrite({
+    getCurrentInstructor,
+    denied: { success: false, error: NO_PERMISSION },
+    onAuthorized: async (actor) => {
+      const result = await createComplexPlanInternal(ridingSlotId, instructorActor(actor));
+      if (!result.success) return result;
+      const editing = await buildComplexPlanForEditing(ridingSlotId, { canEdit: true });
+      return { success: true, plan: editing?.plan };
+    },
+  });
 }
 
 // ---------- Save block (time range only) ----------
@@ -866,14 +878,13 @@ export async function saveRidingSlotComplexBlockAsAdmin(
 }
 
 export async function saveRidingSlotComplexBlockAsInstructor(
-  instructorId: string,
   input: RidingSlotComplexBlockSaveInput
 ): Promise<RidingSlotComplexPlanActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
-    return { success: false, error: NO_PERMISSION };
-  }
-  return saveComplexBlockInternal(input, instructorActor(instructor));
+  return runComplexPlanInstructorWrite({
+    getCurrentInstructor,
+    denied: { success: false, error: NO_PERMISSION },
+    onAuthorized: (actor) => saveComplexBlockInternal(input, instructorActor(actor)),
+  });
 }
 
 // ---------- Save station (create or update, full-replace only this station's pairs) ----------
@@ -1115,14 +1126,13 @@ export async function saveRidingSlotComplexStationAsAdmin(
 }
 
 export async function saveRidingSlotComplexStationAsInstructor(
-  instructorId: string,
   input: RidingSlotComplexStationSaveInput
 ): Promise<RidingSlotComplexPlanActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
-    return { success: false, error: NO_PERMISSION };
-  }
-  return saveComplexStationInternal(input, instructorActor(instructor));
+  return runComplexPlanInstructorWrite({
+    getCurrentInstructor,
+    denied: { success: false, error: NO_PERMISSION },
+    onAuthorized: (actor) => saveComplexStationInternal(input, instructorActor(actor)),
+  });
 }
 
 // ---------- Delete station ----------
@@ -1180,17 +1190,17 @@ export async function deleteRidingSlotComplexStationAsAdmin(
 }
 
 export async function deleteRidingSlotComplexStationAsInstructor(
-  instructorId: string,
   ridingSlotId: string,
   blockId: string,
   stationId: string,
   expectedVersion: number
 ): Promise<RidingSlotComplexPlanActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
-    return { success: false, error: NO_PERMISSION };
-  }
-  return deleteComplexStationInternal(ridingSlotId, blockId, stationId, expectedVersion, instructorActor(instructor));
+  return runComplexPlanInstructorWrite({
+    getCurrentInstructor,
+    denied: { success: false, error: NO_PERMISSION },
+    onAuthorized: (actor) =>
+      deleteComplexStationInternal(ridingSlotId, blockId, stationId, expectedVersion, instructorActor(actor)),
+  });
 }
 
 // ---------- Reorder stations (within one block) ----------
@@ -1259,23 +1269,17 @@ export async function reorderRidingSlotComplexStationsAsAdmin(
 }
 
 export async function reorderRidingSlotComplexStationsAsInstructor(
-  instructorId: string,
   ridingSlotId: string,
   blockId: string,
   orderedStationIds: string[],
   expectedVersion: number
 ): Promise<RidingSlotComplexPlanActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
-    return { success: false, error: NO_PERMISSION };
-  }
-  return reorderComplexStationsInternal(
-    ridingSlotId,
-    blockId,
-    orderedStationIds,
-    expectedVersion,
-    instructorActor(instructor)
-  );
+  return runComplexPlanInstructorWrite({
+    getCurrentInstructor,
+    denied: { success: false, error: NO_PERMISSION },
+    onAuthorized: (actor) =>
+      reorderComplexStationsInternal(ridingSlotId, blockId, orderedStationIds, expectedVersion, instructorActor(actor)),
+  });
 }
 
 // ---------- Delete block ----------
@@ -1330,16 +1334,16 @@ export async function deleteRidingSlotComplexBlockAsAdmin(
 }
 
 export async function deleteRidingSlotComplexBlockAsInstructor(
-  instructorId: string,
   ridingSlotId: string,
   blockId: string,
   expectedVersion: number
 ): Promise<RidingSlotComplexPlanActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
-    return { success: false, error: NO_PERMISSION };
-  }
-  return deleteComplexBlockInternal(ridingSlotId, blockId, expectedVersion, instructorActor(instructor));
+  return runComplexPlanInstructorWrite({
+    getCurrentInstructor,
+    denied: { success: false, error: NO_PERMISSION },
+    onAuthorized: (actor) =>
+      deleteComplexBlockInternal(ridingSlotId, blockId, expectedVersion, instructorActor(actor)),
+  });
 }
 
 // ---------- Duplicate block ----------
@@ -1440,16 +1444,16 @@ export async function duplicateRidingSlotComplexBlockAsAdmin(
 }
 
 export async function duplicateRidingSlotComplexBlockAsInstructor(
-  instructorId: string,
   ridingSlotId: string,
   blockId: string,
   expectedVersion: number
 ): Promise<RidingSlotComplexPlanActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
-    return { success: false, error: NO_PERMISSION };
-  }
-  return duplicateComplexBlockInternal(ridingSlotId, blockId, expectedVersion, instructorActor(instructor));
+  return runComplexPlanInstructorWrite({
+    getCurrentInstructor,
+    denied: { success: false, error: NO_PERMISSION },
+    onAuthorized: (actor) =>
+      duplicateComplexBlockInternal(ridingSlotId, blockId, expectedVersion, instructorActor(actor)),
+  });
 }
 
 // ---------- Reorder blocks ----------
@@ -1515,16 +1519,16 @@ export async function reorderRidingSlotComplexBlocksAsAdmin(
 }
 
 export async function reorderRidingSlotComplexBlocksAsInstructor(
-  instructorId: string,
   ridingSlotId: string,
   orderedBlockIds: string[],
   expectedVersion: number
 ): Promise<RidingSlotComplexPlanActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
-    return { success: false, error: NO_PERMISSION };
-  }
-  return reorderComplexBlocksInternal(ridingSlotId, orderedBlockIds, expectedVersion, instructorActor(instructor));
+  return runComplexPlanInstructorWrite({
+    getCurrentInstructor,
+    denied: { success: false, error: NO_PERMISSION },
+    onAuthorized: (actor) =>
+      reorderComplexBlocksInternal(ridingSlotId, orderedBlockIds, expectedVersion, instructorActor(actor)),
+  });
 }
 
 // ---------- Delete plan (return complex session to normal) ----------
@@ -1592,24 +1596,25 @@ export async function deleteRidingSlotComplexPlanAsAdmin(ridingSlotId: string): 
   return deleteRidingSlotComplexPlanInternal(ridingSlotId);
 }
 
-// Same server-authoritative capability tier as
+// RS-SEC-1I-CP - same server-authoritative capability tier as
 // createRidingSlotComplexPlanAsInstructor / the *AsInstructor writers /
-// unpublishComplexRidingPlanAsInstructor (isActive && canEditRidingNotes,
-// re-read from the DB on every call - instructors have no NextAuth session, so
-// no client flag is ever trusted). Product decision: an instructor authorized to
+// unpublishComplexRidingPlanAsInstructor, now bound to the signed session: the
+// signed instructor (authenticated + active, resolved by getCurrentInstructor)
+// must additionally hold canEditRidingNotes. No client-supplied instructorId is
+// accepted or re-read. Product decision: an instructor authorized to
 // create/manage a complex plan may also return it to a normal session under
-// exactly those same requirements; a read-only or inactive instructor is denied
-// via the same generic NO_PERMISSION contract, carrying no id/PII. Both wrappers
-// then run the one shared deleteRidingSlotComplexPlanInternal above, so the admin
-// path and its return contract are unchanged, and the destructive logic is never
-// duplicated - no new permission introduced.
+// exactly those same requirements; a read-only, inactive, or unauthenticated
+// caller is denied via the same generic NO_PERMISSION contract, carrying no
+// id/PII. Both wrappers then run the one shared deleteRidingSlotComplexPlanInternal
+// above (which needs no actor - the whole-plan delete records no updatedBy*), so
+// the admin path and its return contract are unchanged, and the destructive logic
+// is never duplicated - no new permission introduced.
 export async function deleteRidingSlotComplexPlanAsInstructor(
-  instructorId: string,
   ridingSlotId: string
 ): Promise<ActionResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
-    return { success: false, error: NO_PERMISSION };
-  }
-  return deleteRidingSlotComplexPlanInternal(ridingSlotId);
+  return runComplexPlanInstructorWrite({
+    getCurrentInstructor,
+    denied: { success: false, error: NO_PERMISSION },
+    onAuthorized: () => deleteRidingSlotComplexPlanInternal(ridingSlotId),
+  });
 }

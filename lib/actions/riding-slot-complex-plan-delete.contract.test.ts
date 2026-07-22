@@ -97,8 +97,11 @@ test("both wrappers delegate to the same shared internal delete", () => {
     adminRegion().includes("return deleteRidingSlotComplexPlanInternal("),
     "admin wrapper must call the shared internal"
   );
+  // RS-SEC-1I-CP: the instructor wrapper delegates to the same shared internal
+  // from inside the signed-session boundary's onAuthorized callback (an arrow
+  // body, not a bare `return`), so scope the check to the call itself.
   assert.ok(
-    instructorRegion().includes("return deleteRidingSlotComplexPlanInternal("),
+    instructorRegion().includes("deleteRidingSlotComplexPlanInternal("),
     "instructor wrapper must call the shared internal"
   );
 });
@@ -139,48 +142,51 @@ test("the shared internal mutation stays module-private (no client-callable bypa
   );
 });
 
-test("authorized instructor is allowed: re-fetches Instructor and requires isActive && canEditRidingNotes", () => {
+test("RS-SEC-1I-CP: authorized instructor comes from the signed session, not a client-id re-read", () => {
   const body = instructorRegion();
+  // Identity is resolved via the canonical signed-session resolver, routed
+  // through the shared boundary - never a re-read of a client-supplied id.
+  assert.ok(body.includes("runComplexPlanInstructorWrite("), "delete-instructor must route through the signed-session boundary");
+  assert.ok(body.includes("getCurrentInstructor"), "delete-instructor must resolve identity via getCurrentInstructor");
   assert.ok(
-    /prisma\.instructor\.findUnique\(\{\s*where:\s*\{\s*id:\s*instructorId\s*\}\s*\}\)/.test(body),
-    "instructor wrapper must re-read Instructor from the DB by id"
-  );
-  assert.ok(
-    body.includes("!instructor || !instructor.isActive || !instructor.canEditRidingNotes"),
-    "instructor wrapper must deny unless the fresh Instructor is active and canEditRidingNotes"
+    !body.includes("prisma.instructor.findUnique("),
+    "delete-instructor must NOT re-read an Instructor by a client-supplied id"
   );
 });
 
 test("unauthorized instructor is denied server-side with the generic NO_PERMISSION contract", () => {
   const body = instructorRegion();
-  // The one failure branch returns success:false with NO_PERMISSION (no id/PII).
+  // The denial branch is the boundary's `denied` result: success:false with
+  // NO_PERMISSION (no id/PII). The canEditRidingNotes gate itself lives in the
+  // shared boundary and is asserted behaviorally in riding-slot-complex-auth.test.ts.
   assert.ok(
-    /return\s*\{\s*success:\s*false,\s*error:\s*NO_PERMISSION\s*\}/.test(body),
+    /denied:\s*\{\s*success:\s*false,\s*error:\s*NO_PERMISSION\s*\}/.test(body),
     "denied instructor must get success:false + NO_PERMISSION"
   );
 });
 
-test("instructor delete uses exactly the same guard as instructor create/manage", () => {
+test("instructor delete uses exactly the same signed-session boundary as instructor create/manage", () => {
   const createInstructor = region(
     actionSrc,
     "export async function createRidingSlotComplexPlanAsInstructor",
     "export async function saveRidingSlotComplexBlockAsAdmin"
   );
-  const guard = "!instructor || !instructor.isActive || !instructor.canEditRidingNotes";
-  assert.ok(createInstructor.includes(guard), "create-instructor guard baseline changed unexpectedly");
-  assert.ok(instructorRegion().includes(guard), "delete-instructor must reuse the create/manage tier verbatim");
+  const boundary = "runComplexPlanInstructorWrite(";
+  assert.ok(createInstructor.includes(boundary), "create-instructor must route through the shared boundary");
+  assert.ok(instructorRegion().includes(boundary), "delete-instructor must reuse the same create/manage tier boundary");
 });
 
-test("instructor delete trusts no client permission boolean", () => {
+test("instructor delete accepts no acting instructorId and no client permission boolean", () => {
   const body = instructorRegion();
-  // Signature is exactly (instructorId, ridingSlotId) - no canEdit/permission arg
-  // is accepted, so authorization can only come from the DB re-read above.
+  // RS-SEC-1I-CP: signature is exactly (ridingSlotId) - no instructorId, no
+  // canEdit/permission arg is accepted, so authorization can only come from the
+  // signed session resolved inside the boundary.
   assert.ok(
-    /deleteRidingSlotComplexPlanAsInstructor\(\s*instructorId:\s*string,\s*ridingSlotId:\s*string\s*\)/.test(body),
-    "instructor wrapper must accept only (instructorId, ridingSlotId)"
+    /deleteRidingSlotComplexPlanAsInstructor\(\s*ridingSlotId:\s*string\s*\)/.test(body),
+    "instructor wrapper must accept only (ridingSlotId)"
   );
   // \bcanEdit\b matches a standalone client flag but NOT the legitimate server
-  // field instructor.canEditRidingNotes (no word boundary before "Riding").
+  // field canEditRidingNotes (no word boundary before "Riding").
   assert.ok(!/\bcanEdit\b/.test(body), "instructor wrapper must never reference a client canEdit flag");
 });
 
@@ -205,8 +211,12 @@ test("UI routes instructor delete through the instructor action, admin through t
     "admin branch must call the admin delete action"
   );
   assert.ok(
-    routing.includes("deleteRidingSlotComplexPlanAsInstructor(actor.instructorId, ridingSlotId)"),
-    "instructor branch must call the instructor delete action"
+    routing.includes("deleteRidingSlotComplexPlanAsInstructor(ridingSlotId)"),
+    "instructor branch must call the instructor delete action with only ridingSlotId (signed-session identity)"
+  );
+  assert.ok(
+    !routing.includes("deleteRidingSlotComplexPlanAsInstructor(actor.instructorId"),
+    "instructor delete branch must not pass a client actor.instructorId"
   );
   // The confirm handler must go through the actor router, never the admin action directly.
   const confirmBody = region(

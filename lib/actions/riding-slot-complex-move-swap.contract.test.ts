@@ -85,11 +85,14 @@ test("exactly two exported wrappers, both delegating to the one internal", () =>
   assert.ok(adminRegion().includes("applyComplexPlanMoveSwapInternal("));
   assert.ok(instructorRegion().includes("applyComplexPlanMoveSwapInternal("));
   // The internal is the ONLY place the pure core / transaction lives; both
-  // wrappers `return applyComplexPlanMoveSwapInternal(...)` (the bare
-  // `applyComplexPlanMoveSwapInternal(` also matches the definition, so scope to
-  // the delegating call sites).
-  const delegations = (actionSrc.match(/return applyComplexPlanMoveSwapInternal\(/g) ?? []).length;
-  assert.equal(delegations, 2, "exactly the two wrappers delegate to the internal");
+  // wrappers reach it exactly once. RS-SEC-1I-CP: the admin wrapper delegates
+  // directly (`return applyComplexPlanMoveSwapInternal(`), while the instructor
+  // wrapper delegates from inside the shared signed-session boundary's
+  // onAuthorized callback (`=> applyComplexPlanMoveSwapInternal(`). Counting all
+  // occurrences (one definition + the two delegating call sites) proves both
+  // wrappers reach the single internal without depending on the call form.
+  const internalCalls = (actionSrc.match(/applyComplexPlanMoveSwapInternal\(/g) ?? []).length;
+  assert.equal(internalCalls, 3, "the internal is defined once and called by exactly the two wrappers");
 });
 
 test("admin wrapper calls requireAdmin() BEFORE delegating", () => {
@@ -100,21 +103,26 @@ test("admin wrapper calls requireAdmin() BEFORE delegating", () => {
   assert.ok(delegateIdx > requireIdx, "requireAdmin must run before delegation");
 });
 
-test("instructor wrapper freshly re-reads Instructor and requires isActive + canEditRidingNotes", () => {
+test("RS-SEC-1I-CP: instructor wrapper binds to the signed session, never a client-id re-read", () => {
   const r = instructorRegion();
-  assert.ok(r.includes("prisma.instructor.findUnique("), "must re-read the Instructor server-side");
-  assert.ok(r.includes("isActive !== true"), "must require isActive === true");
-  assert.ok(r.includes("canEditRidingNotes !== true"), "must require canEditRidingNotes === true");
-  // The read + permission checks precede delegation.
-  const readIdx = r.indexOf("prisma.instructor.findUnique(");
+  // Identity comes ONLY from the signed session via the shared boundary; the
+  // canEditRidingNotes gate lives in that boundary (asserted behaviorally in
+  // riding-slot-complex-auth.test.ts).
+  assert.ok(r.includes("runComplexPlanInstructorWrite("), "must route through the signed-session boundary");
+  assert.ok(r.includes("getCurrentInstructor"), "must resolve identity via getCurrentInstructor");
+  assert.ok(!r.includes("prisma.instructor.findUnique("), "must NOT re-read an Instructor by a client-supplied id");
+  // The boundary is entered before the internal transaction is ever reached:
+  // getCurrentInstructor precedes the delegating call to the internal.
+  const resolveIdx = r.indexOf("getCurrentInstructor");
   const delegateIdx = r.indexOf("applyComplexPlanMoveSwapInternal(");
-  assert.ok(delegateIdx > readIdx, "the permission read must run before delegation");
+  assert.ok(delegateIdx > resolveIdx, "the signed-session resolution must precede delegation");
 });
 
-test("no wrapper accepts a client-supplied canEdit / permission flag", () => {
+test("no wrapper accepts a client-supplied acting instructorId or canEdit / permission flag", () => {
   assert.ok(!/canEdit\b/.test(actionSrc), "no client canEdit flag anywhere");
-  // Signatures take only ids + command, never a boolean capability.
-  assert.ok(/applyComplexPlanMoveSwapAsInstructor\(\s*instructorId: string,\s*ridingSlotId: string,\s*command: ComplexPlanMoveSwapCommand\s*\)/.test(actionSrc));
+  // RS-SEC-1I-CP: the instructor signature takes only ridingSlotId + command -
+  // no acting instructorId, no boolean capability.
+  assert.ok(/applyComplexPlanMoveSwapAsInstructor\(\s*ridingSlotId: string,\s*command: ComplexPlanMoveSwapCommand\s*\)/.test(actionSrc));
   assert.ok(/applyComplexPlanMoveSwapAsAdmin\(\s*ridingSlotId: string,\s*command: ComplexPlanMoveSwapCommand\s*\)/.test(actionSrc));
 });
 

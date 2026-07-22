@@ -190,7 +190,7 @@ function saveComplexBlock(
 ): Promise<RidingSlotComplexPlanActionResult> {
   return actor.type === "admin"
     ? saveRidingSlotComplexBlockAsAdmin(input)
-    : saveRidingSlotComplexBlockAsInstructor(actor.instructorId, input);
+    : saveRidingSlotComplexBlockAsInstructor(input);
 }
 
 // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.2) - route one atomic trainee Move/Swap
@@ -205,7 +205,7 @@ function applyComplexMoveSwap(
 ): Promise<ComplexPlanMoveSwapActionResult> {
   return actor.type === "admin"
     ? applyComplexPlanMoveSwapAsAdmin(ridingSlotId, command)
-    : applyComplexPlanMoveSwapAsInstructor(actor.instructorId, ridingSlotId, command);
+    : applyComplexPlanMoveSwapAsInstructor(ridingSlotId, command);
 }
 
 function saveComplexStation(
@@ -214,7 +214,7 @@ function saveComplexStation(
 ): Promise<RidingSlotComplexPlanActionResult> {
   return actor.type === "admin"
     ? saveRidingSlotComplexStationAsAdmin(input)
-    : saveRidingSlotComplexStationAsInstructor(actor.instructorId, input);
+    : saveRidingSlotComplexStationAsInstructor(input);
 }
 
 function deleteComplexStation(
@@ -226,7 +226,7 @@ function deleteComplexStation(
 ): Promise<RidingSlotComplexPlanActionResult> {
   return actor.type === "admin"
     ? deleteRidingSlotComplexStationAsAdmin(ridingSlotId, blockId, stationId, expectedVersion)
-    : deleteRidingSlotComplexStationAsInstructor(actor.instructorId, ridingSlotId, blockId, stationId, expectedVersion);
+    : deleteRidingSlotComplexStationAsInstructor(ridingSlotId, blockId, stationId, expectedVersion);
 }
 
 function reorderComplexStations(
@@ -238,13 +238,7 @@ function reorderComplexStations(
 ): Promise<RidingSlotComplexPlanActionResult> {
   return actor.type === "admin"
     ? reorderRidingSlotComplexStationsAsAdmin(ridingSlotId, blockId, orderedStationIds, expectedVersion)
-    : reorderRidingSlotComplexStationsAsInstructor(
-        actor.instructorId,
-        ridingSlotId,
-        blockId,
-        orderedStationIds,
-        expectedVersion
-      );
+    : reorderRidingSlotComplexStationsAsInstructor(ridingSlotId, blockId, orderedStationIds, expectedVersion);
 }
 
 function deleteComplexBlock(
@@ -255,7 +249,7 @@ function deleteComplexBlock(
 ): Promise<RidingSlotComplexPlanActionResult> {
   return actor.type === "admin"
     ? deleteRidingSlotComplexBlockAsAdmin(ridingSlotId, blockId, expectedVersion)
-    : deleteRidingSlotComplexBlockAsInstructor(actor.instructorId, ridingSlotId, blockId, expectedVersion);
+    : deleteRidingSlotComplexBlockAsInstructor(ridingSlotId, blockId, expectedVersion);
 }
 
 function duplicateComplexBlock(
@@ -266,7 +260,7 @@ function duplicateComplexBlock(
 ): Promise<RidingSlotComplexPlanActionResult> {
   return actor.type === "admin"
     ? duplicateRidingSlotComplexBlockAsAdmin(ridingSlotId, blockId, expectedVersion)
-    : duplicateRidingSlotComplexBlockAsInstructor(actor.instructorId, ridingSlotId, blockId, expectedVersion);
+    : duplicateRidingSlotComplexBlockAsInstructor(ridingSlotId, blockId, expectedVersion);
 }
 
 function reorderComplexBlocks(
@@ -277,7 +271,7 @@ function reorderComplexBlocks(
 ): Promise<RidingSlotComplexPlanActionResult> {
   return actor.type === "admin"
     ? reorderRidingSlotComplexBlocksAsAdmin(ridingSlotId, orderedBlockIds, expectedVersion)
-    : reorderRidingSlotComplexBlocksAsInstructor(actor.instructorId, ridingSlotId, orderedBlockIds, expectedVersion);
+    : reorderRidingSlotComplexBlocksAsInstructor(ridingSlotId, orderedBlockIds, expectedVersion);
 }
 
 // RIDING-COMPLEX-PUBLICATION P7B - status reading has no permission gate
@@ -318,19 +312,19 @@ function unpublishComplexPlan(
 }
 
 // RIDING-COMPLEX-SCHEDULE-BOARD - the "return this riding session to a normal
-// session" delete routes by actor exactly like publish/unpublish above (admin
-// vs instructor variant, instructorId first for the instructor one). Both server
-// actions re-check the caller's capability independently (requireAdmin, or the
-// fresh isActive && canEditRidingNotes read); the wrapper only picks which one to
-// call for the actor already rendering this editor, and never routes an
-// instructor through the admin-only action.
+// session" delete routes by actor. Both server actions re-check the caller's
+// capability independently (requireAdmin, or - RS-SEC-1I-CP - the signed-session
+// instructor's canEditRidingNotes); the wrapper only picks which one to call for
+// the actor already rendering this editor, and never routes an instructor through
+// the admin-only action. The instructor action derives its identity from the
+// signed session, so no instructorId is passed here.
 function deleteComplexPlan(
   actor: RidingComplexPlanEditorActor,
   ridingSlotId: string
 ): ReturnType<typeof deleteRidingSlotComplexPlanAsAdmin> {
   return actor.type === "admin"
     ? deleteRidingSlotComplexPlanAsAdmin(ridingSlotId)
-    : deleteRidingSlotComplexPlanAsInstructor(actor.instructorId, ridingSlotId);
+    : deleteRidingSlotComplexPlanAsInstructor(ridingSlotId);
 }
 
 type LoadStatus = "loading" | "loaded" | "not-found" | "error";
