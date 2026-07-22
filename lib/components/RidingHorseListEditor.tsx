@@ -129,8 +129,6 @@ export function RidingHorseListEditor({
   // reset by it.
   const [showPublicationModal, setShowPublicationModal] = useState(false);
 
-  const instructorKey = actor.type === "instructor" ? actor.instructorId : null;
-
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -147,7 +145,7 @@ export function RidingHorseListEditor({
     const load =
       actor.type === "admin"
         ? getRidingSlotHorseListForAdmin(ridingSlotId)
-        : getRidingSlotHorseListForInstructor(instructorKey as string, ridingSlotId);
+        : getRidingSlotHorseListForInstructor(ridingSlotId);
 
     load
       .then((result) => {
@@ -172,7 +170,7 @@ export function RidingHorseListEditor({
     return () => {
       cancelled = true;
     };
-  }, [open, ridingSlotId, actor.type, instructorKey]);
+  }, [open, ridingSlotId, actor.type]);
 
   function toggleCandidate(candidate: RidingHorseCandidate) {
     setSaveSuccess(false);

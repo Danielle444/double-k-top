@@ -4,6 +4,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
+import { getCurrentInstructor } from "@/lib/auth/actor";
+import { loadHorseListForInstructorWithDeps } from "@/lib/actions/riding-slot-horses-read-auth";
 import type { ActionResult } from "@/lib/actions/students";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
 import { getRidingSlotStudentNotes } from "@/lib/actions/riding-slots";
@@ -175,23 +177,18 @@ export async function getRidingSlotHorseListForAdmin(
   return { ...statusResult, candidates };
 }
 
-// instructorId is re-checked for existence/isActive only - NOT
-// canEditRidingNotes. Viewing a riding slot's roster/notes has no
-// permission-level gate anywhere else in this app (see
-// getRidingSlotStudentNotes/getInstructorRidingSlots in
-// lib/actions/riding-slots.ts), only saving does; but unlike those, this
-// still confirms the caller is a real, active instructor account rather
-// than accepting any id with zero validation. Returns null (the same
-// "not found" shape already used for a missing RidingSlot) rather than an
-// ActionResult error, since this function's return type has no separate
-// error channel - never trusts the UI's own canEdit check as authorization.
-export async function getRidingSlotHorseListForInstructor(
-  instructorId: string,
+// Protected reader core (identity-agnostic) - the exact authorized query
+// behavior that used to live inline in getRidingSlotHorseListForInstructor:
+// the RidingSlot existence check plus the two builders, keyed on ridingSlotId
+// only. It performs NO authorization and NEVER reads Instructor - all
+// authorization is enforced by the caller BEFORE this runs (see
+// getRidingSlotHorseListForInstructor). Returns null (the same "not found"
+// shape already used for a missing RidingSlot) when the slot doesn't exist,
+// since this return type has no separate error channel. Reused as the injected
+// `readList` of the RS-SEC-1I-HL-RD authorization boundary.
+async function readHorseListForEditing(
   ridingSlotId: string
 ): Promise<RidingSlotHorseListForEditing | null> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive) return null;
-
   const slot = await prisma.ridingSlot.findUnique({ where: { id: ridingSlotId }, select: { id: true } });
   if (!slot) return null;
 
@@ -200,6 +197,28 @@ export async function getRidingSlotHorseListForInstructor(
     buildHorseCandidates(ridingSlotId),
   ]);
   return { ...statusResult, candidates };
+}
+
+// RS-SEC-1I-HL-RD - identity comes ONLY from the signed session
+// (getCurrentInstructor), never a client-supplied instructorId (the parameter is
+// gone; a caller can no longer borrow another active instructor's identity to
+// read this list). Viewing still has no permission-level gate - every signed
+// ACTIVE instructor may read, matching getRidingSlotComplexPlanForInstructor's
+// read convention - canEditRidingNotes is NOT required, riding-slot assignment is
+// NOT required, and there is NO publication gate (draft/unpublished data stays
+// readable to signed active instructors). The payload is viewer-INDEPENDENT (no
+// canEdit or any actor-dependent field). The gate + fail-closed-to-null
+// orchestration lives in the pure DI boundary loadHorseListForInstructorWithDeps;
+// a null/invalid/inactive/wrong-audience session (or a thrown resolver) returns
+// null WITHOUT running readHorseListForEditing (so no RidingSlot / RidingSlotHorseList
+// query and neither builder runs), and a genuine reader error still propagates.
+export async function getRidingSlotHorseListForInstructor(
+  ridingSlotId: string
+): Promise<RidingSlotHorseListForEditing | null> {
+  return loadHorseListForInstructorWithDeps(
+    { getCurrentInstructor, readList: readHorseListForEditing },
+    ridingSlotId
+  );
 }
 
 // ---------- Save (full replace, versioned) ----------

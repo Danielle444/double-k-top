@@ -56,10 +56,10 @@ function isAssignedToInstructor(activity: WeeklyRidingActivity, instructorId: st
 // exclusive by construction (P2's server-side guard). Both underlying reads
 // already return null for an inactive instructor (isActive re-checked
 // server-side on every call) - no extra handling needed here for that case.
-async function detectInstructorRidingSlotMode(instructorId: string, ridingSlotId: string): Promise<InstructorSlotMode> {
+async function detectInstructorRidingSlotMode(ridingSlotId: string): Promise<InstructorSlotMode> {
   const complexPlan = await getRidingSlotComplexPlanForInstructor(ridingSlotId);
   if (complexPlan) return "complex";
-  const horseList = await getRidingSlotHorseListForInstructor(instructorId, ridingSlotId);
+  const horseList = await getRidingSlotHorseListForInstructor(ridingSlotId);
   if (horseList?.listId) return "simple";
   return "none";
 }
@@ -240,7 +240,7 @@ export function InstructorRidingSlotsSection({
     if (ridingSlotIds.length === 0) return;
     let cancelled = false;
     for (const ridingSlotId of ridingSlotIds) {
-      detectInstructorRidingSlotMode(instructorId, ridingSlotId)
+      detectInstructorRidingSlotMode(ridingSlotId)
         .then((detected) => {
           if (cancelled) return;
           setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: detected }));
@@ -255,10 +255,10 @@ export function InstructorRidingSlotsSection({
     };
     // setModeByRidingSlotId: stable dispatcher lifted to InstructorClient (see
     // the range-reset effect above) - listed only to satisfy exhaustive-deps.
-  }, [days, instructorId, setModeByRidingSlotId]);
+  }, [days, setModeByRidingSlotId]);
 
   function refreshModeFor(ridingSlotId: string) {
-    detectInstructorRidingSlotMode(instructorId, ridingSlotId)
+    detectInstructorRidingSlotMode(ridingSlotId)
       .then((detected) => setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: detected })))
       .catch(() => setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: "error" })));
   }

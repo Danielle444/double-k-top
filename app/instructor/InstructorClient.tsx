@@ -181,12 +181,11 @@ interface InstructorOption {
 // no broadened authorization: both reads already back the instructor riding
 // surface and re-check the caller is a real, active instructor server-side.
 async function detectScheduleRidingSlotMode(
-  instructorId: string,
   ridingSlotId: string
 ): Promise<InstructorSlotMode> {
   const complexPlan = await getRidingSlotComplexPlanForInstructor(ridingSlotId);
   if (complexPlan) return "complex";
-  const horseList = await getRidingSlotHorseListForInstructor(instructorId, ridingSlotId);
+  const horseList = await getRidingSlotHorseListForInstructor(ridingSlotId);
   if (horseList?.listId) return "simple";
   return "none";
 }
@@ -412,7 +411,7 @@ export function InstructorClient({
           )
         );
         for (const ridingSlotId of ridingSlotIds) {
-          detectScheduleRidingSlotMode(session.id, ridingSlotId)
+          detectScheduleRidingSlotMode(ridingSlotId)
             .then((detected) => {
               if (cancelled) return;
               setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: detected }));
