@@ -2,11 +2,12 @@
 
 import { prisma } from "@/lib/prisma";
 import { getCurrentInstructor, getCurrentTrainee } from "@/lib/auth/actor";
-import { mayAccessInstructorContactDirectory } from "@/lib/auth/contact-directory-access";
 import { resolveCurrentCourseOffering } from "@/lib/course/current-offering";
+import { resolveTraineeCourseOffering } from "@/lib/course/actor-course-offering";
 import { getCurrentCourseEnrollmentRoster } from "@/lib/course/current-enrollments";
 import { getEffectiveCapabilities } from "@/lib/course/capabilities/offering-capabilities";
 import { loadStudentContactsWithDeps } from "./contacts-student-directory";
+import { loadInstructorContactsWithDeps } from "./contacts-instructor-directory";
 
 // StudentContactRow is declared directly in this module (as it was before W5B1)
 // and is the single source of truth for the public contract. It is a type-only
@@ -66,18 +67,28 @@ export interface InstructorContactRow {
 // anonymous caller receives any instructor data. The no-arg signature is
 // unchanged (no client-supplied id is trusted or accepted), callers need no
 // edits, and the ordering + InstructorContactRow[] output shape are preserved.
-// While only one CourseOffering is active the directory stays global; no
-// per-offering scoping is added in this stage.
+//
+// LEVEL 2 SLICE C1A course-authorizes the TRAINEE half only: the trainee's own
+// offering is resolved server-side through the committed, no-argument
+// resolveTraineeCourseOffering() (enrollment-derived, never client-supplied,
+// never resolveCurrentCourseOffering, never a Level 1 fallback), and that exact
+// offering's CONTACTS capability must be ENABLED before any directory read. The
+// INSTRUCTOR half is deliberately unchanged - there is no explicit instructor
+// course context in the UI yet and course context is never inferred; see the
+// contacts-instructor-directory module note. Which instructors are returned is
+// unchanged for both audiences (the temporary launch policy is that every active
+// instructor is relevant to both offerings), as are the returned fields.
 export async function getInstructorContacts(): Promise<InstructorContactRow[]> {
-  const instructor = await getCurrentInstructor();
-  const trainee = instructor === null ? await getCurrentTrainee() : null;
-  if (!mayAccessInstructorContactDirectory(instructor?.id, trainee?.id)) {
-    return [];
-  }
-  const instructors = await prisma.instructor.findMany({
-    where: { isActive: true },
-    orderBy: { fullName: "asc" },
-    select: { id: true, fullName: true, phone: true },
+  return loadInstructorContactsWithDeps({
+    getCurrentInstructor,
+    getCurrentTrainee,
+    resolveTraineeCourseOffering,
+    getEffectiveCapabilities,
+    listActiveInstructors: () =>
+      prisma.instructor.findMany({
+        where: { isActive: true },
+        orderBy: { fullName: "asc" },
+        select: { id: true, fullName: true, phone: true },
+      }),
   });
-  return instructors;
 }
