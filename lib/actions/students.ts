@@ -15,6 +15,11 @@ import {
   writeTraineeGroupChange,
   type GroupChangeErrorCode,
 } from "@/lib/trainee-history/group-change-service";
+import {
+  isStagedTraineeActivationBlocked,
+  STAGED_TRAINEE_ACTIVATION_BLOCKED_MESSAGE,
+  type ActivationEnrollmentInput,
+} from "@/lib/course/staged-trainee-activation-core";
 
 // Single safe, generic message for ANY known current-offering structural
 // failure (no offering / ambiguous / incomplete). Deliberately reveals no
@@ -22,6 +27,15 @@ import {
 // only that trainee creation is unavailable and to contact system management.
 const CURRENT_OFFERING_UNAVAILABLE_MESSAGE =
   "לא ניתן להוסיף חניך/ה כעת עקב בעיה בהגדרת הקורס הנוכחי. יש לפנות לניהול המערכת";
+
+// G2: the stable, non-PII failure for an UNEXPECTED staged-trainee activation
+// guard read failure. It follows the existing "לא בוצעו שינויים" convention and
+// is deliberately DISTINCT from STAGED_TRAINEE_ACTIVATION_BLOCKED_MESSAGE: that
+// message states a verified Rule C block ("course in preparation"), which would
+// be a lie when the guard simply could not read. It reveals no id, no offering
+// detail, and no Prisma error text.
+const ACTIVATION_GUARD_UNAVAILABLE_MESSAGE =
+  "לא ניתן לבדוק כעת את מצב הרישום לקורס. החשבון לא הופעל ולא בוצעו שינויים";
 
 const studentSchema = z.object({
   firstName: z.string().trim().min(1, "יש להזין שם פרטי"),
@@ -230,11 +244,61 @@ export async function changeTraineeGroup(
   return { success: true };
 }
 
+/**
+ * G2: the AUTHORITATIVE staged-trainee activation guard. This action is the only
+ * place that flips Student.isActive from the general admin trainee screen, so it -
+ * not the UI - is what must hold the line: a direct server-action invocation from
+ * a stale client, a replayed request, or devtools reaches exactly this code path.
+ *
+ * The guard is deliberately ASYMMETRIC. Turning a trainee ON is the dangerous
+ * direction (it drops them into every isActive-filtered operational reader at once
+ * and lets them log in), so it is classified by the committed pure Rule C core.
+ * Turning a trainee OFF is always safe and must never be blocked, so the
+ * deactivation path performs NO enrollment read and NO classification at all -
+ * containment stays available even if the guard read would fail.
+ */
 export async function setStudentActive(
   studentId: string,
   isActive: boolean
 ): Promise<ActionResult> {
   await requireAdmin();
+
+  if (isActive === true) {
+    // Rule C reads EXACTLY the two lifecycle statuses of this one student's
+    // enrollments - no id, no name, no level, no dates, no group mirror - so the
+    // core physically cannot be fed anything outside the approved rule.
+    let enrollments: ActivationEnrollmentInput[];
+    try {
+      const rows = await prisma.courseEnrollment.findMany({
+        where: { studentId },
+        select: {
+          status: true,
+          courseOffering: {
+            select: {
+              status: true,
+            },
+          },
+        },
+      });
+      enrollments = rows.map((row) => ({
+        status: row.status,
+        offeringStatus: row.courseOffering.status,
+      }));
+    } catch {
+      // FAIL CLOSED: an unreadable affiliation picture must never fall through to
+      // the update. The Prisma error itself is swallowed (no driver text, no id,
+      // no PII) and the manager gets one stable "nothing was changed" message,
+      // deliberately NOT the Rule C message - this is not a verified block.
+      return { success: false, error: ACTIVATION_GUARD_UNAVAILABLE_MESSAGE };
+    }
+
+    // The transition under consideration is activation of a currently-inactive
+    // account; the current state is never taken from the client.
+    if (isStagedTraineeActivationBlocked(false, enrollments)) {
+      return { success: false, error: STAGED_TRAINEE_ACTIVATION_BLOCKED_MESSAGE };
+    }
+  }
+
   await prisma.student.update({ where: { id: studentId }, data: { isActive } });
   revalidatePath("/admin/students");
   revalidatePath("/admin");
