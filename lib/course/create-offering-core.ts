@@ -23,6 +23,30 @@ export type CreateOfferingValidationErrorCode =
   | "date_invalid"
   | "date_range_invalid";
 
+/**
+ * The single offering-name rule, extracted so the rename slice
+ * (rename-offering-core.ts) enforces EXACTLY the same normalization as creation
+ * instead of duplicating a second, drift-prone copy. The rule is intentionally
+ * minimal and mirrors the repository's existing convention for offering names:
+ * a name is the trimmed string, required to be non-empty, with NO maximum-length
+ * bound (this module has never imposed one - see the create-course-group-core.ts
+ * note that entity-name length is otherwise unbounded here). A non-string,
+ * absent, empty or whitespace-only value fails as "name_required".
+ */
+export type OfferingNameErrorCode = "name_required";
+
+export type ValidateOfferingNameResult =
+  | { readonly ok: true; readonly value: string }
+  | { readonly ok: false; readonly error: OfferingNameErrorCode };
+
+export function validateOfferingName(value: unknown): ValidateOfferingNameResult {
+  const name = asTrimmedString(value);
+  if (name === null || name === "") {
+    return { ok: false, error: "name_required" };
+  }
+  return { ok: true, value: name };
+}
+
 /** The normalized, validated creation input the IO layer will persist. */
 export interface ValidatedNewOffering {
   readonly activityYearId: string;
@@ -127,10 +151,11 @@ export function validateNewOfferingInput(
     return { ok: false, error: "activity_year_required" };
   }
 
-  const name = asTrimmedString(input.name);
-  if (name === null || name === "") {
-    return { ok: false, error: "name_required" };
+  const nameResult = validateOfferingName(input.name);
+  if (!nameResult.ok) {
+    return { ok: false, error: nameResult.error };
   }
+  const name = nameResult.value;
 
   const level = parseLevel(input.level);
   if (level === null) {

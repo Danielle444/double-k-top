@@ -20,15 +20,39 @@ import {
   CourseOfferingNotFoundError,
   type AdminCourseContext,
 } from "@/lib/course/admin-course-context";
+import { evaluateCourseOperationPolicy } from "@/lib/course/operation-policy-core";
+import { renameCourseOfferingAction } from "./actions";
+import { RenameOfferingForm } from "./RenameOfferingForm";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Stable rename error-code -> Hebrew message map for the ?error= state. Only a
+ * stable code is ever reflected; an unknown code falls back to the generic
+ * message. The offering_id_required/expected_name_required codes are not
+ * reachable through the UI (the id is server-bound and the hidden field is always
+ * present) but are mapped defensively to the generic message.
+ */
+const RENAME_ERROR_MESSAGES: Record<string, string> = {
+  name_required: "יש להזין שם קורס.",
+  duplicate_name: "כבר קיים קורס בשם זה בשנת הפעילות הזו.",
+  stale_name:
+    "שם הקורס השתנה מאז טעינת הדף. הדף רוענן עם השם העדכני — יש לבדוק אותו לפני ניסיון נוסף.",
+  operation_not_allowed: "לא ניתן לשנות את שם הקורס במצב זה.",
+  offering_id_required: "אירעה שגיאה. נסו שוב.",
+  expected_name_required: "אירעה שגיאה. נסו שוב.",
+  unexpected: "אירעה שגיאה. נסו שוב.",
+};
+
 export default async function CourseDashboardPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ courseOfferingId: string }>;
+  searchParams: Promise<{ error?: string; renamed?: string }>;
 }) {
   const { courseOfferingId } = await params;
+  const { error, renamed } = await searchParams;
 
   // Admin-authorization-first, then an exact-id lookup of this offering. Only the
   // typed not-found fails closed as notFound(); auth redirects and unexpected
@@ -45,8 +69,45 @@ export default async function CourseDashboardPage({
 
   const groupsHref = `/admin/courses/${encodeURIComponent(context.id)}/groups`;
 
+  // The rename affordance is shown only when a name change is permitted for this
+  // offering's status (OFFERING_METADATA_UPDATE: PLANNED/ACTIVE, not ARCHIVED).
+  // The action re-checks this server-side, so this only gates the visible form.
+  const canRename = evaluateCourseOperationPolicy(
+    context.status,
+    "OFFERING_METADATA_UPDATE",
+  ).allowed;
+  const renameErrorMessage = error
+    ? (RENAME_ERROR_MESSAGES[error] ?? RENAME_ERROR_MESSAGES.unexpected)
+    : null;
+  const renameSuccessMessage = renamed ? "שם הקורס עודכן." : null;
+
   return (
     <div className="flex flex-col gap-4">
+      {renameErrorMessage && (
+        <div className="rounded-lg bg-danger-muted px-4 py-3 text-sm font-medium text-danger">
+          {renameErrorMessage}
+        </div>
+      )}
+      {renameSuccessMessage && (
+        <div className="rounded-lg bg-success-muted px-4 py-3 text-sm font-medium text-success">
+          {renameSuccessMessage}
+        </div>
+      )}
+
+      {canRename && (
+        <div className="rounded-xl border border-border bg-card p-5">
+          <h2 className="text-base font-semibold text-card-foreground">שם הקורס</h2>
+          <p className="mb-3 mt-1 text-sm text-muted-foreground">
+            שינוי שם הקורס בלבד. אין בכך כדי לשנות רמה, תאריכים, שנת פעילות, מצב או
+            נתונים תפעוליים.
+          </p>
+          <RenameOfferingForm
+            action={renameCourseOfferingAction.bind(null, context.id)}
+            currentName={context.name}
+          />
+        </div>
+      )}
+
       <div className="rounded-xl border border-border bg-card p-5">
         <h2 className="text-base font-semibold text-card-foreground">לוח הקורס</h2>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
