@@ -30,7 +30,7 @@ import {
   getCourseGroupTreeByOfferingId,
   type CourseGroupTreeView,
 } from "@/lib/course/course-group-tree";
-import { createCourseGroupAction } from "./actions";
+import { createCourseGroupAction, createCourseSubgroupAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +44,11 @@ const GROUP_ERROR_MESSAGES: Record<string, string> = {
   duplicate_name: "כבר קיימת קבוצה בשם זה בקורס זה.",
   operation_not_allowed: "לא ניתן להוסיף קבוצות לקורס במצב זה.",
   unexpected: "אירעה שגיאה. נסו שוב.",
+  // W9A-4 subgroup-specific codes (distinct wording; W9A-3 codes above unchanged).
+  invalid_parent: "הקבוצה הראשית שנבחרה אינה תקינה.",
+  subgroup_invalid: "יש להזין מספר תת-קבוצה חוקי.",
+  subgroup_duplicate_name: "תת-קבוצה זו כבר קיימת בקבוצה זו.",
+  subgroup_operation_not_allowed: "לא ניתן להוסיף תת-קבוצות לקורס במצב זה.",
 };
 
 export default async function CourseGroupsPage({
@@ -191,6 +196,35 @@ export default async function CourseGroupsPage({
                     </li>
                   ))}
                 </ul>
+              )}
+              {canCreateGroup && (
+                <form
+                  action={createCourseSubgroupAction}
+                  className="mt-3 flex flex-wrap items-end gap-2 border-t border-border pt-3"
+                >
+                  <input type="hidden" name="courseOfferingId" value={context.id} />
+                  <input type="hidden" name="parentGroupId" value={group.id} />
+                  <label className="flex flex-col gap-1 text-xs">
+                    <span className="font-medium text-card-foreground">
+                      מספר תת-קבוצה
+                    </span>
+                    <input
+                      type="number"
+                      name="subgroupNumber"
+                      required
+                      min={1}
+                      step={1}
+                      inputMode="numeric"
+                      className="w-24 rounded-lg border border-border bg-background px-2 py-1 text-sm text-card-foreground"
+                    />
+                  </label>
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground hover:opacity-80"
+                  >
+                    הוסף תת-קבוצה
+                  </button>
+                </form>
               )}
             </li>
           ))}
