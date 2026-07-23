@@ -23,6 +23,15 @@
  * version. A real ACTIVE enrollment into a PLANNED offering IS a valid affiliation
  * and is shown (PLANNED is not hidden merely for being PLANNED).
  *
+ * ACTIVATION GUARD (slice G3): each trainee row additionally carries a top-level
+ * `activationBlocked`, delegated to the committed G1 Rule C core. It is a property
+ * of the ACCOUNT, not of the badges: it is deliberately NOT part of
+ * TraineeAffiliationSummary, which stays the display-only badge model and is
+ * unchanged. The classifier is fed the FULL raw enrollment lifecycle rows - never
+ * `visibleAffiliations`, which drops INACTIVE enrollments and ARCHIVED offerings,
+ * carries no status at all, and could discard the very row that clears a trainee.
+ * Visibility filtering and activation classification stay strictly separate.
+ *
  * FAIL-CLOSED on a malformed row (edge-case robustness): the schema types
  * CourseOffering.level as a non-null Int, so a null/NaN level is not reachable
  * through Prisma. Should one ever arrive, the affiliation is DROPPED (excluded
@@ -34,6 +43,10 @@ import type {
   CourseEnrollmentStatus,
   CourseOfferingStatus,
 } from "@/app/generated/prisma/client";
+import {
+  isStagedTraineeActivationBlocked,
+  type ActivationEnrollmentInput,
+} from "./staged-trainee-activation-core";
 
 /** The minimal CourseOffering fields an affiliation badge needs. */
 export interface RawAffiliationOffering {
@@ -204,6 +217,30 @@ export interface TraineeAffiliationRow {
   readonly phone: string | null;
   readonly isActive: boolean;
   readonly affiliation: TraineeAffiliationSummary;
+  /**
+   * G3: true when ACTIVATING this currently-inactive trainee is temporarily
+   * blocked by the committed G1 Rule C (their only live affiliation is a course
+   * that has not started yet). Always false for an active trainee, so a consumer
+   * can never turn it into a deactivation guard. It is display/UX truth only - the
+   * authoritative refusal lives in setStudentActive (G2).
+   */
+  readonly activationBlocked: boolean;
+}
+
+/**
+ * PURE: project the raw enrollment rows onto the ONLY shape Rule C accepts - the
+ * enrollment's own status plus its offering's status. Every row is passed through,
+ * including INACTIVE enrollments and ARCHIVED offerings, because Rule C must see
+ * the whole lifecycle picture; nothing is filtered, deduped, defaulted or
+ * validated here, so a malformed row reaches G1 intact and fails closed there.
+ */
+function toActivationLifecycleRows(
+  enrollments: readonly RawAffiliationEnrollment[],
+): ActivationEnrollmentInput[] {
+  return enrollments.map((enrollment) => ({
+    status: enrollment.status,
+    offeringStatus: enrollment.courseOffering.status,
+  }));
 }
 
 /**
@@ -212,6 +249,9 @@ export interface TraineeAffiliationRow {
  * query returned it (the reader owns the deterministic Student orderBy); this core
  * never reorders students - it only orders each trainee's badges internally.
  * Never mutates its input.
+ *
+ * G3: also derives each row's `activationBlocked` from the same already-fetched
+ * rows - no extra query, no extra field, no second pass over the database.
  */
 export function buildTraineeAffiliationRows(
   students: readonly RawStudentWithAffiliations[],
@@ -227,5 +267,12 @@ export function buildTraineeAffiliationRows(
     phone: student.phone,
     isActive: student.isActive,
     affiliation: buildTraineeAffiliationSummary(student.courseEnrollments),
+    // Two independent derivations over the SAME raw rows: the badge summary
+    // (visibility-filtered) and the account-level activation classification
+    // (full lifecycle). Neither reads the other's output.
+    activationBlocked: isStagedTraineeActivationBlocked(
+      student.isActive,
+      toActivationLifecycleRows(student.courseEnrollments),
+    ),
   }));
 }

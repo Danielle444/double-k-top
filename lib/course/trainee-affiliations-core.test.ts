@@ -330,3 +330,238 @@ test("buildTraineeAffiliationRows preserves student input order and display fiel
   assert.equal(rows[0].phone, "050");
   assert.equal(rows[1].identityNumber, "111");
 });
+
+// ---------------------------------------------------------------------------
+// G3. activationBlocked: the account-level Rule C flag carried on each row
+//
+// These prove the flag is delegated to the committed G1 core over the FULL raw
+// lifecycle rows, that it never becomes a deactivation guard, and that it is
+// completely independent of the badge summary in both directions.
+// ---------------------------------------------------------------------------
+
+function student(
+  overrides: Partial<RawStudentWithAffiliations> = {},
+): RawStudentWithAffiliations {
+  return {
+    id: "s1",
+    firstName: "אבי",
+    lastName: "כהן",
+    fullName: "אבי כהן",
+    groupName: "א",
+    subgroupNumber: 1,
+    identityNumber: "111",
+    phone: null,
+    isActive: false,
+    courseEnrollments: [],
+    ...overrides,
+  };
+}
+
+function blockedFor(overrides: Partial<RawStudentWithAffiliations>): boolean {
+  return buildTraineeAffiliationRows([student(overrides)])[0].activationBlocked;
+}
+
+test("G3: inactive + ACTIVE enrollment into a PLANNED offering -> activationBlocked", () => {
+  assert.equal(
+    blockedFor({
+      isActive: false,
+      courseEnrollments: [enrollment({ courseOffering: offering("o2", 2, "PLANNED") })],
+    }),
+    true,
+  );
+});
+
+test("G3: an ACTIVE offering clears the block (ordinary reactivation still works)", () => {
+  assert.equal(
+    blockedFor({
+      isActive: false,
+      courseEnrollments: [enrollment({ courseOffering: offering("o1", 1, "ACTIVE") })],
+    }),
+    false,
+  );
+});
+
+test("G3: dual-enrolled ACTIVE + PLANNED -> not blocked (one live course outranks)", () => {
+  assert.equal(
+    blockedFor({
+      isActive: false,
+      courseEnrollments: [
+        enrollment({ id: "e1", courseOffering: offering("o1", 1, "ACTIVE") }),
+        enrollment({ id: "e2", courseOffering: offering("o2", 2, "PLANNED") }),
+      ],
+    }),
+    false,
+  );
+  // Order-independent: the same two rows the other way round decide identically.
+  assert.equal(
+    blockedFor({
+      isActive: false,
+      courseEnrollments: [
+        enrollment({ id: "e2", courseOffering: offering("o2", 2, "PLANNED") }),
+        enrollment({ id: "e1", courseOffering: offering("o1", 1, "ACTIVE") }),
+      ],
+    }),
+    false,
+  );
+});
+
+test("G3: a legacy inactive trainee with no enrollment stays activatable", () => {
+  assert.equal(blockedFor({ isActive: false, courseEnrollments: [] }), false);
+});
+
+test("G3: an ARCHIVED-only history stays activatable", () => {
+  assert.equal(
+    blockedFor({
+      isActive: false,
+      courseEnrollments: [enrollment({ courseOffering: offering("o1", 1, "ARCHIVED") })],
+    }),
+    false,
+  );
+});
+
+test("G3: an INACTIVE enrollment into a PLANNED offering does NOT block", () => {
+  assert.equal(
+    blockedFor({
+      isActive: false,
+      courseEnrollments: [
+        enrollment({ status: "INACTIVE", courseOffering: offering("o2", 2, "PLANNED") }),
+      ],
+    }),
+    false,
+  );
+});
+
+test("G3: an ACTIVE trainee is never blocked (this is not a deactivation guard)", () => {
+  assert.equal(
+    blockedFor({
+      isActive: true,
+      courseEnrollments: [enrollment({ courseOffering: offering("o2", 2, "PLANNED") })],
+    }),
+    false,
+  );
+});
+
+test("G3: duplicate ACTIVE-in-PLANNED rows classify identically (idempotent)", () => {
+  const off = offering("o2", 2, "PLANNED");
+  assert.equal(
+    blockedFor({
+      isActive: false,
+      courseEnrollments: [
+        enrollment({ id: "e1", courseOffering: off }),
+        enrollment({ id: "e2", courseOffering: off }),
+      ],
+    }),
+    true,
+  );
+});
+
+test("G3: the badge summary of a blocked trainee is unchanged (PLANNED still shows)", () => {
+  const rows = buildTraineeAffiliationRows([
+    student({
+      isActive: false,
+      courseEnrollments: [enrollment({ courseOffering: offering("o2", 2, "PLANNED") })],
+    }),
+  ]);
+  assert.equal(rows[0].activationBlocked, true);
+  // The badge model is untouched by the guard: a PLANNED offering is still a
+  // real, visible affiliation and is still labelled exactly as before.
+  assert.deepEqual(rows[0].affiliation.visibleAffiliations.map((a) => a.level), [2]);
+  assert.equal(rows[0].affiliation.shortLabel, "רמה 2");
+  assert.equal(rows[0].affiliation.hasNoActiveCourse, false);
+});
+
+test("G3: classification reads ALL lifecycle rows, not the visible affiliations", () => {
+  // The clearing row (ACTIVE enrollment into an ACTIVE offering) has a malformed
+  // level, so the VISIBILITY filter drops it from the badges. If the classifier
+  // had been fed visibleAffiliations it would lose that row and manufacture a
+  // false block; Rule C sees it and correctly clears the trainee.
+  const rows = buildTraineeAffiliationRows([
+    student({
+      isActive: false,
+      courseEnrollments: [
+        enrollment({ id: "e1", courseOffering: offering("bad", Number.NaN, "ACTIVE") }),
+        enrollment({ id: "e2", courseOffering: offering("o2", 2, "PLANNED") }),
+      ],
+    }),
+  ]);
+  assert.deepEqual(
+    rows[0].affiliation.visibleAffiliations.map((a) => a.courseOfferingId),
+    ["o2"],
+    "the malformed-level row is not a badge",
+  );
+  assert.equal(rows[0].activationBlocked, false, "but it is still a live ACTIVE affiliation");
+});
+
+test("G3: INACTIVE and ARCHIVED rows are passed through and change nothing", () => {
+  assert.equal(
+    blockedFor({
+      isActive: false,
+      courseEnrollments: [
+        enrollment({ id: "e1", status: "INACTIVE", courseOffering: offering("o1", 1, "ACTIVE") }),
+        enrollment({ id: "e2", courseOffering: offering("o3", 3, "ARCHIVED") }),
+        enrollment({ id: "e3", courseOffering: offering("o2", 2, "PLANNED") }),
+      ],
+    }),
+    true,
+    "neither a dead enrollment nor an archived course may clear a staged trainee",
+  );
+});
+
+test("G3: group mirrors, offering name and level never affect the flag", () => {
+  const rowsA = buildTraineeAffiliationRows([
+    student({
+      isActive: false,
+      groupName: "א",
+      subgroupNumber: 1,
+      courseEnrollments: [
+        enrollment({ courseOffering: offering("o2", 2, "PLANNED", "קורס רמה 2 2026") }),
+      ],
+    }),
+  ]);
+  const rowsB = buildTraineeAffiliationRows([
+    student({
+      isActive: false,
+      groupName: null,
+      subgroupNumber: null,
+      courseEnrollments: [
+        enrollment({ courseOffering: offering("o9", 1, "PLANNED", "משהו אחר לגמרי") }),
+      ],
+    }),
+  ]);
+  assert.equal(rowsA[0].activationBlocked, true);
+  assert.equal(rowsB[0].activationBlocked, true, "the rule is not Level-2-specific");
+});
+
+test("G3: every row gets its own flag; student order is still preserved", () => {
+  const rows = buildTraineeAffiliationRows([
+    student({
+      id: "staged",
+      isActive: false,
+      courseEnrollments: [enrollment({ courseOffering: offering("o2", 2, "PLANNED") })],
+    }),
+    student({
+      id: "legacy",
+      isActive: false,
+      courseEnrollments: [],
+    }),
+    student({
+      id: "live",
+      isActive: true,
+      courseEnrollments: [enrollment({ courseOffering: offering("o1", 1, "ACTIVE") })],
+    }),
+  ]);
+  assert.deepEqual(rows.map((r) => r.id), ["staged", "legacy", "live"]);
+  assert.deepEqual(rows.map((r) => r.activationBlocked), [true, false, false]);
+});
+
+test("G3: classification does not mutate the input rows", () => {
+  const input = [
+    student({
+      isActive: false,
+      courseEnrollments: [enrollment({ courseOffering: offering("o2", 2, "PLANNED") })],
+    }),
+  ];
+  const snapshot = JSON.parse(JSON.stringify(input));
+  buildTraineeAffiliationRows(input);
+  assert.deepEqual(JSON.parse(JSON.stringify(input)), snapshot);
+});

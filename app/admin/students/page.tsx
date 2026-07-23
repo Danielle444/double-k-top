@@ -80,6 +80,10 @@ export default async function StudentsPage() {
           // A2: pass the derived affiliation summary straight through - the
           // client renders the badges from it and never recomputes affiliation.
           affiliation: s.affiliation,
+          // G3: the reader row's own Rule C classification. The client renders
+          // and disables from it; the authoritative refusal stays in the server
+          // action (G2), so a stale row can only ever be over-permissive here.
+          activationBlocked: s.activationBlocked,
         }))}
         presets={presets.map((p) => ({ id: p.id, name: p.name }))}
         courseRange={

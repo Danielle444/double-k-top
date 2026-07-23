@@ -13,6 +13,10 @@ import {
 import type { GroupChangeOption } from "@/lib/course/group-change-options";
 import type { TraineeAffiliationSummary } from "@/lib/course/trainee-affiliations";
 import { NO_COURSE_LABEL } from "@/lib/course/trainee-affiliations-core";
+import {
+  STAGED_TRAINEE_ROW_LABEL,
+  STAGED_TRAINEE_ACTIVATION_TOOLTIP,
+} from "@/lib/course/staged-trainee-activation-core";
 import { validateCreateTraineeForm } from "@/lib/course/create-trainee-form";
 import { setStudentAvailabilityScheme } from "@/lib/actions/availability";
 import { maskIdentityNumber } from "@/lib/format";
@@ -34,6 +38,10 @@ interface StudentRow {
   // core. The badges render ONLY from this - the component never recomputes
   // affiliation and never inspects groupName/subgroupNumber to derive a course.
   affiliation: TraineeAffiliationSummary;
+  // G3: server-derived Rule C classification for this row. The client NEVER
+  // computes it and never infers it from the badges - it only renders it and
+  // disables the activation direction with it. The server action re-checks.
+  activationBlocked: boolean;
 }
 
 interface PresetOption {
@@ -173,6 +181,10 @@ export function StudentsClient({
   const [isPending, startTransition] = useTransition();
   const [modalStudent, setModalStudent] = useState<StudentRow | "new" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // G3: the activation toggle's own error surface. The existing `error` state is
+  // rendered ONLY inside the edit modal, so a row-level rejection set there would
+  // be invisible; this one is rendered above the table, where the toggle lives.
+  const [activationError, setActivationError] = useState<string | null>(null);
   const [availabilityMode, setAvailabilityMode] = useState<"whole-course" | "range">(
     "whole-course"
   );
@@ -327,9 +339,19 @@ export function StudentsClient({
     });
   }
 
+  // G3: the server action is authoritative and CAN refuse (a staged trainee whose
+  // only live course has not opened yet, or an unreadable guard read). Its result
+  // used to be discarded, so a refusal looked exactly like a successful no-op.
+  // Now the refusal is shown, named, and the row is left untouched - the canonical
+  // state still arrives through the action's own revalidatePath, so there is no
+  // optimistic isActive mutation here and no router refresh.
   function handleToggleActive(student: StudentRow) {
+    setActivationError(null);
     startTransition(async () => {
-      await setStudentActive(student.id, !student.isActive);
+      const result = await setStudentActive(student.id, !student.isActive);
+      if (!result.success) {
+        setActivationError(`${student.fullName}: ${result.error ?? "אירעה שגיאה"}`);
+      }
     });
   }
 
@@ -410,6 +432,12 @@ export function StudentsClient({
         </select>
       </div>
 
+      {/* G3: the single activation-error banner. It sits directly above the table
+          so it is adjacent to the control that produced it, is prefixed with the
+          trainee's full name so a shared banner is never ambiguous about which
+          row failed, and shows the server's own message verbatim. */}
+      {activationError && <p className="text-sm text-danger">{activationError}</p>}
+
       {/* Bounded self-contained scroll box (same max-h-[70vh] overflow-auto
           pattern as ScheduleGrid.tsx/TeachingPracticeManager.tsx) - the
           header row's sticky top-0 below sticks to the top of *this* box
@@ -456,15 +484,31 @@ export function StudentsClient({
                   {formatPhoneDisplay(student.phone)}
                 </td>
                 <td className="px-4 py-3">
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                      student.isActive
-                        ? "bg-success-muted text-success"
-                        : "bg-muted text-muted-foreground"
-                    }`}
-                  >
-                    {student.isActive ? "פעיל/ה" : "לא פעיל/ה"}
-                  </span>
+                  {/* G3: the existing status chip is unchanged. The staged-trainee
+                      label is ADDITIVE beside it, in a wrap-capable row so the
+                      pair never widens the column on a narrow screen. It is plain
+                      visible text (not a tooltip-only affordance), because the
+                      disabled button below is neither focusable nor a reliable
+                      title host - this span carries the full explanation. */}
+                  <div className="flex flex-wrap items-center gap-1">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                        student.isActive
+                          ? "bg-success-muted text-success"
+                          : "bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {student.isActive ? "פעיל/ה" : "לא פעיל/ה"}
+                    </span>
+                    {!student.isActive && student.activationBlocked && (
+                      <span
+                        title={STAGED_TRAINEE_ACTIVATION_TOOLTIP}
+                        className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"
+                      >
+                        {STAGED_TRAINEE_ROW_LABEL}
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-2">
@@ -475,10 +519,20 @@ export function StudentsClient({
                     >
                       עריכה
                     </Button>
+                    {/* G3: the guard applies to the ACTIVATION direction only.
+                        `!student.isActive` short-circuits the conjunction for an
+                        active trainee, so השבתה can never be guard-disabled -
+                        containment must always stay available. The pre-existing
+                        global `isPending` behavior is preserved exactly. */}
                     <Button
                       variant={student.isActive ? "danger" : "secondary"}
                       className="!px-2 !py-1"
-                      disabled={isPending}
+                      disabled={isPending || (!student.isActive && student.activationBlocked)}
+                      title={
+                        !student.isActive && student.activationBlocked
+                          ? STAGED_TRAINEE_ACTIVATION_TOOLTIP
+                          : undefined
+                      }
                       onClick={() => handleToggleActive(student)}
                     >
                       {student.isActive ? "השבתה" : "הפעלה"}
