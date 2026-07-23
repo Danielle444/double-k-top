@@ -23,6 +23,17 @@
  * The existing-enrollment list is resolved at asOf = offering.startDate (not
  * today) so a freshly created enrollment whose initial membership begins on the
  * offering start date is shown as current, not mislabeled as broken.
+ *
+ * NEW-TRAINEE (slice N2B): a SEPARATE, clearly titled section creates a BRAND-NEW,
+ * INACTIVE-STAGED trainee in this same exact offering. It is gated by the identical
+ * PLANNED + ENROLLMENT_MANAGEMENT rule and reuses the SAME leaf-subgroup options; a
+ * non-PLANNED offering renders a short non-interactive explanation instead of a
+ * form. The N2A action is bound with the validated context.id (never a hidden form
+ * field and never a fallback/current-offering resolver), and N1 re-proves the exact
+ * offering transactionally even if the UI gate is bypassed. Its banners use the
+ * N2-specific created / newError keys, resolved through the committed stable error
+ * map - the raw query value is never rendered. The created trainee stays
+ * Student.isActive = false and there is deliberately NO activation affordance here.
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -47,13 +58,15 @@ import {
   CourseStatusBadge,
   formatCourseDateRange,
 } from "@/app/admin/courses/CourseOfferingSelector";
-import { enrollExistingTraineeAction } from "./actions";
+import { createTraineeIntoOfferingAction, enrollExistingTraineeAction } from "./actions";
 import {
   EnrollExistingTraineeForm,
   type SubgroupOption,
   type TraineeOption,
 } from "./EnrollExistingTraineeForm";
+import { NewTraineeForm } from "./NewTraineeForm";
 import { enrollErrorMessage } from "./enroll-error-messages";
+import { newTraineeErrorMessage } from "./new-trainee-error-messages";
 
 export const dynamic = "force-dynamic";
 
@@ -80,10 +93,15 @@ export default async function CourseEnrollmentsPage({
   searchParams,
 }: {
   params: Promise<{ courseOfferingId: string }>;
-  searchParams: Promise<{ error?: string; enrolled?: string }>;
+  searchParams: Promise<{
+    error?: string;
+    enrolled?: string;
+    newError?: string;
+    created?: string;
+  }>;
 }) {
   const { courseOfferingId } = await params;
-  const { error, enrolled } = await searchParams;
+  const { error, enrolled, newError, created } = await searchParams;
 
   // 1. Authorize the admin and re-validate EXACTLY this offering first. Auth
   //    redirects and unexpected errors propagate; only a typed not-found fails
@@ -135,6 +153,17 @@ export default async function CourseEnrollmentsPage({
   const errorMessage = error ? enrollErrorMessage(error) : null;
   const successMessage = enrolled ? "החניך נרשם לקורס בהצלחה." : null;
 
+  // New-trainee (N2B) banners. They use the N2-specific query keys so they can
+  // never collide with the existing-trainee flow's error/enrolled banners. The raw
+  // query value is NEVER rendered: it is resolved through the committed stable
+  // code -> Hebrew map, which contains no interpolation and no PII.
+  const newTraineeError =
+    typeof newError === "string" && newError.length > 0 ? newTraineeErrorMessage(newError) : null;
+  const newTraineeSuccess =
+    created === "1"
+      ? "החניך נוצר במצב הכנה (לא פעיל) ונרשם לקורס. הוא אינו יכול להתחבר עד להפעלה."
+      : null;
+
   return (
     <div className="flex flex-col gap-4">
       {/* A. Course context */}
@@ -166,6 +195,16 @@ export default async function CourseEnrollmentsPage({
       {successMessage && (
         <div className="rounded-lg bg-success-muted px-4 py-3 text-sm font-medium text-success">
           {successMessage}
+        </div>
+      )}
+      {newTraineeError && (
+        <div className="rounded-lg bg-danger-muted px-4 py-3 text-sm font-medium text-danger">
+          {newTraineeError}
+        </div>
+      )}
+      {newTraineeSuccess && (
+        <div className="rounded-lg bg-success-muted px-4 py-3 text-sm font-medium text-success">
+          {newTraineeSuccess}
         </div>
       )}
 
@@ -202,6 +241,34 @@ export default async function CourseEnrollmentsPage({
           <p className="text-sm text-muted-foreground">
             ניתן לרשום חניכים רק בקורס במצב &quot;מתוכנן&quot;. רשימת החניכים הרשומים
             למטה מוצגת לקריאה בלבד.
+          </p>
+        </div>
+      )}
+
+      {/* D. New-trainee creation (PLANNED only, inactive-staged) */}
+      {canEnroll ? (
+        <div className="rounded-xl border border-border bg-card p-5">
+          <h3 className="text-base font-semibold text-card-foreground">יצירת חניך חדש לקורס</h3>
+          <p className="mb-3 mt-1 text-sm text-muted-foreground">
+            לחניך שעדיין אינו קיים במערכת.
+          </p>
+          {subgroupOptions.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border bg-muted p-4">
+              <p className="text-sm text-muted-foreground">
+                לא הוגדרו תת־קבוצות עבור קורס זה. יש להוסיף תת־קבוצה לפני יצירת חניך.
+              </p>
+            </div>
+          ) : (
+            <NewTraineeForm
+              action={createTraineeIntoOfferingAction.bind(null, context.id)}
+              subgroups={subgroupOptions}
+            />
+          )}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-dashed border-border bg-muted p-5">
+          <p className="text-sm text-muted-foreground">
+            ניתן ליצור חניך חדש רק בקורס במצב &quot;מתוכנן&quot;.
           </p>
         </div>
       )}
