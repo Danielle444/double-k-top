@@ -280,15 +280,34 @@ export function ScheduleSection({
   weeklyScheduleId,
   dayFilter,
   courseOfferingId,
+  dualLevel2 = false,
 }: {
   studentId: string;
   weeklyScheduleId: string | null;
   dayFilter: string | "all";
   courseOfferingId: string | null;
+  // TEMPORARY LAUNCH HOTFIX (dual Level 2). True only when the trainee is
+  // dual-enrolled AND currently viewing a Level 2 offering (classified upstream
+  // in StudentClient from server-returned option metadata). Defaults false, so
+  // every single-course and Level 1 view keeps the ordinary "mine" behaviour.
+  dualLevel2?: boolean;
 }) {
-  const [groupFilter, setGroupFilter] = useState<GroupFilter>("mine");
+  const [groupFilter, setGroupFilter] = useState<GroupFilter>(dualLevel2 ? "both" : "mine");
   const [result, setResult] = useState<StudentScheduleResult | null>(null);
   const [now, setNow] = useState<Date>(() => new Date());
+
+  // TEMPORARY LAUNCH HOTFIX (dual Level 2): a dual trainee's Student.group
+  // compatibility fields still describe their Level 1 group, so the "mine" filter
+  // would hide the entire Level 2 schedule. Until combinedParticipation is wired
+  // for these trainees, DEFAULT such a view to "both" (which hides no items) and
+  // re-apply that default whenever the dual-Level-2 context turns on or off -
+  // switching back to a Level 1 course restores the ordinary "mine" default. This
+  // sets the DEFAULT only; because it re-runs solely on the dualLevel2 flag, a
+  // manual toggle while the flag is unchanged is preserved.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setGroupFilter(dualLevel2 ? "both" : "mine");
+  }, [dualLevel2]);
 
   useEffect(() => {
     if (!weeklyScheduleId) return;
@@ -349,6 +368,15 @@ export function ScheduleSection({
           </button>
         </div>
       </div>
+
+      {/* TEMPORARY LAUNCH HOTFIX (dual Level 2): temporary launch guidance shown
+          next to the group filter while a dual trainee views Level 2. It does NOT
+          claim combinedParticipation is active and hides no items. */}
+      {dualLevel2 && (
+        <p className="mb-4 rounded-lg bg-warning-muted p-3 text-sm text-warning">
+          לתשומת לב: הלו״ז מוצג כרגע בשתי הקבוצות וללא סינון לפי משולב.
+        </p>
+      )}
 
       {!weeklyScheduleId ? (
         <p className="text-base text-card-foreground">עדיין לא הועלה לו&quot;ז לשבוע זה</p>

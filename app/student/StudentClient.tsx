@@ -125,6 +125,28 @@ interface StoredSession {
 // always resolves visually, and it never leaks the raw server error or any PII.
 const SCHEDULE_LOAD_ERROR_MESSAGE = "לא ניתן לטעון כרגע את הלו״ז. נסו לרענן את העמוד.";
 
+// TEMPORARY LAUNCH HOTFIX (dual Level 2) - PURE classifier for "this trainee is
+// dual-enrolled AND is currently viewing a Level 2 offering". A dual trainee's
+// Student.group compatibility fields still describe their Level 1 group, so the
+// ordinary "mine" schedule filter would hide the entire Level 2 schedule until
+// combinedParticipation is wired for these trainees. Until then this drives a
+// temporary "default the group filter to both" behaviour (and a visible notice)
+// in ScheduleSection - see its own comment.
+//
+// It reads ONLY the already-present, server-returned option metadata: the count
+// of eligible options ("dual" == two or more) and the selected option's own
+// server-provided `level`. It hardcodes no offering id and no Level 1 identity;
+// anything that is not an eligible Level 2 selection (single course, Level 1
+// selection, nothing selected yet) is simply not classified as dual-Level-2.
+export function isDualTraineeViewingLevel2(
+  options: TraineeCourseOptionView[],
+  selectedId: string | null,
+): boolean {
+  if (options.length < 2) return false;
+  const selected = options.find((o) => o.id === selectedId);
+  return selected !== undefined && selected.level === 2;
+}
+
 // PURE selection decision for the trainee's course context, extracted from the
 // options effect so its cardinality contract is unit-testable without mounting
 // the client (see trainee-client-course-selection.contract.test.ts):
@@ -654,6 +676,14 @@ export function StudentClient() {
   const isMoreItem = STUDENT_MORE_ITEMS.some((item) => item.id === activeTab);
   const bottomActiveTab: MainTabId = isMoreItem ? "more" : activeTab;
 
+  // TEMPORARY LAUNCH HOTFIX (dual Level 2) - drives ScheduleSection's temporary
+  // "default to both groups + show notice" behaviour. Derived purely from the
+  // server-returned course options already in state (see isDualTraineeViewingLevel2).
+  const dualLevel2ScheduleView = isDualTraineeViewingLevel2(
+    courseOptions ?? [],
+    selectedCourseOfferingId,
+  );
+
   return (
     <div className="flex flex-1 flex-col">
       <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-card px-4 py-3 shadow-sm">
@@ -724,6 +754,7 @@ export function StudentClient() {
                 weeklyScheduleId={todayWeek.id}
                 dayFilter={todayKey}
                 courseOfferingId={selectedCourseOfferingId}
+                dualLevel2={dualLevel2ScheduleView}
               />
             ) : (
               <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
@@ -777,6 +808,7 @@ export function StudentClient() {
                     weeklyScheduleId={selectedWeekId}
                     dayFilter={dayFilter}
                     courseOfferingId={selectedCourseOfferingId}
+                    dualLevel2={dualLevel2ScheduleView}
                   />
                 </div>
               </>
