@@ -8,7 +8,10 @@ import {
 } from "@/lib/course/actor-course-offering";
 import { getCurrentCourseEnrollmentRoster } from "@/lib/course/current-enrollments";
 import { getEffectiveCapabilities } from "@/lib/course/capabilities/offering-capabilities";
-import { loadStudentContactsWithDeps } from "./contacts-student-directory";
+import {
+  loadStudentContactsWithDeps,
+  loadTraineeStudentContactsWithDeps,
+} from "./contacts-student-directory";
 import { loadInstructorContactsWithDeps } from "./contacts-instructor-directory";
 
 // StudentContactRow is declared directly in this module (as it was before W5B1)
@@ -56,6 +59,54 @@ export async function getStudentContacts(
   return loadStudentContactsWithDeps(courseOfferingId, {
     getCurrentInstructor,
     resolveInstructorCourseOffering,
+    getEffectiveCapabilities,
+    getCurrentCourseEnrollmentRoster,
+    now: () => new Date(),
+  });
+}
+
+// LEVEL 2 CONTACTS SLICE C1B: the narrow, trainee-visible fellow-trainee contact
+// row. Deliberately just full name + phone (id is a stable React key, not PII).
+// It is a SEPARATE, smaller contract than the instructor-facing StudentContactRow
+// (which also carries lastName/groupName/subgroupNumber for its grouped view), so
+// no group/subgroup/lastName or any other field is ever emitted to a trainee.
+export interface TraineeContactRow {
+  id: string;
+  fullName: string;
+  phone: string | null;
+}
+
+// LEVEL 2 CONTACTS SLICE C1B — REGRESSION RESTORE of the trainee "חניכים" tab.
+//
+// Historically (pre-7816ff9) the trainee client mounted the same student
+// directory as instructors, backed by a global, UNGATED Student roster query.
+// Adding the instructor-only audience gate silently emptied the trainee tab, and
+// d9dd3bb then hard-coded that empty state in the UI. This restores a trainee
+// view of fellow trainees WITHOUT reviving the legacy global behaviour: it is
+// bound to exactly ONE server-resolved CourseOffering.
+//
+// `requestedCourseOfferingId` is a REQUEST, never an authority (the SAME L2-DUAL
+// contract as getInstructorContacts): it is not identity, never a lookup key, and
+// never reaches a query. resolveTraineeSelectedCourseOffering derives the trainee
+// from the signed session, loads only THAT trainee's ACTIVE enrollments into
+// ACTIVE offerings, and keeps the request only if it exactly equals one of them;
+// the RESOLVED row's id, never the caller's string, is what the CONTACTS
+// capability check and the enrollment roster receive. A dual trainee who has not
+// chosen a course is AMBIGUOUS and fails closed to [] (never a Level 1 fallback);
+// a single-course trainee needs no request. CONTACTS must be positively ENABLED.
+// The roster read and the resolver are both scoped to the resolved id, so a
+// trainee can never reach another course's roster. Rows carry only
+// { id, fullName, phone } — see loadTraineeStudentContactsWithDeps for the
+// step-by-step fail-closed contract and the field-narrowing.
+export async function getTraineeStudentContacts(
+  requestedCourseOfferingId?: string | null,
+): Promise<TraineeContactRow[]> {
+  return loadTraineeStudentContactsWithDeps({
+    getCurrentTrainee,
+    resolveTraineeCourseOffering: async () => {
+      const offering = await resolveTraineeSelectedCourseOffering(requestedCourseOfferingId);
+      return { id: offering.id, startDate: offering.startDate };
+    },
     getEffectiveCapabilities,
     getCurrentCourseEnrollmentRoster,
     now: () => new Date(),

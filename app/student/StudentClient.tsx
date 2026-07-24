@@ -20,7 +20,7 @@ import {
   type TraineeCourseOptionView,
 } from "@/lib/actions/trainee-course-selection";
 import { TraineeCourseSelector } from "@/app/student/TraineeCourseSelector";
-import { filterTraineeNavEntries } from "@/app/student/trainee-nav-visibility";
+import { filterTraineeNavEntries, isLevel2OnlyTrainee } from "@/app/student/trainee-nav-visibility";
 import { updateOwnPrivateHorseName } from "@/lib/actions/horses";
 import { ScheduleSection } from "@/app/student/ScheduleSection";
 import { DutiesSection } from "@/app/student/DutiesSection";
@@ -759,7 +759,15 @@ export function StudentClient() {
               onOpen={() => setActiveTab("messages")}
             />
 
-            <DutiesSection studentId={session.id} startDateKey={todayKey} endDateKey={todayKey} />
+            {/* Duties are not a Level 2 module. Hide the home duties card for a
+                Level-2-only trainee, reusing the SAME rule that already filters
+                the nav/quick-action entries (app/student/trainee-nav-visibility.ts)
+                - no second Level 2 detection. Level-1-only and dual trainees are
+                unaffected (isLevel2OnlyTrainee reads the full eligible options,
+                never the selected course). */}
+            {!isLevel2OnlyTrainee(eligibleCourseOptions) && (
+              <DutiesSection studentId={session.id} startDateKey={todayKey} endDateKey={todayKey} />
+            )}
 
             {/* Third mount site for the course switcher (the schedule and contacts
                 screens are the other two). It reuses the very same courseOptions /

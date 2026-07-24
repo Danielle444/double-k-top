@@ -1,10 +1,115 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { InstructorCourseScopedContactsSection } from "@/app/instructor/InstructorCourseScopedContactsSection";
 import { StudentInstructorContactsSection } from "@/app/student/StudentInstructorContactsSection";
+import { getTraineeStudentContacts, type TraineeContactRow } from "@/lib/actions/contacts";
+import { formatPhoneDisplay, getPhoneHref, getWhatsAppHref } from "@/lib/phone-format";
 
 type ContactsTab = "students" | "instructors";
+
+// LEVEL 2 CONTACTS SLICE C1B: the trainee-facing fellow-trainee directory (the
+// restored "חניכים" tab). View-only, full name + phone only. courseOfferingId is
+// the trainee's REQUESTED course, forwarded verbatim to getTraineeStudentContacts
+// which re-resolves it server-side against this trainee's own ACTIVE enrollments
+// and requires the resolved offering's CONTACTS capability - so an unauthorized,
+// cross-course, or (dual, unchosen) value just yields the same empty list as any
+// other denial. Mirrors StudentInstructorContactsSection's proven flat list.
+function TraineeStudentContactsPanel({
+  courseOfferingId,
+}: {
+  courseOfferingId?: string | null;
+}) {
+  const [rows, setRows] = useState<TraineeContactRow[] | null>(null);
+  const [nameQuery, setNameQuery] = useState("");
+  const [phoneQuery, setPhoneQuery] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    getTraineeStudentContacts(courseOfferingId).then((result) => {
+      if (!cancelled) setRows(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [courseOfferingId]);
+
+  const filteredRows = useMemo(() => {
+    if (!rows) return [];
+    const nameQ = nameQuery.trim().toLowerCase();
+    const phoneQ = phoneQuery.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (nameQ && !r.fullName.toLowerCase().includes(nameQ)) return false;
+      if (phoneQ && !(r.phone ?? "").toLowerCase().includes(phoneQ)) return false;
+      return true;
+    });
+  }, [rows, nameQuery, phoneQuery]);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-2xl border border-border bg-card p-4">
+        <div className="flex flex-col gap-2">
+          <input
+            value={nameQuery}
+            onChange={(e) => setNameQuery(e.target.value)}
+            placeholder="חיפוש לפי שם חניך/ה..."
+            className="w-full rounded-xl border border-border px-3 py-2.5 text-base"
+          />
+          <input
+            value={phoneQuery}
+            onChange={(e) => setPhoneQuery(e.target.value)}
+            placeholder="חיפוש לפי טלפון..."
+            className="w-full rounded-xl border border-border px-3 py-2.5 text-base"
+          />
+        </div>
+      </div>
+
+      {rows === null ? (
+        <p className="text-base text-muted-foreground">טוען...</p>
+      ) : filteredRows.length === 0 ? (
+        <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
+          אין חניכים התואמים את החיפוש
+        </p>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {filteredRows.map((row) => {
+            const phoneHref = getPhoneHref(row.phone);
+            const whatsAppHref = getWhatsAppHref(row.phone);
+            return (
+              <div
+                key={row.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-2 border-border p-4"
+              >
+                <p className="text-lg font-bold text-card-foreground">{row.fullName}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {phoneHref ? (
+                    <a href={phoneHref} className="text-base font-semibold text-accent underline">
+                      {formatPhoneDisplay(row.phone)}
+                    </a>
+                  ) : (
+                    <span className="text-base italic text-muted-foreground">
+                      {formatPhoneDisplay(row.phone)}
+                    </span>
+                  )}
+                  {whatsAppHref && (
+                    <a
+                      href={whatsAppHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-full bg-success-muted px-2.5 py-1 text-xs font-medium text-success"
+                    >
+                      WhatsApp
+                    </a>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface ContactsSectionProps {
   /**
@@ -37,13 +142,14 @@ interface ContactsSectionProps {
 //
 //  - INSTRUCTOR -> InstructorCourseScopedContactsSection: pick a course, then see
 //    that course's roster.
-//  - TRAINEE -> a static panel. Trainees have never been able to read this
-//    directory (the server-side audience gate has always returned [] for them,
-//    so the tab has only ever rendered an empty list), and they must not be
-//    given a course selector or any way to send a courseOfferingId. So the
-//    trainee branch mounts NO roster component and issues NO server request at
-//    all - the outcome is the same empty tab, reached without a pointless
-//    round-trip that could only ever return [].
+//  - TRAINEE -> TraineeStudentContactsPanel (slice C1B): the RESTORED trainee
+//    view of fellow trainees, bound to the trainee's REQUESTED course
+//    (traineeCourseOfferingId). It is course-scoped server-side by
+//    getTraineeStudentContacts (the trainee's OWN enrollment resolves the course,
+//    CONTACTS must be ENABLED, roster scoped to that offering) and shows full
+//    name + phone only. The client sends only the requested offering id - never a
+//    studentId or membership claim. A dual trainee who has not chosen a course
+//    resolves ambiguously server-side and gets an empty list (fail closed).
 export function ContactsSection({ audience, traineeCourseOfferingId }: ContactsSectionProps) {
   const [tab, setTab] = useState<ContactsTab>("students");
 
@@ -78,9 +184,7 @@ export function ContactsSection({ audience, traineeCourseOfferingId }: ContactsS
         audience === "instructor" ? (
           <InstructorCourseScopedContactsSection />
         ) : (
-          <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
-            אין חניכים להצגה
-          </p>
+          <TraineeStudentContactsPanel courseOfferingId={traineeCourseOfferingId} />
         )
       ) : (
         <StudentInstructorContactsSection

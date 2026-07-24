@@ -32,11 +32,13 @@ import { mayAccessStudentContactDirectory } from "@/lib/auth/contact-directory-a
 import {
   MissingInstructorCourseOfferingIdError,
   InstructorCourseOfferingNotAllowedError,
+  NoTraineeCourseOfferingError,
+  AmbiguousTraineeCourseOfferingError,
 } from "@/lib/course/actor-course-offering-core";
 import type { EnrollmentRosterResult } from "@/lib/course/current-enrollments";
 import type { CapabilityKey } from "@/lib/course/capabilities/capability-keys";
 import type { EffectiveCapabilityStatus } from "@/lib/course/capabilities/effective-capability-core";
-import type { StudentContactRow } from "./contacts";
+import type { StudentContactRow, TraineeContactRow } from "./contacts";
 
 /**
  * Structural, PII-free failure raised when the enrollment-backed roster cannot
@@ -247,4 +249,111 @@ export async function loadStudentContactsWithDeps(
   const asOf = resolveRosterAsOf(resolved, deps.now());
   const roster = await deps.getCurrentCourseEnrollmentRoster(resolved.id, { asOf });
   return toStudentContactRows(roster);
+}
+
+/**
+ * Is this failure "the authenticated trainee has no single resolvable course
+ * context" (rather than an infrastructure fault or a real data defect)?
+ *
+ * The two typed trainee cases — zero eligible enrollments (a PLANNED-only /
+ * inactive-enrollment trainee) and an AMBIGUOUS dual trainee who has not chosen a
+ * course — are AUTHORIZATION outcomes: the trainee cannot state which single
+ * course they mean, so they get no directory. Both translate to the same
+ * empty-array denial every other gate uses. Everything else (a Prisma failure, a
+ * capability-reader failure, a session fault, an incomplete/undated offering)
+ * propagates unchanged, exactly as in the instructor half — a real defect must
+ * never be laundered into "this trainee simply has no fellow trainees".
+ */
+function isTraineeCourseContextDenial(error: unknown): boolean {
+  return (
+    error instanceof NoTraineeCourseOfferingError ||
+    error instanceof AmbiguousTraineeCourseOfferingError
+  );
+}
+
+/**
+ * Injectable dependencies for {@link loadTraineeStudentContactsWithDeps}. Only the
+ * narrow surface the orchestration needs is described; the concrete wiring (real
+ * session trainee, real server-owned trainee offering resolver, real capability
+ * reader, real enrollment DAL, real clock) is assembled inside
+ * getTraineeStudentContacts in ./contacts.
+ *
+ * `resolveTraineeCourseOffering` takes NO arguments here: any client-requested id
+ * is bound and re-validated by the wiring in ./contacts BEFORE it becomes this
+ * dependency, so nothing a client sends can reach a query through this seam. It
+ * returns the SERVER-RESOLVED offering (its own `id` and `startDate`), and only
+ * that id is used downstream.
+ */
+export interface TraineeStudentContactsDeps {
+  getCurrentTrainee: () => Promise<{ id: string } | null>;
+  resolveTraineeCourseOffering: () => Promise<ResolvedContactsOffering>;
+  getEffectiveCapabilities: (
+    courseOfferingId: string,
+  ) => Promise<Record<CapabilityKey, EffectiveCapabilityStatus>>;
+  getCurrentCourseEnrollmentRoster: (
+    courseOfferingId: string,
+    options: { asOf: Date },
+  ) => Promise<EnrollmentRosterResult>;
+  now: () => Date;
+}
+
+/**
+ * LEVEL 2 CONTACTS SLICE C1B — trainee-facing, COURSE-SCOPED fellow-trainee
+ * contact directory (REGRESSION RESTORE of the historically-available trainee
+ * "חניכים" tab, which pre-7816ff9 read the LEGACY GLOBAL prisma.student.findMany).
+ *
+ * This deliberately does NOT revive that global behaviour. It is bound to exactly
+ * ONE server-resolved CourseOffering, fail-closed at every step:
+ *  1. an authenticated TRAINEE actor must be present (server-derived; anonymous /
+ *     wrong-audience / inactive → null → []). NO client-supplied studentId or
+ *     membership claim ever participates — the caller supplies at most a REQUESTED
+ *     offering id, already re-validated by the wiring before it reaches step 2.
+ *  2. the offering is resolved by the SERVER-OWNED trainee resolver from THAT
+ *     trainee's own ACTIVE enrollments. A no/ambiguous course context (a dual
+ *     trainee who has not chosen) fails CLOSED to [] — never a guess, never a
+ *     Level 1 fallback.
+ *  3. the RESOLVED offering's CONTACTS capability must be positively ENABLED
+ *     (the strict trainee convention — READ_ONLY / DISABLED / missing all deny),
+ *     matching the trainee half of the instructor directory.
+ *  4. only THAT offering's enrollment-backed roster is read (at the locked
+ *     max(now, startDate) instant) and mapped. The resolver and the roster are
+ *     BOTH scoped to `resolved.id`, so there is no cross-course reach.
+ *
+ * Output rows carry ONLY { id, fullName, phone }. The roster query selects no
+ * identity number, address, parent, medical or enrollment-status field, and the
+ * projection below drops even the group/subgroup/lastName the instructor view
+ * groups by — a trainee sees full name and phone number, nothing else.
+ */
+export async function loadTraineeStudentContactsWithDeps(
+  deps: TraineeStudentContactsDeps,
+): Promise<TraineeContactRow[]> {
+  const trainee = await deps.getCurrentTrainee();
+  if (typeof trainee?.id !== "string" || trainee.id === "") {
+    return [];
+  }
+
+  let resolved: ResolvedContactsOffering;
+  try {
+    resolved = await deps.resolveTraineeCourseOffering();
+  } catch (error) {
+    if (isTraineeCourseContextDenial(error)) {
+      return [];
+    }
+    throw error;
+  }
+
+  const capabilities = await deps.getEffectiveCapabilities(resolved.id);
+  if (capabilities.CONTACTS !== "ENABLED") {
+    return [];
+  }
+
+  const asOf = resolveRosterAsOf(resolved, deps.now());
+  const roster = await deps.getCurrentCourseEnrollmentRoster(resolved.id, { asOf });
+  // Reuse the instructor directory's exact anomaly/duplicate guards and W5B0
+  // ordering, then NARROW to the trainee-visible fields only.
+  return toStudentContactRows(roster).map((row) => ({
+    id: row.id,
+    fullName: row.fullName,
+    phone: row.phone,
+  }));
 }
