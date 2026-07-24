@@ -82,6 +82,15 @@ export interface ScheduleItemView {
   // visible to students - the card should render no info box at all in that
   // case, not an empty one.
   ridingInfo: ScheduleItemRidingInfo | null;
+  // Combined-participation ("משולב") business indication, DISPLAY-ONLY. Mirrors
+  // the ScheduleItem.combinedParticipation tri-state verbatim: true -> the session
+  // runs WITH combined participation, false -> WITHOUT, null -> not stated (the
+  // trainee card shows no badge). This is projection metadata for the trainee card
+  // badge ONLY - it is NEVER used to filter or hide an item here, and this slice
+  // deliberately does not add any combinedParticipation VISIBILITY filtering (that
+  // is Slice 2, out of scope). Level-2-only and dual trainees receive it
+  // identically; a Level 1 item with a null value is unchanged (no badge).
+  combinedParticipation: boolean | null;
   // RIDING-COMPLEX-PUBLICATION P7C - a separate field/variant from ridingInfo
   // above, never a replacement for it. For a complex-mode slot, ridingInfo is
   // suppressed (null) and coach/arena come only from here; for a simple-mode
@@ -284,6 +293,9 @@ export async function getScheduleForStudent(
         location: ridingSlot ? null : i.location,
         isComplex,
         ridingInfo,
+        // Verbatim tri-state passthrough (the item query uses `include`, so this
+        // scalar is already loaded). Display-only; never a filter input.
+        combinedParticipation: i.combinedParticipation,
         publishedComplexRidingPlan: ridingSlot ? (complexPlansByRidingSlotId.get(ridingSlot.id) ?? null) : null,
       };
     }),

@@ -205,12 +205,17 @@ test("no course offering id or level constant is hardcoded in the client", () =>
 // (11)(12) Dual selector wiring intact + contacts still receive the selected id.
 // ---------------------------------------------------------------------------
 
-test("the dual course selector remains wired on both approved screens", () => {
+test("the dual course selector remains wired on all approved screens", () => {
   const mounts = SRC.match(/<TraineeCourseSelector/g) ?? [];
-  assert.equal(mounts.length, 2, "exactly the two approved mount sites remain");
-  for (const line of [/selectedId=\{selectedCourseOfferingId\}/, /onSelect=\{setSelectedCourseOfferingId\}/]) {
-    assert.match(SRC, line, "the selector must stay bound to the selection state");
-  }
+  // Three approved mount sites: home/today, schedule, and contacts. All three
+  // bind to the SAME selection state, so a pick on any screen updates the others.
+  assert.equal(mounts.length, 3, "exactly the three approved mount sites remain");
+  const optionBindings = SRC.match(/options=\{courseOptions \?\? \[\]\}/g) ?? [];
+  const selectedBindings = SRC.match(/selectedId=\{selectedCourseOfferingId\}/g) ?? [];
+  const onSelectBindings = SRC.match(/onSelect=\{setSelectedCourseOfferingId\}/g) ?? [];
+  assert.equal(optionBindings.length, 3, "every mount reads the shared options");
+  assert.equal(selectedBindings.length, 3, "every mount reads the shared selected id");
+  assert.equal(onSelectBindings.length, 3, "every mount writes the shared selection setter");
 });
 
 test("contacts continue receiving the selected offering id", () => {

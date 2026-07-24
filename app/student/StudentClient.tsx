@@ -125,24 +125,24 @@ interface StoredSession {
 // always resolves visually, and it never leaks the raw server error or any PII.
 const SCHEDULE_LOAD_ERROR_MESSAGE = "לא ניתן לטעון כרגע את הלו״ז. נסו לרענן את העמוד.";
 
-// TEMPORARY LAUNCH HOTFIX (dual Level 2) - PURE classifier for "this trainee is
-// dual-enrolled AND is currently viewing a Level 2 offering". A dual trainee's
-// Student.group compatibility fields still describe their Level 1 group, so the
-// ordinary "mine" schedule filter would hide the entire Level 2 schedule until
-// combinedParticipation is wired for these trainees. Until then this drives a
-// temporary "default the group filter to both" behaviour (and a visible notice)
-// in ScheduleSection - see its own comment.
+// TEMPORARY LAUNCH HOTFIX (Level 2 group view) - PURE classifier for "the course
+// the trainee is currently viewing is a Level 2 offering", read ONLY from the
+// already-present, server-returned option metadata (the selected option's own
+// server-provided `level`). It hardcodes no offering id and no Level 1 identity.
 //
-// It reads ONLY the already-present, server-returned option metadata: the count
-// of eligible options ("dual" == two or more) and the selected option's own
-// server-provided `level`. It hardcodes no offering id and no Level 1 identity;
-// anything that is not an eligible Level 2 selection (single course, Level 1
-// selection, nothing selected yet) is simply not classified as dual-Level-2.
-export function isDualTraineeViewingLevel2(
+// Level 2 currently has a single relevant trainee group view, and its useful
+// schedule lives under the "both" filter (a Level 2 trainee's Student.group
+// compatibility fields still describe Level 1). So ANY trainee viewing Level 2 -
+// dual or Level-2-only - defaults the group filter to "both" in ScheduleSection.
+// Whether the mine/both controls are shown or hidden, and whether the temporary
+// notice appears, is decided in ScheduleSection from this flag together with
+// dual-enrollment (2+ eligible options) - see its own comment. Anything that is
+// not a Level 2 selection (a Level 1 selection, nothing selected yet) returns
+// false and keeps the ordinary Level 1 behaviour.
+export function isSelectedOfferingLevel2(
   options: TraineeCourseOptionView[],
   selectedId: string | null,
 ): boolean {
-  if (options.length < 2) return false;
   const selected = options.find((o) => o.id === selectedId);
   return selected !== undefined && selected.level === 2;
 }
@@ -676,13 +676,15 @@ export function StudentClient() {
   const isMoreItem = STUDENT_MORE_ITEMS.some((item) => item.id === activeTab);
   const bottomActiveTab: MainTabId = isMoreItem ? "more" : activeTab;
 
-  // TEMPORARY LAUNCH HOTFIX (dual Level 2) - drives ScheduleSection's temporary
-  // "default to both groups + show notice" behaviour. Derived purely from the
-  // server-returned course options already in state (see isDualTraineeViewingLevel2).
-  const dualLevel2ScheduleView = isDualTraineeViewingLevel2(
-    courseOptions ?? [],
-    selectedCourseOfferingId,
-  );
+  // TEMPORARY LAUNCH HOTFIX (Level 2 group view) - drives ScheduleSection's group
+  // filter behaviour. Both signals are derived purely from the server-returned
+  // course options already in state: whether the SELECTED course is Level 2 (see
+  // isSelectedOfferingLevel2), and whether the trainee is dual-enrolled (2+
+  // eligible options). Level 2 -> default "both"; Level-2-only (Level 2 and not
+  // dual) -> also hide the group controls in ScheduleSection.
+  const eligibleCourseOptions = courseOptions ?? [];
+  const viewingLevel2 = isSelectedOfferingLevel2(eligibleCourseOptions, selectedCourseOfferingId);
+  const dualEnrolled = eligibleCourseOptions.length >= 2;
 
   return (
     <div className="flex flex-1 flex-col">
@@ -739,6 +741,19 @@ export function StudentClient() {
 
             <DutiesSection studentId={session.id} startDateKey={todayKey} endDateKey={todayKey} />
 
+            {/* Third mount site for the course switcher (the schedule and contacts
+                screens are the other two). It reuses the very same courseOptions /
+                selectedCourseOfferingId / setSelectedCourseOfferingId state, so a
+                pick here updates the schedule tab and vice versa, and it renders
+                nothing unless this trainee has more than one eligible course. It
+                sits above the home schedule block so a fresh dual trainee (no course
+                selected yet) can choose one instead of only seeing an empty day. */}
+            <TraineeCourseSelector
+              options={courseOptions ?? []}
+              selectedId={selectedCourseOfferingId}
+              onSelect={setSelectedCourseOfferingId}
+            />
+
             {weeks === null ? (
               <p className="text-base text-muted-foreground">טוען...</p>
             ) : scheduleLoadError ? (
@@ -747,14 +762,14 @@ export function StudentClient() {
               </p>
             ) : todayWeek ? (
               // Part of the SCHEDULE module, so it follows the current course
-              // selection. The selector itself is deliberately not rendered on
-              // the home screen - it belongs to the two full screens below.
+              // selection made via the selector rendered just above.
               <ScheduleSection
                 studentId={session.id}
                 weeklyScheduleId={todayWeek.id}
                 dayFilter={todayKey}
                 courseOfferingId={selectedCourseOfferingId}
-                dualLevel2={dualLevel2ScheduleView}
+                viewingLevel2={viewingLevel2}
+                dualEnrolled={dualEnrolled}
               />
             ) : (
               <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
@@ -766,9 +781,9 @@ export function StudentClient() {
 
         {activeTab === "schedule" && (
           <div className="flex flex-col gap-4">
-            {/* One of exactly TWO mount sites for the course switcher (the other
-                is the contacts screen). It renders nothing unless this trainee
-                genuinely has more than one eligible course. */}
+            {/* One of THREE mount sites for the course switcher (the home/today and
+                contacts screens are the other two). It renders nothing unless this
+                trainee genuinely has more than one eligible course. */}
             <TraineeCourseSelector
               options={courseOptions ?? []}
               selectedId={selectedCourseOfferingId}
@@ -808,7 +823,8 @@ export function StudentClient() {
                     weeklyScheduleId={selectedWeekId}
                     dayFilter={dayFilter}
                     courseOfferingId={selectedCourseOfferingId}
-                    dualLevel2={dualLevel2ScheduleView}
+                    viewingLevel2={viewingLevel2}
+                    dualEnrolled={dualEnrolled}
                   />
                 </div>
               </>
@@ -973,7 +989,8 @@ export function StudentClient() {
 
         {activeTab === "contacts" && (
           <div className="flex flex-col gap-4">
-            {/* The second and last mount site for the course switcher. */}
+            {/* The third mount site for the course switcher (home/today and schedule
+                are the other two). */}
             <TraineeCourseSelector
               options={courseOptions ?? []}
               selectedId={selectedCourseOfferingId}

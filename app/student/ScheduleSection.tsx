@@ -14,6 +14,15 @@ import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { coalesceAdjacentSameActivity } from "@/lib/schedule-grouping";
 
+// Combined-participation ("משולב") business indication for the trainee card,
+// DISPLAY-ONLY. Mirrors the server tri-state verbatim: true -> "עם משולב",
+// false -> "ללא משולב", null -> no badge (returns null so the card renders
+// nothing). This never filters or hides an item - it is a label only.
+function combinedParticipationBadgeLabel(value: boolean | null): string | null {
+  if (value === null) return null;
+  return value ? "עם משולב" : "ללא משולב";
+}
+
 function isItemActiveNow(item: ScheduleItemView, now: Date): boolean {
   const todayKey = now.toISOString().slice(0, 10);
   if (item.dateKey !== todayKey) return false;
@@ -224,13 +233,31 @@ function ScheduleCard({
         <span className={`font-semibold text-card-foreground ${compact ? "text-sm" : "text-base"}`}>
           {item.startTime}-{item.endTime}
         </span>
-        <span
-          className={`rounded-full bg-muted text-muted-foreground ${
-            compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm"
-          }`}
-        >
-          {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
-        </span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span
+            className={`rounded-full bg-muted text-muted-foreground ${
+              compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm"
+            }`}
+          >
+            {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
+          </span>
+          {/* Combined-participation ("משולב") indication - display-only, rendered
+              only when the server sent a non-null tri-state (null -> no badge). It
+              hides no item. */}
+          {(() => {
+            const combinedLabel = combinedParticipationBadgeLabel(item.combinedParticipation);
+            if (combinedLabel === null) return null;
+            return (
+              <span
+                className={`rounded-full bg-secondary text-secondary-foreground ${
+                  compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm"
+                }`}
+              >
+                {combinedLabel}
+              </span>
+            );
+          })()}
+        </div>
       </div>
       <p className={`font-bold text-card-foreground ${compact ? "text-base" : "text-lg"}`}>
         {ridingPresentation.title}
@@ -280,34 +307,46 @@ export function ScheduleSection({
   weeklyScheduleId,
   dayFilter,
   courseOfferingId,
-  dualLevel2 = false,
+  viewingLevel2 = false,
+  dualEnrolled = false,
 }: {
   studentId: string;
   weeklyScheduleId: string | null;
   dayFilter: string | "all";
   courseOfferingId: string | null;
-  // TEMPORARY LAUNCH HOTFIX (dual Level 2). True only when the trainee is
-  // dual-enrolled AND currently viewing a Level 2 offering (classified upstream
-  // in StudentClient from server-returned option metadata). Defaults false, so
-  // every single-course and Level 1 view keeps the ordinary "mine" behaviour.
-  dualLevel2?: boolean;
+  // TEMPORARY LAUNCH HOTFIX (Level 2 group view). Both flags are classified
+  // upstream in StudentClient from server-returned option metadata and default
+  // false, so every single-course and Level 1 view keeps the ordinary "mine"
+  // behaviour with its controls intact.
+  //  - viewingLevel2: the SELECTED course is a Level 2 offering. Level 2 has one
+  //    relevant trainee group view whose useful schedule lives under "both", so
+  //    ANY trainee viewing Level 2 defaults the group filter to "both".
+  //  - dualEnrolled: the trainee has 2+ eligible courses. It only decides whether
+  //    the mine/both controls stay visible on a Level 2 view (see below).
+  viewingLevel2?: boolean;
+  dualEnrolled?: boolean;
 }) {
-  const [groupFilter, setGroupFilter] = useState<GroupFilter>(dualLevel2 ? "both" : "mine");
+  const [groupFilter, setGroupFilter] = useState<GroupFilter>(viewingLevel2 ? "both" : "mine");
   const [result, setResult] = useState<StudentScheduleResult | null>(null);
   const [now, setNow] = useState<Date>(() => new Date());
 
-  // TEMPORARY LAUNCH HOTFIX (dual Level 2): a dual trainee's Student.group
-  // compatibility fields still describe their Level 1 group, so the "mine" filter
-  // would hide the entire Level 2 schedule. Until combinedParticipation is wired
-  // for these trainees, DEFAULT such a view to "both" (which hides no items) and
-  // re-apply that default whenever the dual-Level-2 context turns on or off -
+  // TEMPORARY LAUNCH HOTFIX (Level 2 group view): a Level 2 trainee's Student.group
+  // compatibility fields still describe Level 1, so the "mine" filter would hide the
+  // entire Level 2 schedule. DEFAULT any Level 2 view to "both" (which hides no
+  // items) and re-apply that default whenever the Level 2 context turns on or off -
   // switching back to a Level 1 course restores the ordinary "mine" default. This
-  // sets the DEFAULT only; because it re-runs solely on the dualLevel2 flag, a
+  // sets the DEFAULT only; because it re-runs solely on the viewingLevel2 flag, a
   // manual toggle while the flag is unchanged is preserved.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setGroupFilter(dualLevel2 ? "both" : "mine");
-  }, [dualLevel2]);
+    setGroupFilter(viewingLevel2 ? "both" : "mine");
+  }, [viewingLevel2]);
+
+  // A Level-2-ONLY trainee (Level 2 auto-selected as their sole eligible course)
+  // has a single relevant group view, so the mine/both controls are hidden and the
+  // full "both" schedule is shown. A DUAL trainee viewing Level 2 keeps the manual
+  // controls; every Level 1 view keeps them unchanged.
+  const showGroupControls = !(viewingLevel2 && !dualEnrolled);
 
   useEffect(() => {
     if (!weeklyScheduleId) return;
@@ -343,40 +382,35 @@ export function ScheduleSection({
     <div className="rounded-2xl border border-border bg-card p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-bold text-card-foreground">הלו&quot;ז שלי</h2>
-        <div className="flex gap-2 text-sm">
-          <button
-            type="button"
-            onClick={() => setGroupFilter("mine")}
-            className={`rounded-full px-4 py-2 font-medium ${
-              groupFilter === "mine"
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted text-muted-foreground"
-            }`}
-          >
-            הקבוצה שלי
-          </button>
-          <button
-            type="button"
-            onClick={() => setGroupFilter("both")}
-            className={`rounded-full px-4 py-2 font-medium ${
-              groupFilter === "both"
-                ? "bg-primary text-primary-foreground"
-                : "bg-muted text-muted-foreground"
-            }`}
-          >
-            שתי הקבוצות
-          </button>
-        </div>
+        {/* Hidden for a Level-2-only trainee (single relevant group view); shown
+            for every Level 1 view and for a dual trainee viewing Level 2. */}
+        {showGroupControls && (
+          <div className="flex gap-2 text-sm">
+            <button
+              type="button"
+              onClick={() => setGroupFilter("mine")}
+              className={`rounded-full px-4 py-2 font-medium ${
+                groupFilter === "mine"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              הקבוצה שלי
+            </button>
+            <button
+              type="button"
+              onClick={() => setGroupFilter("both")}
+              className={`rounded-full px-4 py-2 font-medium ${
+                groupFilter === "both"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground"
+              }`}
+            >
+              שתי הקבוצות
+            </button>
+          </div>
+        )}
       </div>
-
-      {/* TEMPORARY LAUNCH HOTFIX (dual Level 2): temporary launch guidance shown
-          next to the group filter while a dual trainee views Level 2. It does NOT
-          claim combinedParticipation is active and hides no items. */}
-      {dualLevel2 && (
-        <p className="mb-4 rounded-lg bg-warning-muted p-3 text-sm text-warning">
-          לתשומת לב: הלו״ז מוצג כרגע בשתי הקבוצות וללא סינון לפי משולב.
-        </p>
-      )}
 
       {!weeklyScheduleId ? (
         <p className="text-base text-card-foreground">עדיין לא הועלה לו&quot;ז לשבוע זה</p>
