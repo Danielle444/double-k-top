@@ -7,6 +7,18 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 import { getSupabaseClient, COURSE_MATERIALS_BUCKET } from "@/lib/supabase";
 import { createMaterialAddedNotifications } from "@/lib/actions/notifications";
 import type { ActionResult } from "@/lib/actions/students";
+// SECURITY / LEVEL 2 SLICE L2-M1C - server-derived trainee identity + the
+// COURSE_MATERIALS capability gate for the trainee-facing getStudentMaterials
+// below. getInstructorMaterials and every admin action in this file are
+// deliberately untouched and keep their existing behaviour / requireAdmin gate.
+import { requireCurrentTrainee } from "@/lib/auth/actor";
+import { resolveTraineeCourseOffering } from "@/lib/course/actor-course-offering";
+import { getEffectiveCapabilities } from "@/lib/course/capabilities/offering-capabilities";
+import type { CapabilityKey } from "@/lib/course/capabilities/capability-keys";
+import {
+  loadAuthorizedTraineeModuleRowsWithDeps,
+  type TraineeModuleContextDeps,
+} from "@/lib/course/trainee-module-containment-core";
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour, matches the booklet's TTL
 
@@ -79,14 +91,64 @@ async function getMaterialsForVisibilities(
   );
 }
 
-// Read-only, no permission gate - same convention as getBookletAccess /
-// getStudentContacts, since students/instructors have no NextAuth session in
-// this app. The visibility filter is enforced here, server-side, not by the
-// UI hiding anything.
+/**
+ * The single capability that authorizes any trainee course-material read
+ * (L2-M1C). A DEDICATED canonical key (capability-keys.ts, added by L2-M1A) - no
+ * unrelated capability is reused. The CapabilityKey annotation makes a typo a
+ * compile error.
+ */
+const TRAINEE_COURSE_MATERIALS_CAPABILITY_KEY: CapabilityKey = "COURSE_MATERIALS";
+
+// Real, server-owned dependencies only: the trainee id from the signed session
+// via the canonical Actor DAL (requireCurrentTrainee rejects anonymous,
+// expired, wrong-audience and INACTIVE sessions), the offering from the
+// committed no-argument resolveTraineeCourseOffering(), and that exact
+// offering's capabilities. No courseOfferingId parameter, no legacy singleton
+// offering resolver, no Level 1 fallback, no inference from date, group, level
+// or name.
+const TRAINEE_COURSE_MATERIALS_DEPS: TraineeModuleContextDeps = {
+  requireTraineeId: async () => (await requireCurrentTrainee()).id,
+  resolveTraineeCourseOffering,
+  getEffectiveCapabilities,
+};
+
+// SECURITY / LEVEL 2 SLICE L2-M1C - CONTAINED. This reader previously had NO
+// gate at all: any caller, including an anonymous one, received every
+// STUDENTS/BOTH material row together with freshly minted signed storage URLs.
+// The caller is now derived from the signed session and the resolved offering's
+// COURSE_MATERIALS capability must be positively ENABLED before a single
+// CourseMaterial row is fetched - and therefore before any signed URL can be
+// generated, since signing only ever happens over already-loaded rows inside
+// getMaterialsForVisibilities.
+//
+// RESIDUAL, ACCEPTED IN THIS SLICE: CourseMaterial has no courseOfferingId
+// column, so the library is still GLOBAL. The capability is the offering-level
+// containment boundary: an offering without an ENABLED COURSE_MATERIALS row
+// (Level 2) sees nothing, and an offering with one (Level 1) sees the whole
+// global library exactly as before. Per-offering material OWNERSHIP is a later
+// schema slice; no schema field is added here.
+//
+// Every denial - anonymous, expired, wrong audience, inactive trainee, no
+// eligible offering, ambiguous offering, missing capability row, DISABLED,
+// READ_ONLY, malformed capability map - returns the SAME empty array this
+// action already returned when there were no materials, so a Level 2 trainee
+// cannot distinguish "denied" from "nothing published" and no Level 1 material
+// metadata is disclosed. Prisma / storage / programming failures are NOT
+// denials and propagate unchanged.
 export async function getStudentMaterials(): Promise<RoleMaterialItem[]> {
-  return getMaterialsForVisibilities(["STUDENTS", "BOTH"]);
+  return loadAuthorizedTraineeModuleRowsWithDeps(
+    TRAINEE_COURSE_MATERIALS_CAPABILITY_KEY,
+    TRAINEE_COURSE_MATERIALS_DEPS,
+    // Unreachable unless every gate passed. The visibility filter is unchanged,
+    // so an authorized Level 1 trainee receives exactly the previous rows and
+    // signed URLs.
+    async () => getMaterialsForVisibilities(["STUDENTS", "BOTH"])
+  );
 }
 
+// Read-only, no permission gate - unchanged by L2-M1C, which contains the
+// TRAINEE surface only. The visibility filter is enforced here, server-side,
+// not by the UI hiding anything.
 export async function getInstructorMaterials(): Promise<RoleMaterialItem[]> {
   return getMaterialsForVisibilities(["INSTRUCTORS", "BOTH"]);
 }

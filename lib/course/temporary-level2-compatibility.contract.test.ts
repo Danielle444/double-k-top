@@ -131,6 +131,10 @@ function importsModule(src: string, moduleName: string): boolean {
  *                                     and consumes no resolver;
  *  - lib/actions/contacts.ts        - trainee instructor directory, separately
  *                                     reviewed and committed in 19a4cf1;
+ *  - lib/actions/materials.ts       - L2-M1C trainee course-material containment
+ *                                     (getStudentMaterials); getInstructorMaterials
+ *                                     and the admin actions in the same file are
+ *                                     untouched and consume no resolver;
  *  - lib/actions/messages.ts        - L2-C3 trainee message/task containment;
  *                                     the admin creation/fan-out and instructor
  *                                     actions in the same file are untouched
@@ -155,6 +159,7 @@ function importsModule(src: string, moduleName: string): boolean {
 const APPROVED_ACTOR_RESOLVER_CONSUMERS: readonly string[] = [
   "lib/actions/completion.ts",
   "lib/actions/contacts.ts",
+  "lib/actions/materials.ts",
   "lib/actions/messages.ts",
   "lib/actions/student-schedule.ts",
   "lib/actions/teaching-practice-student.ts",
