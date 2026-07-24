@@ -2,13 +2,24 @@
 
 import { FormEvent, useEffect, useMemo, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
+import { ConfirmModal } from "@/lib/components/ConfirmModal";
 import {
   createMessageTaskAsInstructor,
   getMessageTasksForInstructorView,
+  type CreateMessageTaskInput,
   type InstructorMessageTaskView,
   type MessageAudienceValue,
   type MessageTaskTypeValue,
 } from "@/lib/actions/messages";
+// LAUNCH-WARNING - this is an accidental-send warning only, not course-scoped
+// containment. Remove after message and material notification fanout are wired
+// to the roster-authoritative course-scoped resolvers.
+import {
+  FANOUT_WARNING_CANCEL_LABEL,
+  MESSAGE_FANOUT_WARNING_CONFIRM_LABEL,
+  MESSAGE_FANOUT_WARNING_TEXT,
+  MESSAGE_FANOUT_WARNING_TITLE,
+} from "@/lib/course/launch-fanout-warning-text";
 import { formatHebrewDateTime } from "@/lib/dates";
 
 interface StudentOption {
@@ -127,6 +138,10 @@ export function InstructorMessagesSection({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [isComposerOpen, setIsComposerOpen] = useState(false);
+  // LAUNCH-WARNING - the composed send, staged instead of sent. Non-null means
+  // the warning is on screen and nothing has been sent; clearing it closes the
+  // warning on both the cancel and confirm paths.
+  const [pendingSend, setPendingSend] = useState<CreateMessageTaskInput | null>(null);
 
   const groups = useMemo(
     () =>
@@ -156,19 +171,41 @@ export function InstructorMessagesSection({
     setBody("");
   }
 
+  // LAUNCH-WARNING - submitting the composer no longer sends. It only stages the
+  // fully-formed payload and opens the confirmation. createMessageTaskAsInstructor
+  // is called exclusively from confirmSend below.
   function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
     setSuccessMessage(null);
+    setPendingSend({
+      type,
+      title,
+      body,
+      audience,
+      groupName: audience === "GROUP" ? groupName : undefined,
+      studentIds: audience === "SPECIFIC" ? selectedStudentIds : undefined,
+    });
+  }
+
+  // LAUNCH-WARNING - the ✕, the backdrop and "ביטול" all land here. Clearing the
+  // staged payload closes the warning and sends nothing.
+  function cancelSend() {
+    setPendingSend(null);
+  }
+
+  // LAUNCH-WARNING - the only place the send Server Action is invoked. The staged
+  // payload is captured and cleared FIRST (closing the warning before the
+  // transition starts), so a double-click finds no confirm button;
+  // disabled={isPending} guards it as a second layer.
+  function confirmSend() {
+    if (!pendingSend) return;
+    const payload = pendingSend;
+    setPendingSend(null);
+    setError(null);
+    setSuccessMessage(null);
     startTransition(async () => {
-      const result = await createMessageTaskAsInstructor(instructorId, {
-        type,
-        title,
-        body,
-        audience,
-        groupName: audience === "GROUP" ? groupName : undefined,
-        studentIds: audience === "SPECIFIC" ? selectedStudentIds : undefined,
-      });
+      const result = await createMessageTaskAsInstructor(instructorId, payload);
       if (!result.success) {
         setError(result.error ?? "אירעה שגיאה");
         return;
@@ -182,6 +219,9 @@ export function InstructorMessagesSection({
   function openComposer() {
     setError(null);
     setSuccessMessage(null);
+    // LAUNCH-WARNING - a freshly opened composer never inherits a previously
+    // staged send, so the warning is always shown again. Nothing is persisted.
+    setPendingSend(null);
     setIsComposerOpen(true);
   }
 
@@ -413,6 +453,19 @@ export function InstructorMessagesSection({
         </form>
       </div>
       )}
+
+      {/* LAUNCH-WARNING - accidental-send warning only, not course-scoped
+          containment. */}
+      <ConfirmModal
+        open={pendingSend !== null}
+        title={MESSAGE_FANOUT_WARNING_TITLE}
+        message={MESSAGE_FANOUT_WARNING_TEXT}
+        confirmLabel={MESSAGE_FANOUT_WARNING_CONFIRM_LABEL}
+        cancelLabel={FANOUT_WARNING_CANCEL_LABEL}
+        isPending={isPending}
+        onConfirm={confirmSend}
+        onCancel={cancelSend}
+      />
     </div>
   );
 }

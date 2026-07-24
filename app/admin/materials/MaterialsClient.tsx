@@ -3,6 +3,7 @@
 import { FormEvent, useRef, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
+import { ConfirmModal } from "@/lib/components/ConfirmModal";
 import {
   createLinkMaterial,
   getMaterialsForAdmin,
@@ -11,7 +12,17 @@ import {
   type AdminMaterialRow,
   type CourseMaterialTypeValue,
   type CourseMaterialVisibilityValue,
+  type CreateLinkMaterialInput,
 } from "@/lib/actions/materials";
+// LAUNCH-WARNING - this is an accidental-send warning only, not course-scoped
+// containment. Remove after message and material notification fanout are wired
+// to the roster-authoritative course-scoped resolvers.
+import {
+  FANOUT_WARNING_CANCEL_LABEL,
+  MATERIAL_FANOUT_WARNING_CONFIRM_LABEL,
+  MATERIAL_FANOUT_WARNING_TEXT,
+  MATERIAL_FANOUT_WARNING_TITLE,
+} from "@/lib/course/launch-fanout-warning-text";
 import { formatHebrewDateTime } from "@/lib/dates";
 
 const TYPE_LABELS: Record<CourseMaterialTypeValue, string> = {
@@ -24,6 +35,23 @@ const VISIBILITY_LABELS: Record<CourseMaterialVisibilityValue, string> = {
   INSTRUCTORS: "מדריכים",
   BOTH: "כולם",
 };
+
+// LAUNCH-WARNING - exactly the two visibilities for which
+// createMaterialAddedNotifications fans a MATERIAL_ADDED notification out to
+// students. INSTRUCTORS-only creates no student notification at all, so that
+// path must stay direct and warning-free rather than training the admin to click
+// through a warning that does not apply.
+function materialCreateNotifiesStudents(visibility: CourseMaterialVisibilityValue): boolean {
+  return visibility === "STUDENTS" || visibility === "BOTH";
+}
+
+// LAUNCH-WARNING - a staged, not-yet-performed NEW material creation. The LINK
+// payload is a plain snapshot; the FILE payload deliberately is NOT here - a
+// FormData must be built synchronously from the live form element and lives in a
+// ref (see stagedFileFormDataRef).
+type StagedMaterialCreate =
+  | { kind: "LINK"; input: CreateLinkMaterialInput }
+  | { kind: "FILE" };
 
 export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }) {
   const [items, setItems] = useState(materials);
@@ -46,6 +74,16 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
   const [isEditPending, startEditTransition] = useTransition();
   const editFileInputRef = useRef<HTMLInputElement>(null);
 
+  // LAUNCH-WARNING - staged NEW-material creation awaiting confirmation. Non-null
+  // means the warning is on screen and nothing has been created yet.
+  const [pendingCreate, setPendingCreate] = useState<StagedMaterialCreate | null>(null);
+  // LAUNCH-WARNING - the FILE create's multipart body. It MUST be built
+  // synchronously from e.currentTarget inside handleCreateSubmit (React nulls
+  // currentTarget once the handler returns), so it cannot be reconstructed in the
+  // confirm callback. It is held here, out of React state, and cleared on both
+  // cancel and confirm.
+  const stagedFileFormDataRef = useRef<FormData | null>(null);
+
   async function refreshList() {
     const fresh = await getMaterialsForAdmin();
     setItems(fresh);
@@ -58,6 +96,10 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
     setVisibility("BOTH");
     setExternalUrl("");
     setError(null);
+    // LAUNCH-WARNING - a fresh composer never inherits a previously staged
+    // creation, so the warning is always shown again. Nothing is persisted.
+    setPendingCreate(null);
+    stagedFileFormDataRef.current = null;
     setIsCreateOpen(true);
   }
 
@@ -70,29 +112,23 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
     setEditError(null);
   }
 
-  function handleCreateSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError(null);
+  // The actual LINK creation - unchanged behaviour, extracted so it can run
+  // either directly (INSTRUCTORS-only, no warning) or from the confirm handler.
+  function performLinkCreate(input: CreateLinkMaterialInput) {
+    startTransition(async () => {
+      const result = await createLinkMaterial(input);
+      if (!result.success) {
+        setError(result.error ?? "אירעה שגיאה");
+        return;
+      }
+      await refreshList();
+      setIsCreateOpen(false);
+    });
+  }
 
-    if (createType === "LINK") {
-      startTransition(async () => {
-        const result = await createLinkMaterial({
-          title,
-          description: description || undefined,
-          visibility,
-          externalUrl,
-        });
-        if (!result.success) {
-          setError(result.error ?? "אירעה שגיאה");
-          return;
-        }
-        await refreshList();
-        setIsCreateOpen(false);
-      });
-      return;
-    }
-
-    const formData = new FormData(e.currentTarget);
+  // The actual FILE creation - unchanged upload behaviour, driven by an
+  // already-built FormData (never e.currentTarget, which is gone by confirm time).
+  function performFileCreate(formData: FormData) {
     startTransition(async () => {
       try {
         const response = await fetch("/api/admin/materials/upload", {
@@ -110,6 +146,77 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
         setError("אירעה שגיאה בהעלאה - בדקו את החיבור ונסו שוב");
       }
     });
+  }
+
+  // LAUNCH-WARNING - creating a NEW material. The FormData for a FILE create is
+  // built SYNCHRONOUSLY from the live form here, before this handler returns,
+  // because React nulls e.currentTarget afterwards. When the chosen visibility
+  // does NOT notify students (INSTRUCTORS-only) the create runs immediately with
+  // no warning; otherwise it is staged and the warning is opened, and the create
+  // Server Action / upload runs only from confirmCreate.
+  function handleCreateSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+
+    const notifiesStudents = materialCreateNotifiesStudents(visibility);
+
+    if (createType === "LINK") {
+      const input: CreateLinkMaterialInput = {
+        title,
+        description: description || undefined,
+        visibility,
+        externalUrl,
+      };
+      if (!notifiesStudents) {
+        performLinkCreate(input);
+        return;
+      }
+      setPendingCreate({ kind: "LINK", input });
+      return;
+    }
+
+    // FILE - capture the multipart body NOW, from the live form element.
+    const formData = new FormData(e.currentTarget);
+    if (!notifiesStudents) {
+      performFileCreate(formData);
+      return;
+    }
+    stagedFileFormDataRef.current = formData;
+    setPendingCreate({ kind: "FILE" });
+  }
+
+  // LAUNCH-WARNING - the ✕, the backdrop and "ביטול" all land here. Clearing the
+  // staged creation and the staged FormData closes the warning and creates
+  // nothing.
+  function cancelCreate() {
+    setPendingCreate(null);
+    stagedFileFormDataRef.current = null;
+  }
+
+  // LAUNCH-WARNING - the only place a NOTIFYING create is performed. The staged
+  // work is captured into locals and cleared FIRST (closing the warning before
+  // the transition starts), so a double-click finds no confirm button;
+  // disabled={isPending} guards it as a second layer.
+  function confirmCreate() {
+    const staged = pendingCreate;
+    if (!staged) return;
+    if (staged.kind === "LINK") {
+      setPendingCreate(null);
+      stagedFileFormDataRef.current = null;
+      setError(null);
+      performLinkCreate(staged.input);
+      return;
+    }
+    const formData = stagedFileFormDataRef.current;
+    setPendingCreate(null);
+    stagedFileFormDataRef.current = null;
+    setError(null);
+    if (!formData) {
+      // Defensive: a staged FILE create with no captured body cannot proceed.
+      setError("אירעה שגיאה בהעלאה - נסו שוב");
+      return;
+    }
+    performFileCreate(formData);
   }
 
   function handleEditSubmit(e: FormEvent<HTMLFormElement>) {
@@ -425,6 +532,20 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
           </div>
         </form>
       </Modal>
+
+      {/* LAUNCH-WARNING - shown only for a NEW material whose visibility notifies
+          students (STUDENTS/BOTH). Accidental-add warning only, not course-scoped
+          containment. */}
+      <ConfirmModal
+        open={pendingCreate !== null}
+        title={MATERIAL_FANOUT_WARNING_TITLE}
+        message={MATERIAL_FANOUT_WARNING_TEXT}
+        confirmLabel={MATERIAL_FANOUT_WARNING_CONFIRM_LABEL}
+        cancelLabel={FANOUT_WARNING_CANCEL_LABEL}
+        isPending={isPending}
+        onConfirm={confirmCreate}
+        onCancel={cancelCreate}
+      />
     </div>
   );
 }

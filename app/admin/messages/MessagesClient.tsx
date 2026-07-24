@@ -3,17 +3,28 @@
 import { FormEvent, useMemo, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
+import { ConfirmModal } from "@/lib/components/ConfirmModal";
 import {
   archiveMessageTask,
   createMessageTask,
   getMessageTaskRecipients,
   listMessageTasksForAdmin,
   updateMessageTask,
+  type CreateMessageTaskInput,
   type MessageAudienceValue,
   type MessageTaskListItem,
   type MessageTaskRecipientRow,
   type MessageTaskTypeValue,
 } from "@/lib/actions/messages";
+// LAUNCH-WARNING - this is an accidental-send warning only, not course-scoped
+// containment. Remove after message and material notification fanout are wired
+// to the roster-authoritative course-scoped resolvers.
+import {
+  FANOUT_WARNING_CANCEL_LABEL,
+  MESSAGE_FANOUT_WARNING_CONFIRM_LABEL,
+  MESSAGE_FANOUT_WARNING_TEXT,
+  MESSAGE_FANOUT_WARNING_TITLE,
+} from "@/lib/course/launch-fanout-warning-text";
 import { formatHebrewDateTime } from "@/lib/dates";
 
 interface StudentOption {
@@ -60,6 +71,11 @@ export function MessagesClient({
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
+  // LAUNCH-WARNING - the composed send, staged instead of sent. While this is
+  // non-null the warning is on screen and NOTHING has been sent yet; clearing it
+  // is what closes the warning, on both the cancel and the confirm path.
+  const [pendingSend, setPendingSend] = useState<CreateMessageTaskInput | null>(null);
+
   const [drillDownTask, setDrillDownTask] = useState<MessageTaskListItem | null>(null);
   const [recipients, setRecipients] = useState<MessageTaskRecipientRow[] | null>(null);
 
@@ -100,6 +116,10 @@ export function MessagesClient({
     setTitle("");
     setBody("");
     setError(null);
+    // LAUNCH-WARNING - a fresh composer never inherits a previously staged send,
+    // so the warning is always shown again for the next send. Nothing about the
+    // dismissal is persisted anywhere.
+    setPendingSend(null);
     setIsCreateOpen(true);
   }
 
@@ -109,18 +129,39 @@ export function MessagesClient({
     );
   }
 
+  // LAUNCH-WARNING - submitting the composer no longer sends. It only stages the
+  // fully-formed payload and opens the confirmation. The Server Action is called
+  // exclusively from confirmSend below.
   function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
+    setPendingSend({
+      type,
+      title,
+      body,
+      audience,
+      groupName: audience === "GROUP" ? groupName : undefined,
+      studentIds: audience === "SPECIFIC" ? selectedStudentIds : undefined,
+    });
+  }
+
+  // LAUNCH-WARNING - the ✕, the backdrop and the "ביטול" button all land here.
+  // Clearing the staged payload closes the warning and sends nothing.
+  function cancelSend() {
+    setPendingSend(null);
+  }
+
+  // LAUNCH-WARNING - the only place the send Server Action is invoked. The staged
+  // payload is captured into a local and cleared FIRST (which closes the warning
+  // before the transition starts), so a second click has no confirm button to
+  // hit; disabled={isPending} guards it as a second layer.
+  function confirmSend() {
+    if (!pendingSend) return;
+    const payload = pendingSend;
+    setPendingSend(null);
+    setError(null);
     startTransition(async () => {
-      const result = await createMessageTask({
-        type,
-        title,
-        body,
-        audience,
-        groupName: audience === "GROUP" ? groupName : undefined,
-        studentIds: audience === "SPECIFIC" ? selectedStudentIds : undefined,
-      });
+      const result = await createMessageTask(payload);
       if (!result.success) {
         setError(result.error ?? "אירעה שגיאה");
         return;
@@ -506,6 +547,20 @@ export function MessagesClient({
           </Button>
         </div>
       </Modal>
+
+      {/* LAUNCH-WARNING - rendered last so it paints above the create modal it
+          sits on top of. Accidental-send warning only, not course-scoped
+          containment. */}
+      <ConfirmModal
+        open={pendingSend !== null}
+        title={MESSAGE_FANOUT_WARNING_TITLE}
+        message={MESSAGE_FANOUT_WARNING_TEXT}
+        confirmLabel={MESSAGE_FANOUT_WARNING_CONFIRM_LABEL}
+        cancelLabel={FANOUT_WARNING_CANCEL_LABEL}
+        isPending={isPending}
+        onConfirm={confirmSend}
+        onCancel={cancelSend}
+      />
     </div>
   );
 }
