@@ -140,6 +140,12 @@ function importsModule(src: string, moduleName: string): boolean {
  *                                     (getStudentDutiesForRange);
  *  - lib/actions/teaching-practice-student.ts - L2-C1 trainee Teaching Practice
  *                                     containment;
+ *  - lib/actions/weekly-feedback.ts  - L2-F1A trainee weekly-feedback
+ *                                     containment (getOpenWeeklyFeedbackFor-
+ *                                     Student, submitWeeklyFeedback); every
+ *                                     admin action in the same file keeps its
+ *                                     requireAdmin gate and consumes no
+ *                                     resolver;
  *  - lib/actions/weekly-schedule.ts  - trainee course-scoped week picker
  *                                     (getWeeklyScheduleSelectionForTrainee),
  *                                     SLICE S1A.
@@ -152,6 +158,7 @@ const APPROVED_ACTOR_RESOLVER_CONSUMERS: readonly string[] = [
   "lib/actions/messages.ts",
   "lib/actions/student-schedule.ts",
   "lib/actions/teaching-practice-student.ts",
+  "lib/actions/weekly-feedback.ts",
   "lib/actions/weekly-schedule.ts",
 ];
 

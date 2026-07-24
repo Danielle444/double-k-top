@@ -6,6 +6,19 @@ import { dateKey, formatHebrewDate, formatHebrewWeekday } from "@/lib/dates";
 import { cleanScheduleTitle } from "@/lib/schedule-title";
 import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
 import type { ActionResult } from "@/lib/actions/students";
+// SECURITY / LEVEL 2 SLICE L2-F1A - server-derived trainee identity + course
+// context for the two trainee-facing actions at the bottom of this file.
+// Nothing else in this module changes: every requireAdmin() action above, and
+// getWeeklyFeedbackResults below, are untouched by this slice.
+import { requireCurrentTrainee } from "@/lib/auth/actor";
+import { resolveTraineeCourseOffering } from "@/lib/course/actor-course-offering";
+import {
+  authorizeTraineeWeeklyFeedbackSubmissionWithDeps,
+  classifyWeeklyFeedbackSubmissionWindow,
+  loadTraineeWeeklyFeedbackWithDeps,
+  type TraineeWeeklyFeedbackFormRow,
+  type WeeklyFeedbackSubmissionWindowState,
+} from "@/lib/course/weekly-feedback-course-scope-core";
 
 export type WeeklyFeedbackStatusValue = "DRAFT" | "PUBLISHED" | "CLOSED";
 export type FeedbackQuestionTypeValue = "RATING_5" | "COMPARISON_3" | "FREE_TEXT";
@@ -640,53 +653,123 @@ export type WeeklyFeedbackForStudent =
   | { status: "submitted"; formTitle: string; submittedAt: string }
   | { status: "open"; formId: string; formTitle: string; questions: WeeklyFeedbackQuestionForStudent[] };
 
-// Students have no NextAuth session, so studentId is re-verified against the
-// DB on every call (same convention as getScheduleForStudent/verifyStudentLogin)
-// rather than trusted from the client's cached localStorage session.
+// ---------------------------------------------------------------------------
+// TRAINEE-FACING WEEKLY FEEDBACK SURFACE - SECURITY / LEVEL 2 SLICE L2-F1A
+// ---------------------------------------------------------------------------
+//
+// Both actions below are CONTAINED: identity comes from the signed trainee
+// session, the course context is server-resolved from that trainee's own
+// enrollment, and the form is loaded ONLY through its own week's offering
+// (WeeklyFeedbackForm -> WeeklySchedule.courseOfferingId), strictly equal to
+// the resolved offering, with a NULL-scoped week failing closed.
+//
+// This closes an ANONYMOUS, CROSS-COURSE exposure. These actions previously
+// "authenticated" a caller by re-reading the client-supplied studentId's
+// Student row and checking only the global Student.isActive flag - which
+// authorizes nothing, because searchStudents() is unauthenticated by design (it
+// powers the login screen) and returns real student ids. The read then selected
+// the newest published form IN THE ENTIRE DATABASE, and the submit accepted any
+// formId with no ownership predicate at all. An activated Level 2 trainee would
+// have been served the Level 1 form and been able to write a response into it,
+// permanently contaminating Level 1 statistics and being counted as a Level 1
+// respondent.
+//
+// The studentId parameters are RETAINED for caller compatibility in this slice
+// and are deliberately discarded; they are NEVER identity. The session-derived
+// trainee id is the only one that reaches a query filter, a response lookup or
+// a response write.
+//
+// There is deliberately NO capability key here: weekly feedback has no
+// canonical key, and none is reused (SCHEDULE is ENABLED for Level 2, so gating
+// on it would grant exactly what must be denied). Ownership scoping is the
+// boundary - see the core module's header.
+
+/** The exact form columns the trainee read projects - plus its questions. */
+const TRAINEE_FEEDBACK_FORM_SELECT = {
+  id: true,
+  title: true,
+  status: true,
+  opensAt: true,
+  closesAt: true,
+  weeklySchedule: { select: { courseOfferingId: true } },
+  questions: {
+    orderBy: { sortOrder: "asc" as const },
+    select: {
+      id: true,
+      section: true,
+      prompt: true,
+      type: true,
+      sortOrder: true,
+      isRequired: true,
+    },
+  },
+} as const;
+
+interface TraineeFeedbackFormWithQuestions extends TraineeWeeklyFeedbackFormRow {
+  questions: WeeklyFeedbackQuestionForStudent[];
+}
+
+// The single containment binding for the read. It supplies ONLY real,
+// server-owned dependencies: the trainee id from the signed session via the
+// canonical Actor DAL (requireCurrentTrainee rejects anonymous, expired,
+// wrong-audience and INACTIVE sessions), and the offering from the committed
+// no-argument resolveTraineeCourseOffering(). There is deliberately no
+// courseOfferingId parameter anywhere in this file, no resolveCurrentCourse-
+// Offering, no offering-id constant, no Level 1 fallback, no cookie, and no
+// group/name/level/date inference. All ordering and every allow/deny decision
+// live in the pure core, which is where the DB-free tests exercise them.
 export async function getOpenWeeklyFeedbackForStudent(studentId: string): Promise<WeeklyFeedbackForStudent> {
-  const student = await prisma.student.findUnique({ where: { id: studentId } });
-  if (!student || !student.isActive) return { status: "none" };
+  // L2-F1A: accepted for caller compatibility and deliberately DISCARDED. It is
+  // a client-supplied value and therefore never identity; see the header above.
+  void studentId;
 
-  // The "relevant" form is the most recently published one, whether or not
-  // it's still open (DRAFT forms are excluded - trainees never had access
-  // to them). "Already submitted" is checked against this form before the
-  // open-window gate below, so a trainee who submitted while it was open
-  // keeps seeing "תודה, המשוב הוגש" even after the admin closes it or its
-  // closesAt passes, instead of that confirmation silently disappearing.
-  const form = await prisma.weeklyFeedbackForm.findFirst({
-    where: { status: { in: ["PUBLISHED", "CLOSED"] } },
-    orderBy: { publishedAt: "desc" },
-    include: { questions: { orderBy: { sortOrder: "asc" } } },
+  const outcome = await loadTraineeWeeklyFeedbackWithDeps<TraineeFeedbackFormWithQuestions>({
+    requireTraineeId: async () => (await requireCurrentTrainee()).id,
+    resolveTraineeCourseOffering,
+    // Ownership lives INSIDE this where clause: a form belonging to another
+    // course is never fetched, so it can never be fetched-then-filtered.
+    fetchOwnedForm: (query) =>
+      prisma.weeklyFeedbackForm.findFirst({
+        where: query.where,
+        orderBy: query.orderBy,
+        select: TRAINEE_FEEDBACK_FORM_SELECT,
+      }),
+    // traineeId is supplied by the core from the signed session, never by this
+    // action's caller.
+    fetchResponse: ({ formId, traineeId }) =>
+      prisma.weeklyFeedbackResponse.findUnique({
+        where: { formId_studentId: { formId, studentId: traineeId } },
+        select: { submittedAt: true },
+      }),
+    now: () => new Date(),
   });
-  if (!form) return { status: "none" };
 
-  const response = await prisma.weeklyFeedbackResponse.findUnique({
-    where: { formId_studentId: { formId: form.id, studentId } },
-  });
-  if (response) {
-    return { status: "submitted", formTitle: form.title, submittedAt: response.submittedAt.toISOString() };
+  // "submitted" is decided before the open-window gate, so a trainee who
+  // submitted while the form was open keeps seeing "תודה, המשוב הוגש" after the
+  // admin closes it or its closesAt passes - unchanged behaviour.
+  if (outcome.status === "submitted") {
+    return {
+      status: "submitted",
+      formTitle: outcome.form.title,
+      submittedAt: outcome.submittedAt.toISOString(),
+    };
   }
-
-  const now = new Date();
-  const isCurrentlyOpen =
-    form.status === "PUBLISHED" &&
-    (!form.opensAt || form.opensAt <= now) &&
-    (!form.closesAt || form.closesAt > now);
-  if (!isCurrentlyOpen) return { status: "none" };
-
-  return {
-    status: "open",
-    formId: form.id,
-    formTitle: form.title,
-    questions: form.questions.map((q) => ({
-      id: q.id,
-      section: q.section,
-      prompt: q.prompt,
-      type: q.type,
-      sortOrder: q.sortOrder,
-      isRequired: q.isRequired,
-    })),
-  };
+  if (outcome.status === "open") {
+    return {
+      status: "open",
+      formId: outcome.form.id,
+      formTitle: outcome.form.title,
+      questions: outcome.form.questions.map((q) => ({
+        id: q.id,
+        section: q.section,
+        prompt: q.prompt,
+        type: q.type,
+        sortOrder: q.sortOrder,
+        isRequired: q.isRequired,
+      })),
+    };
+  }
+  return { status: "none" };
 }
 
 export interface WeeklyFeedbackAnswerInput {
@@ -694,6 +777,43 @@ export interface WeeklyFeedbackAnswerInput {
   ratingValue: number | null;
   textValue: string | null;
 }
+
+/** The exact form columns the submission projects - plus its questions. */
+const TRAINEE_SUBMISSION_FORM_SELECT = {
+  id: true,
+  title: true,
+  status: true,
+  opensAt: true,
+  closesAt: true,
+  weeklySchedule: { select: { courseOfferingId: true } },
+  questions: { select: { id: true, type: true, isRequired: true } },
+} as const;
+
+interface TraineeSubmissionForm extends TraineeWeeklyFeedbackFormRow {
+  questions: { id: string; type: FeedbackQuestionTypeValue; isRequired: boolean }[];
+}
+
+/**
+ * The SINGLE message every authorization/ownership denial returns, so
+ * unauthenticated, no/ambiguous-course, unknown-form, NULL-scoped and
+ * cross-course are indistinguishable and no form can be probed for existence.
+ * It is the exact string the previous "form not found" branch used.
+ */
+const WEEKLY_FEEDBACK_NOT_FOUND_ERROR = "המשוב לא נמצא";
+
+/**
+ * The pre-existing window/status messages, keyed by the core's classification.
+ * These apply only to a form the caller's OWN offering owns, so they disclose
+ * nothing across courses.
+ */
+const SUBMISSION_WINDOW_ERROR: Record<
+  Exclude<WeeklyFeedbackSubmissionWindowState, "OPEN">,
+  string
+> = {
+  NOT_PUBLISHED: "המשוב אינו פתוח למילוי",
+  NOT_YET_OPEN: "המשוב עדיין לא נפתח למילוי",
+  CLOSED: "המשוב נסגר למילוי",
+};
 
 // Re-validates everything server-side rather than trusting the client's
 // question list - opensAt/closesAt/status are re-read fresh, and every
@@ -707,30 +827,45 @@ export async function submitWeeklyFeedback(
   formId: string,
   answers: WeeklyFeedbackAnswerInput[]
 ): Promise<ActionResult> {
-  const student = await prisma.student.findUnique({ where: { id: studentId } });
-  if (!student || !student.isActive) {
-    return { success: false, error: "חניך/ה לא נמצא/ה" };
-  }
+  // L2-F1A: accepted for caller compatibility and deliberately DISCARDED. It is
+  // a client-supplied value and therefore never identity; see the header above
+  // getOpenWeeklyFeedbackForStudent. Passing another trainee's id can no longer
+  // submit as them.
+  void studentId;
 
-  const form = await prisma.weeklyFeedbackForm.findUnique({
-    where: { id: formId },
-    include: { questions: true },
-  });
-  if (!form) return { success: false, error: "המשוב לא נמצא" };
+  const authorization = await authorizeTraineeWeeklyFeedbackSubmissionWithDeps<TraineeSubmissionForm>(
+    formId,
+    {
+      requireTraineeId: async () => (await requireCurrentTrainee()).id,
+      resolveTraineeCourseOffering,
+      // The caller-supplied formId is ANDed with the mandatory ownership
+      // predicate, so another course's form simply does not match - it is never
+      // fetched. A raw formId is never authorization.
+      fetchOwnedFormById: (query) =>
+        prisma.weeklyFeedbackForm.findFirst({
+          where: query.where,
+          select: TRAINEE_SUBMISSION_FORM_SELECT,
+        }),
+    }
+  );
+  // One uniform denial for anonymous, expired, inactive, no/ambiguous offering,
+  // unknown form, NULL-scoped week and another course's form - so a Level 2
+  // caller cannot distinguish "wrong course" from "no such form", and nothing
+  // is read or written before this returns.
+  if (!authorization.authorized) {
+    return { success: false, error: WEEKLY_FEEDBACK_NOT_FOUND_ERROR };
+  }
+  const { traineeId, form } = authorization;
 
-  const now = new Date();
-  if (form.status !== "PUBLISHED") {
-    return { success: false, error: "המשוב אינו פתוח למילוי" };
-  }
-  if (form.opensAt && form.opensAt > now) {
-    return { success: false, error: "המשוב עדיין לא נפתח למילוי" };
-  }
-  if (form.closesAt && form.closesAt <= now) {
-    return { success: false, error: "המשוב נסגר למילוי" };
+  // Window/status gates on an ALREADY-OWNED form - same rules, same three
+  // messages as before.
+  const windowState = classifyWeeklyFeedbackSubmissionWindow(form, new Date());
+  if (windowState !== "OPEN") {
+    return { success: false, error: SUBMISSION_WINDOW_ERROR[windowState] };
   }
 
   const existing = await prisma.weeklyFeedbackResponse.findUnique({
-    where: { formId_studentId: { formId, studentId } },
+    where: { formId_studentId: { formId: form.id, studentId: traineeId } },
   });
   if (existing) {
     return { success: false, error: "כבר הגשת את המשוב הזה" };
@@ -765,7 +900,12 @@ export async function submitWeeklyFeedback(
 
   try {
     await prisma.$transaction(async (tx) => {
-      const response = await tx.weeklyFeedbackResponse.create({ data: { formId, studentId } });
+      // Both ids are server-derived: the form is the one ownership verified, and
+      // the student is the signed session's trainee. Neither comes from a
+      // client argument, so no cross-course response row can be created.
+      const response = await tx.weeklyFeedbackResponse.create({
+        data: { formId: form.id, studentId: traineeId },
+      });
       if (answerRowsToCreate.length > 0) {
         await tx.weeklyFeedbackAnswer.createMany({
           data: answerRowsToCreate.map((a) => ({ ...a, responseId: response.id })),
