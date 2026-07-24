@@ -901,6 +901,33 @@ export interface RidingSlotStudentRow {
   attendanceNotes: string | null;
 }
 
+// RIDING-COMPLEX-FEEDBACK-TABS - pure collector for the distinct, non-null
+// trainee ids referenced anywhere in a slot's complex plan (block -> station
+// -> pair, both trainee slots). Kept private (not exported) because this is a
+// "use server" module where every EXPORT must be an async Server Action - a
+// pure sync helper can only live here un-exported. Order is not significant
+// (it only feeds a Prisma `id in` filter); de-duplication is, so a trainee
+// appearing in two pairs/stations is fetched once. A null plan (a non-complex
+// slot) yields an empty list, which the caller uses to keep the students query
+// byte-for-byte identical to its pre-existing form.
+function collectComplexPlanTraineeIds(
+  plan:
+    | { blocks: { stations: { pairs: { trainee1Id: string | null; trainee2Id: string | null }[] }[] }[] }
+    | null
+): string[] {
+  if (!plan) return [];
+  const ids = new Set<string>();
+  for (const block of plan.blocks) {
+    for (const station of block.stations) {
+      for (const pair of station.pairs) {
+        if (pair.trainee1Id) ids.add(pair.trainee1Id);
+        if (pair.trainee2Id) ids.add(pair.trainee2Id);
+      }
+    }
+  }
+  return [...ids];
+}
+
 // Private reader body - the roster + note + attendance read, unchanged. Wrapped
 // by the authenticated getRidingSlotStudentNotes below (never exported, so the
 // session gate can never be bypassed). Read-only - never creates anything.
@@ -938,13 +965,37 @@ async function buildRidingSlotStudentNotes(ridingSlotId: string): Promise<Riding
         )
       : [{ groupName: scheduleItemGroupName, subgroupNumber: null }];
 
+  // RIDING-COMPLEX-FEEDBACK-TABS - a complex-mode slot assigns trainees to
+  // coach "stations" that deliberately mix across simple-riding subgroups, so a
+  // station-mate can fall entirely outside this slot's assignment-derived
+  // (group/subgroup) roster computed above. Union in every trainee referenced
+  // by THIS slot's own complex plan (block -> station -> pair) so the complex
+  // feedback view can open/switch to them. The isActive gate below still
+  // applies (an id-match is AND-ed with isActive: true, exactly like the
+  // group/subgroup matches), and the scope is strictly this one slot's plan, so
+  // no unrelated or deactivated student is ever exposed. A non-complex slot has
+  // no plan row -> collectComplexPlanTraineeIds returns [] -> no extra OR clause
+  // is added and the students query is byte-for-byte the pre-existing one.
+  const complexPlan = await prisma.ridingSlotComplexPlan.findUnique({
+    where: { ridingSlotId },
+    select: {
+      blocks: {
+        select: { stations: { select: { pairs: { select: { trainee1Id: true, trainee2Id: true } } } } },
+      },
+    },
+  });
+  const complexTraineeIds = collectComplexPlanTraineeIds(complexPlan);
+
   const students = await prisma.student.findMany({
     where: {
       isActive: true,
-      OR: filters.map((f) => ({
-        ...(f.groupName !== null ? { groupName: f.groupName } : {}),
-        ...(f.subgroupNumber !== null ? { subgroupNumber: f.subgroupNumber } : {}),
-      })),
+      OR: [
+        ...filters.map((f) => ({
+          ...(f.groupName !== null ? { groupName: f.groupName } : {}),
+          ...(f.subgroupNumber !== null ? { subgroupNumber: f.subgroupNumber } : {}),
+        })),
+        ...(complexTraineeIds.length > 0 ? [{ id: { in: complexTraineeIds } }] : []),
+      ],
     },
     orderBy: { fullName: "asc" },
   });

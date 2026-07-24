@@ -134,16 +134,72 @@ function sortFlatSectionsForInstructor<T>(
 // falls back to matching groupName alone rather than crashing or silently
 // showing every trainee in the activity. Always true for the current
 // trainee against itself, so it's never filtered out of its own tab list.
-function isSameSwitchScope(current: RidingSlotStudentRow, candidate: RidingSlotStudentRow): boolean {
+export function isSameSwitchScope(current: RidingSlotStudentRow, candidate: RidingSlotStudentRow): boolean {
   if (current.groupName !== candidate.groupName) return false;
   if (current.subgroupNumber == null) return true;
   return candidate.subgroupNumber === current.subgroupNumber;
 }
 
+// RIDING-COMPLEX-FEEDBACK-TABS - trainee tab switcher for the "לפי שיבוץ
+// הרכיבה" (complex) path. Scopes the tabs to the EXACT complex station (inside
+// its exact block) that contains the currently-opened trainee - never the
+// simple subgroup peers isSameSwitchScope returns for the flat list tab, never
+// another station (even one belonging to the same coach), never another block.
+// A complex station deliberately mixes trainees across simple subgroups, so
+// this station membership is the only correct source for "who this coach rides
+// with in this exact session". Returns options in pair-then-station order (the
+// same order the plan renders), de-duplicated, and only for trainees that
+// exist in slotStudents - so every tab is actually openable/switchable (the
+// switch handlers resolve their target from slotStudents), and a plan trainee
+// missing from the loaded roster (e.g. since deactivated) is skipped rather
+// than shown as a dead tab. Falls back to just the current trainee - which
+// hides the tab bar entirely (rendered only when length > 1) and can never
+// show the wrong trainees - when no plan is loaded, or the opened trainee is
+// not found in any station. Pure: no React/Prisma/network, so it is unit-
+// testable in isolation.
+export function buildComplexStationSwitchOptions(
+  plan: RidingSlotComplexPlanForEditing | null,
+  currentStudentId: string,
+  slotStudents: RidingSlotStudentRow[] | null
+): { studentId: string; label: string }[] {
+  const rowById = new Map((slotStudents ?? []).map((r) => [r.studentId, r]));
+  const toOption = (id: string): { studentId: string; label: string } | null => {
+    const row = rowById.get(id);
+    return row ? { studentId: row.studentId, label: formatTraineeTabLabel(row.studentName) } : null;
+  };
+  const selfOnly = (): { studentId: string; label: string }[] => {
+    const self = toOption(currentStudentId);
+    return self ? [self] : [];
+  };
+  if (!plan) return selfOnly();
+  for (const block of plan.plan.blocks) {
+    for (const station of block.stations) {
+      const containsCurrent = station.pairs.some(
+        (p) => p.trainee1Id === currentStudentId || p.trainee2Id === currentStudentId
+      );
+      if (!containsCurrent) continue;
+      const orderedIds: string[] = [];
+      const seen = new Set<string>();
+      for (const pair of station.pairs) {
+        for (const id of [pair.trainee1Id, pair.trainee2Id]) {
+          if (id && !seen.has(id)) {
+            seen.add(id);
+            orderedIds.push(id);
+          }
+        }
+      }
+      return orderedIds
+        .map(toOption)
+        .filter((o): o is { studentId: string; label: string } => o !== null);
+    }
+  }
+  return selfOnly();
+}
+
 // Tab label format: first name + first letter of last name (e.g. "דניאל ק׳").
 // Falls back to the bare name for a single-token name or anything unparsable,
 // so an unusual fullName never throws - it just shows as-is.
-function formatTraineeTabLabel(fullName: string): string {
+export function formatTraineeTabLabel(fullName: string): string {
   const parts = fullName.trim().split(/\s+/).filter(Boolean);
   if (parts.length < 2) return parts[0] ?? fullName;
   const firstName = parts[0];
@@ -503,10 +559,13 @@ function StudentEditor({
   ridingSlotId: string;
   canEdit: boolean;
   students: RidingStudentOption[];
-  // Trainees from the same subgroup as the currently opened row only (see
-  // isSameSwitchScope in the parent, which filters the activity's full
-  // slotStudents list down to this scope), including the current row itself
-  // so it shows as selected. Rendered as tabs; label is first name + first
+  // Trainees to render as switch tabs, always including the current row itself
+  // so it shows as selected. Scope depends on which tab opened this editor
+  // (decided by the parent): the flat "צפייה בחניכים" list scopes to the same
+  // simple subgroup (see isSameSwitchScope), while the "לפי שיבוץ הרכיבה"
+  // complex tab scopes instead to the exact complex station the opened trainee
+  // sits in (see buildComplexStationSwitchOptions) - deliberately NOT the
+  // subgroup, since a station mixes subgroups. Label is first name + first
   // letter of last name (see formatTraineeTabLabel).
   switchOptions: { studentId: string; label: string }[];
   knownLessonTopics: string[];
@@ -1143,12 +1202,26 @@ export function RidingStudentsModalController({
               ridingSlotId={openActivity!.ridingSlot!.id}
               canEdit={canEdit}
               students={students}
-              switchOptions={(slotStudents ?? [])
-                .filter((s) => isSameSwitchScope(editingStudent, s))
-                .map((s) => ({
-                  studentId: s.studentId,
-                  label: formatTraineeTabLabel(s.studentName),
-                }))}
+              switchOptions={
+                // RIDING-COMPLEX-FEEDBACK-TABS - the tab set depends on which
+                // tab this editor was opened from (activeStudentsTab survives
+                // opening a trainee - see its own state comment). The complex
+                // "לפי שיבוץ הרכיבה" tab scopes to the exact complex station of
+                // the opened trainee; the flat list tab keeps its unchanged
+                // simple-subgroup scope.
+                activeStudentsTab === "schedule"
+                  ? buildComplexStationSwitchOptions(
+                      complexPlanForFeedback,
+                      editingStudent.studentId,
+                      slotStudents
+                    )
+                  : (slotStudents ?? [])
+                      .filter((s) => isSameSwitchScope(editingStudent, s))
+                      .map((s) => ({
+                        studentId: s.studentId,
+                        label: formatTraineeTabLabel(s.studentName),
+                      }))
+              }
               knownLessonTopics={knownLessonTopics}
               knownHorseNames={knownHorseNames}
               onBack={() => setEditingStudent(null)}
