@@ -7,20 +7,32 @@ import { formatPhoneDisplay, getPhoneHref, getWhatsAppHref } from "@/lib/phone-f
 // View-only - students have no way to edit instructor contact info. Only
 // active instructors are returned by getInstructorContacts() in the first
 // place, so there is no active/inactive status to show or filter here.
-export function StudentInstructorContactsSection() {
+//
+// courseOfferingId (L2-DUAL) is the trainee's REQUESTED course. It is a request
+// only - getInstructorContacts re-resolves it server-side against the trainee's
+// own ACTIVE enrollments and requires that resolved offering's CONTACTS
+// capability - so an unauthorized value just yields the same empty list as any
+// other denial. It is optional and undefined for the INSTRUCTOR audience, which
+// this component also serves: the action short-circuits on an instructor actor
+// long before the trainee resolver, so that path is entirely unaffected.
+export function StudentInstructorContactsSection({
+  courseOfferingId,
+}: {
+  courseOfferingId?: string | null;
+}) {
   const [rows, setRows] = useState<InstructorContactRow[] | null>(null);
   const [nameQuery, setNameQuery] = useState("");
   const [phoneQuery, setPhoneQuery] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    getInstructorContacts().then((result) => {
+    getInstructorContacts(courseOfferingId).then((result) => {
       if (!cancelled) setRows(result);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [courseOfferingId]);
 
   const filteredRows = useMemo(() => {
     if (!rows) return [];

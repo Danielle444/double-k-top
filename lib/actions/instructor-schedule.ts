@@ -7,124 +7,27 @@ import {
   formatHebrewWeekday,
   parseDateKey,
 } from "@/lib/dates";
-import { cleanScheduleTitle } from "@/lib/schedule-title";
 import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
 
-export interface InstructorScheduleItem {
-  id: string;
-  dateKey: string;
-  dateLabel: string;
-  dayLabel: string;
-  startTime: string;
-  endTime: string;
-  title: string;
-  description: string | null;
-  groupName: string | null;
-  instructorName: string | null;
-  location: string | null;
-}
-
-export interface InstructorScheduleResult {
-  hasSchedule: boolean;
-  weekName: string | null;
-  items: InstructorScheduleItem[];
-}
-
-export type InstructorScheduleFilter = "mine" | "all";
-
-// Collapses whitespace/separators and strips common punctuation so Hebrew
-// names compare reliably regardless of commas, slashes, or extra spacing
-// introduced by the Excel import.
-function normalizeHebrewName(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[,;/|]+/g, " ")
-    .replace(/["'`׳״]/g, "")
-    .replace(/\s+/g, " ");
-}
-
-// The schedule's instructorName column is free text (there is no FK from
-// ScheduleItem to Instructor - the Excel import only ever produces a name
-// string) and can list multiple instructors, e.g. "דנה, יוסי" or "כולם".
-// A lesson is "mine" if the instructor's first name or full name appears
-// anywhere in that text, or if the text marks the lesson for everyone.
-function isInstructorMatch(
-  instructorName: string | null,
-  instructor: { firstName: string; fullName: string }
-): boolean {
-  if (!instructorName) return false;
-  const normalized = normalizeHebrewName(instructorName);
-  if (normalized.includes("כולם")) return true;
-
-  const firstName = normalizeHebrewName(instructor.firstName);
-  const fullName = normalizeHebrewName(instructor.fullName);
-  return (
-    (firstName.length > 0 && normalized.includes(firstName)) ||
-    (fullName.length > 0 && normalized.includes(fullName))
-  );
-}
-
-// Meal slots always concern every instructor regardless of who the
-// instructorName column names, so they always show up under "מהשיעורים שלי".
-// Real schedules abbreviate the meal marker ("א. צהריים", "א. ערב + ...")
-// as often as they spell it out ("ארוחת צהריים"/"ארוחת ערב"), so a meal
-// marker plus a "צהריים"/"ערב" mention is required together, rather than
-// matching the full phrase literally (which would miss the abbreviation).
-const MEAL_MARKER_PATTERN = /(ארוחה|ארוחת|א\.)/;
-const LUNCH_OR_DINNER_PATTERN = /(צהריים|ערב)/;
-
-function isMealItem(title: string): boolean {
-  const cleaned = cleanScheduleTitle(title);
-  return MEAL_MARKER_PATTERN.test(cleaned) && LUNCH_OR_DINNER_PATTERN.test(cleaned);
-}
-
-// dayKey: a specific date within the week, or "all" for the whole week.
-export async function getScheduleForInstructor(
-  instructorId: string,
-  weeklyScheduleId: string,
-  dayKey: string | "all",
-  filter: InstructorScheduleFilter
-): Promise<InstructorScheduleResult> {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor) return { hasSchedule: false, weekName: null, items: [] };
-
-  const week = await prisma.weeklySchedule.findUnique({
-    where: { id: weeklyScheduleId },
-    include: { items: { orderBy: [{ date: "asc" }, { startTime: "asc" }] } },
-  });
-  if (!week) return { hasSchedule: false, weekName: null, items: [] };
-
-  const items = week.items.filter((i) => {
-    if (
-      filter === "mine" &&
-      !isInstructorMatch(i.instructorName, instructor) &&
-      !isMealItem(i.title)
-    ) {
-      return false;
-    }
-    if (dayKey !== "all" && dateKey(i.date) !== dayKey) return false;
-    return true;
-  });
-
-  return {
-    hasSchedule: true,
-    weekName: week.name,
-    items: items.map((i) => ({
-      id: i.id,
-      dateKey: dateKey(i.date),
-      dateLabel: formatHebrewDate(i.date),
-      dayLabel: formatHebrewWeekday(i.date),
-      startTime: i.startTime,
-      endTime: i.endTime,
-      title: i.title,
-      description: i.description,
-      groupName: i.groupName,
-      instructorName: i.instructorName,
-      location: i.location,
-    })),
-  };
-}
+/**
+ * LEVEL 2 SLICE S2A - the GLOBAL instructor schedule reader that used to live
+ * here (`getScheduleForInstructor`) has been DELETED, along with the
+ * InstructorScheduleItem / InstructorScheduleResult / InstructorScheduleFilter
+ * types and the normalizeHebrewName / isInstructorMatch / isMealItem helpers.
+ *
+ * It was the last instructor schedule reader that could not tell Level 1 from
+ * Level 2: it looked a week up by bare id with no offering predicate, and it
+ * accepted a CLIENT-SUPPLIED instructorId as identity with no session check at
+ * all. Both properties are gone rather than patched.
+ *
+ * Its replacement is @/lib/actions/instructor-schedule-course-scoped, which
+ * derives identity from the signed session, re-validates an explicitly requested
+ * courseOfferingId, requires SCHEDULE=ENABLED, and scopes every week query to the
+ * resolved offering. The view types and the "mine"/meal helpers moved verbatim
+ * to the pure core @/lib/course/instructor-schedule-scope-core.
+ *
+ * The duty readers below are UNCHANGED by that slice.
+ */
 
 export interface InstructorDutyRow {
   id: string;

@@ -3,7 +3,7 @@
 import { prisma } from "@/lib/prisma";
 import { getCurrentInstructor, getCurrentTrainee } from "@/lib/auth/actor";
 import {
-  resolveTraineeCourseOffering,
+  resolveTraineeSelectedCourseOffering,
   resolveInstructorCourseOffering,
 } from "@/lib/course/actor-course-offering";
 import { getCurrentCourseEnrollmentRoster } from "@/lib/course/current-enrollments";
@@ -76,25 +76,42 @@ export interface InstructorContactRow {
 // the trainee lookup is skipped when an instructor is already present. Only when
 // no trustworthy actor of either audience exists (anonymous, invalid,
 // wrong-audience, or inactive → null upstream) is access denied, so no
-// anonymous caller receives any instructor data. The no-arg signature is
-// unchanged (no client-supplied id is trusted or accepted), callers need no
-// edits, and the ordering + InstructorContactRow[] output shape are preserved.
+// anonymous caller receives any instructor data. No client-supplied ACTOR id is
+// trusted or accepted, and the ordering + InstructorContactRow[] output shape are
+// preserved.
 //
-// LEVEL 2 SLICE C1A course-authorizes the TRAINEE half only: the trainee's own
-// offering is resolved server-side through the committed, no-argument
-// resolveTraineeCourseOffering() (enrollment-derived, never client-supplied,
-// never resolveCurrentCourseOffering, never a Level 1 fallback), and that exact
-// offering's CONTACTS capability must be ENABLED before any directory read. The
-// INSTRUCTOR half is deliberately unchanged - there is no explicit instructor
-// course context in the UI yet and course context is never inferred; see the
-// contacts-instructor-directory module note. Which instructors are returned is
-// unchanged for both audiences (the temporary launch policy is that every active
-// instructor is relevant to both offerings), as are the returned fields.
-export async function getInstructorContacts(): Promise<InstructorContactRow[]> {
+// LEVEL 2 SLICE C1A course-authorizes the TRAINEE half only, and LEVEL 2 SLICE
+// L2-DUAL lets that half say WHICH of the trainee's own courses it means.
+// `requestedCourseOfferingId` is a REQUEST, never an authority: it is not
+// identity, never a lookup key, and never reaches a query.
+// resolveTraineeSelectedCourseOffering derives the trainee from the session,
+// loads only THAT trainee's ACTIVE enrollments into ACTIVE offerings, and keeps
+// the request only if it exactly equals one of them; the RESOLVED row's id, never
+// the caller's string, is what the CONTACTS capability check receives. That
+// capability must still be positively ENABLED before any directory read. Omitting
+// the parameter preserves the previous single-course behaviour. Still never
+// resolveCurrentCourseOffering and never a Level 1 fallback, and an unknown,
+// malformed, outside-roster, inactive-enrollment, PLANNED or inactive requested id
+// yields the same [] as every other denial.
+//
+// The INSTRUCTOR half is deliberately unchanged and cannot even reach the new
+// parameter: loadInstructorContactsWithDeps short-circuits to the directory read
+// as soon as an instructor actor is present, so the trainee resolver dependency is
+// never invoked for that audience (there is still no explicit instructor course
+// context in the UI, and course context is never inferred - see the
+// contacts-instructor-directory module note). The instructor caller
+// (InstructorRidingSlotsSection) passes no argument and is untouched. Which
+// instructors are returned is unchanged for both audiences (the temporary launch
+// policy is that every active instructor is relevant to both offerings), as are
+// the returned fields.
+export async function getInstructorContacts(
+  requestedCourseOfferingId?: string | null,
+): Promise<InstructorContactRow[]> {
   return loadInstructorContactsWithDeps({
     getCurrentInstructor,
     getCurrentTrainee,
-    resolveTraineeCourseOffering,
+    resolveTraineeCourseOffering: () =>
+      resolveTraineeSelectedCourseOffering(requestedCourseOfferingId),
     getEffectiveCapabilities,
     listActiveInstructors: () =>
       prisma.instructor.findMany({

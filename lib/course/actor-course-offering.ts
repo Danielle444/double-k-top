@@ -27,10 +27,24 @@ import { requireCurrentTrainee, requireCurrentInstructor } from "@/lib/auth/acto
 import {
   resolveTraineeCourseOfferingWithDeps,
   resolveInstructorCourseOfferingWithDeps,
+  type TraineeEnrollmentQuery,
+  type TraineeEnrollmentOfferingRow,
 } from "./actor-course-offering-core";
+// LEVEL 2 SLICE L2-DUAL - the narrower SCHEDULE/CONTACTS selection core. It is a
+// SECOND path alongside the committed single-course resolver below, never a
+// replacement for it.
+import {
+  resolveTraineeSelectedCourseOfferingWithDeps,
+  listTraineeCourseOptionsWithDeps,
+  type TraineeCourseOptionView,
+} from "./trainee-course-selection-core";
 import type { CurrentCourseOffering } from "./current-offering-core";
 import type { CourseOfferingView } from "./offering-by-id-core";
-import { isInstructorAllowedCourseOfferingId } from "./temporary-level2-compatibility";
+import {
+  isInstructorAllowedCourseOfferingId,
+  LEVEL_1_COURSE_OFFERING_ID,
+  LEVEL_2_COURSE_OFFERING_ID,
+} from "./temporary-level2-compatibility";
 
 export {
   NoTraineeCourseOfferingError,
@@ -46,6 +60,15 @@ export {
   type InstructorCourseOfferingDeps,
 } from "./actor-course-offering-core";
 
+export {
+  selectTraineeCourseOfferingFromRows,
+  buildTraineeCourseOptions,
+  resolveTraineeSelectedCourseOfferingWithDeps,
+  listTraineeCourseOptionsWithDeps,
+  type TraineeCourseOptionView,
+  type TraineeCourseSelectionDeps,
+} from "./trainee-course-selection-core";
+
 /** The exact offering columns every actor-aware fetch projects. */
 const OFFERING_SELECT = {
   id: true,
@@ -58,29 +81,102 @@ const OFFERING_SELECT = {
 } as const;
 
 /**
+ * The TEMPORARY dual-enrollment compatibility pair, supplied as DATA to the pure
+ * core (which holds no offering id of its own).
+ *
+ * This is the ONLY place the two constants meet the trainee resolver. They act
+ * purely as an equality predicate over the trainee's own already-fetched
+ * eligible rows: the resolver returns the MATCHED ROW, so neither constant is
+ * ever a lookup key, a substitute for a missing row, or itself returned. A
+ * trainee with no ACTIVE Level 1 enrollment cannot be resolved to Level 1 by it.
+ *
+ * Deliberately NOT applied to resolveTraineeSelectedCourseOffering below:
+ * schedule and contacts express a dual trainee's course by EXPLICIT
+ * server-validated selection and must never fall back to Level 1.
+ */
+const TRAINEE_DUAL_ENROLLMENT_COMPATIBILITY = {
+  level1OfferingId: LEVEL_1_COURSE_OFFERING_ID,
+  level2OfferingId: LEVEL_2_COURSE_OFFERING_ID,
+} as const;
+
+/**
  * Resolve the authenticated trainee's course offering through the signed
  * session and the shared Prisma client. Takes no arguments: the student id comes
  * from the session, never from the caller.
+ *
+ * This is the resolver every NON-selectable trainee module uses (duties, course
+ * materials, messages/tasks, weekly feedback, Teaching Practice, completion). It
+ * injects the launch-scoped dual-enrollment compatibility so those Level 1
+ * modules keep working for a trainee enrolled in BOTH launch offerings, instead
+ * of failing closed into a uniform empty result. Every other ambiguous state
+ * still fails closed - see actor-course-offering-core.ts for the exact contract.
  */
 export async function resolveTraineeCourseOffering(): Promise<CurrentCourseOffering> {
   return resolveTraineeCourseOfferingWithDeps({
     requireTraineeId: async () => (await requireCurrentTrainee()).id,
-    fetchTraineeEnrollmentRows: async ({ take, where }) => {
-      const rows = await prisma.courseEnrollment.findMany({
-        take,
-        where,
-        select: {
-          id: true,
-          status: true,
-          courseOffering: { select: OFFERING_SELECT },
-        },
-      });
-      return rows.map((r) => ({
-        enrollmentId: r.id,
-        enrollmentStatus: r.status,
-        offering: r.courseOffering,
-      }));
+    fetchTraineeEnrollmentRows: fetchTraineeEnrollmentRows,
+    legacyDualEnrollmentCompatibility: TRAINEE_DUAL_ENROLLMENT_COMPATIBILITY,
+  });
+}
+
+/**
+ * The ONE enrollment fetch shared by every trainee course-context resolver in this
+ * module. The query object is built by a pure core and passed through verbatim -
+ * this binding adds no filter, no ordering and no id of its own, so the database
+ * scope is exactly what the tested core decided.
+ */
+async function fetchTraineeEnrollmentRows({
+  take,
+  where,
+}: TraineeEnrollmentQuery): Promise<TraineeEnrollmentOfferingRow[]> {
+  const rows = await prisma.courseEnrollment.findMany({
+    take,
+    where,
+    select: {
+      id: true,
+      status: true,
+      courseOffering: { select: OFFERING_SELECT },
     },
+  });
+  return rows.map((r) => ({
+    enrollmentId: r.id,
+    enrollmentStatus: r.status,
+    offering: r.courseOffering,
+  }));
+}
+
+/**
+ * LEVEL 2 SLICE L2-DUAL - resolve the authenticated trainee's course offering for
+ * an OPTIONAL requested id. Used by the SCHEDULE and CONTACTS reads only.
+ *
+ * The student id still comes only from the signed session. `requestedCourseOfferingId`
+ * is a REQUEST: it never reaches the query (which is scoped to that trainee's own
+ * ACTIVE enrollments into ACTIVE offerings) and is only matched by exact equality
+ * against the rows that come back. The id returned is the matched ROW's, never the
+ * caller's string. Omitting it preserves the committed single-course behaviour;
+ * with more than one eligible offering an omitted id fails closed rather than
+ * being guessed.
+ */
+export async function resolveTraineeSelectedCourseOffering(
+  requestedCourseOfferingId?: string | null,
+): Promise<CurrentCourseOffering> {
+  return resolveTraineeSelectedCourseOfferingWithDeps(requestedCourseOfferingId, {
+    requireTraineeId: async () => (await requireCurrentTrainee()).id,
+    fetchTraineeEnrollmentRows: fetchTraineeEnrollmentRows,
+  });
+}
+
+/**
+ * LEVEL 2 SLICE L2-DUAL - the courses the authenticated trainee may ask for.
+ *
+ * A MENU, not an authorization: it grants no module and authorizes no read. Every
+ * consuming action re-resolves the chosen id independently through
+ * resolveTraineeSelectedCourseOffering above. Takes no arguments at all.
+ */
+export async function listTraineeCourseOptions(): Promise<TraineeCourseOptionView[]> {
+  return listTraineeCourseOptionsWithDeps({
+    requireTraineeId: async () => (await requireCurrentTrainee()).id,
+    fetchTraineeEnrollmentRows: fetchTraineeEnrollmentRows,
   });
 }
 

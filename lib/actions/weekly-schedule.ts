@@ -11,7 +11,11 @@ import { cleanScheduleTitle } from "@/lib/schedule-title";
 // LEVEL 2 SLICE S1A - the trainee course-scoped selection reader below. The
 // legacy admin/instructor/student option readers in this file are deliberately
 // untouched by that slice.
-import { resolveTraineeCourseOffering } from "@/lib/course/actor-course-offering";
+// LEVEL 2 SLICE L2-DUAL - the trainee week picker below now accepts an OPTIONAL
+// requested course id and therefore binds the SELECTION resolver instead of the
+// single-course one. Every other trainee module keeps the committed no-argument
+// resolveTraineeCourseOffering() and is untouched by that slice.
+import { resolveTraineeSelectedCourseOffering } from "@/lib/course/actor-course-offering";
 import { getEffectiveCapabilities } from "@/lib/course/capabilities/offering-capabilities";
 import {
   loadTraineeWeeklyScheduleSelectionWithDeps,
@@ -872,26 +876,37 @@ export async function getWeeklyScheduleSelectionForStudent(): Promise<WeeklySche
 // left in place unchanged, still globally scoped, and must not be called from a
 // trainee surface).
 //
-// Takes NO arguments at all: neither a student id nor a courseOfferingId, so
-// there is no parameter through which a client could name a course. The
-// offering comes only from the committed, no-argument
-// resolveTraineeCourseOffering() (derived from the signed session and that
-// trainee's single ACTIVE enrollment into an ACTIVE offering) - never the legacy
-// singleton current-offering resolver, never a group/subgroup/name/level/date
-// heuristic, and never a Level 1 fallback.
+// Takes NO student id - identity comes only from the signed session.
+//
+// LEVEL 2 SLICE L2-DUAL: it now accepts an OPTIONAL requestedCourseOfferingId,
+// which is a REQUEST and never an authority. It is not an identity, it is not a
+// lookup key, and it never reaches a query. resolveTraineeSelectedCourseOffering
+// re-derives the trainee from the session, loads THAT trainee's own ACTIVE
+// enrollments into ACTIVE offerings, and keeps the request only if it exactly
+// equals one of them; the RESOLVED row's id (not the caller's string) is what the
+// capability read and the week query below receive. Omitting it preserves the
+// previous single-course behaviour exactly. Still never the legacy singleton
+// current-offering resolver, never a group/subgroup/name/level/date heuristic, and
+// never a Level 1 fallback.
 //
 // This is a THIN binding by design: the order of the gates, the exact query
 // shape, the option mapping and the default-week pick all live in the pure core
 // (@/lib/course/course-scoped-week-options-core), which is where the DB-free
-// tests exercise them. This file only supplies the real resolver, the real
-// capability reader, the real Prisma query and the real clock.
+// tests exercise them. That core is UNCHANGED by L2-DUAL - it still receives a
+// zero-argument resolver, now closed over the requested id - so the gate ordering
+// it enforces is provably the same one that shipped.
 //
 // The returned WeeklyScheduleSelection shape is unchanged, so the trainee client
-// needs no shape edits; an unresolvable course context or a SCHEDULE capability
-// that is not ENABLED yields the uniform empty selection.
-export async function getWeeklyScheduleSelectionForTrainee(): Promise<WeeklyScheduleSelection> {
+// needs no shape edits; an unresolvable course context (including an unknown,
+// malformed, outside-roster, inactive-enrollment, PLANNED or inactive requested
+// id) or a SCHEDULE capability that is not ENABLED yields the same uniform empty
+// selection, so no denial reason is distinguishable.
+export async function getWeeklyScheduleSelectionForTrainee(
+  requestedCourseOfferingId?: string | null,
+): Promise<WeeklyScheduleSelection> {
   return loadTraineeWeeklyScheduleSelectionWithDeps({
-    resolveTraineeCourseOffering,
+    resolveTraineeCourseOffering: () =>
+      resolveTraineeSelectedCourseOffering(requestedCourseOfferingId),
     getEffectiveCapabilities,
     fetchPublishedWeekRows: (query) => prisma.weeklySchedule.findMany(query),
     todayDateKey,

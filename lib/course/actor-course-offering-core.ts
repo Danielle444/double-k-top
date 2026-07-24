@@ -10,7 +10,8 @@
  *
  * The two audiences have DIFFERENT course-context models, on purpose:
  *  - TRAINEE: context is DERIVED from enrollment data. Exactly one ACTIVE
- *    CourseEnrollment into an ACTIVE CourseOffering, or it fails closed.
+ *    CourseEnrollment into an ACTIVE CourseOffering, or it fails closed - with
+ *    the ONE temporary, injected exception described below.
  *  - INSTRUCTOR: context is REQUESTED, not derived. The caller must state an
  *    explicit courseOfferingId, and the server checks it against a temporary
  *    explicit allowed-offerings policy. There is no instructor-id allow-list and
@@ -20,6 +21,40 @@
  * neither infers course context from a trainee's group/subgroup, a name, an
  * identity number, a date window, a course level, an offering name, schedule
  * contents, a status ordering, the "current" offering, or a cookie.
+ *
+ * TEMPORARY DUAL-ENROLLMENT COMPATIBILITY EXCEPTION (launch-scoped)
+ * ----------------------------------------------------------------
+ * Once Level 2 is ACTIVE a combined trainee holds TWO eligible enrollments, and
+ * the "exactly one" invariant above would close every trainee module that is not
+ * course-selectable (duties, course materials, messages/tasks, weekly feedback,
+ * Teaching Practice, completion) - an unacceptable Level 1 regression.
+ *
+ * So resolveTraineeCourseOfferingFromRows accepts an OPTIONAL, INJECTED
+ * LegacyOfferingCompatibility. When (and only when) it is supplied, the eligible
+ * offering rows are passed through the already-tested pure filter
+ * selectLegacyCompatibleActiveRows, whose entire contract is: the EXACT distinct
+ * two-id set {Level 1, Level 2} narrows to the Level 1 ROW; every other shape (0
+ * rows, 1 row, 3+ rows, an unknown pair, a known id beside an unknown third, a
+ * duplicate) passes through UNCHANGED and therefore still fails closed.
+ *
+ * Hard properties of this exception:
+ *  - It is OPT-IN. Omit the parameter and behavior is byte-identical to the
+ *    pre-exception resolver, so this core still fails closed by default.
+ *  - This file holds NO hardcoded offering id. The pair is supplied by the IO
+ *    binding (actor-course-offering.ts), which is the only place the constants
+ *    live, so the core stays testable with arbitrary fake pairs.
+ *  - The id handed onward is the MATCHED ROW's - a row that came from THIS
+ *    trainee's own ACTIVE enrollments into ACTIVE offerings. The configured
+ *    Level 1 constant is used ONLY as an equality predicate against those rows;
+ *    it is never a lookup key, never a substitute for a missing row, and never
+ *    itself returned. A trainee not enrolled in Level 1 cannot reach Level 1.
+ *  - It adds NO new inference: no level comparison, no date window, no offering
+ *    name, no activity year, no status ordering, no first-row pick, no
+ *    isPrimary, no cookie, no client-selected value. Only exact id-set equality.
+ *  - The SELECTION path (selectTraineeCourseOfferingFromRows, used by schedule
+ *    and contacts) is a separate function and does NOT call into this one, so it
+ *    neither inherits nor is widened by this exception.
+ * Removal criteria live in temporary-level2-compatibility.ts.
  *
  * NOTHING here is wired into an existing reader in this slice: schedule and
  * contact call sites still use the legacy resolver.
@@ -34,6 +69,14 @@ import {
   type CourseOfferingByIdRow,
   type CourseOfferingView,
 } from "./offering-by-id-core";
+// The TEMPORARY dual-enrollment exception delegates its entire decision to this
+// already-committed, already-tested pure filter. Importing the FILTER (which
+// takes the pair as data) rather than the CONSTANTS is what keeps this core free
+// of hardcoded offering ids.
+import {
+  selectLegacyCompatibleActiveRows,
+  type LegacyOfferingCompatibility,
+} from "./legacy-offering-compatibility-core";
 import type { CourseEnrollmentStatus } from "@/app/generated/prisma/client";
 
 // ---------------------------------------------------------------------------
@@ -105,8 +148,23 @@ export class AmbiguousTraineeCourseOfferingError extends Error {
  *  - keeps ONLY rows whose enrollment is ACTIVE and whose offering is ACTIVE;
  *  - 0 eligible  -> NoTraineeCourseOfferingError (fail closed);
  *  - >1 eligible -> AmbiguousTraineeCourseOfferingError (fail closed, no
- *    isPrimary tie-break, no lowest-level / earliest-date / first-row pick);
+ *    isPrimary tie-break, no lowest-level / earliest-date / first-row pick),
+ *    UNLESS the temporary injected compatibility narrows the set (below);
  *  - exactly 1   -> the stable CurrentCourseOffering view.
+ *
+ * `legacyDualEnrollmentCompatibility` is the OPTIONAL, launch-scoped exception
+ * documented in this file's header. Omitted (the default) means the resolver is
+ * byte-identical to its pre-exception self. Supplied, the ELIGIBLE offering rows
+ * - never the raw input rows - are narrowed by selectLegacyCompatibleActiveRows,
+ * which rewrites exactly one shape: the distinct pair {Level 1, Level 2} becomes
+ * the Level 1 ROW. Anything else is returned untouched and still fails closed
+ * below, so the exception cannot generalize.
+ *
+ * Note the ORDER: eligibility (ACTIVE enrollment + ACTIVE offering) is applied
+ * FIRST and is never relaxed. An INACTIVE enrollment or a non-ACTIVE offering is
+ * therefore already gone before the filter runs and can never form the pair - a
+ * dual-enrolled trainee whose Level 2 enrollment is INACTIVE simply has one
+ * eligible row and takes the ordinary single-row path.
  *
  * The single-row mapping (and the missing-dates check that produces
  * IncompleteCourseOfferingError) is delegated to the existing pure cardinality
@@ -115,6 +173,7 @@ export class AmbiguousTraineeCourseOfferingError extends Error {
 export function resolveTraineeCourseOfferingFromRows(
   studentId: string,
   rows: readonly TraineeEnrollmentOfferingRow[],
+  legacyDualEnrollmentCompatibility?: LegacyOfferingCompatibility,
 ): CurrentCourseOffering {
   const eligible = rows.filter(
     (r) => r.enrollmentStatus === "ACTIVE" && r.offering.status === "ACTIVE",
@@ -123,16 +182,26 @@ export function resolveTraineeCourseOfferingFromRows(
   if (eligible.length === 0) {
     throw new NoTraineeCourseOfferingError(studentId);
   }
-  if (eligible.length > 1) {
+
+  // Every row here is one the trainee themselves holds an ACTIVE enrollment
+  // into, so whichever row survives the narrowing below is the trainee's own.
+  const eligibleOfferings = eligible.map((r) => r.offering);
+  const decidable =
+    legacyDualEnrollmentCompatibility === undefined
+      ? eligibleOfferings
+      : selectLegacyCompatibleActiveRows(eligibleOfferings, legacyDualEnrollmentCompatibility);
+
+  if (decidable.length > 1) {
     throw new AmbiguousTraineeCourseOfferingError(
       studentId,
-      eligible.map((r) => r.offering.id),
+      decidable.map((o) => o.id),
     );
   }
-  // Exactly one eligible row: reuse the shared mapper so completeness (dates)
-  // is enforced identically. The zero/many branches of that core are
-  // unreachable here - the cardinality was already decided above.
-  return resolveCurrentCourseOfferingFromRows([eligible[0].offering]);
+  // Exactly one row: reuse the shared mapper so completeness (dates) is enforced
+  // identically. The zero/many branches of that core are unreachable here - the
+  // cardinality was already decided above, and the filter never empties a
+  // non-empty set.
+  return resolveCurrentCourseOfferingFromRows([decidable[0]]);
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +358,14 @@ export interface TraineeCourseOfferingDeps {
   fetchTraineeEnrollmentRows: (
     query: TraineeEnrollmentQuery,
   ) => Promise<readonly TraineeEnrollmentOfferingRow[]>;
+  /**
+   * OPTIONAL launch-scoped dual-enrollment compatibility (see this file's
+   * header). It is DATA, not behavior: the two exact offering ids the pair
+   * exception recognizes. Omitting it - which every test that does not
+   * specifically exercise the exception does - keeps the resolver fully
+   * fail-closed. Only the real IO binding supplies it.
+   */
+  legacyDualEnrollmentCompatibility?: LegacyOfferingCompatibility;
 }
 
 /**
@@ -297,8 +374,16 @@ export interface TraineeCourseOfferingDeps {
  * Course authority is EXACTLY: one ACTIVE CourseEnrollment belonging to an
  * ACTIVE CourseOffering. Zero or more than one fails closed. Student.groupName /
  * Student.subgroupNumber are never read, isPrimary is never used as a
- * tie-breaker, no selected-course cookie is consulted, and there is NO fallback
- * to the legacy Level 1 offering.
+ * tie-breaker, and no selected-course cookie is consulted.
+ *
+ * The ONLY relaxation is the optional injected dual-enrollment compatibility
+ * (see this file's header), which can narrow the exact {Level 1, Level 2} pair
+ * to the trainee's own already-fetched Level 1 row. It is passed straight
+ * through as data; this function makes no decision about it.
+ *
+ * take:3 is deliberately kept: two eligible rows are the most the exception can
+ * ever resolve, so fetching a THIRD is what makes "the known pair plus another
+ * ACTIVE offering" visible to the filter and keeps it ambiguous.
  */
 export async function resolveTraineeCourseOfferingWithDeps(
   deps: TraineeCourseOfferingDeps,
@@ -312,7 +397,11 @@ export async function resolveTraineeCourseOfferingWithDeps(
       courseOffering: { status: "ACTIVE" },
     },
   });
-  return resolveTraineeCourseOfferingFromRows(studentId, rows);
+  return resolveTraineeCourseOfferingFromRows(
+    studentId,
+    rows,
+    deps.legacyDualEnrollmentCompatibility,
+  );
 }
 
 /**

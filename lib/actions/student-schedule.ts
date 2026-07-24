@@ -19,7 +19,17 @@ import {
   type PublishedComplexRidingPlanForStudent,
 } from "@/lib/actions/riding-slot-complex-publications";
 // LEVEL 2 SLICE S1A - server-derived trainee course context for the final read.
-import { resolveTraineeCourseOffering } from "@/lib/course/actor-course-offering";
+//
+// BOTH resolvers are imported here on purpose, and they are NOT interchangeable:
+//  - resolveTraineeSelectedCourseOffering (L2-DUAL) backs getScheduleForStudent
+//    only, which may be asked for one of the trainee's own courses;
+//  - resolveTraineeCourseOffering (committed, no arguments) backs the DUTIES deps
+//    at the bottom of this file, which stay single-course and fail closed for a
+//    dual-enrolled trainee. Do not collapse these into one.
+import {
+  resolveTraineeCourseOffering,
+  resolveTraineeSelectedCourseOffering,
+} from "@/lib/course/actor-course-offering";
 import { getEffectiveCapabilities } from "@/lib/course/capabilities/offering-capabilities";
 import {
   authorizeTraineeWeekReadWithDeps,
@@ -137,23 +147,35 @@ function emptyStudentScheduleResult(): StudentScheduleResult {
 
 // dayKey: a specific date within the week, or "all" for the whole week.
 //
-// LEVEL 2 SLICE S1A - COURSE-SCOPED. The signature is deliberately UNCHANGED
-// (four parameters, no courseOfferingId): the trainee's course context is
-// resolved server-side from the signed session via the committed, no-argument
-// resolveTraineeCourseOffering(), so there is no parameter through which a
-// client could name a course, and no group/subgroup/name/level/date heuristic
-// and no Level 1 fallback is used.
+// LEVEL 2 SLICE S1A - COURSE-SCOPED; LEVEL 2 SLICE L2-DUAL - course-SELECTABLE.
+//
+// Identity is still never a parameter: `studentId` is a legacy client value used
+// only to read the group/subgroup used for display filtering (see below), and the
+// course context is resolved from the SIGNED SESSION inside the resolver.
+//
+// `requestedCourseOfferingId` is a REQUEST, never an authority. It is not
+// identity, it is not a lookup key, and it never reaches a query.
+// resolveTraineeSelectedCourseOffering derives the trainee from the session,
+// loads only THAT trainee's ACTIVE enrollments into ACTIVE offerings, and keeps
+// the request only if it exactly equals one of them - otherwise it fails closed
+// with the same error a trainee with no course at all produces. The RESOLVED
+// row's id, never the caller's string, is what the SCHEDULE capability check and
+// the week-ownership comparison below use. Omitting the parameter preserves the
+// previous single-course behaviour exactly. No group/subgroup/name/level/date
+// heuristic and no Level 1 fallback is used.
 //
 // A raw weeklyScheduleId is NEVER authorization. This action is independently
 // invocable as a Server Action, so it must never assume the id came from the
 // filtered picker (getWeeklyScheduleSelectionForTrainee): the id is re-checked
 // here against the freshly resolved offering, and ScheduleItems are read ONLY
-// after that check passes.
+// after that check passes. That re-check is exactly what makes a switched course
+// safe - a week id from the OTHER course is rejected on the very next call.
 export async function getScheduleForStudent(
   studentId: string,
   weeklyScheduleId: string,
   dayKey: string | "all",
-  groupFilter: GroupFilter
+  groupFilter: GroupFilter,
+  requestedCourseOfferingId?: string | null
 ): Promise<StudentScheduleResult> {
   const student = await prisma.student.findUnique({ where: { id: studentId } });
   if (!student) return emptyStudentScheduleResult();
@@ -166,7 +188,8 @@ export async function getScheduleForStudent(
   // preserved inside that predicate, not dropped. See the pure core for the
   // full ordering contract and the fail-closed rules.
   const authorization = await authorizeTraineeWeekReadWithDeps(weeklyScheduleId, {
-    resolveTraineeCourseOffering,
+    resolveTraineeCourseOffering: () =>
+      resolveTraineeSelectedCourseOffering(requestedCourseOfferingId),
     getEffectiveCapabilities,
     fetchWeekMeta: (id) =>
       prisma.weeklySchedule.findUnique({ where: { id }, select: TRAINEE_WEEK_META_SELECT }),
@@ -305,6 +328,12 @@ const TRAINEE_DUTIES_CAPABILITY_KEY: CapabilityKey = "DUTIES";
 // resolveTraineeCourseOffering(), and that exact offering's capabilities. No
 // courseOfferingId parameter, no legacy singleton offering resolver, no Level 1
 // fallback, no group/name/level/date inference.
+//
+// DELIBERATELY NOT MIGRATED BY L2-DUAL. Duties are not one of the two modules a
+// trainee may switch course for, so this keeps the committed no-argument
+// resolveTraineeCourseOffering() and its "exactly one eligible enrollment"
+// invariant: a dual-enrolled trainee therefore fails closed here (Ambiguous ->
+// the uniform empty result), which is the intended containment, not a bug.
 const TRAINEE_DUTIES_DEPS: TraineeModuleContextDeps = {
   requireTraineeId: async () => (await requireCurrentTrainee()).id,
   resolveTraineeCourseOffering,

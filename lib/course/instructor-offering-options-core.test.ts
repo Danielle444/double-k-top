@@ -409,6 +409,13 @@ test("no client component imports the temporary compatibility module", () => {
  */
 const APPROVED_OPTIONS_ACTION_CONSUMERS: readonly string[] = [
   "app/instructor/InstructorCourseScopedContactsSection.tsx",
+  // SLICE S2A: the instructor SCHEDULE course selector, shared by the schedule
+  // tab and the today card. It consumes only the options MENU (which grants no
+  // module and no row); both schedule surfaces re-validate the chosen id
+  // server-side through resolveInstructorCourseOffering + a positive SCHEDULE
+  // capability check before any week or item is read. Its selection is
+  // screen-local and is deliberately NOT shared with the contacts selector above.
+  "app/instructor/InstructorScheduleCourseSelector.tsx",
 ];
 
 /**
@@ -419,6 +426,10 @@ const APPROVED_OPTIONS_ACTION_CONSUMERS: readonly string[] = [
  */
 const APPROVED_OPTIONS_ACTION_CLIENT_CONSUMERS: readonly string[] = [
   "app/instructor/InstructorCourseScopedContactsSection.tsx",
+  // SLICE S2A - approved in the CLIENT column too: it is a "use client"
+  // component that calls the server action directly (the intended way to invoke
+  // it). It does not, and must not, import the pure core.
+  "app/instructor/InstructorScheduleCourseSelector.tsx",
 ];
 
 // The two rules below were ONE combined assertion until slice C0-B. They are

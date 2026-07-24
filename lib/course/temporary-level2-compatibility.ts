@@ -50,6 +50,17 @@
  *  - This module never changes an offering's status. Level 2 is NOT made ACTIVE
  *    by this slice.
  *
+ * TRAINEE DUAL-ENROLLMENT COMPATIBILITY (second consumer of these constants)
+ * -------------------------------------------------------------------------
+ * actor-course-offering.ts injects LEVEL_1_COURSE_OFFERING_ID +
+ * LEVEL_2_COURSE_OFFERING_ID into the ZERO-ARGUMENT trainee resolver, so a
+ * trainee holding ACTIVE enrollments in EXACTLY this pair resolves to their own
+ * Level 1 row for the trainee modules that are NOT course-selectable (duties,
+ * course materials, messages/tasks, weekly feedback, Teaching Practice,
+ * completion) instead of failing closed and emptying all of them. Schedule and
+ * contacts are excluded: they use explicit server-validated selection and must
+ * never fall back. See actor-course-offering-core.ts for the exact contract.
+ *
  * REMOVAL CRITERIA (delete this whole module when ALL of these hold)
  * -----------------------------------------------------------------
  *  A. A permanent Instructor <-> CourseOffering relation exists in the schema and
@@ -58,10 +69,26 @@
  *  B. Every remaining resolveCurrentCourseOffering() call site has been migrated
  *     to an explicit, actor-aware or admin-selected offering, so the legacy
  *     two-ACTIVE compatibility branch is never taken.
- *  C. No module imports LEVEL_1_COURSE_OFFERING_ID or
+ *  C. EVERY trainee-facing module either supports EXPLICIT course-offering
+ *     selection (as schedule and contacts already do) or has an EXPLICIT,
+ *     SERVER-OWNED offering policy of its own. Until then the zero-argument
+ *     resolver's dual-enrollment exception is load-bearing and removing these
+ *     constants would silently empty those Level 1 modules for every
+ *     dual-enrolled trainee.
+ *  D. No module imports LEVEL_1_COURSE_OFFERING_ID or
  *     LEVEL_2_COURSE_OFFERING_ID.
  * At that point deleting this file must break nothing; if it does, the migration
  * above is incomplete.
+ *
+ * MANDATORY REMOVAL BEFORE A THIRD SIMULTANEOUSLY ACTIVE OFFERING
+ * --------------------------------------------------------------
+ * Both compatibility rules recognize EXACTLY ONE two-offering state and are
+ * built to fail closed on anything else. The moment a THIRD CourseOffering is
+ * ACTIVE at the same time, a trainee enrolled in the launch pair plus that third
+ * offering - and every legacy singleton call site - goes back to failing closed,
+ * silently emptying Level 1 modules again. Criterion C above MUST therefore be
+ * satisfied and this module removed BEFORE a third offering is activated; do not
+ * attempt to extend either rule to cover a third id.
  */
 
 /**

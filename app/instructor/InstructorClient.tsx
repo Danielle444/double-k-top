@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState, useTransition } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
 import { Logo } from "@/lib/components/Logo";
 import { WeekDayPicker, type WeekOption } from "@/lib/components/WeekDayPicker";
@@ -19,7 +19,8 @@ import {
   getRidingAssignmentSummaryForInstructor,
   type InstructorRidingAssignmentSummary,
 } from "@/lib/actions/riding-assignment-summary";
-import { InstructorScheduleSection } from "@/app/instructor/InstructorScheduleSection";
+import { InstructorCourseScopedScheduleSection } from "@/app/instructor/InstructorCourseScopedScheduleSection";
+import { InstructorTodayScheduleCard } from "@/app/instructor/InstructorTodayScheduleCard";
 import { InstructorDutiesSection } from "@/app/instructor/InstructorDutiesSection";
 import { InstructorHorsesSection } from "@/app/instructor/InstructorHorsesSection";
 import { InstructorMessagesSection } from "@/app/instructor/InstructorMessagesSection";
@@ -269,6 +270,23 @@ export function InstructorClient({
     () => new Map()
   );
 
+  // LEVEL 2 SLICE S2A - the two schedule surfaces are now COURSE-SCOPED and own
+  // their own course selection plus everything derived from it (week list,
+  // selected week, selected day, loaded items). This shell therefore no longer
+  // derives the riding range itself; it holds ONLY the resolved DATE RANGE those
+  // screens report upward.
+  //
+  // DELIBERATELY NOT a course: there is no courseOfferingId and no
+  // selectedOfferingId anywhere in this component, so the schedule tab, the today
+  // card and the contacts tab cannot reach each other's selection through it. The
+  // setter is stable (useCallback with no deps) because the reporting screens
+  // list it in an effect dependency array.
+  const [scheduleRange, setScheduleRange] = useState<{ start: string; end: string } | null>(null);
+  const handleScheduleRangeChange = useCallback(
+    (range: { start: string; end: string } | null) => setScheduleRange(range),
+    []
+  );
+
   // Same load/guard as the riding section's previous loadKnownValues; gated on
   // the riding tab being active so the query timing matches the section's prior
   // mount-driven load (not eagerly on page load, not for non-riding tabs).
@@ -344,11 +362,10 @@ export function InstructorClient({
     return () => clearInterval(interval);
   }, []);
 
-  // A per-day string that only changes across a real local-day rollover (not
-  // every minute like `now`), so keying the schedule-activities effect below on
-  // it never refetches mid-day yet still moves to the new day if left open past
-  // midnight.
-  const nowDayKey = getLocalDateKey(now);
+  // S2A - `nowDayKey` (a per-day string derived from `now`) was removed with the
+  // shell's own range derivation: the schedule surfaces now report their range,
+  // so no date is computed here for them. `todayKey` below is the same
+  // once-per-day value and still serves the duties box and the today card.
 
   // Loads the configured riding activities for whichever schedule surface is
   // active (today or the full schedule), builds the schedule-card lookup, and
@@ -363,24 +380,13 @@ export function InstructorClient({
       setScheduleActivityMap(new Map());
       return;
     }
-    // Range of the active schedule surface: today shows only today's items
-    // (and only when a week actually covers today); the full schedule shows
-    // the whole selected week.
-    let rangeStart: string | null = null;
-    let rangeEnd: string | null = null;
-    if (activeTab === "today") {
-      const todayWk = weeks?.find((w) => w.startDate <= nowDayKey && nowDayKey <= w.endDate) ?? null;
-      if (todayWk) {
-        rangeStart = nowDayKey;
-        rangeEnd = nowDayKey;
-      }
-    } else if (activeTab === "schedule") {
-      const week = weeks?.find((w) => w.id === selectedWeekId) ?? null;
-      if (week) {
-        rangeStart = week.startDate;
-        rangeEnd = week.endDate;
-      }
-    }
+    // Range of the active schedule surface, REPORTED BY that surface rather than
+    // derived here (S2A): the today card reports today when a course is selected;
+    // the schedule tab reports its selected week. Both report null while no
+    // course is selected and clear on unmount, so a non-schedule tab and an
+    // unselected course are the same "no range" case as before.
+    const rangeStart = scheduleRange?.start ?? null;
+    const rangeEnd = scheduleRange?.end ?? null;
 
     // Any non-schedule tab (or a surface with no resolvable range) clears the
     // map and loads nothing - a stale mapping must never linger where a current
@@ -429,7 +435,7 @@ export function InstructorClient({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.id, activeTab, selectedWeekId, weeks, nowDayKey]);
+  }, [session?.id, scheduleRange]);
 
   // Client version AWARENESS only (Stage 0B-1). Detects when this open bundle
   // is older than the currently-served one and offers a guarded full reload.
@@ -880,25 +886,16 @@ export function InstructorClient({
                 arbitrarily long - each box scrolls its own content
                 independently, same max-height/overflow-y-auto pattern already
                 used for the riding-notes modal in InstructorRidingSlotsSection. */}
-            {weeks === null ? (
-              <p className="text-base text-muted-foreground">טוען...</p>
-            ) : todayWeek ? (
-              <div className="max-h-[40vh] overflow-y-auto">
-                <InstructorScheduleSection
-                  instructorId={session.id}
-                  weeklyScheduleId={todayWeek.id}
-                  dayFilter={todayKey}
-                  resolveRidingActivity={(scheduleItemId) =>
-                    scheduleActivityMap.get(scheduleItemId) ?? null
-                  }
-                  onOpenRidingActivity={openScheduleRidingActivity}
-                />
-              </div>
-            ) : (
-              <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
-                עדיין לא הועלה לו&quot;ז להיום
-              </p>
-            )}
+            {/* S2A - the today card owns its OWN course selection and its own
+                bounded scroll box; the shell passes no course and no week. */}
+            <InstructorTodayScheduleCard
+              todayKey={todayKey}
+              onScheduleRangeChange={handleScheduleRangeChange}
+              resolveRidingActivity={(scheduleItemId) =>
+                scheduleActivityMap.get(scheduleItemId) ?? null
+              }
+              onOpenRidingActivity={openScheduleRidingActivity}
+            />
 
             <div className="max-h-[40vh] overflow-y-auto">
               <InstructorDutiesSection
@@ -913,44 +910,17 @@ export function InstructorClient({
         )}
 
         {activeTab === "schedule" && (
-          <div className="flex flex-col gap-4">
-            {weeks === null ? (
-              <p className="text-base text-muted-foreground">טוען...</p>
-            ) : (
-              <WeekDayPicker
-                weeks={weeks}
-                selectedWeekId={selectedWeekId}
-                onSelectWeek={(id) => {
-                  setSelectedWeekId(id);
-                  const week = weeks?.find((w) => w.id === id) ?? null;
-                  setDayFilter(getDefaultDayFilter(week, getLocalDateKey()));
-                }}
-                dayFilter={dayFilter}
-                onSelectDay={setDayFilter}
-              />
-            )}
-            {/* Bounded internal scroll (unlike the unbounded "today" preview
-                above, this is the primary full-week view) - the day-group
-                labels inside InstructorScheduleSection are already
-                `sticky top-0`; without this bounded box they'd resolve
-                against the page's own scroll and collide with/hide behind
-                the shell header's own `sticky top-0 z-20` above. Wrapping
-                just this call (not the WeekDayPicker) gives the sticky day
-                labels their own isolated scroll container, same fix shape
-                already used for the "today" tab and for ScheduleGrid.tsx/
-                TeachingPracticeManager.tsx. */}
-            <div className="max-h-[calc(100vh-180px)] overflow-y-auto">
-              <InstructorScheduleSection
-                instructorId={session.id}
-                weeklyScheduleId={selectedWeekId}
-                dayFilter={dayFilter}
-                resolveRidingActivity={(scheduleItemId) =>
-                  scheduleActivityMap.get(scheduleItemId) ?? null
-                }
-                onOpenRidingActivity={openScheduleRidingActivity}
-              />
-            </div>
-          </div>
+          // S2A - the schedule tab owns its OWN course selection and, inside the
+          // keyed browser, its own week list / selected week / selected day. It
+          // deliberately no longer shares `weeks`, `selectedWeekId` or
+          // `dayFilter` with the duties tab, which keeps them unchanged.
+          <InstructorCourseScopedScheduleSection
+            onScheduleRangeChange={handleScheduleRangeChange}
+            resolveRidingActivity={(scheduleItemId) =>
+              scheduleActivityMap.get(scheduleItemId) ?? null
+            }
+            onOpenRidingActivity={openScheduleRidingActivity}
+          />
         )}
 
         {activeTab === "duties" && (

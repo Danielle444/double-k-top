@@ -717,9 +717,15 @@ test("getStudentContacts takes exactly ONE required course offering id", () => {
   assert.equal(getStudentContacts.length, 1);
 });
 
-test("getInstructorContacts remains exported and unchanged (no-arg)", () => {
+// SUPERSEDED BY L2-DUAL. This used to assert getInstructorContacts.length === 0.
+// It now takes ONE optional trainee course REQUEST. That is not a widening of the
+// student directory this suite covers: getStudentContacts is a different,
+// instructor-only action whose own explicit course argument is unchanged, and the
+// two signatures still cannot converge (asserted below and in
+// contacts.instructor-directory.test.ts).
+test("getInstructorContacts takes at most the one optional course request", () => {
   assert.equal(typeof getInstructorContacts, "function");
-  assert.equal(getInstructorContacts.length, 0);
+  assert.equal(getInstructorContacts.length, 1);
 });
 
 test("the action wires the INSTRUCTOR resolver and never the legacy singleton", () => {

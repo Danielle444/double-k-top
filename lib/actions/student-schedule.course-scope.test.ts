@@ -82,23 +82,46 @@ function requiredIndex(body: string, needle: string, label: string): number {
 }
 
 // ===========================================================================
-// getScheduleForStudent - signature is unchanged and carries no course context.
+// getScheduleForStudent - the first four parameters are unchanged; the fifth is
+// an OPTIONAL course REQUEST.
+//
+// SUPERSEDED BY L2-DUAL: this section previously asserted "exactly four
+// parameters" and "no parameter may name a course", i.e. a trainee could never
+// state which course they meant. That is deliberately reversed for SCHEDULE and
+// CONTACTS only. The replacement contract asserted here is that the new parameter
+// is OPTIONAL (so every existing four-argument call keeps working), that it is a
+// course request and NOT an identity, and that it is re-resolved server-side
+// against the trainee's own ACTIVE enrollments before anything is read. The
+// behaviour of that re-resolution is proved DB-free in
+// lib/course/trainee-course-selection-core.test.ts.
 // ===========================================================================
 
-test("getScheduleForStudent still takes exactly four parameters", () => {
+test("getScheduleForStudent keeps its four original parameters, in order", () => {
   const params = parameterList(studentScheduleSrc, "getScheduleForStudent");
-  assert.equal(params.length, 4, `expected 4 parameters, got: ${JSON.stringify(params)}`);
+  assert.equal(params.length, 5, `expected 5 parameters, got: ${JSON.stringify(params)}`);
   assert.ok(params[0].startsWith("studentId"));
   assert.ok(params[1].startsWith("weeklyScheduleId"));
   assert.ok(params[2].startsWith("dayKey"));
   assert.ok(params[3].startsWith("groupFilter"));
 });
 
-test("no parameter of getScheduleForStudent can name a course", () => {
-  for (const param of parameterList(studentScheduleSrc, "getScheduleForStudent")) {
+test("the fifth parameter is an OPTIONAL course request - four-argument callers still work", () => {
+  const params = parameterList(studentScheduleSrc, "getScheduleForStudent");
+  assert.match(
+    params[4],
+    /^requestedCourseOfferingId\?: string \| null$/,
+    "the course request must be optional, so omitting it stays the single-course path",
+  );
+});
+
+test("no parameter of getScheduleForStudent can name an ACTOR", () => {
+  // Course context became statable; IDENTITY did not. studentId is a pre-existing
+  // legacy display-filter value that authorizes nothing (the session is the sole
+  // identity source), and no new actor parameter may appear beside it.
+  for (const param of parameterList(studentScheduleSrc, "getScheduleForStudent").slice(1)) {
     assert.ok(
-      !/courseOffering|offeringId|courseId|level/i.test(param),
-      `parameter "${param}" must not accept a client-supplied course context`,
+      !/traineeId|instructorId|identityNumber|actor/i.test(param),
+      `parameter "${param}" must not accept a client-supplied identity`,
     );
   }
 });
@@ -107,15 +130,45 @@ test("no parameter of getScheduleForStudent can name a course", () => {
 // getScheduleForStudent - server-derived course context, no legacy resolver.
 // ===========================================================================
 
-test("student-schedule.ts wires the TRAINEE resolver and never resolveCurrentCourseOffering", () => {
+test("student-schedule.ts wires BOTH trainee resolvers and never resolveCurrentCourseOffering", () => {
+  // SUPERSEDED BY L2-DUAL: this file now legitimately imports two resolvers, and
+  // they must stay distinct. The SELECTION resolver serves the course-switchable
+  // schedule read; the committed no-argument resolver still serves the DUTIES
+  // deps in the same file, which keep failing closed for a dual-enrolled trainee.
   assert.match(
     studentScheduleSrc,
-    /import\s*\{\s*resolveTraineeCourseOffering\s*\}\s*from\s*["']@\/lib\/course\/actor-course-offering["']/,
-    "must import the committed no-argument trainee resolver",
+    /import\s*\{[^}]*\bresolveTraineeCourseOffering\b[^}]*\}\s*from\s*["']@\/lib\/course\/actor-course-offering["']/,
+    "must still import the committed no-argument trainee resolver (for duties)",
+  );
+  assert.match(
+    studentScheduleSrc,
+    /import\s*\{[^}]*\bresolveTraineeSelectedCourseOffering\b[^}]*\}\s*from\s*["']@\/lib\/course\/actor-course-offering["']/,
+    "must import the selection resolver (for the schedule read)",
   );
   assert.ok(
     !studentScheduleSrc.includes("resolveCurrentCourseOffering"),
     "the migrated trainee read path must never use the legacy singleton resolver",
+  );
+});
+
+test("the DUTIES module keeps the single-course resolver - L2-DUAL did not touch it", () => {
+  // The containment guarantee, asserted at the one place both resolvers coexist:
+  // duties must never receive the requested course id.
+  const dutiesDeps = studentScheduleSrc.slice(
+    studentScheduleSrc.indexOf("const TRAINEE_DUTIES_DEPS"),
+    studentScheduleSrc.indexOf("export async function getStudentDutiesForRange"),
+  );
+  assert.ok(dutiesDeps.length > 0, "expected the duties deps declaration");
+  assert.match(dutiesDeps, /^\s*resolveTraineeCourseOffering,$/m, "must stay the bare 0-arg dep");
+  assert.ok(
+    !dutiesDeps.includes("resolveTraineeSelectedCourseOffering"),
+    "duties must never accept a requested course",
+  );
+  assert.ok(
+    !parameterList(studentScheduleSrc, "getStudentDutiesForRange").some((p) =>
+      /courseOffering/i.test(p),
+    ),
+    "getStudentDutiesForRange must not gain a course parameter",
   );
 });
 
@@ -143,8 +196,31 @@ test("the course context is resolved INDEPENDENTLY inside getScheduleForStudent"
     /authorizeTraineeWeekReadWithDeps\(\s*weeklyScheduleId\s*,\s*\{/,
     "the gate must be invoked with the requested week id",
   );
-  assert.match(body, /resolveTraineeCourseOffering,/, "the real resolver must be injected");
+  // SUPERSEDED BY L2-DUAL: the injected dep used to be the bare 0-arg resolver.
+  // It is now a bound 0-arg CLOSURE over the requested id. The shared gate core is
+  // therefore unchanged - it still receives a zero-argument function and cannot be
+  // handed a client value - while the request is re-resolved inside the closure.
+  assert.match(
+    body,
+    /resolveTraineeCourseOffering:\s*\(\)\s*=>\s*\n?\s*resolveTraineeSelectedCourseOffering\(requestedCourseOfferingId\)/,
+    "the selection resolver must be injected, closed over the requested id",
+  );
   assert.match(body, /getEffectiveCapabilities,/, "the real capability reader must be injected");
+});
+
+test("the requested course id is never used as a query key or a week filter", () => {
+  const signatureAndBody = functionSource(studentScheduleSrc, "getScheduleForStudent");
+  // Excludes the parameter declaration itself - the first `{` opens the body.
+  const body = signatureAndBody.slice(signatureAndBody.indexOf("{"));
+  // Inside the body it may appear EXACTLY once, as the argument to the resolver.
+  // Anywhere else (a where clause, a comparison, a returned field) would make the
+  // raw client value authoritative.
+  const uses = body.match(/requestedCourseOfferingId/g) ?? [];
+  assert.equal(uses.length, 1, "the raw request must reach nothing but the resolver");
+  assert.ok(
+    !/where:[\s\S]{0,200}requestedCourseOfferingId/.test(body),
+    "the requested id must never enter a Prisma where clause",
+  );
 });
 
 // ===========================================================================
@@ -229,14 +305,22 @@ test("the pre-existing publication guard is preserved (now inside the shared gat
 // getWeeklyScheduleSelectionForTrainee - the new, course-scoped week picker.
 // ===========================================================================
 
-test("getWeeklyScheduleSelectionForTrainee takes no arguments at all", () => {
-  assert.deepEqual(parameterList(weeklyScheduleSrc, "getWeeklyScheduleSelectionForTrainee"), []);
+// SUPERSEDED BY L2-DUAL: this used to assert a zero-parameter picker. It now takes
+// the same OPTIONAL course request as the schedule read, so the week list follows
+// the selected course. No student id, and still nothing else.
+test("getWeeklyScheduleSelectionForTrainee takes only the optional course request", () => {
+  assert.deepEqual(parameterList(weeklyScheduleSrc, "getWeeklyScheduleSelectionForTrainee"), [
+    "requestedCourseOfferingId?: string | null",
+  ]);
 });
 
 test("getWeeklyScheduleSelectionForTrainee wires the trainee resolver, capabilities and the pure core", () => {
   const body = functionSource(weeklyScheduleSrc, "getWeeklyScheduleSelectionForTrainee");
   assert.match(body, /loadTraineeWeeklyScheduleSelectionWithDeps\(\{/);
-  assert.match(body, /resolveTraineeCourseOffering,/);
+  assert.match(
+    body,
+    /resolveTraineeCourseOffering:\s*\(\)\s*=>\s*\n?\s*resolveTraineeSelectedCourseOffering\(requestedCourseOfferingId\)/,
+  );
   assert.match(body, /getEffectiveCapabilities,/);
   assert.match(body, /prisma\.weeklySchedule\.findMany\(query\)/);
   assert.match(body, /todayDateKey,/);
@@ -248,12 +332,15 @@ test("getWeeklyScheduleSelectionForTrainee wires the trainee resolver, capabilit
   assert.ok(!body.includes("resolveCurrentCourseOffering"));
 });
 
-test("weekly-schedule.ts imports the trainee resolver, not the legacy singleton one", () => {
+test("weekly-schedule.ts imports the trainee SELECTION resolver, not the legacy singleton one", () => {
   assert.match(
     weeklyScheduleSrc,
-    /import\s*\{\s*resolveTraineeCourseOffering\s*\}\s*from\s*["']@\/lib\/course\/actor-course-offering["']/,
+    /import\s*\{\s*resolveTraineeSelectedCourseOffering\s*\}\s*from\s*["']@\/lib\/course\/actor-course-offering["']/,
   );
   assert.ok(!weeklyScheduleSrc.includes("resolveCurrentCourseOffering"));
+  for (const forbidden of ["LEVEL_1_COURSE_OFFERING_ID", "temporary-level2-compatibility"]) {
+    assert.ok(!weeklyScheduleSrc.includes(forbidden), `no ${forbidden} fallback may appear`);
+  }
 });
 
 // ===========================================================================
@@ -303,22 +390,52 @@ test("pickDefaultWeekId has ONE implementation, imported from the pure core", ()
 // StudentClient - the only UI change is the swapped week-picker call.
 // ===========================================================================
 
-test("StudentClient calls getWeeklyScheduleSelectionForTrainee() with no arguments", () => {
+test("StudentClient calls getWeeklyScheduleSelectionForTrainee with the selected course", () => {
   assert.match(
     studentClientSrc,
     /import \{ getWeeklyScheduleSelectionForTrainee \} from "@\/lib\/actions\/weekly-schedule"/,
   );
-  assert.match(studentClientSrc, /getWeeklyScheduleSelectionForTrainee\(\)\.then\(\(sel\) => \{/);
+  // SUPERSEDED BY L2-DUAL: previously a literal no-argument call.
+  assert.match(
+    studentClientSrc,
+    /getWeeklyScheduleSelectionForTrainee\(selectedCourseOfferingId\)\.then\(\(sel\) => \{/,
+  );
   assert.ok(
     !studentClientSrc.includes("getWeeklyScheduleSelectionForStudent"),
     "the trainee app must no longer use the globally-scoped picker",
   );
 });
 
-test("no course context is present anywhere in the trainee client", () => {
-  for (const forbidden of ["courseOfferingId", "LEVEL_1_COURSE_OFFERING_ID", "LEVEL_2_COURSE_OFFERING_ID"]) {
-    assert.ok(!studentClientSrc.includes(forbidden), `StudentClient must not reference "${forbidden}"`);
+test("the trainee client's course context is server-supplied and never a constant", () => {
+  // SUPERSEDED BY L2-DUAL: the client may now hold a courseOfferingId, but ONLY a
+  // value the server handed it. It must never contain a hardcoded offering, and it
+  // must never derive one from a level, a name or a date.
+  for (const forbidden of [
+    "LEVEL_1_COURSE_OFFERING_ID",
+    "LEVEL_2_COURSE_OFFERING_ID",
+    "temporary-level2-compatibility",
+    "cmrqngqhn00017gcndjixzrh0",
+    "cmrxk58vc0000lscnfm54bpze",
+  ]) {
+    assert.ok(
+      !studentClientSrc.includes(forbidden),
+      `StudentClient must not reference "${forbidden}"`,
+    );
   }
+  // The only source of options and of the default selection is the server action.
+  assert.match(
+    studentClientSrc,
+    /import \{\s*listTraineeCourseOptions,[\s\S]*?\} from "@\/lib\/actions\/trainee-course-selection"/,
+  );
+  assert.match(studentClientSrc, /setSelectedCourseOfferingId\(\(previous\) =>/);
+});
+
+test("the trainee course selection is never persisted anywhere", () => {
+  // React state only. A persisted selection could outlive the session or be edited
+  // in devtools and replayed, which is precisely what must stay impossible.
+  assert.ok(!/localStorage[^\n]*[Cc]ourse/.test(studentClientSrc));
+  assert.ok(!/document\.cookie/.test(studentClientSrc));
+  assert.ok(!studentClientSrc.includes("sessionStorage"));
 });
 
 test("the existing loading and empty-state behaviour is preserved", () => {
@@ -336,18 +453,22 @@ test("the existing loading and empty-state behaviour is preserved", () => {
   );
 });
 
-test("ScheduleSection's props are unchanged - no other student component signature moved", () => {
+test("ScheduleSection gained the course prop and nothing else", () => {
+  // SUPERSEDED BY L2-DUAL: ScheduleSection previously could not carry a course
+  // prop. The three original props are unchanged and the fourth is the requested
+  // course, forwarded verbatim as the fifth action argument.
   assert.match(
     scheduleSectionSrc,
-    /studentId: string;\s*weeklyScheduleId: string \| null;\s*dayFilter: string \| "all";/,
-  );
-  assert.ok(
-    !scheduleSectionSrc.includes("courseOfferingId"),
-    "ScheduleSection must not gain a course prop",
+    /studentId: string;\s*weeklyScheduleId: string \| null;\s*dayFilter: string \| "all";\s*courseOfferingId: string \| null;/,
   );
   assert.match(
     scheduleSectionSrc,
-    /getScheduleForStudent\(studentId, weeklyScheduleId, dayFilter, groupFilter\)/,
-    "the four-argument call site is unchanged",
+    /getScheduleForStudent\(studentId, weeklyScheduleId, dayFilter, groupFilter, courseOfferingId\)/,
+    "the original four arguments keep their order and meaning",
+  );
+  // Re-fetching on a course switch is what makes the switch take effect at all.
+  assert.match(
+    scheduleSectionSrc,
+    /\[studentId, weeklyScheduleId, dayFilter, groupFilter, courseOfferingId\]/,
   );
 });

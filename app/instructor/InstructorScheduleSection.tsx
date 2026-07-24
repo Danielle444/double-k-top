@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import {
-  getScheduleForInstructor,
+  getCourseScopedScheduleForInstructor,
+  getTodayScheduleForInstructor,
   type InstructorScheduleFilter,
   type InstructorScheduleItem,
   type InstructorScheduleResult,
-} from "@/lib/actions/instructor-schedule";
+} from "@/lib/actions/instructor-schedule-course-scoped";
 import type { WeeklyRidingActivity } from "@/lib/actions/riding-slots";
 import { todayDateKey } from "@/lib/dates";
 import { cleanScheduleTitle } from "@/lib/schedule-title";
@@ -113,16 +114,40 @@ function renderScheduleCard(
   );
 }
 
+/**
+ * LEVEL 2 SLICE S2A - COURSE-SCOPED. This section no longer takes an
+ * `instructorId`: identity is derived server-side from the signed session inside
+ * both actions below, so no client value can control whose schedule is read.
+ *
+ * `courseOfferingId` is REQUIRED and is a REQUEST, never a grant - the server
+ * re-validates it on every read. This component never renders "the current
+ * course" and never picks one itself.
+ *
+ * CLEARING ON COURSE SWITCH IS THE PARENT'S JOB, and the mechanism is
+ * LOAD-BEARING: both mounting screens mount this with key={selectedOfferingId},
+ * so choosing a different course REMOUNTS the component and `result` plus the
+ * mine/all filter return to their initial state before the next request is
+ * issued. No previous course's items can survive. (Same pattern the contacts
+ * roster already relies on.) If a future caller ever mounts this WITHOUT the
+ * key, it must clear the previous course itself.
+ */
 export function InstructorScheduleSection({
-  instructorId,
-  weeklyScheduleId,
-  dayFilter,
+  mode,
+  courseOfferingId,
+  weeklyScheduleId = null,
+  dayFilter = "all",
+  emptyMessage = "עדיין לא הועלה לו\"ז לשבוע זה",
   resolveRidingActivity,
   onOpenRidingActivity,
 }: {
-  instructorId: string;
-  weeklyScheduleId: string | null;
-  dayFilter: string | "all";
+  // "week": read the explicitly selected week of this course.
+  // "today": let the SERVER pick whichever week of this course covers today
+  //   (the client sends no date and no week id).
+  mode: "week" | "today";
+  courseOfferingId: string;
+  weeklyScheduleId?: string | null;
+  dayFilter?: string | "all";
+  emptyMessage?: string;
   // Read-only lookup from a rendered card's own real ScheduleItem id to the
   // configured riding activity behind it (or null). Supplied by InstructorClient
   // from its single shared per-range activities read; when omitted, no card is
@@ -142,13 +167,26 @@ export function InstructorScheduleSection({
   const [now, setNow] = useState<Date>(() => new Date());
 
   useEffect(() => {
-    if (!weeklyScheduleId) return;
+    // In "week" mode nothing is requested until a week is chosen (the render
+    // below shows the empty message instead) - unchanged from before. In "today"
+    // mode there is no week to choose: the server picks it, scoped to this
+    // course.
+    if (mode === "week" && !weeklyScheduleId) return;
     let cancelled = false;
     // Reset to the loading state on every filter change so a slow or failed
     // request never leaves the previous (unfiltered) list frozen on screen.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setResult(null);
-    getScheduleForInstructor(instructorId, weeklyScheduleId, dayFilter, scheduleFilter)
+    const request =
+      mode === "today"
+        ? getTodayScheduleForInstructor(courseOfferingId, scheduleFilter)
+        : getCourseScopedScheduleForInstructor(
+            courseOfferingId,
+            weeklyScheduleId,
+            dayFilter,
+            scheduleFilter,
+          );
+    request
       .then((r) => {
         if (!cancelled) setResult(r);
       })
@@ -158,7 +196,7 @@ export function InstructorScheduleSection({
     return () => {
       cancelled = true;
     };
-  }, [instructorId, weeklyScheduleId, dayFilter, scheduleFilter]);
+  }, [mode, courseOfferingId, weeklyScheduleId, dayFilter, scheduleFilter]);
 
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date()), 60_000);
@@ -207,12 +245,16 @@ export function InstructorScheduleSection({
         </div>
       </div>
 
-      {!weeklyScheduleId ? (
-        <p className="text-base text-card-foreground">עדיין לא הועלה לו&quot;ז לשבוע זה</p>
+      {mode === "week" && !weeklyScheduleId ? (
+        <p className="text-base text-card-foreground">{emptyMessage}</p>
       ) : !result ? (
         <p className="text-base text-muted-foreground">טוען...</p>
       ) : !result.hasSchedule ? (
-        <p className="text-base text-card-foreground">עדיין לא הועלה לו&quot;ז לשבוע זה</p>
+        // Also the uniform server-side denial (unauthorized course, SCHEDULE not
+        // ENABLED, or a week this course does not own) - deliberately
+        // indistinguishable from "no week uploaded", so a week id can never be
+        // probed across courses.
+        <p className="text-base text-card-foreground">{emptyMessage}</p>
       ) : groupedByDay.length === 0 ? (
         <p className="text-base text-muted-foreground">אין פריטים להצגה</p>
       ) : (

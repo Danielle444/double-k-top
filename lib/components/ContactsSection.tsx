@@ -13,6 +13,16 @@ interface ContactsSectionProps {
    * (see below) and a silent default would be the wrong one for somebody.
    */
   audience: "instructor" | "trainee";
+  /**
+   * L2-DUAL: the TRAINEE's requested course, forwarded to the instructors tab. A
+   * request only - the server re-resolves it against that trainee's own ACTIVE
+   * enrollments and requires the resolved offering's CONTACTS capability.
+   *
+   * Meaningful for audience="trainee" only. The instructor app passes nothing and
+   * its behaviour is unchanged; the students tab ignores it entirely (the
+   * instructor roster there has its own separate, explicit course selection).
+   */
+  traineeCourseOfferingId?: string | null;
 }
 
 // Shared by both the student and instructor apps. The INSTRUCTORS tab is
@@ -34,7 +44,7 @@ interface ContactsSectionProps {
 //    trainee branch mounts NO roster component and issues NO server request at
 //    all - the outcome is the same empty tab, reached without a pointless
 //    round-trip that could only ever return [].
-export function ContactsSection({ audience }: ContactsSectionProps) {
+export function ContactsSection({ audience, traineeCourseOfferingId }: ContactsSectionProps) {
   const [tab, setTab] = useState<ContactsTab>("students");
 
   return (
@@ -73,7 +83,9 @@ export function ContactsSection({ audience }: ContactsSectionProps) {
           </p>
         )
       ) : (
-        <StudentInstructorContactsSection />
+        <StudentInstructorContactsSection
+          courseOfferingId={audience === "trainee" ? traineeCourseOfferingId : undefined}
+        />
       )}
     </div>
   );

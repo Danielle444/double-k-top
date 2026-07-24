@@ -159,10 +159,21 @@ function importsModule(src: string, moduleName: string): boolean {
 const APPROVED_ACTOR_RESOLVER_CONSUMERS: readonly string[] = [
   "lib/actions/completion.ts",
   "lib/actions/contacts.ts",
+  // SLICE S2A: the course-scoped INSTRUCTOR schedule actions (week list, week
+  // read, today read). They consume resolveInstructorCourseOffering to
+  // re-validate an explicitly requested offering, then require a positive
+  // SCHEDULE capability before any offering-scoped week query. They import no
+  // offering constant from the temporary compatibility module and accept no
+  // instructor id - identity comes only from the signed session.
+  "lib/actions/instructor-schedule-course-scoped.ts",
   "lib/actions/materials.ts",
   "lib/actions/messages.ts",
   "lib/actions/student-schedule.ts",
   "lib/actions/teaching-practice-student.ts",
+  // L2-DUAL: the trainee course-options MENU. It consumes only
+  // listTraineeCourseOptions (a menu, not an authorization) and neither imports
+  // nor re-exports any offering constant from the temporary compatibility module.
+  "lib/actions/trainee-course-selection.ts",
   "lib/actions/weekly-feedback.ts",
   "lib/actions/weekly-schedule.ts",
 ];

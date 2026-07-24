@@ -268,14 +268,23 @@ function ScheduleCard({
   );
 }
 
+// courseOfferingId (L2-DUAL) is the trainee's REQUESTED course, forwarded to
+// getScheduleForStudent as the fifth argument. It is a request only: the action
+// re-resolves it server-side against the trainee's own ACTIVE enrollments and
+// re-checks that the week belongs to the RESOLVED offering, so switching course
+// with a stale weeklyScheduleId simply yields the uniform empty result. null (the
+// pre-selection state, and every single-course trainee before options load) means
+// "not stated", which is the unchanged single-course path.
 export function ScheduleSection({
   studentId,
   weeklyScheduleId,
   dayFilter,
+  courseOfferingId,
 }: {
   studentId: string;
   weeklyScheduleId: string | null;
   dayFilter: string | "all";
+  courseOfferingId: string | null;
 }) {
   const [groupFilter, setGroupFilter] = useState<GroupFilter>("mine");
   const [result, setResult] = useState<StudentScheduleResult | null>(null);
@@ -284,13 +293,15 @@ export function ScheduleSection({
   useEffect(() => {
     if (!weeklyScheduleId) return;
     let cancelled = false;
-    getScheduleForStudent(studentId, weeklyScheduleId, dayFilter, groupFilter).then((r) => {
-      if (!cancelled) setResult(r);
-    });
+    getScheduleForStudent(studentId, weeklyScheduleId, dayFilter, groupFilter, courseOfferingId).then(
+      (r) => {
+        if (!cancelled) setResult(r);
+      }
+    );
     return () => {
       cancelled = true;
     };
-  }, [studentId, weeklyScheduleId, dayFilter, groupFilter]);
+  }, [studentId, weeklyScheduleId, dayFilter, groupFilter, courseOfferingId]);
 
   useEffect(() => {
     const interval = setInterval(() => setNow(new Date()), 60_000);

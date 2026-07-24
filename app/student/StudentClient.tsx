@@ -15,6 +15,11 @@ import {
   type StudentSearchResult,
 } from "@/lib/actions/auth";
 import { getWeeklyScheduleSelectionForTrainee } from "@/lib/actions/weekly-schedule";
+import {
+  listTraineeCourseOptions,
+  type TraineeCourseOptionView,
+} from "@/lib/actions/trainee-course-selection";
+import { TraineeCourseSelector } from "@/app/student/TraineeCourseSelector";
 import { updateOwnPrivateHorseName } from "@/lib/actions/horses";
 import { ScheduleSection } from "@/app/student/ScheduleSection";
 import { DutiesSection } from "@/app/student/DutiesSection";
@@ -133,6 +138,18 @@ export function StudentClient() {
   const [refreshError, setRefreshError] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<MainTabId>("today");
+  // LEVEL 2 SLICE L2-DUAL - the trainee's own selectable courses, and which one
+  // the SCHEDULE and CONTACTS screens are currently asking for.
+  //
+  // UX STATE ONLY, NEVER AUTHORITY. Both values come from the server
+  // (listTraineeCourseOptions) and are re-fetched on every mount; the selected id
+  // is sent as a REQUEST that each server action independently re-resolves against
+  // this trainee's ACTIVE enrollments. Deliberately NOT persisted to localStorage
+  // (unlike STORAGE_KEY above), a cookie or the database, so a selection can never
+  // outlive a session or skip a future server check. null = "not stated", which is
+  // the unchanged single-course path.
+  const [courseOptions, setCourseOptions] = useState<TraineeCourseOptionView[] | null>(null);
+  const [selectedCourseOfferingId, setSelectedCourseOfferingId] = useState<string | null>(null);
   const [weeks, setWeeks] = useState<WeekOption[] | null>(null);
   const [selectedWeekId, setSelectedWeekId] = useState<string | null>(null);
   const [dayFilter, setDayFilter] = useState<string | "all">("all");
@@ -304,16 +321,47 @@ export function StudentClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id]);
 
+  // LEVEL 2 SLICE L2-DUAL - load the trainee's own course options, then default
+  // the selection to the FIRST option. That default is a UX convenience drawn
+  // ONLY from this server-authorized list (never a Level 1 constant, a level, a
+  // name, a date or a stored value), and it is re-validated server-side like any
+  // other request. A trainee with one course gets that single course; a trainee
+  // with none gets null and every screen keeps its existing empty behaviour.
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
-    // LEVEL 2 SLICE S1A: the COURSE-SCOPED trainee week picker. Takes no
-    // arguments - the offering is derived server-side from the signed session,
-    // never sent from here. The returned shape, the `weeks === null` loading
-    // state and the empty-state behaviour are unchanged; an unresolvable course
-    // context or a SCHEDULE capability that is not ENABLED simply yields an
-    // empty week list.
-    getWeeklyScheduleSelectionForTrainee().then((sel) => {
+    listTraineeCourseOptions().then((options) => {
+      if (cancelled) return;
+      setCourseOptions(options);
+      setSelectedCourseOfferingId((previous) =>
+        previous !== null && options.some((o) => o.id === previous)
+          ? previous
+          : (options[0]?.id ?? null)
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id]);
+
+  useEffect(() => {
+    // Waits for the course options so the very first week query already carries
+    // the intended course - otherwise a dual-enrolled trainee would flash an
+    // empty week list (an un-stated course is ambiguous and fails closed) before
+    // the real one arrived. The pre-existing `weeks === null` loading branches
+    // cover that extra round-trip with no new UI state.
+    if (!session || courseOptions === null) return;
+    let cancelled = false;
+    // LEVEL 2 SLICE S1A / L2-DUAL: the COURSE-SCOPED trainee week picker. It takes
+    // no student id - the trainee is derived server-side from the signed session.
+    // selectedCourseOfferingId is a REQUEST only: the server re-resolves it
+    // against this trainee's own ACTIVE enrollments into ACTIVE offerings and
+    // requires that resolved offering's SCHEDULE capability. The returned shape,
+    // the `weeks === null` loading state and the empty-state behaviour are
+    // unchanged; an unresolvable course context, an unauthorized requested id or a
+    // SCHEDULE capability that is not ENABLED all simply yield an empty week list.
+    getWeeklyScheduleSelectionForTrainee(selectedCourseOfferingId).then((sel) => {
       if (cancelled) return;
       setWeeks(sel.weeks);
       setSelectedWeekId(sel.defaultWeekId);
@@ -323,7 +371,7 @@ export function StudentClient() {
     return () => {
       cancelled = true;
     };
-  }, [session]);
+  }, [session, courseOptions, selectedCourseOfferingId]);
 
   useEffect(() => {
     if (selected || query.trim().length < 2) return;
@@ -597,7 +645,15 @@ export function StudentClient() {
             {weeks === null ? (
               <p className="text-base text-muted-foreground">טוען...</p>
             ) : todayWeek ? (
-              <ScheduleSection studentId={session.id} weeklyScheduleId={todayWeek.id} dayFilter={todayKey} />
+              // Part of the SCHEDULE module, so it follows the current course
+              // selection. The selector itself is deliberately not rendered on
+              // the home screen - it belongs to the two full screens below.
+              <ScheduleSection
+                studentId={session.id}
+                weeklyScheduleId={todayWeek.id}
+                dayFilter={todayKey}
+                courseOfferingId={selectedCourseOfferingId}
+              />
             ) : (
               <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
                 עדיין לא הועלה לו&quot;ז להיום
@@ -608,6 +664,14 @@ export function StudentClient() {
 
         {activeTab === "schedule" && (
           <div className="flex flex-col gap-4">
+            {/* One of exactly TWO mount sites for the course switcher (the other
+                is the contacts screen). It renders nothing unless this trainee
+                genuinely has more than one eligible course. */}
+            <TraineeCourseSelector
+              options={courseOptions ?? []}
+              selectedId={selectedCourseOfferingId}
+              onSelect={setSelectedCourseOfferingId}
+            />
             {weeks === null ? (
               <p className="text-base text-muted-foreground">טוען...</p>
             ) : (
@@ -637,6 +701,7 @@ export function StudentClient() {
                 studentId={session.id}
                 weeklyScheduleId={selectedWeekId}
                 dayFilter={dayFilter}
+                courseOfferingId={selectedCourseOfferingId}
               />
             </div>
           </div>
@@ -797,7 +862,17 @@ export function StudentClient() {
 
         {activeTab === "messages" && <StudentMessagesSection studentId={session.id} />}
 
-        {activeTab === "contacts" && <ContactsSection audience="trainee" />}
+        {activeTab === "contacts" && (
+          <div className="flex flex-col gap-4">
+            {/* The second and last mount site for the course switcher. */}
+            <TraineeCourseSelector
+              options={courseOptions ?? []}
+              selectedId={selectedCourseOfferingId}
+              onSelect={setSelectedCourseOfferingId}
+            />
+            <ContactsSection audience="trainee" traineeCourseOfferingId={selectedCourseOfferingId} />
+          </div>
+        )}
 
         {activeTab === "materials" && <CourseMaterialsSection role="student" />}
 

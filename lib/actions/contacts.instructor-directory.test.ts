@@ -415,9 +415,36 @@ test("instructor audience: the trainee session is never even read", async () => 
 
 // --- surrounding contract + structural guards -------------------------------
 
-test("getInstructorContacts keeps its no-argument signature (no client offering id)", () => {
+// SUPERSEDED BY L2-DUAL. This used to assert length === 0, i.e. "a trainee may
+// never name a course". The replacement contract is that the ONE parameter is a
+// REQUEST, not an authority: it carries no identity, never reaches a query, and is
+// re-resolved server-side against the trainee's own ACTIVE enrollments (proved in
+// lib/course/trainee-course-selection-core.test.ts). What must still hold here is
+// that it is the ONLY parameter and that no ACTOR id can be supplied.
+test("getInstructorContacts accepts exactly one optional course request, and no actor id", () => {
   assert.equal(typeof getInstructorContacts, "function");
-  assert.equal(getInstructorContacts.length, 0);
+  assert.equal(getInstructorContacts.length, 1);
+
+  const source = instructorContactsActionSource();
+  const params = source.slice(source.indexOf("("), source.indexOf(")"));
+  assert.match(params, /requestedCourseOfferingId\?: string \| null/);
+  for (const forbidden of ["studentId", "traineeId", "instructorId", "identityNumber"]) {
+    assert.ok(!params.includes(forbidden), `no ${forbidden} parameter may exist`);
+  }
+});
+
+test("the trainee half re-resolves the request through the SELECTION resolver", () => {
+  const source = instructorContactsActionSource();
+  // A bound zero-argument closure: the shared orchestration is unchanged and still
+  // cannot be handed a client value directly.
+  assert.match(
+    source,
+    /resolveTraineeCourseOffering:\s*\(\)\s*=>\s*\n?\s*resolveTraineeSelectedCourseOffering\(requestedCourseOfferingId\)/,
+  );
+  assert.ok(
+    !source.includes("LEVEL_1_COURSE_OFFERING_ID"),
+    "no Level 1 fallback may appear in the contacts action",
+  );
 });
 
 test("the trainee resolver dependency takes no arguments (no id can be passed)", async () => {
@@ -483,20 +510,25 @@ test("the core orchestration module pulls no Next.js cookie/session or Prisma co
   );
 });
 
-test("the C1A trainee-facing instructor-directory UI path is still no-argument", () => {
-  // C1A is server-side only, and the LATER instructor-context slice (C0-B) must
-  // not have disturbed it: the instructor-contacts tab still routes to the same
-  // component for BOTH audiences, and that component still calls the NO-ARGUMENT
-  // action - the trainee's course context stays server-derived and no
-  // courseOfferingId is ever threaded through the trainee UI.
+test("the trainee-facing instructor-directory UI path threads only the course request", () => {
+  // SUPERSEDED BY L2-DUAL. The first two cases used to assert a NO-ARGUMENT call
+  // chain. The instructor-contacts tab still routes to the SAME component for both
+  // audiences; what changed is that the trainee branch now forwards its requested
+  // course id (and only that - never a student id, never a level or a name).
   //
   // The third case is the C0-B boundary marker: the STUDENT directory (a
-  // different action, instructor-only) is now explicitly course-scoped. It is
-  // asserted here so that the two directories' signatures can never silently
-  // converge.
+  // different action, instructor-only) is course-scoped by its own explicit
+  // argument. It is asserted here so that the two directories' signatures can
+  // never silently converge.
   const cases: Array<[string, string]> = [
-    ["../components/ContactsSection.tsx", "<StudentInstructorContactsSection />"],
-    ["../../app/student/StudentInstructorContactsSection.tsx", "getInstructorContacts()"],
+    [
+      "../components/ContactsSection.tsx",
+      'courseOfferingId={audience === "trainee" ? traineeCourseOfferingId : undefined}',
+    ],
+    [
+      "../../app/student/StudentInstructorContactsSection.tsx",
+      "getInstructorContacts(courseOfferingId)",
+    ],
     ["../../app/instructor/InstructorContactsSection.tsx", "getStudentContacts(courseOfferingId)"],
   ];
   for (const [relative, expected] of cases) {

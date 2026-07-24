@@ -8,6 +8,8 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   resolveTraineeCourseOfferingFromRows,
   authorizeInstructorCourseOfferingId,
@@ -513,5 +515,421 @@ test("instructor resolver returns only offering fields - never policy membership
     "name",
     "startDate",
     "status",
+  ]);
+});
+
+// ===========================================================================
+// TEMPORARY dual-enrollment compatibility exception (launch-scoped)
+//
+// The exception exists so a trainee enrolled in BOTH launch offerings keeps the
+// Level 1 modules that are NOT course-selectable. Every test below is about one
+// property: it applies to the EXACT known pair and to NOTHING else.
+//
+// It is exercised through an INJECTED pair, because the pure core holds no
+// offering id of its own. The real constants are used here so these tests bind
+// to the ids production actually ships (see the binding contract test below).
+// ===========================================================================
+
+/** The launch pair exactly as the real IO binding injects it. */
+const LAUNCH_PAIR = {
+  level1OfferingId: LEVEL_1_COURSE_OFFERING_ID,
+  level2OfferingId: LEVEL_2_COURSE_OFFERING_ID,
+} as const;
+
+const THIRD = "cmthirdofferingxxxxxxxxxx";
+
+/** The canonical dual-enrolled trainee: ACTIVE in both ACTIVE launch offerings. */
+function dualRows(): TraineeEnrollmentOfferingRow[] {
+  return [
+    enrollment({ enrollmentId: "enr-l1", offering: offering(L1, { level: 1 }) }),
+    enrollment({ enrollmentId: "enr-l2", offering: offering(L2, { level: 2 }) }),
+  ];
+}
+
+test("exception: the exact {L1, L2} pair resolves to the Level 1 offering", () => {
+  const result = resolveTraineeCourseOfferingFromRows("stu-1", dualRows(), LAUNCH_PAIR);
+  assert.equal(result.id, L1);
+});
+
+test("exception: row order does not change the outcome", () => {
+  const forward = resolveTraineeCourseOfferingFromRows("stu-1", dualRows(), LAUNCH_PAIR);
+  const reversed = resolveTraineeCourseOfferingFromRows(
+    "stu-1",
+    [...dualRows()].reverse(),
+    LAUNCH_PAIR,
+  );
+  assert.equal(forward.id, L1);
+  assert.equal(reversed.id, L1);
+  assert.deepEqual(reversed, forward);
+});
+
+test("exception: the resolved offering carries the ELIGIBLE ROW's own metadata", () => {
+  // Proof the result comes from the trainee's already-loaded enrollment row and
+  // not from the configured constant: every field asserted below is fixture data
+  // that only the row could supply. A constant-derived id could not carry them.
+  const rows = [
+    enrollment({
+      enrollmentId: "enr-l1",
+      offering: offering(L1, {
+        level: 1,
+        name: "מחזור אביב",
+        activityYearId: "year-2026",
+        startDate: new Date("2026-03-01T00:00:00.000Z"),
+        endDate: new Date("2026-09-30T00:00:00.000Z"),
+      }),
+    }),
+    enrollment({ enrollmentId: "enr-l2", offering: offering(L2, { level: 2 }) }),
+  ];
+  const result = resolveTraineeCourseOfferingFromRows("stu-1", rows, LAUNCH_PAIR);
+  assert.equal(result.id, L1);
+  assert.equal(result.name, "מחזור אביב");
+  assert.equal(result.activityYearId, "year-2026");
+  assert.equal(result.level, 1);
+  assert.deepEqual(result.startDate, new Date("2026-03-01T00:00:00.000Z"));
+  assert.deepEqual(result.endDate, new Date("2026-09-30T00:00:00.000Z"));
+});
+
+test("exception: a trainee NOT enrolled in Level 1 can never be resolved to Level 1", () => {
+  // The strongest non-authority proof: the injected pair still names L1, but no
+  // eligible row IS L1, so L1 is unreachable and the state stays ambiguous.
+  assert.throws(
+    () =>
+      resolveTraineeCourseOfferingFromRows(
+        "stu-1",
+        [
+          enrollment({ enrollmentId: "enr-a", offering: offering(L2, { level: 2 }) }),
+          enrollment({ enrollmentId: "enr-b", offering: offering(THIRD, { level: 3 }) }),
+        ],
+        LAUNCH_PAIR,
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof AmbiguousTraineeCourseOfferingError);
+      assert.ok(!err.offeringIds.includes(L1), "the configured Level 1 id must not appear");
+      return true;
+    },
+  );
+});
+
+test("exception: {L1, unknown} stays ambiguous", () => {
+  assert.throws(
+    () =>
+      resolveTraineeCourseOfferingFromRows(
+        "stu-1",
+        [
+          enrollment({ enrollmentId: "enr-1", offering: offering(L1) }),
+          enrollment({ enrollmentId: "enr-2", offering: offering(THIRD, { level: 3 }) }),
+        ],
+        LAUNCH_PAIR,
+      ),
+    AmbiguousTraineeCourseOfferingError,
+  );
+});
+
+test("exception: {L2, unknown} stays ambiguous", () => {
+  assert.throws(
+    () =>
+      resolveTraineeCourseOfferingFromRows(
+        "stu-1",
+        [
+          enrollment({ enrollmentId: "enr-1", offering: offering(L2, { level: 2 }) }),
+          enrollment({ enrollmentId: "enr-2", offering: offering(THIRD, { level: 3 }) }),
+        ],
+        LAUNCH_PAIR,
+      ),
+    AmbiguousTraineeCourseOfferingError,
+  );
+});
+
+test("exception: the known pair PLUS a third eligible offering stays ambiguous", () => {
+  assert.throws(
+    () =>
+      resolveTraineeCourseOfferingFromRows(
+        "stu-1",
+        [
+          ...dualRows(),
+          enrollment({ enrollmentId: "enr-3", offering: offering(THIRD, { level: 3 }) }),
+        ],
+        LAUNCH_PAIR,
+      ),
+    (err: unknown) => {
+      assert.ok(err instanceof AmbiguousTraineeCourseOfferingError);
+      assert.deepEqual(err.offeringIds, [L1, L2, THIRD]);
+      return true;
+    },
+  );
+});
+
+test("exception: two ACTIVE enrollments into the SAME offering are not the pair", () => {
+  // Duplicates must never be mistaken for the two-offering state, in either
+  // direction, and must never be silently de-duplicated into a resolution.
+  for (const id of [L1, L2]) {
+    assert.throws(
+      () =>
+        resolveTraineeCourseOfferingFromRows(
+          "stu-1",
+          [
+            enrollment({ enrollmentId: "enr-a", offering: offering(id) }),
+            enrollment({ enrollmentId: "enr-b", offering: offering(id) }),
+          ],
+          LAUNCH_PAIR,
+        ),
+      AmbiguousTraineeCourseOfferingError,
+      `duplicate ${id} rows must stay ambiguous`,
+    );
+  }
+});
+
+test("exception: an INACTIVE Level 2 enrollment is filtered by eligibility, not by the exception", () => {
+  // Eligibility runs FIRST, so this is an ordinary single-row resolution: it
+  // resolves identically with the pair injected and with it omitted.
+  const rows = [
+    enrollment({ enrollmentId: "enr-l1", offering: offering(L1) }),
+    enrollment({
+      enrollmentId: "enr-l2",
+      enrollmentStatus: "INACTIVE",
+      offering: offering(L2, { level: 2 }),
+    }),
+  ];
+  assert.equal(resolveTraineeCourseOfferingFromRows("stu-1", rows, LAUNCH_PAIR).id, L1);
+  assert.equal(resolveTraineeCourseOfferingFromRows("stu-1", rows).id, L1);
+});
+
+test("exception: a PLANNED Level 2 offering is filtered by eligibility, not by the exception", () => {
+  const rows = [
+    enrollment({ enrollmentId: "enr-l1", offering: offering(L1) }),
+    enrollment({
+      enrollmentId: "enr-l2",
+      offering: offering(L2, { level: 2, status: "PLANNED" }),
+    }),
+  ];
+  assert.equal(resolveTraineeCourseOfferingFromRows("stu-1", rows, LAUNCH_PAIR).id, L1);
+  assert.equal(resolveTraineeCourseOfferingFromRows("stu-1", rows).id, L1);
+});
+
+test("exception: a Level-1-only trainee is unchanged", () => {
+  const rows = [enrollment({ offering: offering(L1) })];
+  const withPair = resolveTraineeCourseOfferingFromRows("stu-1", rows, LAUNCH_PAIR);
+  assert.deepEqual(withPair, resolveTraineeCourseOfferingFromRows("stu-1", rows));
+  assert.equal(withPair.id, L1);
+});
+
+test("exception: a Level-2-only trainee still resolves to Level 2 (never rewritten)", () => {
+  const rows = [enrollment({ offering: offering(L2, { level: 2 }) })];
+  const withPair = resolveTraineeCourseOfferingFromRows("stu-1", rows, LAUNCH_PAIR);
+  assert.deepEqual(withPair, resolveTraineeCourseOfferingFromRows("stu-1", rows));
+  assert.equal(withPair.id, L2);
+  assert.equal(withPair.level, 2);
+});
+
+test("exception: a trainee with NO eligible enrollment still fails closed", () => {
+  assert.throws(
+    () => resolveTraineeCourseOfferingFromRows("stu-1", [], LAUNCH_PAIR),
+    NoTraineeCourseOfferingError,
+  );
+  assert.throws(
+    () =>
+      resolveTraineeCourseOfferingFromRows(
+        "stu-1",
+        [enrollment({ enrollmentStatus: "INACTIVE" })],
+        LAUNCH_PAIR,
+      ),
+    NoTraineeCourseOfferingError,
+  );
+});
+
+test("exception: OMITTING the compatibility keeps {L1, L2} ambiguous (opt-in, fail-closed default)", () => {
+  assert.throws(
+    () => resolveTraineeCourseOfferingFromRows("stu-1", dualRows()),
+    AmbiguousTraineeCourseOfferingError,
+  );
+  assert.throws(
+    () => resolveTraineeCourseOfferingFromRows("stu-1", dualRows(), undefined),
+    AmbiguousTraineeCourseOfferingError,
+  );
+});
+
+test("exception: the DI seam applies the pair only when the dep supplies it", async () => {
+  const fetchDual = async () => dualRows();
+  const resolved = await resolveTraineeCourseOfferingWithDeps({
+    requireTraineeId: async () => "stu-session",
+    fetchTraineeEnrollmentRows: fetchDual,
+    legacyDualEnrollmentCompatibility: LAUNCH_PAIR,
+  });
+  assert.equal(resolved.id, L1);
+
+  await assert.rejects(
+    resolveTraineeCourseOfferingWithDeps({
+      requireTraineeId: async () => "stu-session",
+      fetchTraineeEnrollmentRows: fetchDual,
+    }),
+    AmbiguousTraineeCourseOfferingError,
+    "without the dep the resolver must still refuse to choose",
+  );
+});
+
+test("exception: the compatibility never widens the QUERY (take:3 still exposes a third offering)", async () => {
+  const queries: TraineeEnrollmentQuery[] = [];
+  await assert.rejects(
+    resolveTraineeCourseOfferingWithDeps({
+      requireTraineeId: async () => "stu-session",
+      fetchTraineeEnrollmentRows: async (query) => {
+        queries.push(query);
+        return [...dualRows(), enrollment({ enrollmentId: "enr-3", offering: offering(THIRD) })];
+      },
+      legacyDualEnrollmentCompatibility: LAUNCH_PAIR,
+    }),
+    AmbiguousTraineeCourseOfferingError,
+  );
+  assert.deepEqual(queries[0], {
+    take: 3,
+    where: { studentId: "stu-session", status: "ACTIVE", courseOffering: { status: "ACTIVE" } },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Source contracts: where the exception may and may not appear
+// ---------------------------------------------------------------------------
+
+function readSource(relativePath: string): string {
+  return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), "utf8");
+}
+
+/**
+ * Source with block and line comments removed, so a forbidden-identifier scan
+ * tests what the module DOES, not what its documentation discusses. These cores
+ * name isPrimary, cookies and date inference in prose precisely to say they are
+ * never used, and that prose must not be mistaken for a use.
+ */
+function bodyAfterHeader(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+}
+
+/** From `export ... function NAME` up to the next top-level `export`, or the end. */
+function functionSource(src: string, name: string): string {
+  const start = src.search(new RegExp(`export (?:async )?function ${name}\\b`));
+  assert.ok(start >= 0, `expected to find ${name}`);
+  const rest = src.slice(start + 1);
+  const end = rest.search(/\nexport /);
+  return end < 0 ? rest : rest.slice(0, end);
+}
+
+test("the pure core contains NO hardcoded offering id and no compatibility import", () => {
+  const body = bodyAfterHeader(readSource("./actor-course-offering-core.ts"));
+  for (const forbidden of [
+    L1,
+    L2,
+    "LEVEL_1_COURSE_OFFERING_ID",
+    "LEVEL_2_COURSE_OFFERING_ID",
+    "temporary-level2-compatibility",
+    "courseSettings",
+    // The cookie/session READ markers specifically. The word "cookies" itself
+    // appears in a denial MESSAGE that exists to say cookies are never consulted.
+    "next/headers",
+    "cookies(",
+    // Likewise a property READ. The bare identifier appears in the ambiguity
+    // message, which exists to say isPrimary is deliberately never consulted.
+    ".isPrimary",
+    // The Prisma CLIENT. The core imports a type-only enum from the generated
+    // client, which carries no runtime dependency and issues no query.
+    "prisma.",
+    "Date.now",
+  ]) {
+    assert.ok(!body.includes(forbidden), `the pure core must not reference "${forbidden}"`);
+  }
+});
+
+test("the real ZERO-ARGUMENT binding injects exactly the two known offering ids", () => {
+  const src = readSource("./actor-course-offering.ts");
+  assert.match(
+    src,
+    /level1OfferingId:\s*LEVEL_1_COURSE_OFFERING_ID,\s*\n\s*level2OfferingId:\s*LEVEL_2_COURSE_OFFERING_ID,/,
+    "the injected pair must be exactly the two verified constants",
+  );
+  assert.match(
+    functionSource(src, "resolveTraineeCourseOffering"),
+    /legacyDualEnrollmentCompatibility:\s*TRAINEE_DUAL_ENROLLMENT_COMPATIBILITY,/,
+    "the zero-argument resolver must inject the compatibility",
+  );
+  // No third id, and no id literal spelled out at the binding either.
+  assert.deepEqual(
+    src.match(/cm[a-z0-9]{20,}/g) ?? [],
+    [],
+    "offering id literals belong in temporary-level2-compatibility.ts only",
+  );
+});
+
+test("the EXPLICIT-SELECTION resolvers do not receive the compatibility", () => {
+  const src = readSource("./actor-course-offering.ts");
+  for (const fn of ["resolveTraineeSelectedCourseOffering", "listTraineeCourseOptions"]) {
+    assert.ok(
+      !functionSource(src, fn).includes("legacyDualEnrollmentCompatibility"),
+      `${fn} must never fall back to Level 1 - it uses explicit selection`,
+    );
+  }
+  // The selection CORE is a separate decision function that does not call the
+  // single-course one, so it cannot inherit the exception transitively either.
+  const selectionCore = bodyAfterHeader(readSource("./trainee-course-selection-core.ts"));
+  assert.ok(
+    !selectionCore.includes("resolveTraineeCourseOfferingFromRows"),
+    "the selection core must not call the single-course decision function",
+  );
+  assert.ok(
+    !selectionCore.includes("legacyDualEnrollmentCompatibility"),
+    "the selection core must not know about the compatibility",
+  );
+});
+
+test("the schedule and contacts actions still bind EXPLICIT selection, unchanged", () => {
+  for (const relative of [
+    "../actions/contacts.ts",
+    "../actions/weekly-schedule.ts",
+    "../actions/student-schedule.ts",
+  ]) {
+    const src = readSource(relative);
+    assert.match(
+      src,
+      /resolveTraineeSelectedCourseOffering\(requestedCourseOfferingId\)/,
+      `${relative} must keep resolving the trainee's REQUESTED course`,
+    );
+    assert.ok(
+      !src.includes("legacyDualEnrollmentCompatibility"),
+      `${relative} must not reference the compatibility`,
+    );
+  }
+});
+
+test("exactly the six non-selectable trainee modules inherit the exception", () => {
+  // These are the modules that import the ZERO-ARGUMENT resolver and therefore
+  // gain the Level 1 compatibility. Any new entry here is a module silently
+  // acquiring a Level 1 fallback and must be a deliberate, reviewed decision.
+  const inheriting: string[] = [];
+  for (const relative of [
+    "../actions/completion.ts",
+    "../actions/materials.ts",
+    "../actions/messages.ts",
+    "../actions/student-schedule.ts",
+    "../actions/teaching-practice-student.ts",
+    "../actions/weekly-feedback.ts",
+    "../actions/weekly-schedule.ts",
+    "../actions/contacts.ts",
+    "../actions/trainee-course-selection.ts",
+  ]) {
+    const importBlock =
+      readSource(relative).match(
+        /import\s*\{[\s\S]*?\}\s*from\s*"@\/lib\/course\/actor-course-offering";/,
+      )?.[0] ?? "";
+    // The dependency PROPERTY shares this name, so match the IMPORTED specifier
+    // only - never a plain substring of the whole file.
+    if (/(?:\{|,)\s*resolveTraineeCourseOffering\s*(?:,|\})/.test(importBlock)) {
+      inheriting.push(relative);
+    }
+  }
+  assert.deepEqual(inheriting.sort(), [
+    "../actions/completion.ts",
+    "../actions/materials.ts",
+    "../actions/messages.ts",
+    "../actions/student-schedule.ts",
+    "../actions/teaching-practice-student.ts",
+    "../actions/weekly-feedback.ts",
   ]);
 });
