@@ -6,12 +6,38 @@ import type {
   TeachingPracticeRoleValue,
   TeachingPracticeTypeValue,
 } from "@/lib/teaching-practice-rotation";
+// SECURITY / LEVEL 2 SLICE L2-C1 - server-derived trainee identity + course
+// context for every reader in this file.
+import { requireCurrentTrainee } from "@/lib/auth/actor";
+import { resolveTraineeCourseOffering } from "@/lib/course/actor-course-offering";
+import { getEffectiveCapabilities } from "@/lib/course/capabilities/offering-capabilities";
+import {
+  TRAINEE_TEACHING_PRACTICE_CAPABILITY_KEY,
+  loadAuthorizedTraineeModuleRowsWithDeps,
+  type TraineeModuleContextDeps,
+} from "@/lib/course/trainee-module-containment-core";
 
 // Read-only, trainee-facing surface for published Teaching Practice lessons
 // only. Deliberately separate from lib/actions/teaching-practice.ts (the
 // admin/instructor CRUD module) - this file must never expose feedback,
 // lesson notes, unpublished lessons, or any write path, so it stays a
 // distinct, narrowly-scoped file rather than reusing that module's mappers.
+//
+// SECURITY / LEVEL 2 SLICE L2-C1
+// ------------------------------
+// Every reader below is CONTAINED: identity comes from the signed session, the
+// course context is server-resolved from that trainee's own enrollment, and the
+// resolved offering's TEACHING_PRACTICE capability must be positively ENABLED
+// before a single Teaching Practice row is queried.
+//
+// This closes an ANONYMOUS exposure. These readers previously accepted a
+// client-supplied studentId and "verified" it by re-reading the Student row and
+// checking only the global Student.isActive flag. searchStudents() is
+// unauthenticated by design (it powers the login screen) and returns real
+// student ids, so any caller could obtain a valid id and read every published
+// lesson in the database - including each child's first/last name, age, gender,
+// and their parent's name and phone number. The studentId parameters are kept
+// for this slice only, for caller compatibility; they are NEVER identity.
 
 export interface TeachingPracticeTraineeParticipantRow {
   traineeId: string;
@@ -112,15 +138,25 @@ function toTraineeLessonRow(
   };
 }
 
-// Re-verified fresh from the DB on every call, same convention as every
-// other student-facing action in this app (students have no NextAuth
-// session) - a deactivated/deleted trainee id silently yields [] rather
-// than an error, so a stale client session never leaks data.
-async function getActiveTraineeOrNull(studentId: string) {
-  const student = await prisma.student.findUnique({ where: { id: studentId } });
-  if (!student || !student.isActive) return null;
-  return student;
-}
+// The single containment binding shared by all three readers below (L2-C1).
+//
+// It supplies ONLY real, server-owned dependencies: the trainee id comes from
+// the signed session via the canonical Actor DAL (requireCurrentTrainee, which
+// rejects anonymous, expired, wrong-audience and INACTIVE sessions), the
+// offering comes from the committed no-argument resolveTraineeCourseOffering()
+// (that trainee's single ACTIVE enrollment into an ACTIVE offering), and the
+// capabilities come from that exact resolved offering. There is deliberately no
+// courseOfferingId anywhere in this file, no resolveCurrentCourseOffering, no
+// Level 1 fallback, and no group/name/level/date inference.
+//
+// The ordering and every allow/deny decision live in the pure core
+// (@/lib/course/trainee-module-containment-core), which is where the DB-free
+// tests exercise them; this file only binds the real IO.
+const TRAINEE_TEACHING_PRACTICE_DEPS: TraineeModuleContextDeps = {
+  requireTraineeId: async () => (await requireCurrentTrainee()).id,
+  resolveTraineeCourseOffering,
+  getEffectiveCapabilities,
+};
 
 // Fixed-structure ("מבנה קבוע") read-only surface, added for Stage S3's
 // "כל ההתנסויות" -> "מבנה קבוע" mode. TeachingPracticeTrack has no
@@ -174,9 +210,19 @@ export interface TeachingPracticeTraineeTrackRow {
 export async function listPublishedTeachingPracticeTracksForTrainee(
   studentId: string
 ): Promise<TeachingPracticeTraineeTrackRow[]> {
-  const student = await getActiveTraineeOrNull(studentId);
-  if (!student) return [];
+  // L2-C1: accepted for caller compatibility and deliberately DISCARDED. It is
+  // a client-supplied value and therefore never identity; see the file header.
+  void studentId;
+  return loadAuthorizedTraineeModuleRowsWithDeps(
+    TRAINEE_TEACHING_PRACTICE_CAPABILITY_KEY,
+    TRAINEE_TEACHING_PRACTICE_DEPS,
+    async ({ traineeId }) => loadPublishedTracksForTrainee(traineeId)
+  );
+}
 
+async function loadPublishedTracksForTrainee(
+  traineeId: string
+): Promise<TeachingPracticeTraineeTrackRow[]> {
   const tracks = await prisma.teachingPracticeTrack.findMany({
     where: {
       isActive: true,
@@ -230,7 +276,9 @@ export async function listPublishedTeachingPracticeTracksForTrainee(
       traineeId: t.traineeId,
       traineeName: t.trainee.fullName,
       rotationOrder: t.rotationOrder,
-      isSelf: t.traineeId === studentId,
+      // Session-derived id only - a client-supplied id can never mark another
+      // trainee's row as "self".
+      isSelf: t.traineeId === traineeId,
     })),
     // Childless horse/equipment placeholder rows (childId null) have
     // nothing to show a trainee - skipped rather than rendered as a blank
@@ -255,33 +303,50 @@ export async function listPublishedTeachingPracticeTracksForTrainee(
 export async function listMyTeachingPracticeLessonsForTrainee(
   studentId: string
 ): Promise<TeachingPracticeTraineeLessonRow[]> {
-  const student = await getActiveTraineeOrNull(studentId);
-  if (!student) return [];
+  // L2-C1: accepted for caller compatibility and deliberately DISCARDED - see
+  // the file header. "My" is the SESSION's trainee, so the participant filter
+  // below is driven by the session-derived id: passing someone else's id can no
+  // longer return their lessons.
+  void studentId;
+  return loadAuthorizedTraineeModuleRowsWithDeps(
+    TRAINEE_TEACHING_PRACTICE_CAPABILITY_KEY,
+    TRAINEE_TEACHING_PRACTICE_DEPS,
+    async ({ traineeId }) => {
+      const lessons = await prisma.teachingPracticeLesson.findMany({
+        where: {
+          isPublished: true,
+          participants: { some: { traineeId } },
+        },
+        include: TRAINEE_LESSON_INCLUDE,
+        orderBy: [{ date: "asc" }, { startTime: "asc" }, { id: "asc" }],
+      });
 
-  const lessons = await prisma.teachingPracticeLesson.findMany({
-    where: {
-      isPublished: true,
-      participants: { some: { traineeId: studentId } },
-    },
-    include: TRAINEE_LESSON_INCLUDE,
-    orderBy: [{ date: "asc" }, { startTime: "asc" }, { id: "asc" }],
-  });
-
-  return lessons.map((lesson) => toTraineeLessonRow(lesson, studentId));
+      return lessons.map((lesson) => toTraineeLessonRow(lesson, traineeId));
+    }
+  );
 }
 
 // "כל ההתנסויות" - every published lesson, visible to any active trainee.
 export async function listPublishedTeachingPracticeLessonsForTrainee(
   studentId: string
 ): Promise<TeachingPracticeTraineeLessonRow[]> {
-  const student = await getActiveTraineeOrNull(studentId);
-  if (!student) return [];
+  // L2-C1: accepted for caller compatibility and deliberately DISCARDED - see
+  // the file header. This is the reader that carried the anonymous exposure of
+  // children's names/ages and parent contact details; it is now unreachable
+  // without an authenticated trainee whose own offering has TEACHING_PRACTICE
+  // positively ENABLED.
+  void studentId;
+  return loadAuthorizedTraineeModuleRowsWithDeps(
+    TRAINEE_TEACHING_PRACTICE_CAPABILITY_KEY,
+    TRAINEE_TEACHING_PRACTICE_DEPS,
+    async ({ traineeId }) => {
+      const lessons = await prisma.teachingPracticeLesson.findMany({
+        where: { isPublished: true },
+        include: TRAINEE_LESSON_INCLUDE,
+        orderBy: [{ date: "asc" }, { startTime: "asc" }, { id: "asc" }],
+      });
 
-  const lessons = await prisma.teachingPracticeLesson.findMany({
-    where: { isPublished: true },
-    include: TRAINEE_LESSON_INCLUDE,
-    orderBy: [{ date: "asc" }, { startTime: "asc" }, { id: "asc" }],
-  });
-
-  return lessons.map((lesson) => toTraineeLessonRow(lesson, studentId));
+      return lessons.map((lesson) => toTraineeLessonRow(lesson, traineeId));
+    }
+  );
 }

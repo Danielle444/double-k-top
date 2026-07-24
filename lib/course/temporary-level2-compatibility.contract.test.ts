@@ -128,6 +128,8 @@ function importsModule(src: string, moduleName: string): boolean {
  *  - lib/actions/contacts.ts        - trainee instructor directory, separately
  *                                     reviewed and committed in 19a4cf1;
  *  - lib/actions/student-schedule.ts - trainee final schedule read, SLICE S1A;
+ *  - lib/actions/teaching-practice-student.ts - L2-C1 trainee Teaching Practice
+ *                                     containment;
  *  - lib/actions/weekly-schedule.ts  - trainee course-scoped week picker
  *                                     (getWeeklyScheduleSelectionForTrainee),
  *                                     SLICE S1A.
@@ -137,6 +139,7 @@ function importsModule(src: string, moduleName: string): boolean {
 const APPROVED_ACTOR_RESOLVER_CONSUMERS: readonly string[] = [
   "lib/actions/contacts.ts",
   "lib/actions/student-schedule.ts",
+  "lib/actions/teaching-practice-student.ts",
   "lib/actions/weekly-schedule.ts",
 ];
 
