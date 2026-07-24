@@ -85,6 +85,25 @@ const STUDENT_MORE_ITEMS: { id: MainTabId; label: string }[] = [
 
 const STUDENT_ALL_TABS = [...STUDENT_MAIN_TABS, ...STUDENT_MORE_ITEMS];
 
+// Nav entries safe to show for ANY trainee before the course options have
+// loaded (courseOptions === null). Until we know the trainee's eligible
+// options we cannot tell a Level-2-only trainee (who must not see the course
+// modules) from a Level-1-only/dual trainee, so we render only the always-safe
+// entries - the utility screens plus the two modules Level 2 also enables
+// (schedule, contacts). This is the SAME allow-list a Level-2-only trainee
+// ends on (see LEVEL2_ONLY_VISIBLE_NAV_IDS in trainee-nav-visibility.ts), so
+// the visible nav never shrinks when options resolve to Level-2-only; for a
+// Level-1-only/dual trainee it simply expands to the full nav. This is
+// presentation gating only - it unlocks nothing and guards nothing.
+const LOADING_SAFE_NAV_IDS: readonly MainTabId[] = [
+  "today",
+  "schedule",
+  "contacts",
+  "profile",
+  "help",
+  "more",
+];
+
 // Normalizes the existing getStudentMessages() shape for the "עדכונים"
 // preview section - real per-recipient read/completed state already exists
 // for students, so isUnread is a genuine true/false, never null.
@@ -699,12 +718,27 @@ export function StudentClient() {
   // eligible options set, never the selected course, so a dual trainee is never
   // filtered and never loses a Level 1 module by selecting a Level 2 course. For
   // every non-Level-2-only trainee the three lists are returned unchanged.
-  const visibleMainTabs = filterTraineeNavEntries(STUDENT_MAIN_TABS, eligibleCourseOptions);
-  const visibleMoreMenuItems = filterTraineeNavEntries(
-    STUDENT_ALL_TABS.filter((item) => item.id !== "more"),
-    eligibleCourseOptions,
-  );
-  const visibleQuickActions = filterTraineeNavEntries(STUDENT_QUICK_ACTIONS, eligibleCourseOptions);
+  // While the course options are still loading (courseOptions === null) the
+  // eligibleCourseOptions fallback [] is NOT Level-2-only, so filterTraineeNav-
+  // Entries would return the FULL unfiltered nav - which then flashes and drops
+  // entries the moment a Level-2-only trainee's single option arrives. Until
+  // options resolve, restrict every nav surface to the always-safe subset; once
+  // resolved, the existing filter runs unchanged (Level-2-only filtered,
+  // Level-1-only/dual full).
+  const courseOptionsLoading = courseOptions === null;
+  const restrictToLoadingSafe = <T extends { id: MainTabId }>(entries: readonly T[]): T[] =>
+    entries.filter((entry) => LOADING_SAFE_NAV_IDS.includes(entry.id));
+
+  const visibleMainTabs = courseOptionsLoading
+    ? restrictToLoadingSafe(STUDENT_MAIN_TABS)
+    : filterTraineeNavEntries(STUDENT_MAIN_TABS, eligibleCourseOptions);
+  const moreMenuSource = STUDENT_ALL_TABS.filter((item) => item.id !== "more");
+  const visibleMoreMenuItems = courseOptionsLoading
+    ? restrictToLoadingSafe(moreMenuSource)
+    : filterTraineeNavEntries(moreMenuSource, eligibleCourseOptions);
+  const visibleQuickActions = courseOptionsLoading
+    ? restrictToLoadingSafe(STUDENT_QUICK_ACTIONS)
+    : filterTraineeNavEntries(STUDENT_QUICK_ACTIONS, eligibleCourseOptions);
 
   return (
     <div className="flex flex-1 flex-col">
@@ -765,7 +799,7 @@ export function StudentClient() {
                 - no second Level 2 detection. Level-1-only and dual trainees are
                 unaffected (isLevel2OnlyTrainee reads the full eligible options,
                 never the selected course). */}
-            {!isLevel2OnlyTrainee(eligibleCourseOptions) && (
+            {!courseOptionsLoading && !isLevel2OnlyTrainee(eligibleCourseOptions) && (
               <DutiesSection studentId={session.id} startDateKey={todayKey} endDateKey={todayKey} />
             )}
 
