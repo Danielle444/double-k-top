@@ -120,6 +120,32 @@ interface StoredSession {
   assignedHorseName: string | null;
 }
 
+// Shown in the schedule surfaces when the course-scoped weekly-schedule load
+// REJECTS with a non-denial error. It replaces a permanent "טוען..." so the load
+// always resolves visually, and it never leaks the raw server error or any PII.
+const SCHEDULE_LOAD_ERROR_MESSAGE = "לא ניתן לטעון כרגע את הלו״ז. נסו לרענן את העמוד.";
+
+// PURE selection decision for the trainee's course context, extracted from the
+// options effect so its cardinality contract is unit-testable without mounting
+// the client (see trainee-client-course-selection.contract.test.ts):
+//  - exactly one eligible course -> auto-select that EXACT server-returned id;
+//  - two or more -> NEVER auto-pick a course. Keep a still-valid prior selection,
+//    otherwise fall back to "not stated" (null) so the selector is shown and no
+//    schedule/contacts request runs until the trainee explicitly chooses;
+//  - zero -> null.
+// It draws ONLY from the server-authorized options list and hardcodes no course
+// id or level; the chosen id is re-validated server-side like any other request.
+export function pickTraineeCourseSelection(
+  previous: string | null,
+  options: TraineeCourseOptionView[],
+): string | null {
+  if (options.length === 1) return options[0].id;
+  if (options.length > 1) {
+    return previous !== null && options.some((o) => o.id === previous) ? previous : null;
+  }
+  return null;
+}
+
 export function StudentClient() {
   const [session, setSession] = useState<StoredSession | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -153,6 +179,12 @@ export function StudentClient() {
   const [weeks, setWeeks] = useState<WeekOption[] | null>(null);
   const [selectedWeekId, setSelectedWeekId] = useState<string | null>(null);
   const [dayFilter, setDayFilter] = useState<string | "all">("all");
+  // Set when the course-scoped weekly-schedule load REJECTS with a non-denial
+  // error (typed course-context denials already resolve to an empty selection
+  // server-side, so they never reach here). It distinguishes "loaded but empty"
+  // from "could not load", so the schedule shows SCHEDULE_LOAD_ERROR_MESSAGE
+  // instead of a permanent "טוען...".
+  const [scheduleLoadError, setScheduleLoadError] = useState(false);
 
   // Drives the "עוד" tab / "עדכונים" menu-row dot - a real unread-notification
   // count, kept in sync afterward by NotificationsList's onUnreadChange.
@@ -321,24 +353,32 @@ export function StudentClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id]);
 
-  // LEVEL 2 SLICE L2-DUAL - load the trainee's own course options, then default
-  // the selection to the FIRST option. That default is a UX convenience drawn
-  // ONLY from this server-authorized list (never a Level 1 constant, a level, a
-  // name, a date or a stored value), and it is re-validated server-side like any
-  // other request. A trainee with one course gets that single course; a trainee
-  // with none gets null and every screen keeps its existing empty behaviour.
+  // LEVEL 2 SLICE L2-DUAL - load the trainee's own course options, then apply the
+  // cardinality-correct selection: exactly one course auto-selects that server id,
+  // two or more never auto-pick (see pickTraineeCourseSelection). The decision is
+  // drawn ONLY from this server-authorized list (never a Level 1 constant, a
+  // level, a name, a date or a stored value) and is re-validated server-side like
+  // any other request.
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
-    listTraineeCourseOptions().then((options) => {
-      if (cancelled) return;
-      setCourseOptions(options);
-      setSelectedCourseOfferingId((previous) =>
-        previous !== null && options.some((o) => o.id === previous)
-          ? previous
-          : (options[0]?.id ?? null)
-      );
-    });
+    listTraineeCourseOptions()
+      .then((options) => {
+        if (cancelled) return;
+        setCourseOptions(options);
+        setSelectedCourseOfferingId((previous) => pickTraineeCourseSelection(previous, options));
+      })
+      .catch(() => {
+        // listTraineeCourseOptions only swallows the typed course-context denials;
+        // any OTHER rejection must still end the loading state rather than leave
+        // courseOptions === null forever - which would strand the schedule effect
+        // on its `courseOptions === null` guard and spin "טוען..." indefinitely.
+        // Fall back to no options + no selection so the schedule effect runs its
+        // own empty/error path. No raw error or PII is surfaced.
+        if (cancelled) return;
+        setCourseOptions([]);
+        setSelectedCourseOfferingId(null);
+      });
     return () => {
       cancelled = true;
     };
@@ -349,25 +389,52 @@ export function StudentClient() {
     // Waits for the course options so the very first week query already carries
     // the intended course - otherwise a dual-enrolled trainee would flash an
     // empty week list (an un-stated course is ambiguous and fails closed) before
-    // the real one arrived. The pre-existing `weeks === null` loading branches
-    // cover that extra round-trip with no new UI state.
+    // the real one arrived.
     if (!session || courseOptions === null) return;
+
+    // Two or more eligible courses but none chosen yet: wait for an explicit
+    // selection. Issue NO schedule request, but never leave the loading state
+    // stuck - clear to an empty (non-null) selection so no permanent "טוען..."
+    // persists while the selector is shown.
+    if (selectedCourseOfferingId === null && courseOptions.length > 1) {
+      /* eslint-disable react-hooks/set-state-in-effect */
+      setScheduleLoadError(false);
+      setWeeks([]);
+      setSelectedWeekId(null);
+      /* eslint-enable react-hooks/set-state-in-effect */
+      return;
+    }
+
     let cancelled = false;
     // LEVEL 2 SLICE S1A / L2-DUAL: the COURSE-SCOPED trainee week picker. It takes
     // no student id - the trainee is derived server-side from the signed session.
     // selectedCourseOfferingId is a REQUEST only: the server re-resolves it
     // against this trainee's own ACTIVE enrollments into ACTIVE offerings and
-    // requires that resolved offering's SCHEDULE capability. The returned shape,
-    // the `weeks === null` loading state and the empty-state behaviour are
-    // unchanged; an unresolvable course context, an unauthorized requested id or a
-    // SCHEDULE capability that is not ENABLED all simply yield an empty week list.
-    getWeeklyScheduleSelectionForTrainee(selectedCourseOfferingId).then((sel) => {
-      if (cancelled) return;
-      setWeeks(sel.weeks);
-      setSelectedWeekId(sel.defaultWeekId);
-      const defaultWeek = sel.weeks.find((w) => w.id === sel.defaultWeekId) ?? null;
-      setDayFilter(getDefaultDayFilter(defaultWeek, getLocalDateKey()));
-    });
+    // requires that resolved offering's SCHEDULE capability. Typed course-context
+    // denials (no/ambiguous/unauthenticated course context, unauthorized requested
+    // id, SCHEDULE not ENABLED) all resolve to an empty week list server-side; a
+    // non-denial rejection is caught below so the load always leaves loading.
+    getWeeklyScheduleSelectionForTrainee(selectedCourseOfferingId)
+      .then((sel) => {
+        if (cancelled) return;
+        setScheduleLoadError(false);
+        setWeeks(sel.weeks);
+        setSelectedWeekId(sel.defaultWeekId);
+        const defaultWeek = sel.weeks.find((w) => w.id === sel.defaultWeekId) ?? null;
+        setDayFilter(getDefaultDayFilter(defaultWeek, getLocalDateKey()));
+      })
+      .catch(() => {
+        // A non-denial rejection (an infra/Prisma error, or a resolver throwing a
+        // non-denial such as IncompleteCourseOfferingError) must not leave weeks
+        // === null forever. Surface a contained error and clear any stale week so
+        // an older course's schedule is never shown under a newer context. The
+        // `cancelled` guard drops this if a newer selection has superseded it.
+        if (cancelled) return;
+        setScheduleLoadError(true);
+        setWeeks([]);
+        setSelectedWeekId(null);
+        setDayFilter("all");
+      });
     return () => {
       cancelled = true;
     };
@@ -644,6 +711,10 @@ export function StudentClient() {
 
             {weeks === null ? (
               <p className="text-base text-muted-foreground">טוען...</p>
+            ) : scheduleLoadError ? (
+              <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
+                {SCHEDULE_LOAD_ERROR_MESSAGE}
+              </p>
             ) : todayWeek ? (
               // Part of the SCHEDULE module, so it follows the current course
               // selection. The selector itself is deliberately not rendered on
@@ -674,36 +745,42 @@ export function StudentClient() {
             />
             {weeks === null ? (
               <p className="text-base text-muted-foreground">טוען...</p>
+            ) : scheduleLoadError ? (
+              <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
+                {SCHEDULE_LOAD_ERROR_MESSAGE}
+              </p>
             ) : (
-              <WeekDayPicker
-                weeks={weeks}
-                selectedWeekId={selectedWeekId}
-                onSelectWeek={(id) => {
-                  setSelectedWeekId(id);
-                  const week = weeks?.find((w) => w.id === id) ?? null;
-                  setDayFilter(getDefaultDayFilter(week, getLocalDateKey()));
-                }}
-                dayFilter={dayFilter}
-                onSelectDay={setDayFilter}
-              />
+              <>
+                <WeekDayPicker
+                  weeks={weeks}
+                  selectedWeekId={selectedWeekId}
+                  onSelectWeek={(id) => {
+                    setSelectedWeekId(id);
+                    const week = weeks?.find((w) => w.id === id) ?? null;
+                    setDayFilter(getDefaultDayFilter(week, getLocalDateKey()));
+                  }}
+                  dayFilter={dayFilter}
+                  onSelectDay={setDayFilter}
+                />
+                {/* Bounded internal scroll (unlike the unbounded "today" preview
+                    above, this is the primary full-week view) - the day-group
+                    labels inside ScheduleSection are already `sticky top-0`;
+                    without this bounded box they'd resolve against the page's
+                    own scroll and collide with/hide behind the shell header's
+                    own `sticky top-0 z-20` above. Wrapping just this call (not
+                    the WeekDayPicker) gives the sticky day labels their own
+                    isolated scroll container, same fix shape already used for
+                    the instructor "לו"ז" tab. */}
+                <div className="max-h-[calc(100vh-180px)] overflow-y-auto">
+                  <ScheduleSection
+                    studentId={session.id}
+                    weeklyScheduleId={selectedWeekId}
+                    dayFilter={dayFilter}
+                    courseOfferingId={selectedCourseOfferingId}
+                  />
+                </div>
+              </>
             )}
-            {/* Bounded internal scroll (unlike the unbounded "today" preview
-                above, this is the primary full-week view) - the day-group
-                labels inside ScheduleSection are already `sticky top-0`;
-                without this bounded box they'd resolve against the page's
-                own scroll and collide with/hide behind the shell header's
-                own `sticky top-0 z-20` above. Wrapping just this call (not
-                the WeekDayPicker) gives the sticky day labels their own
-                isolated scroll container, same fix shape already used for
-                the instructor "לו"ז" tab. */}
-            <div className="max-h-[calc(100vh-180px)] overflow-y-auto">
-              <ScheduleSection
-                studentId={session.id}
-                weeklyScheduleId={selectedWeekId}
-                dayFilter={dayFilter}
-                courseOfferingId={selectedCourseOfferingId}
-              />
-            </div>
           </div>
         )}
 
