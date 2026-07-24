@@ -78,6 +78,7 @@ export default async function CourseSchedulePage({
       startDate: true,
       endDate: true,
       uploadedFileName: true,
+      isPublished: true,
       _count: { select: { items: true } },
     },
   });
@@ -88,6 +89,7 @@ export default async function CourseSchedulePage({
     startDate: dateKey(week.startDate),
     endDate: dateKey(week.endDate),
     uploadedFileName: week.uploadedFileName,
+    isPublished: week.isPublished,
     itemCount: week._count.items,
   }));
 
@@ -130,6 +132,7 @@ export default async function CourseSchedulePage({
       <OfferingScheduleClient
         weeks={weeks}
         canDraft={canDraft}
+        scheduleBasePath={`/admin/courses/${encodeURIComponent(context.id)}/schedule`}
         action={saveOfferingWeeklyScheduleAction.bind(null, context.id)}
       />
     </div>

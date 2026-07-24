@@ -241,10 +241,10 @@ test("the client has no offering field and no offering selector", () => {
 
 test("no publication / delete / day-plan / duty-generation action is imported", () => {
   const forbidden = [
-    // publication
+    // publication MUTATION (a read-only isPublished status chip is allowed on the
+    // week card as of W-S3B; only the ability to CHANGE publication is excluded)
     "setWeeklySchedulePublished",
     "setPublishStatus",
-    "isPublished",
     "SCHEDULE_PUBLICATION",
     // delete
     "deleteWeeklySchedule",

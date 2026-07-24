@@ -26,6 +26,7 @@
  */
 import { FormEvent, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
 import {
@@ -42,6 +43,7 @@ export interface OfferingWeekView {
   startDate: string;
   endDate: string;
   uploadedFileName: string;
+  isPublished: boolean;
   itemCount: number;
 }
 
@@ -84,10 +86,12 @@ function isImportableRow(item: ScheduleImportItem): boolean {
 export function OfferingScheduleClient({
   weeks,
   canDraft,
+  scheduleBasePath,
   action,
 }: {
   weeks: OfferingWeekView[];
   canDraft: boolean;
+  scheduleBasePath: string;
   action: SaveAction;
 }) {
   const router = useRouter();
@@ -201,23 +205,42 @@ export function OfferingScheduleClient({
           <div key={week.id} className="rounded-xl border border-border bg-card p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="font-bold text-card-foreground">{week.name}</p>
+                <p className="flex flex-wrap items-center gap-2 font-bold text-card-foreground">
+                  {week.name}
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                      week.isPublished
+                        ? "bg-success-muted text-success"
+                        : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {week.isPublished ? "מפורסם" : "טיוטה"}
+                  </span>
+                </p>
                 <p className="text-xs text-muted-foreground">
                   {formatHebrewDate(parseDateKey(week.startDate))} -{" "}
                   {formatHebrewDate(parseDateKey(week.endDate))} · {week.itemCount} פריטים
                   {week.uploadedFileName ? ` · ${week.uploadedFileName}` : ""}
                 </p>
               </div>
-              {canDraft && (
-                <Button
-                  variant="secondary"
-                  className="!px-2 !py-1"
-                  disabled={isPending}
-                  onClick={() => openUpload(week)}
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href={`${scheduleBasePath}/${week.id}`}
+                  className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90"
                 >
-                  ייבוא מחדש
-                </Button>
-              )}
+                  צפייה ועריכה
+                </Link>
+                {canDraft && (
+                  <Button
+                    variant="secondary"
+                    className="!px-2 !py-1"
+                    disabled={isPending}
+                    onClick={() => openUpload(week)}
+                  >
+                    ייבוא מחדש
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
         ))}
