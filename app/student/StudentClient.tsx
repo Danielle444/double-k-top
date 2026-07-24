@@ -20,6 +20,7 @@ import {
   type TraineeCourseOptionView,
 } from "@/lib/actions/trainee-course-selection";
 import { TraineeCourseSelector } from "@/app/student/TraineeCourseSelector";
+import { filterTraineeNavEntries } from "@/app/student/trainee-nav-visibility";
 import { updateOwnPrivateHorseName } from "@/lib/actions/horses";
 import { ScheduleSection } from "@/app/student/ScheduleSection";
 import { DutiesSection } from "@/app/student/DutiesSection";
@@ -686,6 +687,25 @@ export function StudentClient() {
   const viewingLevel2 = isSelectedOfferingLevel2(eligibleCourseOptions, selectedCourseOfferingId);
   const dualEnrolled = eligibleCourseOptions.length >= 2;
 
+  // TEMPORARY LAUNCH RULE (see app/student/trainee-nav-visibility.ts):
+  // Level-2-only navigation is derived from the single eligible option's level.
+  // Replace with server-returned effective capabilities after launch.
+  //
+  // For a Level-2-only trainee (exactly one eligible option, level 2) these lists
+  // drop the course modules that Level 2 does not enable (duties, messages,
+  // materials, teaching practice, weekly feedback, notifications) from every nav
+  // surface - the bottom tabs, the "עוד" menu and the home quick-actions - while
+  // keeping schedule, contacts and the utility entries. The rule reads the FULL
+  // eligible options set, never the selected course, so a dual trainee is never
+  // filtered and never loses a Level 1 module by selecting a Level 2 course. For
+  // every non-Level-2-only trainee the three lists are returned unchanged.
+  const visibleMainTabs = filterTraineeNavEntries(STUDENT_MAIN_TABS, eligibleCourseOptions);
+  const visibleMoreMenuItems = filterTraineeNavEntries(
+    STUDENT_ALL_TABS.filter((item) => item.id !== "more"),
+    eligibleCourseOptions,
+  );
+  const visibleQuickActions = filterTraineeNavEntries(STUDENT_QUICK_ACTIONS, eligibleCourseOptions);
+
   return (
     <div className="flex flex-1 flex-col">
       <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-card px-4 py-3 shadow-sm">
@@ -716,7 +736,7 @@ export function StudentClient() {
             <StudentAttendanceNotice dateKey={todayKey} />
 
             <div className="grid grid-cols-3 gap-2">
-              {STUDENT_QUICK_ACTIONS.map((action) => (
+              {visibleQuickActions.map((action) => (
                 <button
                   key={action.id}
                   type="button"
@@ -855,7 +875,7 @@ export function StudentClient() {
 
         {activeTab === "more" && (
           <div className="flex flex-col gap-3">
-            {STUDENT_ALL_TABS.filter((item) => item.id !== "more").map((item) => (
+            {visibleMoreMenuItems.map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -1024,7 +1044,7 @@ export function StudentClient() {
       <BottomTabs
         active={bottomActiveTab}
         onChange={setActiveTab}
-        tabs={STUDENT_MAIN_TABS}
+        tabs={visibleMainTabs}
         dotTabIds={[
           ...(hasNewMessages ? (["messages"] as MainTabId[]) : []),
           ...(hasUnreadNotifications || hasOpenWeeklyFeedback ? (["more"] as MainTabId[]) : []),
