@@ -63,6 +63,7 @@ function capabilities(overrides: Partial<CapabilityMap> = {}): CapabilityMap {
     RIDING_HORSE_ASSIGNMENTS: "DISABLED",
     ADVANCED_INSTRUCTION: "DISABLED",
     TEACHING_PRACTICE: "DISABLED",
+    COURSE_MATERIALS: "DISABLED",
     ...overrides,
   };
 }

@@ -69,6 +69,7 @@ const ALL_ENABLED_CAPABILITIES: Record<CapabilityKey, EffectiveCapabilityStatus>
   RIDING_HORSE_ASSIGNMENTS: "ENABLED",
   ADVANCED_INSTRUCTION: "ENABLED",
   TEACHING_PRACTICE: "ENABLED",
+  COURSE_MATERIALS: "ENABLED",
 };
 
 function effectiveCapabilities(

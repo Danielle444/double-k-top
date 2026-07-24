@@ -76,13 +76,14 @@ test("the locked initial Hebrew labels are exactly as approved", () => {
   );
   assert.equal(INITIAL_CAPABILITY_LABELS.ADVANCED_INSTRUCTION, "הדרכת מתקדמים");
   assert.equal(INITIAL_CAPABILITY_LABELS.TEACHING_PRACTICE, "התנסויות מתחילים");
+  assert.equal(INITIAL_CAPABILITY_LABELS.COURSE_MATERIALS, "חומרי קורס");
 });
 
 // --- the explicit legacy preset ---------------------------------------------
 
-test("legacy preset contains all ten canonical keys exactly once", () => {
-  assert.equal(LEGACY_OFFERING_CAPABILITY_PRESET.length, 10);
-  assert.equal(CAPABILITY_KEYS.length, 10);
+test("legacy preset contains all eleven canonical keys exactly once", () => {
+  assert.equal(LEGACY_OFFERING_CAPABILITY_PRESET.length, 11);
+  assert.equal(CAPABILITY_KEYS.length, 11);
 
   const keys = LEGACY_OFFERING_CAPABILITY_PRESET.map((e) => e.key);
   assert.equal(new Set(keys).size, keys.length, "duplicate key in preset");
@@ -123,6 +124,21 @@ test("preset is NOT derived from defaultEnabled", () => {
     assert.equal(CAPABILITY_CATALOG[key].defaultEnabled, false);
     assert.equal(LEGACY_OFFERING_PRESET_STATUS_BY_KEY[key], "ENABLED");
   }
+});
+
+// L2-M1A — the ratified Level 1 initialization intent for course materials.
+test("legacy Level 1 preset initializes COURSE_MATERIALS as ENABLED", () => {
+  assert.equal(LEGACY_OFFERING_PRESET_STATUS_BY_KEY.COURSE_MATERIALS, "ENABLED");
+  const entry = LEGACY_OFFERING_CAPABILITY_PRESET.find(
+    (e) => e.key === "COURSE_MATERIALS",
+  );
+  assert.ok(entry, "COURSE_MATERIALS must be present in the legacy preset");
+  assert.equal(entry.status, "ENABLED");
+
+  // The preset intent is INDEPENDENT of the catalog default: materials are
+  // defaultEnabled:false, so an unrelated offering gets nothing automatically
+  // while the established Level 1 course keeps its existing behavior.
+  assert.equal(CAPABILITY_CATALOG.COURSE_MATERIALS.defaultEnabled, false);
 });
 
 test("preset order is deterministic canonical key order", () => {

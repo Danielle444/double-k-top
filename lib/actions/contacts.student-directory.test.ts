@@ -114,6 +114,7 @@ const ALL_ENABLED_CAPABILITIES: Record<CapabilityKey, EffectiveCapabilityStatus>
   RIDING_HORSE_ASSIGNMENTS: "ENABLED",
   ADVANCED_INSTRUCTION: "ENABLED",
   TEACHING_PRACTICE: "ENABLED",
+  COURSE_MATERIALS: "ENABLED",
 };
 
 // Every capability defaults to ENABLED so the pre-existing tests keep exercising

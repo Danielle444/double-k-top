@@ -31,7 +31,7 @@ import {
   type OfferingCapabilityRowInput,
 } from "./offering-init-core";
 
-/** The exact ten rows the approved legacy preset describes (State B fixture). */
+/** The exact eleven rows the approved legacy preset describes (State B fixture). */
 function presetRows(): OfferingCapabilityRowInput[] {
   return LEGACY_OFFERING_CAPABILITY_PRESET.map((e) => ({
     capabilityKey: e.key,
@@ -57,11 +57,11 @@ function stateMap(
 // State A–E initialization
 // ===========================================================================
 
-test("State A — zero rows plans exactly the ten preset inserts", () => {
+test("State A — zero rows plans exactly the eleven preset inserts", () => {
   const plan = planLegacyOfferingInit([]);
   assert.equal(plan.state, "A");
   assert.equal(plan.blocked, false);
-  assert.equal(plan.writes.length, 10);
+  assert.equal(plan.writes.length, 11);
   assert.deepEqual(
     plan.writes.map((w) => w.capabilityKey),
     [...CAPABILITY_KEYS],
@@ -79,7 +79,7 @@ test("State B — the exact expected set and statuses is a successful no-op", ()
   assert.equal(plan.isNoOp, true);
   assert.equal(plan.writes.length, 0);
   assert.deepEqual([...plan.findings], []);
-  assert.equal(plan.detected.existing.length, 10);
+  assert.equal(plan.detected.existing.length, 11);
   assert.equal(plan.detected.missing.length, 0);
 });
 
@@ -102,7 +102,7 @@ test("State C — partial expected set blocks and plans zero writes", () => {
   assert.equal(plan.state, "BLOCKED");
   assert.equal(plan.writes.length, 0);
   assert.deepEqual([...plan.detected.missing].sort(), ["DUTIES", "RIDING"]);
-  assert.equal(plan.detected.existing.length, 8);
+  assert.equal(plan.detected.existing.length, 9);
   const missingCodes = plan.blockers
     .filter((b) => b.code === "MISSING_PRESET_ROW")
     .map((b) => b.key)
@@ -341,7 +341,7 @@ test("the exact initialized state validates cleanly", () => {
   const result = validateOfferingCapabilityState(presetRows(), activeCatalog());
   assert.equal(result.ok, true);
   assert.deepEqual([...result.findings], []);
-  assert.equal(result.effective.length, 10);
+  assert.equal(result.effective.length, 11);
 });
 
 test("an offering row referencing an INACTIVE catalog capability is FATAL", () => {
@@ -413,7 +413,7 @@ test("preset/catalog gate refuses a missing or retired catalog row", () => {
 
 test("preset/catalog gate refuses an empty catalog for every preset key", () => {
   const findings = checkPresetAgainstCatalog([]);
-  assert.equal(findings.length, 10);
+  assert.equal(findings.length, 11);
   assert.ok(findings.every((f) => f.code === "CATALOG_KEY_MISSING"));
 });
 

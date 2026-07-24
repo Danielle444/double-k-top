@@ -110,4 +110,16 @@ export const CAPABILITY_CATALOG: {
     defaultEnabled: false,
     dependsOn: [],
   },
+  // L2-M1A. OPTIONAL, not CORE: the material library must be deniable per
+  // offering. defaultEnabled is FALSE so a new or unrelated offering never
+  // receives materials automatically - the established Level 1 course gets it
+  // from the EXPLICIT legacy preset in capability-labels.ts instead, which is
+  // deliberately not derived from this hint. No dependencies: materials stand
+  // alone and are not clamped by RIDING or any other capability.
+  COURSE_MATERIALS: {
+    key: "COURSE_MATERIALS",
+    classification: "OPTIONAL",
+    defaultEnabled: false,
+    dependsOn: [],
+  },
 };

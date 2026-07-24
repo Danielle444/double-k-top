@@ -71,6 +71,7 @@ export const INITIAL_CAPABILITY_LABELS: {
   RIDING_HORSE_ASSIGNMENTS: "שיבוץ סוסים לרכיבות",
   ADVANCED_INSTRUCTION: "הדרכת מתקדמים",
   TEACHING_PRACTICE: "התנסויות מתחילים",
+  COURSE_MATERIALS: "חומרי קורס",
 };
 
 /** One (capability, saved status) pair of an initialization preset. */
@@ -81,9 +82,17 @@ export interface OfferingCapabilityPresetEntry {
 
 /**
  * The EXPLICIT legacy-course preset: the single existing operating course runs
- * every canonical module today, so all ten capabilities are initialized
+ * every canonical module today, so all eleven capabilities are initialized
  * ENABLED. No capability is READ_ONLY and no canonical capability is absent for
  * this specific preset.
+ *
+ * COURSE_MATERIALS is ENABLED here by an explicit, ratified business decision
+ * (L2-M1A): the established Level 1 course already serves course materials to
+ * its trainees today, and this preset states the Level 1 INITIALIZATION intent
+ * so that behavior is preserved when the materials reader is capability-gated
+ * in a later slice. It is a statement of intent only - this constant writes
+ * nothing, and no capability_course row exists for it until an operator applies
+ * one through the (untouched) admin CLI.
  *
  * Written as an exhaustive mapped record (compile-time proof that every
  * `CapabilityKey` is listed exactly once and no unknown key sneaks in), then
@@ -104,10 +113,11 @@ export const LEGACY_OFFERING_PRESET_STATUS_BY_KEY: {
   RIDING_HORSE_ASSIGNMENTS: "ENABLED",
   ADVANCED_INSTRUCTION: "ENABLED",
   TEACHING_PRACTICE: "ENABLED",
+  COURSE_MATERIALS: "ENABLED",
 };
 
 /**
- * The legacy preset in canonical key order — the exact ten rows an approved
+ * The legacy preset in canonical key order — the exact eleven rows an approved
  * State-A initialization inserts. Deterministic: the order is
  * `CAPABILITY_KEYS`, never object-iteration order of a database result.
  */

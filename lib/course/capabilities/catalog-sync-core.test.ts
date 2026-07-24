@@ -29,11 +29,11 @@ function synchronizedSnapshot(): CatalogRowInput[] {
 
 // --- State: empty catalog ----------------------------------------------------
 
-test("empty catalog plans exactly ten inserts with the exact initial labels", () => {
+test("empty catalog plans exactly eleven inserts with the exact initial labels", () => {
   const plan = planCatalogSync([]);
   assert.equal(plan.blocked, false);
-  assert.equal(plan.writes.length, 10);
-  assert.equal(plan.counts.inserts, 10);
+  assert.equal(plan.writes.length, 11);
+  assert.equal(plan.counts.inserts, 11);
   assert.equal(plan.counts.retirements, 0);
   assert.equal(plan.counts.reactivations, 0);
 

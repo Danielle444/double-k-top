@@ -154,6 +154,52 @@ test("documented RIDING dependency graph is represented exactly", () => {
   assert.equal(totalEdges, 3, "graph must contain exactly the three documented edges");
 });
 
+// 8b. L2-M1A — the COURSE_MATERIALS contract, stated exactly
+test("COURSE_MATERIALS is a single canonical key with the ratified contract", () => {
+  // Exactly once in the canonical list - not merely present.
+  const occurrences = CAPABILITY_KEYS.filter((k) => k === "COURSE_MATERIALS");
+  assert.equal(occurrences.length, 1, "COURSE_MATERIALS must appear exactly once");
+  assert.ok(isCapabilityKey("COURSE_MATERIALS"));
+
+  const meta = CAPABILITY_CATALOG.COURSE_MATERIALS;
+  assert.equal(meta.key, "COURSE_MATERIALS");
+  assert.equal(meta.classification, "OPTIONAL", "materials must be deniable per offering");
+  assert.equal(meta.defaultEnabled, false, "no offering may receive materials automatically");
+  assert.deepEqual([...meta.dependsOn], [], "materials stand alone - nothing clamps them");
+});
+
+// 8c. L2-M1A — every PRE-EXISTING entry is locked, so this slice cannot have
+// altered another capability's semantics as a side effect. Exact snapshot, not
+// a subset: a changed classification, defaultEnabled or edge fails here.
+const LOCKED_PRE_EXISTING_CONTRACT: ReadonlyArray<
+  readonly [CapabilityKey, "CORE" | "OPTIONAL", boolean, readonly CapabilityKey[]]
+> = [
+  ["SCHEDULE", "CORE", true, []],
+  ["CONTACTS", "CORE", true, []],
+  ["MESSAGES", "CORE", true, []],
+  ["ATTENDANCE", "OPTIONAL", true, []],
+  ["DUTIES", "OPTIONAL", false, []],
+  ["RIDING", "OPTIONAL", false, []],
+  ["PROGRESS_RIDING", "OPTIONAL", false, ["RIDING"]],
+  ["RIDING_HORSE_ASSIGNMENTS", "OPTIONAL", false, ["RIDING"]],
+  ["ADVANCED_INSTRUCTION", "OPTIONAL", false, ["RIDING"]],
+  ["TEACHING_PRACTICE", "OPTIONAL", false, []],
+];
+
+test("no pre-existing capability entry changed", () => {
+  for (const [key, classification, defaultEnabled, dependsOn] of LOCKED_PRE_EXISTING_CONTRACT) {
+    const meta = CAPABILITY_CATALOG[key];
+    assert.equal(meta.classification, classification, `${key} classification changed`);
+    assert.equal(meta.defaultEnabled, defaultEnabled, `${key} defaultEnabled changed`);
+    assert.deepEqual([...meta.dependsOn], [...dependsOn], `${key} dependsOn changed`);
+  }
+  // The catalog is exactly the ten locked entries plus COURSE_MATERIALS.
+  assert.deepEqual(
+    [...CAPABILITY_KEYS].sort(),
+    [...LOCKED_PRE_EXISTING_CONTRACT.map(([k]) => k), "COURSE_MATERIALS"].sort(),
+  );
+});
+
 // (supporting) documented presets: the CORE set and ATTENDANCE default-on
 test("core set and ATTENDANCE default-on preset match the handoff", () => {
   const core = entries

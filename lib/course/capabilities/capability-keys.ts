@@ -29,6 +29,14 @@
  * Scope (this stage): only the capabilities the handoff names explicitly
  * (CAP-4/CAP-5/§13/DUT-3). `TEACHING_PRACTICE` is the TP capability (TP-1/TP-7).
  * EXAMS is intentionally absent (EXAM-1: no EXAMS capability in first release).
+ *
+ * `COURSE_MATERIALS` (slice L2-M1A) owns the trainee-facing course-material
+ * library. It is a DEDICATED key precisely so no unrelated capability has to be
+ * reused to contain materials: the library has no CourseOffering ownership
+ * column, so the capability is the only offering-level authorization available
+ * to the later reader slice (L2-M1). Adding it here is CONTRACT ONLY - no
+ * runtime reader consults it in this slice, and until a `capability_catalog`
+ * row exists it resolves DISABLED for every offering (fail-closed, CAP-1).
  */
 export const CAPABILITY_KEYS = Object.freeze([
   "SCHEDULE",
@@ -41,6 +49,7 @@ export const CAPABILITY_KEYS = Object.freeze([
   "RIDING_HORSE_ASSIGNMENTS",
   "ADVANCED_INSTRUCTION",
   "TEACHING_PRACTICE",
+  "COURSE_MATERIALS",
 ] as const);
 
 /** Derived capability-key type — the only capability-key union in the codebase. */
