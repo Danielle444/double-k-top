@@ -74,9 +74,31 @@ function buildSections(rows: StudentContactRow[]): GroupSection[] {
   return sections;
 }
 
+interface InstructorContactsSectionProps {
+  /**
+   * The course whose trainee roster to show. REQUIRED - this component never
+   * renders "the current course": the id comes from an explicit instructor
+   * selection (see InstructorCourseScopedContactsSection) and is re-validated
+   * server-side on every read, so it is a request and never a grant.
+   */
+  courseOfferingId: string;
+}
+
 // View-only - there is no instructor edit action for contacts.
-export function InstructorContactsSection() {
+//
+// CLEARING ON COURSE SWITCH IS THE PARENT'S JOB, and the mechanism is
+// LOAD-BEARING: InstructorCourseScopedContactsSection mounts this with
+// key={courseOfferingId}, so choosing a different course REMOUNTS the component
+// and rows plus all four filters return to their initial state before the next
+// roster is requested. No previous course's rows or filters can survive.
+//
+// That is why the effect below does NOT synchronously reset state on
+// courseOfferingId change (which the repo's react-hooks/set-state-in-effect rule
+// rejects, and which would be redundant on a remount). If a future caller ever
+// mounts this WITHOUT the key, it must clear the previous course itself.
+export function InstructorContactsSection({ courseOfferingId }: InstructorContactsSectionProps) {
   const [rows, setRows] = useState<StudentContactRow[] | null>(null);
+  const [failed, setFailed] = useState(false);
   const [groupTab, setGroupTab] = useState("all");
   const [subgroupFilter, setSubgroupFilter] = useState("all");
   const [nameQuery, setNameQuery] = useState("");
@@ -84,13 +106,20 @@ export function InstructorContactsSection() {
 
   useEffect(() => {
     let cancelled = false;
-    getStudentContacts().then((result) => {
-      if (!cancelled) setRows(result);
-    });
+    getStudentContacts(courseOfferingId)
+      .then((result) => {
+        if (!cancelled) setRows(result);
+      })
+      .catch(() => {
+        // A course-context/roster defect propagates from the server by design
+        // (it must never be laundered into "this course has no trainees"). Show
+        // an explicit failure instead of leaving the tab stuck on "loading".
+        if (!cancelled) setFailed(true);
+      });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [courseOfferingId]);
 
   const groups = useMemo(() => {
     if (!rows) return [];
@@ -185,7 +214,11 @@ export function InstructorContactsSection() {
         </div>
       </div>
 
-      {rows === null ? (
+      {failed ? (
+        <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
+          לא ניתן לטעון את רשימת החניכים של הקורס שנבחר
+        </p>
+      ) : rows === null ? (
         <p className="text-base text-muted-foreground">טוען...</p>
       ) : sections.length === 0 ? (
         <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">

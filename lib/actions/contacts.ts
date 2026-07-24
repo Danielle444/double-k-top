@@ -2,8 +2,10 @@
 
 import { prisma } from "@/lib/prisma";
 import { getCurrentInstructor, getCurrentTrainee } from "@/lib/auth/actor";
-import { resolveCurrentCourseOffering } from "@/lib/course/current-offering";
-import { resolveTraineeCourseOffering } from "@/lib/course/actor-course-offering";
+import {
+  resolveTraineeCourseOffering,
+  resolveInstructorCourseOffering,
+} from "@/lib/course/actor-course-offering";
 import { getCurrentCourseEnrollmentRoster } from "@/lib/course/current-enrollments";
 import { getEffectiveCapabilities } from "@/lib/course/capabilities/offering-capabilities";
 import { loadStudentContactsWithDeps } from "./contacts-student-directory";
@@ -23,27 +25,37 @@ export interface StudentContactRow {
   phone: string | null;
 }
 
-// Audience-gated (Stage 0A3) + enrollment-backed (Multi-Course W5B1): the
-// STUDENT contact directory carries trainee PII (names + phone numbers), so it
-// is served ONLY to an authenticated instructor derived server-side from the
-// signed session via getCurrentInstructor(). A missing/invalid/wrong-audience/
-// inactive session yields a null actor (see actor-core deriveInstructorActor),
-// and a trainee cookie can never satisfy this gate, so no anonymous or trainee
-// caller receives any student data. The no-arg signature is unchanged (no
-// client-supplied id is trusted or even accepted), so callers need no edits,
-// and the ordering + StudentContactRow[] output shape are preserved unchanged.
+// Audience-gated (Stage 0A3) + enrollment-backed (Multi-Course W5B1) +
+// course-scoped (LEVEL 2 SLICE C0-B): the STUDENT contact directory carries
+// trainee PII (names + phone numbers), so it is served ONLY to an authenticated
+// instructor derived server-side from the signed session via
+// getCurrentInstructor(). A missing/invalid/wrong-audience/inactive session
+// yields a null actor (see actor-core deriveInstructorActor), and a trainee
+// cookie can never satisfy this gate, so no anonymous or trainee caller receives
+// any student data.
 //
-// W5B1 repoints ONLY this one read path from the legacy global Student
-// compatibility roster to the enrollment-backed current-course DAL: resolve the
-// singleton CourseOffering, load its ACTIVE enrollment roster at one captured
-// asOf, and map it to the same StudentContactRow[] contract in the same reviewed
-// W5B0 ordering. Structural failures (resolver ambiguity, membership anomalies,
-// malformed subgroup, duplicate id, DAL failure) fail loudly and never fall back
-// to prisma.student.findMany.
-export async function getStudentContacts(): Promise<StudentContactRow[]> {
-  return loadStudentContactsWithDeps({
+// C0-B makes the course context EXPLICIT and REQUIRED. `courseOfferingId` is a
+// REQUEST, never a grant: it is re-validated server-side by
+// resolveInstructorCourseOffering, which applies the audience gate again, checks
+// the id against the temporary allowed-offerings policy, and proves the offering
+// exists as exactly that id. Only the RESOLVED offering's id then reaches the
+// capability read and the roster read, so a request can never address an
+// offering the server did not verify. There is deliberately NO optional
+// parameter, NO default course, NO resolveCurrentCourseOffering, and NO Level 1
+// fallback: an unstated or disallowed course yields [] rather than a guess.
+//
+// The roster is the enrollment-backed DAL (never prisma.student.findMany), read
+// at the locked max(now, offering.startDate) instant so a future-dated PLANNED
+// offering can be PREVIEWED (see resolveRosterAsOf), and mapped to the same
+// StudentContactRow[] contract in the same reviewed W5B0 ordering. Structural
+// failures (a configured-but-missing offering, membership anomalies, malformed
+// subgroup, duplicate id, capability-reader or DAL failure) fail loudly.
+export async function getStudentContacts(
+  courseOfferingId: string,
+): Promise<StudentContactRow[]> {
+  return loadStudentContactsWithDeps(courseOfferingId, {
     getCurrentInstructor,
-    resolveCurrentCourseOffering,
+    resolveInstructorCourseOffering,
     getEffectiveCapabilities,
     getCurrentCourseEnrollmentRoster,
     now: () => new Date(),

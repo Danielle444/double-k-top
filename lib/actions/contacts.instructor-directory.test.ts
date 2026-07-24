@@ -482,14 +482,21 @@ test("the core orchestration module pulls no Next.js cookie/session or Prisma co
   );
 });
 
-test("no contacts UI component was modified by this slice", () => {
-  // C1A is server-side only. These three client components must still call the
-  // no-argument actions exactly as before - if a future edit threads a course id
-  // through the UI, that belongs to the separate instructor-context slice.
+test("the C1A trainee-facing instructor-directory UI path is still no-argument", () => {
+  // C1A is server-side only, and the LATER instructor-context slice (C0-B) must
+  // not have disturbed it: the instructor-contacts tab still routes to the same
+  // component for BOTH audiences, and that component still calls the NO-ARGUMENT
+  // action - the trainee's course context stays server-derived and no
+  // courseOfferingId is ever threaded through the trainee UI.
+  //
+  // The third case is the C0-B boundary marker: the STUDENT directory (a
+  // different action, instructor-only) is now explicitly course-scoped. It is
+  // asserted here so that the two directories' signatures can never silently
+  // converge.
   const cases: Array<[string, string]> = [
-    ["../components/ContactsSection.tsx", "<InstructorContactsSection />"],
+    ["../components/ContactsSection.tsx", "<StudentInstructorContactsSection />"],
     ["../../app/student/StudentInstructorContactsSection.tsx", "getInstructorContacts()"],
-    ["../../app/instructor/InstructorContactsSection.tsx", "getStudentContacts()"],
+    ["../../app/instructor/InstructorContactsSection.tsx", "getStudentContacts(courseOfferingId)"],
   ];
   for (const [relative, expected] of cases) {
     assert.ok(

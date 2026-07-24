@@ -393,14 +393,63 @@ test("no client component imports the temporary compatibility module", () => {
   assert.deepEqual(offenders, [], "the temporary policy is server-only");
 });
 
-test("no client component imports the options core or the options action", () => {
+/**
+ * The COMPLETE set of modules approved to consume the options SERVER ACTION
+ * (@/lib/actions/instructor-course-options). Exact allow-list, not a floor: an
+ * unapproved module that starts importing the action, and a listed module that
+ * stops, must BOTH fail.
+ *
+ * Ownership of each entry:
+ *  - app/instructor/InstructorCourseScopedContactsSection.tsx - the instructor
+ *    contacts course selector, SLICE C0-B. This is the ONLY surface allowed to
+ *    ask which courses an instructor may address; any other consumer is a new
+ *    course-context surface and needs its own review.
+ *
+ * Kept sorted so the comparison is deterministic regardless of walk order.
+ */
+const APPROVED_OPTIONS_ACTION_CONSUMERS: readonly string[] = [
+  "app/instructor/InstructorCourseScopedContactsSection.tsx",
+];
+
+/**
+ * The subset of the above that is a CLIENT component. Tracked separately (rather
+ * than reusing the list above) so that approving a future SERVER-side consumer
+ * cannot silently also approve a new client-side one: the two lists are asserted
+ * independently below, and a module in the wrong column fails.
+ */
+const APPROVED_OPTIONS_ACTION_CLIENT_CONSUMERS: readonly string[] = [
+  "app/instructor/InstructorCourseScopedContactsSection.tsx",
+];
+
+// The two rules below were ONE combined assertion until slice C0-B. They are
+// split because they are genuinely different rules with different verdicts:
+// reaching the PURE CORE from a client is always wrong (it is server-side
+// decision logic), whereas calling the SERVER ACTION from a client is the normal,
+// intended way to invoke it - so that one is an allow-list, not a prohibition.
+// Collapsing them again would either forbid the approved wiring or silently
+// legalise a client-side import of the core.
+
+test("no client component imports the PURE options core", () => {
   const offenders = SOURCES.filter(
     (s) =>
       /^\s*["']use client["']/m.test(s.src) &&
-      (importsModule(s.src, "instructor-offering-options-core") ||
-        importsModule(s.src, "instructor-course-options")),
+      importsModule(s.src, "instructor-offering-options-core"),
   ).map((s) => s.rel);
-  assert.deepEqual(offenders, []);
+  assert.deepEqual(
+    offenders,
+    [],
+    "the pure core is server-side only - a client must call the server action instead",
+  );
+});
+
+test("only the approved client component imports the options SERVER ACTION", () => {
+  const clientConsumers = SOURCES.filter(
+    (s) =>
+      /^\s*["']use client["']/m.test(s.src) && importsModule(s.src, "instructor-course-options"),
+  )
+    .map((s) => s.rel)
+    .sort();
+  assert.deepEqual(clientConsumers, [...APPROVED_OPTIONS_ACTION_CLIENT_CONSUMERS].sort());
 });
 
 test("the pure core imports nothing at runtime (policy, Prisma and session all injected)", () => {
@@ -413,13 +462,29 @@ test("the pure core imports nothing at runtime (policy, Prisma and session all i
   assert.deepEqual([...valueImports, ...bareImports], []);
 });
 
-test("C0-A is un-wired: nothing imports the options action yet", () => {
+test("only the approved production modules consume the options server action", () => {
+  // Replaces the original "C0-A is un-wired: nothing imports the options action
+  // yet" assertion, which was a TEMPORAL tripwire: its own message named slice
+  // C0-B as the one allowed to wire the selector, and C0-B has now done so. It
+  // becomes an exact approved-consumer allow-list rather than being deleted, so
+  // the reach of the options action stays under review.
+  //
+  // The two exclusions are structural, NOT convenience: the action module
+  // obviously references its own name, and test files are not production call
+  // sites. No production source file is filtered out to make this pass - every
+  // one that imports the action must be listed above.
   const consumers = SOURCES.filter(
     (s) =>
       importsModule(s.src, "instructor-course-options") &&
       !s.rel.startsWith("lib/actions/instructor-course-options") &&
       !s.rel.endsWith(".test.ts") &&
       !s.rel.endsWith(".test.tsx"),
-  ).map((s) => s.rel);
-  assert.deepEqual(consumers, [], "wiring the selector is the separate C0-B slice");
+  )
+    .map((s) => s.rel)
+    .sort();
+  assert.deepEqual(
+    consumers,
+    [...APPROVED_OPTIONS_ACTION_CONSUMERS].sort(),
+    "every options-action consumer must be explicitly approved and listed",
+  );
 });

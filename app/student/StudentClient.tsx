@@ -797,7 +797,7 @@ export function StudentClient() {
 
         {activeTab === "messages" && <StudentMessagesSection studentId={session.id} />}
 
-        {activeTab === "contacts" && <ContactsSection />}
+        {activeTab === "contacts" && <ContactsSection audience="trainee" />}
 
         {activeTab === "materials" && <CourseMaterialsSection role="student" />}
 

@@ -1,15 +1,22 @@
 /**
- * MULTI-COURSE W5B1 - focused tests for the enrollment-backed student contact
- * directory pilot (lib/actions/contacts.ts -> getStudentContacts).
+ * MULTI-COURSE W5B1 / LEVEL 2 SLICE C0-B - focused tests for the enrollment-backed,
+ * COURSE-SCOPED student contact directory (lib/actions/contacts.ts ->
+ * getStudentContacts).
  *
  * These exercise the dependency-injected orchestration `loadStudentContactsWithDeps`
  * with plain fakes, so no Next.js cookies and no live Prisma are needed. They lock
- * the W5B1 contract:
+ * the contract:
  *  - authorization is preserved exactly (getCurrentInstructor -> mayAccess -> []);
  *  - a trainee / anonymous caller (null instructor actor) gets [];
+ *  - course context is EXPLICITLY REQUESTED and re-validated server-side: a
+ *    missing/blank or disallowed offering denies with [], while a configured but
+ *    UNAVAILABLE offering fails loudly;
+ *  - every downstream read receives the RESOLVED offering id, never the requested
+ *    string (the cross-course guarantee);
+ *  - the roster instant is the locked max(now, startDate) policy;
  *  - the roster source is the enrollment DAL, mapped to the EXACT StudentContactRow
  *    shape in the reviewed W5B0 order;
- *  - resolver ambiguity, membership anomalies, and duplicate ids FAIL LOUDLY and
+ *  - membership anomalies and duplicate ids FAIL LOUDLY at the chosen instant and
  *    never fall back to the legacy global roster.
  *
  * Uses the existing `tsx` + node:test approach. Run with:
@@ -25,6 +32,7 @@ import { fileURLToPath } from "node:url";
 // getStudentContacts / getInstructorContacts still come from ./contacts.
 import {
   loadStudentContactsWithDeps,
+  resolveRosterAsOf,
   type StudentContactsDeps,
 } from "./contacts-student-directory";
 import {
@@ -37,11 +45,26 @@ import type {
   EnrollmentRosterResult,
   EnrollmentMembershipAnomaly,
 } from "@/lib/course/enrollment-view";
-import { AmbiguousCourseOfferingError } from "@/lib/course/current-offering";
+import {
+  MissingInstructorCourseOfferingIdError,
+  InstructorCourseOfferingNotAllowedError,
+  InstructorCourseOfferingUnavailableError,
+} from "@/lib/course/actor-course-offering-core";
 import { CAPABILITY_KEYS, type CapabilityKey } from "@/lib/course/capabilities/capability-keys";
 import type { EffectiveCapabilityStatus } from "@/lib/course/capabilities/effective-capability-core";
 
 const AS_OF = new Date("2026-07-19T12:00:00.000Z");
+
+// The requested id and the resolved id are deliberately DIFFERENT everywhere in
+// this suite. The requested string is what a client could influence; the resolved
+// id is what the server proved. Every downstream assertion below checks the
+// RESOLVED one, so any code path that leaked the requested string through would
+// fail loudly instead of coincidentally passing.
+const REQUESTED_OFFERING_ID = "offering-REQUESTED";
+const RESOLVED_OFFERING_ID = "offering-RESOLVED";
+
+/** A start date safely BEFORE AS_OF: the already-started (Level 1-like) case. */
+const STARTED_START_DATE = new Date("2026-01-05T00:00:00.000Z");
 
 // --- fixtures ---------------------------------------------------------------
 
@@ -105,7 +128,10 @@ function effectiveCapabilities(
 function makeDeps(overrides: Partial<StudentContactsDeps> = {}): StudentContactsDeps {
   return {
     getCurrentInstructor: async () => ({ id: "instructor-1" }),
-    resolveCurrentCourseOffering: async () => ({ id: "offering-1" }),
+    resolveInstructorCourseOffering: async () => ({
+      id: RESOLVED_OFFERING_ID,
+      startDate: STARTED_START_DATE,
+    }),
     getEffectiveCapabilities: async () => effectiveCapabilities(),
     getCurrentCourseEnrollmentRoster: async () => roster([]),
     now: () => AS_OF,
@@ -126,6 +152,7 @@ const CONTACT_ROW_KEYS = [
 
 test("authorized: maps the enrollment roster to StudentContactRow-compatible rows", async () => {
   const rows = await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
     makeDeps({
       getCurrentCourseEnrollmentRoster: async () =>
         roster([
@@ -142,6 +169,7 @@ test("authorized: maps the enrollment roster to StudentContactRow-compatible row
 
 test("authorized: output rows carry EXACTLY the six contract keys (no extras)", async () => {
   const rows = await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
     makeDeps({
       getCurrentCourseEnrollmentRoster: async () =>
         roster([traineeView("s1", "א", null, "אבן")]),
@@ -153,6 +181,7 @@ test("authorized: output rows carry EXACTLY the six contract keys (no extras)", 
 
 test("authorized: null phone stays null; null subgroup stays null", async () => {
   const rows = await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
     makeDeps({
       getCurrentCourseEnrollmentRoster: async () =>
         roster([traineeView("s1", "א", null, "אבן", null)]),
@@ -166,6 +195,7 @@ test("authorized: ordering is taken from the W5B0 roster and never re-sorted", a
   // Rows arrive already sorted by compareTraineeView; the mapping must preserve
   // that exact order (here s2 before s1, deliberately not alphabetical by id).
   const rows = await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
     makeDeps({
       getCurrentCourseEnrollmentRoster: async () =>
         roster([traineeView("s2", "א", 1, "אבן"), traineeView("s1", "ב", 1, "כהן")]),
@@ -174,22 +204,250 @@ test("authorized: ordering is taken from the W5B0 roster and never re-sorted", a
   assert.deepEqual(rows.map((r: StudentContactRow) => r.id), ["s2", "s1"]);
 });
 
-test("authorized: a single asOf is captured and passed to the roster DAL", async () => {
-  let capturedOffering: string | null = null;
-  let capturedAsOf: Date | null = null;
+// --- explicit course context (C0-B) -----------------------------------------
+
+test("the REQUESTED id is handed to the resolver verbatim (never pre-trimmed or rewritten)", async () => {
+  let received: string | null = null;
   await loadStudentContactsWithDeps(
+    "  offering-with-spaces  ",
     makeDeps({
-      resolveCurrentCourseOffering: async () => ({ id: "offering-XYZ" }),
-      now: () => AS_OF,
-      getCurrentCourseEnrollmentRoster: async (offeringId, options) => {
-        capturedOffering = offeringId;
-        capturedAsOf = options.asOf;
+      resolveInstructorCourseOffering: async (requestedId) => {
+        received = requestedId;
+        return { id: RESOLVED_OFFERING_ID, startDate: STARTED_START_DATE };
+      },
+    }),
+  );
+  // Normalization/rejection is the resolver's job, not this orchestration's.
+  assert.equal(received, "  offering-with-spaces  ");
+});
+
+test("downstream reads receive the RESOLVED id, never the requested id", async () => {
+  let capsOfferingId: string | null = null;
+  let rosterOfferingId: string | null = null;
+  await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
+    makeDeps({
+      getEffectiveCapabilities: async (offeringId) => {
+        capsOfferingId = offeringId;
+        return effectiveCapabilities();
+      },
+      getCurrentCourseEnrollmentRoster: async (offeringId) => {
+        rosterOfferingId = offeringId;
         return roster([]);
       },
     }),
   );
-  assert.equal(capturedOffering, "offering-XYZ");
-  assert.equal(capturedAsOf, AS_OF);
+  assert.equal(capsOfferingId, RESOLVED_OFFERING_ID);
+  assert.equal(rosterOfferingId, RESOLVED_OFFERING_ID);
+  assert.notEqual(capsOfferingId, REQUESTED_OFFERING_ID);
+  assert.notEqual(rosterOfferingId, REQUESTED_OFFERING_ID);
+});
+
+test("a MISSING/blank offering id denies with [] and reads nothing", async () => {
+  let capsCalled = false;
+  let rosterCalled = false;
+  const rows = await loadStudentContactsWithDeps(
+    "",
+    makeDeps({
+      resolveInstructorCourseOffering: async () => {
+        throw new MissingInstructorCourseOfferingIdError();
+      },
+      getEffectiveCapabilities: async () => {
+        capsCalled = true;
+        return effectiveCapabilities();
+      },
+      getCurrentCourseEnrollmentRoster: async () => {
+        rosterCalled = true;
+        return roster([]);
+      },
+    }),
+  );
+  assert.deepEqual(rows, []);
+  assert.equal(capsCalled, false, "must not read capabilities without a course context");
+  assert.equal(rosterCalled, false, "must not read the roster without a course context");
+});
+
+test("a DISALLOWED offering id denies with [] (never substitutes another offering)", async () => {
+  let rosterCalled = false;
+  const rows = await loadStudentContactsWithDeps(
+    "offering-not-in-policy",
+    makeDeps({
+      resolveInstructorCourseOffering: async () => {
+        throw new InstructorCourseOfferingNotAllowedError("offering-not-in-policy");
+      },
+      getCurrentCourseEnrollmentRoster: async () => {
+        rosterCalled = true;
+        return roster([traineeView("s1", "א", 1, "אבן", "050-1111111")]);
+      },
+    }),
+  );
+  assert.deepEqual(rows, []);
+  assert.equal(rosterCalled, false, "a refused course must never reach a PII read");
+});
+
+test("an UNAVAILABLE configured offering propagates (a real defect, never laundered into [])", async () => {
+  let rosterCalled = false;
+  await assert.rejects(
+    () =>
+      loadStudentContactsWithDeps(
+        REQUESTED_OFFERING_ID,
+        makeDeps({
+          resolveInstructorCourseOffering: async () => {
+            throw new InstructorCourseOfferingUnavailableError(REQUESTED_OFFERING_ID, "missing");
+          },
+          getCurrentCourseEnrollmentRoster: async () => {
+            rosterCalled = true;
+            return roster([]);
+          },
+        }),
+      ),
+    /unavailable \(missing\)/,
+  );
+  assert.equal(rosterCalled, false);
+});
+
+test("a NON-denial resolver failure propagates (never laundered into [])", async () => {
+  await assert.rejects(
+    () =>
+      loadStudentContactsWithDeps(
+        REQUESTED_OFFERING_ID,
+        makeDeps({
+          resolveInstructorCourseOffering: async () => {
+            throw new Error("simulated Prisma failure");
+          },
+        }),
+      ),
+    /simulated Prisma failure/,
+  );
+});
+
+test("strict call order: actor -> offering -> capability -> roster", async () => {
+  const calls: string[] = [];
+  await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
+    makeDeps({
+      getCurrentInstructor: async () => {
+        calls.push("actor");
+        return { id: "instructor-1" };
+      },
+      resolveInstructorCourseOffering: async () => {
+        calls.push("offering");
+        return { id: RESOLVED_OFFERING_ID, startDate: STARTED_START_DATE };
+      },
+      getEffectiveCapabilities: async () => {
+        calls.push("capability");
+        return effectiveCapabilities();
+      },
+      getCurrentCourseEnrollmentRoster: async () => {
+        calls.push("roster");
+        return roster([]);
+      },
+    }),
+  );
+  assert.deepEqual(calls, ["actor", "offering", "capability", "roster"]);
+});
+
+// --- locked rosterAsOf policy: max(now, startDate) --------------------------
+
+test("rosterAsOf: a FUTURE PLANNED offering is previewed at its startDate", async () => {
+  const now = new Date("2026-07-25T00:00:00.000Z");
+  const startDate = new Date("2026-07-26T00:00:00.000Z");
+  let rosterAsOf: Date | null = null;
+  await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
+    makeDeps({
+      now: () => now,
+      resolveInstructorCourseOffering: async () => ({ id: RESOLVED_OFFERING_ID, startDate }),
+      getCurrentCourseEnrollmentRoster: async (_offeringId, options) => {
+        rosterAsOf = options.asOf;
+        return roster([]);
+      },
+    }),
+  );
+  assert.equal(rosterAsOf, startDate);
+});
+
+test("rosterAsOf: an ALREADY-STARTED offering uses now (Level 1 unchanged)", async () => {
+  const now = new Date("2026-07-25T00:00:00.000Z");
+  const startDate = new Date("2026-01-05T00:00:00.000Z");
+  let rosterAsOf: Date | null = null;
+  await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
+    makeDeps({
+      now: () => now,
+      resolveInstructorCourseOffering: async () => ({ id: RESOLVED_OFFERING_ID, startDate }),
+      getCurrentCourseEnrollmentRoster: async (_offeringId, options) => {
+        rosterAsOf = options.asOf;
+        return roster([]);
+      },
+    }),
+  );
+  assert.equal(rosterAsOf, now);
+});
+
+test("rosterAsOf: a NULL startDate falls back to now (no date is ever fabricated)", async () => {
+  const now = new Date("2026-07-25T00:00:00.000Z");
+  let rosterAsOf: Date | null = null;
+  await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
+    makeDeps({
+      now: () => now,
+      resolveInstructorCourseOffering: async () => ({
+        id: RESOLVED_OFFERING_ID,
+        startDate: null,
+      }),
+      getCurrentCourseEnrollmentRoster: async (_offeringId, options) => {
+        rosterAsOf = options.asOf;
+        return roster([]);
+      },
+    }),
+  );
+  assert.equal(rosterAsOf, now);
+});
+
+test("rosterAsOf: startDate EXACTLY equal to now uses now (strict > only)", () => {
+  const now = new Date("2026-07-25T00:00:00.000Z");
+  const sameInstant = new Date("2026-07-25T00:00:00.000Z");
+  const chosen = resolveRosterAsOf({ id: RESOLVED_OFFERING_ID, startDate: sameInstant }, now);
+  assert.equal(chosen, now, "a non-future startDate must not displace now");
+});
+
+test("rosterAsOf: the pure policy is exactly max(now, startDate)", () => {
+  const now = new Date("2026-07-25T00:00:00.000Z");
+  const future = new Date("2026-07-26T00:00:00.000Z");
+  const past = new Date("2026-07-24T00:00:00.000Z");
+  assert.equal(resolveRosterAsOf({ id: "o", startDate: future }, now), future);
+  assert.equal(resolveRosterAsOf({ id: "o", startDate: past }, now), now);
+  assert.equal(resolveRosterAsOf({ id: "o", startDate: null }, now), now);
+});
+
+test("rosterAsOf: a genuine anomaly AT the previewed instant still throws", async () => {
+  // The policy shifts only the instant the roster is resolved at - it must NOT
+  // soften anomaly handling. A trainee still broken at the offering's own start
+  // date fails loudly exactly as at any other instant.
+  const now = new Date("2026-07-25T00:00:00.000Z");
+  const startDate = new Date("2026-07-26T00:00:00.000Z");
+  const anomaly: EnrollmentMembershipAnomaly = {
+    enrollmentId: "e9",
+    studentId: "s9",
+    kind: "NO_CURRENT_MEMBERSHIP",
+    currentMembershipCount: 0,
+  };
+  await assert.rejects(
+    () =>
+      loadStudentContactsWithDeps(
+        REQUESTED_OFFERING_ID,
+        makeDeps({
+          now: () => now,
+          resolveInstructorCourseOffering: async () => ({ id: RESOLVED_OFFERING_ID, startDate }),
+          getCurrentCourseEnrollmentRoster: async (_offeringId, options) => {
+            assert.equal(options.asOf, startDate, "must be asked at the previewed instant");
+            return roster([], [anomaly]);
+          },
+        }),
+      ),
+    /NO_CURRENT_MEMBERSHIP/,
+  );
 });
 
 // --- authorization preserved ------------------------------------------------
@@ -198,11 +456,12 @@ test("unauthorized: a null instructor actor returns [] without touching the rost
   let resolverCalled = false;
   let rosterCalled = false;
   const rows = await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
     makeDeps({
       getCurrentInstructor: async () => null,
-      resolveCurrentCourseOffering: async () => {
+      resolveInstructorCourseOffering: async () => {
         resolverCalled = true;
-        return { id: "offering-1" };
+        return { id: RESOLVED_OFFERING_ID, startDate: STARTED_START_DATE };
       },
       getCurrentCourseEnrollmentRoster: async () => {
         rosterCalled = true;
@@ -218,33 +477,15 @@ test("unauthorized: a null instructor actor returns [] without touching the rost
 test("trainee/anonymous: instructor-only gate yields [] (no student PII)", async () => {
   // A trainee or anonymous session collapses to a null instructor actor upstream;
   // the student directory gate is instructor-only, so access is denied with [].
+  // Supplying a perfectly valid offering id does not help.
   const rows = await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
     makeDeps({ getCurrentInstructor: async () => null }),
   );
   assert.deepEqual(rows, []);
 });
 
 // --- failures never fall back to the legacy global roster -------------------
-
-test("resolver ambiguity throws and does NOT fall back to a legacy roster", async () => {
-  let rosterCalled = false;
-  await assert.rejects(
-    () =>
-      loadStudentContactsWithDeps(
-        makeDeps({
-          resolveCurrentCourseOffering: async () => {
-            throw new AmbiguousCourseOfferingError(["offering-1", "offering-2"]);
-          },
-          getCurrentCourseEnrollmentRoster: async () => {
-            rosterCalled = true;
-            return roster([]);
-          },
-        }),
-      ),
-    /Ambiguous current CourseOffering/,
-  );
-  assert.equal(rosterCalled, false, "ambiguity must abort before any roster read");
-});
 
 test("a membership anomaly throws and does NOT fall back to a legacy roster", async () => {
   const anomaly: EnrollmentMembershipAnomaly = {
@@ -256,6 +497,7 @@ test("a membership anomaly throws and does NOT fall back to a legacy roster", as
   await assert.rejects(
     () =>
       loadStudentContactsWithDeps(
+        REQUESTED_OFFERING_ID,
         makeDeps({
           getCurrentCourseEnrollmentRoster: async () =>
             roster([traineeView("s1", "א", 1, "אבן")], [anomaly]),
@@ -275,6 +517,7 @@ test("a malformed-subgroup anomaly throws (never degrades to the global roster)"
   await assert.rejects(
     () =>
       loadStudentContactsWithDeps(
+        REQUESTED_OFFERING_ID,
         makeDeps({ getCurrentCourseEnrollmentRoster: async () => roster([], [anomaly]) }),
       ),
     /MALFORMED_SUBGROUP/,
@@ -285,6 +528,7 @@ test("a duplicate student id does NOT pass silently (throws)", async () => {
   await assert.rejects(
     () =>
       loadStudentContactsWithDeps(
+        REQUESTED_OFFERING_ID,
         makeDeps({
           getCurrentCourseEnrollmentRoster: async () =>
             roster([traineeView("s1", "א", 1, "אבן"), traineeView("s1", "א", 1, "אבן")]),
@@ -298,6 +542,7 @@ test("a DAL failure propagates (not swallowed into [])", async () => {
   await assert.rejects(
     () =>
       loadStudentContactsWithDeps(
+        REQUESTED_OFFERING_ID,
         makeDeps({
           getCurrentCourseEnrollmentRoster: async () => {
             throw new Error("simulated Prisma failure");
@@ -325,11 +570,12 @@ test("capability: unauthorized actor returns [] and calls neither resolver, caps
   let capsCalled = false;
   let rosterCalled = false;
   const rows = await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
     makeDeps({
       getCurrentInstructor: async () => null,
-      resolveCurrentCourseOffering: async () => {
+      resolveInstructorCourseOffering: async () => {
         resolverCalled = true;
-        return { id: "offering-1" };
+        return { id: RESOLVED_OFFERING_ID, startDate: STARTED_START_DATE };
       },
       getEffectiveCapabilities: async () => {
         capsCalled = true;
@@ -352,8 +598,8 @@ test("capability: ENABLED passes the trusted offering.id to caps + roster and re
   let rosterOfferingId: string | null = null;
   let rosterAsOf: Date | null = null;
   const rows = await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
     makeDeps({
-      resolveCurrentCourseOffering: async () => ({ id: "offering-ENABLED" }),
       now: () => AS_OF,
       getEffectiveCapabilities: async (offeringId) => {
         capsOfferingId = offeringId;
@@ -370,9 +616,9 @@ test("capability: ENABLED passes the trusted offering.id to caps + roster and re
     }),
   );
   // The capability lookup and the roster read both receive EXACTLY the trusted
-  // offering.id from resolveCurrentCourseOffering, with the existing asOf.
-  assert.equal(capsOfferingId, "offering-ENABLED");
-  assert.equal(rosterOfferingId, "offering-ENABLED");
+  // resolved offering id; the offering has already started, so asOf is now.
+  assert.equal(capsOfferingId, RESOLVED_OFFERING_ID);
+  assert.equal(rosterOfferingId, RESOLVED_OFFERING_ID);
   assert.equal(rosterAsOf, AS_OF);
   assert.deepEqual(rows, [
     { id: "s1", fullName: "full s1", lastName: "אבן", groupName: "א", subgroupNumber: 1, phone: "050-1111111" },
@@ -383,6 +629,7 @@ test("capability: ENABLED passes the trusted offering.id to caps + roster and re
 test("capability: READ_ONLY behaves exactly like ENABLED (roster served, not blocked)", async () => {
   let rosterCalled = false;
   const rows = await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
     makeDeps({
       getEffectiveCapabilities: async () => effectiveCapabilities({ CONTACTS: "READ_ONLY" }),
       getCurrentCourseEnrollmentRoster: async () => {
@@ -398,6 +645,7 @@ test("capability: READ_ONLY behaves exactly like ENABLED (roster served, not blo
 test("capability: DISABLED returns [] and never reads the roster", async () => {
   let rosterCalled = false;
   const rows = await loadStudentContactsWithDeps(
+    REQUESTED_OFFERING_ID,
     makeDeps({
       getEffectiveCapabilities: async () => effectiveCapabilities({ CONTACTS: "DISABLED" }),
       getCurrentCourseEnrollmentRoster: async () => {
@@ -416,9 +664,13 @@ test("capability: an offering-resolution failure propagates before caps or roste
   await assert.rejects(
     () =>
       loadStudentContactsWithDeps(
+        REQUESTED_OFFERING_ID,
         makeDeps({
-          resolveCurrentCourseOffering: async () => {
-            throw new AmbiguousCourseOfferingError(["offering-1", "offering-2"]);
+          resolveInstructorCourseOffering: async () => {
+            throw new InstructorCourseOfferingUnavailableError(
+              REQUESTED_OFFERING_ID,
+              "id-mismatch",
+            );
           },
           getEffectiveCapabilities: async () => {
             capsCalled = true;
@@ -430,7 +682,7 @@ test("capability: an offering-resolution failure propagates before caps or roste
           },
         }),
       ),
-    /Ambiguous current CourseOffering/,
+    /unavailable \(id-mismatch\)/,
   );
   assert.equal(capsCalled, false, "offering failure must abort before the capability lookup");
   assert.equal(rosterCalled, false, "offering failure must abort before any roster read");
@@ -441,6 +693,7 @@ test("capability: a capability-reader failure propagates and never falls open to
   await assert.rejects(
     () =>
       loadStudentContactsWithDeps(
+        REQUESTED_OFFERING_ID,
         makeDeps({
           getEffectiveCapabilities: async () => {
             throw new Error("simulated capability-reader failure");
@@ -456,36 +709,11 @@ test("capability: a capability-reader failure propagates and never falls open to
   assert.equal(rosterCalled, false, "a capability-reader failure must not fail open to the roster");
 });
 
-test("capability: strict call order actor -> offering -> capability -> roster", async () => {
-  const calls: string[] = [];
-  await loadStudentContactsWithDeps(
-    makeDeps({
-      getCurrentInstructor: async () => {
-        calls.push("actor");
-        return { id: "instructor-1" };
-      },
-      resolveCurrentCourseOffering: async () => {
-        calls.push("offering");
-        return { id: "offering-1" };
-      },
-      getEffectiveCapabilities: async () => {
-        calls.push("capability");
-        return effectiveCapabilities();
-      },
-      getCurrentCourseEnrollmentRoster: async () => {
-        calls.push("roster");
-        return roster([]);
-      },
-    }),
-  );
-  assert.deepEqual(calls, ["actor", "offering", "capability", "roster"]);
-});
+// --- surrounding contract ---------------------------------------------------
 
-// --- surrounding contract unchanged ----------------------------------------
-
-test("getStudentContacts keeps its no-argument signature", () => {
+test("getStudentContacts takes exactly ONE required course offering id", () => {
   assert.equal(typeof getStudentContacts, "function");
-  assert.equal(getStudentContacts.length, 0);
+  assert.equal(getStudentContacts.length, 1);
 });
 
 test("getInstructorContacts remains exported and unchanged (no-arg)", () => {
@@ -493,26 +721,62 @@ test("getInstructorContacts remains exported and unchanged (no-arg)", () => {
   assert.equal(getInstructorContacts.length, 0);
 });
 
+test("the action wires the INSTRUCTOR resolver and never the legacy singleton", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("./contacts.ts", import.meta.url)),
+    "utf8",
+  );
+  const start = src.indexOf("export async function getStudentContacts");
+  assert.ok(start >= 0, "getStudentContacts must still be declared in contacts.ts");
+  const end = src.indexOf("export interface InstructorContactRow");
+  assert.ok(end > start, "the InstructorContactRow declaration must still follow it");
+  const action = src.slice(start, end);
+  assert.match(action, /resolveInstructorCourseOffering/);
+  assert.ok(
+    !action.includes("resolveCurrentCourseOffering"),
+    "the student-contacts path must not use the legacy singleton resolver",
+  );
+  assert.ok(
+    !/prisma\.student\./.test(action),
+    "the student directory must never read a global Student roster",
+  );
+  // The whole module must have dropped the legacy resolver import too.
+  assert.ok(
+    !src.includes("@/lib/course/current-offering"),
+    "contacts.ts must no longer import the legacy singleton resolver",
+  );
+});
+
 // --- module purity: no Next cookie/session or Prisma at runtime -------------
 
 test("the core orchestration module pulls no Next.js cookie/session or Prisma code", () => {
   // Structural guard on the core module's OWN import graph: everything impure is
-  // injected via StudentContactsDeps, so its only runtime (value) import must be
-  // the pure audience-gate predicate. A type-only import (e.g. EnrollmentRosterResult)
-  // is erased and irrelevant. This fails loudly if a future edit reaches for
-  // next/headers, next/cookies, Prisma, or the session/actor DAL.
+  // injected via StudentContactsDeps, so its only runtime (value) imports are the
+  // pure audience-gate predicate and the pure typed course-context errors. A
+  // type-only import (e.g. EnrollmentRosterResult) is erased and irrelevant. This
+  // fails loudly if a future edit reaches for next/headers, next/cookies, Prisma,
+  // or the session/actor DAL.
   const corePath = fileURLToPath(new URL("./contacts-student-directory.ts", import.meta.url));
   const src = readFileSync(corePath, "utf8");
+  // [\s\S] (not [^\n]) so a MULTI-LINE value import cannot slip past this guard;
+  // the lazy quantifier stops at the first `from "..."` of each import.
   const valueImports = [
-    ...src.matchAll(/^\s*import\s+(?!type\b)[^\n]*?from\s*["']([^"']+)["']/gm),
+    ...src.matchAll(/^\s*import\s+(?!type\b)[\s\S]*?from\s*["']([^"']+)["']/gm),
   ].map((m) => m[1]);
   const bareImports = [...src.matchAll(/^\s*import\s+["']([^"']+)["']/gm)].map((m) => m[1]);
   const runtimeSpecifiers = [...valueImports, ...bareImports];
-  assert.deepEqual(runtimeSpecifiers, ["@/lib/auth/contact-directory-access"]);
+  assert.deepEqual(runtimeSpecifiers, [
+    "@/lib/auth/contact-directory-access",
+    "@/lib/course/actor-course-offering-core",
+  ]);
   for (const spec of runtimeSpecifiers) {
     assert.ok(
       !/next\/(headers|cookies)|prisma|auth\/(actor|session)/.test(spec),
       `core module must not import ${spec}`,
     );
   }
+  assert.ok(
+    !src.includes("resolveCurrentCourseOffering"),
+    "the core must not reference the legacy singleton resolver",
+  );
 });

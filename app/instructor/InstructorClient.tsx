@@ -1077,7 +1077,7 @@ export function InstructorClient({
           </div>
         )}
 
-        {activeTab === "contacts" && <ContactsSection />}
+        {activeTab === "contacts" && <ContactsSection audience="instructor" />}
 
         {activeTab === "materials" && <CourseMaterialsSection role="instructor" />}
 
