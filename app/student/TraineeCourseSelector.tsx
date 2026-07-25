@@ -11,6 +11,20 @@ interface TraineeCourseSelectorProps {
   options: TraineeCourseOptionView[];
   selectedId: string | null;
   onSelect: (courseOfferingId: string) => void;
+  /**
+   * UNIFIED TRAINEE SCHEDULE - SLICE U1 (UI correction): an optional trailing
+   * pseudo-option pill rendered in the SAME row as the real course pills -
+   * used only by the schedule tab's "הלו״ז שלי" unified view. It is NEVER a
+   * real CourseOffering id: its own isActive/onSelect drive its
+   * selection/highlight independently of selectedId/onSelect above, so no
+   * fake offering id is ever created, stored, or forwarded to a server
+   * action.
+   */
+  extraOption?: {
+    label: string;
+    isActive: boolean;
+    onSelect: () => void;
+  };
 }
 
 /**
@@ -34,6 +48,7 @@ export function TraineeCourseSelector({
   options,
   selectedId,
   onSelect,
+  extraOption,
 }: TraineeCourseSelectorProps) {
   if (options.length <= 1) return null;
 
@@ -62,6 +77,20 @@ export function TraineeCourseSelector({
             </button>
           );
         })}
+        {extraOption && (
+          <button
+            type="button"
+            aria-pressed={extraOption.isActive}
+            onClick={extraOption.onSelect}
+            className={`min-h-11 flex-1 basis-40 rounded-full px-4 py-2 text-sm font-semibold ${
+              extraOption.isActive
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground"
+            }`}
+          >
+            {extraOption.label}
+          </button>
+        )}
       </div>
     </div>
   );

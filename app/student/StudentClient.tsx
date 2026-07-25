@@ -26,6 +26,7 @@ import { TraineeCourseSelector } from "@/app/student/TraineeCourseSelector";
 import { filterTraineeNavEntries, isLevel2OnlyTrainee } from "@/app/student/trainee-nav-visibility";
 import { updateOwnPrivateHorseName } from "@/lib/actions/horses";
 import { ScheduleSection } from "@/app/student/ScheduleSection";
+import { UnifiedScheduleSection } from "@/app/student/UnifiedScheduleSection";
 import { DutiesSection } from "@/app/student/DutiesSection";
 import { StudentMessagesSection } from "@/app/student/StudentMessagesSection";
 import { StudentWeeklyFeedbackSection } from "@/app/student/StudentWeeklyFeedbackSection";
@@ -148,6 +149,26 @@ interface StoredSession {
 // always resolves visually, and it never leaks the raw server error or any PII.
 const SCHEDULE_LOAD_ERROR_MESSAGE = "לא ניתן לטעון כרגע את הלו״ז. נסו לרענן את העמוד.";
 
+// UNIFIED TRAINEE SCHEDULE - SLICE U1: resolves the single calendar day the
+// "הלו״ז שלי" sub-view reads for, from the SAME date-navigation state the
+// course-specific "schedule" tab already uses (dayFilter + the currently
+// navigated week), never a second/conflicting date state.
+// getUnifiedScheduleForTrainee always wants one specific day, never "all"
+// (see its own comment), so when the week-wide "all" filter is selected this
+// falls back to today (if today falls inside the currently navigated week)
+// or otherwise that week's own start date - it never invents a date outside
+// the week the trainee is currently looking at.
+export function resolveUnifiedScheduleDayKey(
+  dayFilter: string | "all",
+  selectedWeek: WeekOption | null,
+  todayKey: string,
+): string | null {
+  if (dayFilter !== "all") return dayFilter;
+  if (!selectedWeek) return null;
+  if (todayKey >= selectedWeek.startDate && todayKey <= selectedWeek.endDate) return todayKey;
+  return selectedWeek.startDate;
+}
+
 // TEMPORARY LAUNCH HOTFIX (Level 2 group view) - PURE classifier for "the course
 // the trainee is currently viewing is a Level 2 offering", read ONLY from the
 // already-present, server-returned option metadata (the selected option's own
@@ -221,6 +242,13 @@ export function StudentClient() {
   // the unchanged single-course path.
   const [courseOptions, setCourseOptions] = useState<TraineeCourseOptionView[] | null>(null);
   const [selectedCourseOfferingId, setSelectedCourseOfferingId] = useState<string | null>(null);
+  // UNIFIED TRAINEE SCHEDULE - SLICE U1: which schedule sub-view is shown -
+  // the selected course (Level 1/Level 2, the unchanged default) or the
+  // combined "הלו״ז שלי" cross-course view. UX STATE ONLY: rendering the
+  // unified view still calls getUnifiedScheduleForTrainee with no offering
+  // id, student id, or dual flag - it independently re-derives and
+  // re-authorizes eligibility server-side (see its own comment).
+  const [scheduleSubView, setScheduleSubView] = useState<"course" | "unified">("course");
   const [weeks, setWeeks] = useState<WeekOption[] | null>(null);
   const [selectedWeekId, setSelectedWeekId] = useState<string | null>(null);
   const [dayFilter, setDayFilter] = useState<string | "all">("all");
@@ -440,6 +468,19 @@ export function StudentClient() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id]);
+
+  // UNIFIED TRAINEE SCHEDULE - SLICE U1: picking a course via the existing,
+  // UNCHANGED TraineeCourseSelector (whose onSelect wiring must keep writing
+  // ONLY setSelectedCourseOfferingId - see the pinned dual-course-selector
+  // wiring contract in trainee-client-course-selection.contract.test.ts)
+  // always returns the schedule sub-view to the course-specific view,
+  // without touching that wiring. A no-op when the id does not actually
+  // change (e.g. the initial null -> auto-selected transition while already
+  // on "course").
+  useEffect(() => {
+    /* eslint-disable-next-line react-hooks/set-state-in-effect */
+    setScheduleSubView("course");
+  }, [selectedCourseOfferingId]);
 
   useEffect(() => {
     // Waits for the course options so the very first week query already carries
@@ -728,6 +769,10 @@ export function StudentClient() {
 
   const todayKey = getLocalDateKey(now);
   const todayWeek = weeks?.find((w) => w.startDate <= todayKey && todayKey <= w.endDate) ?? null;
+  // UNIFIED TRAINEE SCHEDULE - SLICE U1: the currently navigated week (by
+  // id), used only to resolve a single day for the unified reader when
+  // dayFilter is "all" - see resolveUnifiedScheduleDayKey.
+  const selectedWeek = weeks?.find((w) => w.id === selectedWeekId) ?? null;
 
   // TRAINEE DUTIES WEEK VISIBILITY FIX - the Duties tab's range, derived ONLY from
   // the independent duty-week state, so it is unaffected by the schedule course
@@ -862,13 +907,55 @@ export function StudentClient() {
                 nothing unless this trainee has more than one eligible course. It
                 sits above the home schedule block so a fresh dual trainee (no course
                 selected yet) can choose one instead of only seeing an empty day. */}
-            <TraineeCourseSelector
-              options={courseOptions ?? []}
-              selectedId={selectedCourseOfferingId}
-              onSelect={setSelectedCourseOfferingId}
-            />
+            {/* UNIFIED TRAINEE SCHEDULE - SLICE U1 (UI correction): the course
+                selector is visible ONLY while "לפי קורס" is the active
+                sub-view - selecting "הלו״ז שלי" hides it completely rather
+                than leaving it visible alongside the unified view. For a
+                single-course trainee scheduleSubView never leaves "course"
+                (the toggle below is never shown), so this is a no-op there. */}
+            {scheduleSubView === "course" && (
+              <TraineeCourseSelector
+                options={courseOptions ?? []}
+                selectedId={selectedCourseOfferingId}
+                onSelect={setSelectedCourseOfferingId}
+              />
+            )}
 
-            {weeks === null ? (
+            {/* UNIFIED TRAINEE SCHEDULE - SLICE U1: the "הלו״ז שלי" sub-view
+                toggle, additive to (never replacing) the course selector
+                above. Only rendered for a trainee with 2+ eligible courses -
+                the SAME server-derived cardinality already computed as
+                dualEnrolled above, never a client-supplied dual flag. */}
+            {dualEnrolled && (
+              <div className="flex gap-2 text-sm">
+                <button
+                  type="button"
+                  onClick={() => setScheduleSubView("course")}
+                  className={`min-h-11 flex-1 rounded-full px-4 py-2 font-semibold ${
+                    scheduleSubView === "course"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  לפי קורס
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setScheduleSubView("unified")}
+                  className={`min-h-11 flex-1 rounded-full px-4 py-2 font-semibold ${
+                    scheduleSubView === "unified"
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  הלו&quot;ז שלי
+                </button>
+              </div>
+            )}
+
+            {scheduleSubView === "unified" && dualEnrolled ? (
+              <UnifiedScheduleSection studentId={session.id} dayKey={todayKey} />
+            ) : weeks === null ? (
               <p className="text-base text-muted-foreground">טוען...</p>
             ) : scheduleLoadError ? (
               <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
@@ -898,11 +985,29 @@ export function StudentClient() {
             {/* One of THREE mount sites for the course switcher (the home/today and
                 contacts screens are the other two). It renders nothing unless this
                 trainee genuinely has more than one eligible course. */}
+            {/* UNIFIED TRAINEE SCHEDULE - SLICE U1 (UI correction): ONE
+                selector row for dual trainees - the real course pills plus a
+                trailing "הלו״ז שלי" pseudo-option pill, via
+                TraineeCourseSelector's own extraOption slot (never a second,
+                separate toggle row). The pseudo-option is never modeled as a
+                CourseOffering id: it drives ONLY scheduleSubView, completely
+                independent of selectedCourseOfferingId, which stays exactly
+                as last chosen so returning to a real course restores it. */}
             <TraineeCourseSelector
               options={courseOptions ?? []}
               selectedId={selectedCourseOfferingId}
               onSelect={setSelectedCourseOfferingId}
+              extraOption={
+                dualEnrolled
+                  ? {
+                      label: "הלו״ז שלי",
+                      isActive: scheduleSubView === "unified",
+                      onSelect: () => setScheduleSubView("unified"),
+                    }
+                  : undefined
+              }
             />
+
             {weeks === null ? (
               <p className="text-base text-muted-foreground">טוען...</p>
             ) : scheduleLoadError ? (
@@ -911,6 +1016,11 @@ export function StudentClient() {
               </p>
             ) : (
               <>
+                {/* The date-navigation control is SHARED, unchanged, and reused
+                    verbatim by both sub-views (see resolveUnifiedScheduleDayKey) -
+                    switching to "הלו״ז שלי" never introduces a second/conflicting
+                    date state, and switching back preserves the normal
+                    course-specific week/day selection exactly as before. */}
                 <WeekDayPicker
                   weeks={weeks}
                   selectedWeekId={selectedWeekId}
@@ -922,25 +1032,32 @@ export function StudentClient() {
                   dayFilter={dayFilter}
                   onSelectDay={setDayFilter}
                 />
-                {/* Bounded internal scroll (unlike the unbounded "today" preview
-                    above, this is the primary full-week view) - the day-group
-                    labels inside ScheduleSection are already `sticky top-0`;
-                    without this bounded box they'd resolve against the page's
-                    own scroll and collide with/hide behind the shell header's
-                    own `sticky top-0 z-20` above. Wrapping just this call (not
-                    the WeekDayPicker) gives the sticky day labels their own
-                    isolated scroll container, same fix shape already used for
-                    the instructor "לו"ז" tab. */}
-                <div className="max-h-[calc(100vh-180px)] overflow-y-auto">
-                  <ScheduleSection
+                {scheduleSubView === "unified" && dualEnrolled ? (
+                  <UnifiedScheduleSection
                     studentId={session.id}
-                    weeklyScheduleId={selectedWeekId}
-                    dayFilter={dayFilter}
-                    courseOfferingId={selectedCourseOfferingId}
-                    viewingLevel2={viewingLevel2}
-                    dualEnrolled={dualEnrolled}
+                    dayKey={resolveUnifiedScheduleDayKey(dayFilter, selectedWeek, todayKey)}
                   />
-                </div>
+                ) : (
+                  // Bounded internal scroll (unlike the unbounded "today" preview
+                  // above, this is the primary full-week view) - the day-group
+                  // labels inside ScheduleSection are already `sticky top-0`;
+                  // without this bounded box they'd resolve against the page's
+                  // own scroll and collide with/hide behind the shell header's
+                  // own `sticky top-0 z-20` above. Wrapping just this call (not
+                  // the WeekDayPicker) gives the sticky day labels their own
+                  // isolated scroll container, same fix shape already used for
+                  // the instructor "לו"ז" tab.
+                  <div className="max-h-[calc(100vh-180px)] overflow-y-auto">
+                    <ScheduleSection
+                      studentId={session.id}
+                      weeklyScheduleId={selectedWeekId}
+                      dayFilter={dayFilter}
+                      courseOfferingId={selectedCourseOfferingId}
+                      viewingLevel2={viewingLevel2}
+                      dualEnrolled={dualEnrolled}
+                    />
+                  </div>
+                )}
               </>
             )}
           </div>

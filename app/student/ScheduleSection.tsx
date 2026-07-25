@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   getScheduleForStudent,
   type GroupFilter,
@@ -25,7 +25,7 @@ function combinedParticipationBadgeLabel(value: boolean | null): string | null {
   return value ? "עם משולב" : "ללא משולב";
 }
 
-function isItemActiveNow(item: ScheduleItemView, now: Date): boolean {
+export function isItemActiveNow(item: ScheduleItemView, now: Date): boolean {
   const todayKey = now.toISOString().slice(0, 10);
   if (item.dateKey !== todayKey) return false;
   const [sh, sm] = item.startTime.split(":").map(Number);
@@ -211,16 +211,24 @@ function ComplexRidingPlanSection({
 // stale cards and mounts fresh ones at isExpanded=false, with no manual
 // "reset expanded state" bookkeeping needed and no risk of one card's
 // expanded plan leaking under another.
-function ScheduleCard({
+export function ScheduleCard({
   item,
   active,
   compact = false,
   studentId,
+  extraBadges,
 }: {
   item: ScheduleItemView;
   active: boolean;
   compact?: boolean;
   studentId: string;
+  // UNIFIED TRAINEE SCHEDULE - SLICE U1: an optional extra badge slot rendered
+  // in the same always-visible badge row as the group/combined-participation
+  // badges (never inside the compact-only details dialog). Undefined for every
+  // existing caller in this file, so Level 1/Level 2 rendering is byte-identical;
+  // only UnifiedScheduleSection.tsx passes this, for the per-item source-course
+  // and cross-course-overlap badges.
+  extraBadges?: ReactNode;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   // Compact/grid cards (rendered inside ScheduleTimeGrid's fixed-height,
@@ -331,6 +339,7 @@ function ScheduleCard({
               </span>
             );
           })()}
+          {extraBadges}
         </div>
       </div>
       <div className="flex items-start justify-between gap-2">
