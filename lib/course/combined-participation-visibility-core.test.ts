@@ -16,6 +16,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   COMBINED_PARTICIPATION_HIDDEN_LEVEL,
+  COMBINED_PARTICIPATION_PLACEHOLDER_DESCRIPTION,
+  COMBINED_PARTICIPATION_PLACEHOLDER_TITLE,
+  buildHiddenCombinedParticipationPlaceholders,
   filterTraineeScheduleItemsForCombinedParticipation,
   isTraineeDualEnrolledFromRows,
   resolveTraineeDualEnrollmentWithDeps,
@@ -283,4 +286,199 @@ test("the selected offering id never reaches the enrollment query", () => {
   return resolveTraineeDualEnrollmentWithDeps(L2, deps).then(() => {
     assert.ok(!JSON.stringify(capturedQuery).includes(L2), "the offering id must not appear in the query");
   });
+});
+
+// ---------------------------------------------------------------------------
+// SLICE 2.1 - buildHiddenCombinedParticipationPlaceholders
+// ---------------------------------------------------------------------------
+
+interface FakeScheduleRow {
+  id: string;
+  date: Date;
+  startTime: string;
+  endTime: string;
+  groupName: string | null;
+  combinedParticipation: boolean | null;
+}
+
+function row(overrides: Partial<FakeScheduleRow> = {}): FakeScheduleRow {
+  return {
+    id: "item-1",
+    date: new Date("2026-07-05T00:00:00.000Z"),
+    startTime: "09:00",
+    endTime: "10:00",
+    groupName: null,
+    combinedParticipation: false,
+    ...overrides,
+  };
+}
+
+test("the fixed placeholder wording matches the required product copy exactly", () => {
+  assert.equal(COMBINED_PARTICIPATION_PLACEHOLDER_TITLE, "זמן עם לו״ז רמה 1");
+  assert.equal(COMBINED_PARTICIPATION_PLACEHOLDER_DESCRIPTION, "יש לעבור ללוח רמה 1 לפרטים");
+});
+
+test("(SLICE 2.1 - 1) dual + L2 + hidden item -> exactly one placeholder with the fixed neutral wording", () => {
+  const items = [row({ id: "a" })];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: COMBINED_PARTICIPATION_HIDDEN_LEVEL,
+    isDualEnrolled: true,
+  });
+  assert.equal(placeholders.length, 1);
+  assert.equal(placeholders[0].title, COMBINED_PARTICIPATION_PLACEHOLDER_TITLE);
+  assert.equal(placeholders[0].description, COMBINED_PARTICIPATION_PLACEHOLDER_DESCRIPTION);
+  assert.equal(placeholders[0].startTime, "09:00");
+  assert.equal(placeholders[0].endTime, "10:00");
+});
+
+test("(SLICE 2.1 - 2) dual + L2 + true/null -> no placeholders (item is shown for real, never replaced)", () => {
+  const items = [row({ id: "a", combinedParticipation: true }), row({ id: "b", combinedParticipation: null })];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: COMBINED_PARTICIPATION_HIDDEN_LEVEL,
+    isDualEnrolled: true,
+  });
+  assert.deepEqual(placeholders, []);
+});
+
+test("(SLICE 2.1 - 3) Level-2-only (not dual) -> no placeholders even when combinedParticipation is false", () => {
+  const items = [row({ combinedParticipation: false })];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: COMBINED_PARTICIPATION_HIDDEN_LEVEL,
+    isDualEnrolled: false,
+  });
+  assert.deepEqual(placeholders, []);
+});
+
+test("(SLICE 2.1 - 4) Level 1 selected -> no placeholders", () => {
+  const items = [row({ combinedParticipation: false })];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: 1,
+    isDualEnrolled: true,
+  });
+  assert.deepEqual(placeholders, []);
+});
+
+test("(SLICE 2.1 - 5) touching hidden items in the same day+group collapse into one placeholder spanning the full range", () => {
+  const items = [
+    row({ id: "a", startTime: "09:00", endTime: "10:00" }),
+    row({ id: "b", startTime: "10:00", endTime: "11:00" }),
+  ];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: 2,
+    isDualEnrolled: true,
+  });
+  assert.equal(placeholders.length, 1);
+  assert.equal(placeholders[0].startTime, "09:00");
+  assert.equal(placeholders[0].endTime, "11:00");
+});
+
+test("(SLICE 2.1 - 6) overlapping hidden items collapse to the union of their ranges", () => {
+  const items = [
+    row({ id: "a", startTime: "09:00", endTime: "10:30" }),
+    row({ id: "b", startTime: "10:00", endTime: "11:00" }),
+  ];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: 2,
+    isDualEnrolled: true,
+  });
+  assert.equal(placeholders.length, 1);
+  assert.equal(placeholders[0].startTime, "09:00");
+  assert.equal(placeholders[0].endTime, "11:00");
+});
+
+test("(SLICE 2.1 - 7) a real time gap between hidden items produces two separate placeholders", () => {
+  const items = [
+    row({ id: "a", startTime: "09:00", endTime: "10:00" }),
+    row({ id: "b", startTime: "12:00", endTime: "13:00" }),
+  ];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: 2,
+    isDualEnrolled: true,
+  });
+  assert.equal(placeholders.length, 2);
+});
+
+test("(SLICE 2.1 - 8) same-time hidden items from DIFFERENT groups collapse into ONE placeholder, never one per group", () => {
+  const items = [
+    row({ id: "a", groupName: "א", startTime: "09:00", endTime: "10:00" }),
+    row({ id: "b", groupName: "ב", startTime: "09:00", endTime: "10:00" }),
+  ];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: 2,
+    isDualEnrolled: true,
+  });
+  assert.equal(placeholders.length, 1, "one merged placeholder, not one per source group");
+  assert.equal(placeholders[0].startTime, "09:00");
+  assert.equal(placeholders[0].endTime, "10:00");
+});
+
+test("(SLICE 2.1 - 8b) overlapping/touching hidden items across three different groups still collapse into ONE placeholder spanning the union", () => {
+  const items = [
+    row({ id: "a", groupName: "א", startTime: "09:00", endTime: "10:00" }),
+    row({ id: "b", groupName: "ב", startTime: "10:00", endTime: "11:00" }),
+    row({ id: "c", groupName: null, startTime: "09:30", endTime: "10:30" }),
+  ];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: 2,
+    isDualEnrolled: true,
+  });
+  assert.equal(placeholders.length, 1);
+  assert.equal(placeholders[0].startTime, "09:00");
+  assert.equal(placeholders[0].endTime, "11:00");
+});
+
+test("(SLICE 2.1 - 8c) a genuine time gap keeps hidden items separate even when their groups differ", () => {
+  const items = [
+    row({ id: "a", groupName: "א", startTime: "09:00", endTime: "10:00" }),
+    row({ id: "b", groupName: "ב", startTime: "12:00", endTime: "13:00" }),
+  ];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: 2,
+    isDualEnrolled: true,
+  });
+  assert.equal(placeholders.length, 2, "a real time gap still separates placeholders, regardless of group");
+});
+
+test("(SLICE 2.1 - 8d) no hidden groupName reaches the client - a placeholder carries no groupName property at all", () => {
+  const items = [row({ id: "a", groupName: "א" }), row({ id: "b", groupName: "ב", startTime: "09:00", endTime: "10:00" })];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: 2,
+    isDualEnrolled: true,
+  });
+  assert.equal(placeholders.length, 1);
+  assert.ok(!("groupName" in placeholders[0]), "a placeholder must not expose a groupName field at all");
+});
+
+test("(SLICE 2.1 - 9) different days never merge into one placeholder", () => {
+  const items = [
+    row({ id: "a", date: new Date("2026-07-05T00:00:00.000Z") }),
+    row({ id: "b", date: new Date("2026-07-06T00:00:00.000Z") }),
+  ];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: 2,
+    isDualEnrolled: true,
+  });
+  assert.equal(placeholders.length, 2);
+});
+
+test("(SLICE 2.1 - 10) a placeholder exposes only the safe field set - no room for a hidden item's group, title, description, location, instructor, notes, horse or participant data", () => {
+  const items = [row({ id: "secret-session-id", groupName: "א" })];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: 2,
+    isDualEnrolled: true,
+  });
+  assert.deepEqual(
+    Object.keys(placeholders[0]).sort(),
+    ["dateKey", "dateLabel", "dayLabel", "description", "endTime", "id", "startTime", "title"].sort(),
+  );
+});
+
+test("(SLICE 2.1 - 11) a placeholder's id is built only from source ids, never from any content field", () => {
+  const items = [row({ id: "row-a" }), row({ id: "row-b", startTime: "10:00", endTime: "11:00" })];
+  const placeholders = buildHiddenCombinedParticipationPlaceholders(items, {
+    offeringLevel: 2,
+    isDualEnrolled: true,
+  });
+  assert.equal(placeholders.length, 1);
+  assert.equal(placeholders[0].id, "combined-participation-placeholder:row-a+row-b");
 });

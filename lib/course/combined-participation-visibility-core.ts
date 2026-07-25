@@ -41,6 +41,7 @@ import {
   eligibleTraineeOfferingsFromRows,
   type TraineeCourseSelectionDeps,
 } from "./trainee-course-selection-core";
+import { dateKey, formatHebrewDate, formatHebrewWeekday } from "@/lib/dates";
 
 /**
  * The one course level at which the hide rule applies. A LEVEL number backed by
@@ -123,6 +124,132 @@ export function filterTraineeScheduleItemsForCombinedParticipation<
     return [...items];
   }
   return items.filter((item) => item.combinedParticipation !== false);
+}
+
+// ---------------------------------------------------------------------------
+// SLICE 2.1 - compact placeholders for hidden Level 2 items
+//
+// The filter above REMOVES combinedParticipation === false items outright for
+// a dual trainee viewing Level 2, which leaves large empty gaps in the
+// rendered schedule. This section builds a SEPARATE, deliberately reduced
+// stand-in for each removed time range - never the removed item(s)
+// themselves - so the gap reads as "something is here, go check Level 1"
+// without exposing the hidden session's group, title, description, location,
+// instructor, notes, horse assignment or participants. Only day and time
+// range survive (schedule layout needs them and neither is on the forbidden
+// list) - groupName is EXCLUDED even though it's on the source row, because
+// it is itself derived from the hidden item and merging must not depend on
+// it (see below). The wording is two FIXED strings, never derived from the
+// hidden item(s).
+// ---------------------------------------------------------------------------
+
+/** The only text a placeholder ever carries - fixed, never item-derived. */
+export const COMBINED_PARTICIPATION_PLACEHOLDER_TITLE = "זמן עם לו״ז רמה 1";
+export const COMBINED_PARTICIPATION_PLACEHOLDER_DESCRIPTION = "יש לעבור ללוח רמה 1 לפרטים";
+
+/**
+ * The minimal, non-identifying shape the placeholder builder needs from a
+ * schedule row: enough to bucket, sort and merge by day/time - nothing that
+ * could describe what the hidden session actually was. groupName is
+ * deliberately NOT part of this shape: the builder must never read it, so a
+ * hidden item's group can never influence merging or reach the output.
+ */
+export interface CombinedParticipationScheduleItemShape {
+  readonly id: string;
+  readonly date: Date;
+  readonly startTime: string;
+  readonly endTime: string;
+  readonly combinedParticipation: boolean | null;
+}
+
+/**
+ * A compact stand-in for one or more merged hidden Level 2 items covering one
+ * contiguous/overlapping time range, on one day, ACROSS every hidden group
+ * (a placeholder never carries or is scoped by group - see the shape above).
+ * This object IS the entire surface sent to the client for a hidden range -
+ * its id is opaque and content-free (built only from source ids, never from
+ * source text), and every field beyond day/time is the fixed wording above.
+ */
+export interface CombinedParticipationHiddenPlaceholder {
+  readonly id: string;
+  readonly dateKey: string;
+  readonly dateLabel: string;
+  readonly dayLabel: string;
+  readonly startTime: string;
+  readonly endTime: string;
+  readonly title: string;
+  readonly description: string;
+}
+
+/**
+ * Builds one placeholder per contiguous-or-overlapping run of hidden items,
+ * per day, MERGING ACROSS GROUPS - two different groups' hidden items at the
+ * same time must produce exactly one placeholder, never one per group,
+ * because a placeholder carries no group and duplicate same-time cards for
+ * one trainee would be confusing/wrong. Returns [] whenever the hide rule
+ * doesn't apply (Level-2-only trainee, Level 1 selected) or nothing is
+ * actually hidden - the exact same applicability gate as
+ * {@link filterTraineeScheduleItemsForCombinedParticipation}, so the two
+ * functions can never disagree about WHICH items are hidden, only about what
+ * happens to them afterward (dropped vs. replaced).
+ */
+export function buildHiddenCombinedParticipationPlaceholders<
+  T extends CombinedParticipationScheduleItemShape,
+>(
+  items: readonly T[],
+  context: CombinedParticipationVisibilityContext,
+): CombinedParticipationHiddenPlaceholder[] {
+  if (!shouldHideCombinedParticipationItems(context)) return [];
+  const hidden = items.filter((item) => item.combinedParticipation === false);
+  if (hidden.length === 0) return [];
+
+  // Bucket by day ONLY - never by group. A placeholder must never merge
+  // across a day boundary, but MUST merge across a group boundary within the
+  // same day when the time ranges touch or overlap (see the loop below).
+  const buckets = new Map<string, T[]>();
+  for (const item of hidden) {
+    const bucketKey = dateKey(item.date);
+    const bucket = buckets.get(bucketKey);
+    if (bucket) bucket.push(item);
+    else buckets.set(bucketKey, [item]);
+  }
+
+  const placeholders: CombinedParticipationHiddenPlaceholder[] = [];
+  for (const bucket of buckets.values()) {
+    const sorted = [...bucket].sort((a, b) => a.startTime.localeCompare(b.startTime));
+    let run: T[] = [sorted[0]];
+    let runEnd = sorted[0].endTime;
+    const flush = () => {
+      const first = run[0];
+      placeholders.push({
+        id: `combined-participation-placeholder:${run.map((i) => i.id).join("+")}`,
+        dateKey: dateKey(first.date),
+        dateLabel: formatHebrewDate(first.date),
+        dayLabel: formatHebrewWeekday(first.date),
+        startTime: first.startTime,
+        endTime: runEnd,
+        title: COMBINED_PARTICIPATION_PLACEHOLDER_TITLE,
+        description: COMBINED_PARTICIPATION_PLACEHOLDER_DESCRIPTION,
+      });
+    };
+    // Touching (next.startTime === runEnd) or overlapping (next.startTime <
+    // runEnd) runs merge into one placeholder; a real gap starts a new one.
+    for (let idx = 1; idx < sorted.length; idx++) {
+      const next = sorted[idx];
+      if (next.startTime <= runEnd) {
+        if (next.endTime > runEnd) runEnd = next.endTime;
+        run.push(next);
+      } else {
+        flush();
+        run = [next];
+        runEnd = next.endTime;
+      }
+    }
+    flush();
+  }
+
+  placeholders.sort((a, b) => a.dateKey.localeCompare(b.dateKey) || a.startTime.localeCompare(b.startTime));
+  return placeholders;
 }
 
 // ---------------------------------------------------------------------------

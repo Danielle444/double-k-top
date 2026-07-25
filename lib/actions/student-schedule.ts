@@ -35,6 +35,7 @@ import {
 // instructor reader imports either module.
 import {
   COMBINED_PARTICIPATION_HIDDEN_LEVEL,
+  buildHiddenCombinedParticipationPlaceholders,
   filterTraineeScheduleItemsForCombinedParticipation,
 } from "@/lib/course/combined-participation-visibility-core";
 import { isTraineeDualEnrolledForSelectedOffering } from "@/lib/course/schedule-dual-enrollment";
@@ -100,6 +101,14 @@ export interface ScheduleItemView {
   // surviving item's badge value here is always exactly what should render; this
   // field itself is never used to filter or hide anything at THIS layer.
   combinedParticipation: boolean | null;
+  // COMBINED PARTICIPATION SLICE 2.1 - true ONLY for a compact Level-1-time
+  // stand-in built by buildHiddenCombinedParticipationPlaceholders in place of
+  // one or more hidden Level 2 items; false for every real item. When true,
+  // every other content field on this object is a safe, non-identifying
+  // default (see the mapper in getScheduleForStudent) - never data drawn from
+  // the hidden item(s). The client uses this flag to render the placeholder
+  // through its own compact branch, never the ordinary card pipeline.
+  isCombinedParticipationPlaceholder: boolean;
   // RIDING-COMPLEX-PUBLICATION P7C - a separate field/variant from ridingInfo
   // above, never a replacement for it. For a complex-mode slot, ridingInfo is
   // suppressed (null) and coach/arena come only from here; for a simple-mode
@@ -269,6 +278,17 @@ export async function getScheduleForStudent(
     isDualEnrolled,
   });
 
+  // COMBINED PARTICIPATION SLICE 2.1 - compact placeholders for the items the
+  // filter above just removed. Built from the SAME groupFilteredItems input
+  // the filter used (so the two can never disagree about which items are
+  // hidden), by the pure core only - this file supplies no title/description
+  // of its own for a hidden item, only the day/time/group values it already
+  // has.
+  const hiddenPlaceholders = buildHiddenCombinedParticipationPlaceholders(groupFilteredItems, {
+    offeringLevel,
+    isDualEnrolled,
+  });
+
   // RIDING-COMPLEX-PUBLICATION P7C - collected from the already-filtered
   // `items` only (never the raw, unfiltered weekItems), so a ridingSlotId
   // this student shouldn't even see in "mine" scope is never sent onward
@@ -289,45 +309,79 @@ export async function getScheduleForStudent(
     ridingSlotIds
   );
 
+  const realViews: ScheduleItemView[] = items.map((i) => {
+    const ridingSlot = i.ridingSlotLink?.ridingSlot ?? null;
+    // Canonical complex signal: presence of the complexPlan relation, never
+    // the title text or publication state (an unpublished complex slot is
+    // still complex).
+    const isComplex = ridingSlot?.complexPlan != null;
+    // Single data-layer choke point: a complex slot never carries the
+    // generic assignment coach/arena box - that info comes only from its
+    // published complex plan, so building ridingInfo here would double it.
+    const ridingInfo =
+      ridingSlot && !isComplex
+        ? buildRidingInfoForStudent(ridingSlot, student.groupName, student.subgroupNumber)
+        : null;
+    return {
+      id: i.id,
+      dateKey: dateKey(i.date),
+      dateLabel: formatHebrewDate(i.date),
+      dayLabel: formatHebrewWeekday(i.date),
+      startTime: i.startTime,
+      endTime: i.endTime,
+      title: i.title,
+      description: i.description,
+      groupName: i.groupName,
+      // Riding-slot-linked items never fall back to the raw free-text
+      // fields - a student only sees instructor/location for those via
+      // ridingInfo, gated by the slot's own visibility flags.
+      instructorName: ridingSlot ? null : i.instructorName,
+      location: ridingSlot ? null : i.location,
+      isComplex,
+      ridingInfo,
+      // Verbatim tri-state passthrough (the item query uses `include`, so this
+      // scalar is already loaded). Display-only; never a filter input.
+      combinedParticipation: i.combinedParticipation,
+      isCombinedParticipationPlaceholder: false,
+      publishedComplexRidingPlan: ridingSlot ? (complexPlansByRidingSlotId.get(ridingSlot.id) ?? null) : null,
+    };
+  });
+
+  // SLICE 2.1 - each hidden placeholder becomes a reduced ScheduleItemView:
+  // every content field a real item could carry (group, instructor, location,
+  // ridingInfo, complex plan) is hardcoded to a fixed/null value here, never
+  // sourced from a hidden item; title/description are the pure core's two
+  // fixed strings. groupName is fixed to null (never a hidden item's group -
+  // the pure core doesn't even carry group data) so ScheduleItemView's shape
+  // is satisfied without ever exposing which group the hidden item(s) were in.
+  const placeholderViews: ScheduleItemView[] = hiddenPlaceholders.map((p) => ({
+    id: p.id,
+    dateKey: p.dateKey,
+    dateLabel: p.dateLabel,
+    dayLabel: p.dayLabel,
+    startTime: p.startTime,
+    endTime: p.endTime,
+    title: p.title,
+    description: p.description,
+    groupName: null,
+    instructorName: null,
+    location: null,
+    isComplex: false,
+    ridingInfo: null,
+    combinedParticipation: null,
+    isCombinedParticipationPlaceholder: true,
+    publishedComplexRidingPlan: null,
+  }));
+
   return {
     hasSchedule: true,
     weekName: week.name,
-    items: items.map((i) => {
-      const ridingSlot = i.ridingSlotLink?.ridingSlot ?? null;
-      // Canonical complex signal: presence of the complexPlan relation, never
-      // the title text or publication state (an unpublished complex slot is
-      // still complex).
-      const isComplex = ridingSlot?.complexPlan != null;
-      // Single data-layer choke point: a complex slot never carries the
-      // generic assignment coach/arena box - that info comes only from its
-      // published complex plan, so building ridingInfo here would double it.
-      const ridingInfo =
-        ridingSlot && !isComplex
-          ? buildRidingInfoForStudent(ridingSlot, student.groupName, student.subgroupNumber)
-          : null;
-      return {
-        id: i.id,
-        dateKey: dateKey(i.date),
-        dateLabel: formatHebrewDate(i.date),
-        dayLabel: formatHebrewWeekday(i.date),
-        startTime: i.startTime,
-        endTime: i.endTime,
-        title: i.title,
-        description: i.description,
-        groupName: i.groupName,
-        // Riding-slot-linked items never fall back to the raw free-text
-        // fields - a student only sees instructor/location for those via
-        // ridingInfo, gated by the slot's own visibility flags.
-        instructorName: ridingSlot ? null : i.instructorName,
-        location: ridingSlot ? null : i.location,
-        isComplex,
-        ridingInfo,
-        // Verbatim tri-state passthrough (the item query uses `include`, so this
-        // scalar is already loaded). Display-only; never a filter input.
-        combinedParticipation: i.combinedParticipation,
-        publishedComplexRidingPlan: ridingSlot ? (complexPlansByRidingSlotId.get(ridingSlot.id) ?? null) : null,
-      };
-    }),
+    items: [...realViews, ...placeholderViews].sort(
+      (a, b) =>
+        a.dateKey.localeCompare(b.dateKey) ||
+        a.startTime.localeCompare(b.startTime) ||
+        a.endTime.localeCompare(b.endTime)
+    ),
   };
 }
 

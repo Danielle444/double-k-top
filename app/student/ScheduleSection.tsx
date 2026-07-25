@@ -221,6 +221,28 @@ function ScheduleCard({
   studentId: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // COMBINED PARTICIPATION SLICE 2.1 - a compact, neutral stand-in for one or
+  // more hidden Level 2 items. Rendered through its own branch, never the
+  // riding-title/complex-plan pipeline below: item.title/item.description are
+  // already the fixed placeholder wording, and every other content field on
+  // a placeholder item is null by construction (see getScheduleForStudent).
+  if (item.isCombinedParticipationPlaceholder) {
+    return (
+      <div
+        className={`rounded-xl border-2 border-dashed border-border bg-muted/40 ${compact ? "p-2.5" : "p-4"}`}
+      >
+        <span className={`font-semibold text-muted-foreground ${compact ? "text-sm" : "text-base"}`}>
+          {item.startTime}-{item.endTime}
+        </span>
+        <p className={`mt-1 font-bold text-muted-foreground ${compact ? "text-base" : "text-lg"}`}>
+          {item.title}
+        </p>
+        <p className={`mt-1 text-muted-foreground ${compact ? "text-xs" : "text-sm"}`}>{item.description}</p>
+      </div>
+    );
+  }
+
   const ridingPresentation = resolveStudentRidingPresentation(item);
 
   return (
