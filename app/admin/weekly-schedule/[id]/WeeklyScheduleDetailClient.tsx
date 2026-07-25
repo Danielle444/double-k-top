@@ -54,70 +54,87 @@ const EMPTY_FORM: ScheduleItemInput = {
 
 // Admin always sees the full (time-cleaned) title and instructorName - no
 // student-facing shortening or hiding here.
-function renderScheduleCard(
-  item: ScheduleItemView,
-  onEdit: (item: ScheduleItemView) => void,
-  onDelete: (item: ScheduleItemView) => void,
-  onManageRiding: (item: ScheduleItemView) => void,
-  compact = false
-) {
+//
+// A real component (not a plain function returning JSX) specifically so its
+// own menuOpen state can live here, scoped per card - the same reason
+// InstructorScheduleCard (InstructorScheduleSection.tsx) holds its own
+// showDetails state instead of the caller. Compact grid cards (see
+// ScheduleTimeGrid) can be as short as a single time-slot row, whose
+// upstream per-item wrapper's overflow-hidden (unchanged) clips content from
+// the bottom up - so the old inline עריכה/ניהול רכיבה/מחיקה button cluster
+// could overflow or get clipped. All three actions now live behind one
+// compact "⋯" trigger that stays on the top header line (time/tag), which
+// is never clipped, and the SAME trigger is used for the non-compact
+// (single-group list) card too, so no card's controls depend on its height.
+function ScheduleCard({
+  item,
+  onEdit,
+  onDelete,
+  onManageRiding,
+  compact = false,
+}: {
+  item: ScheduleItemView;
+  onEdit: (item: ScheduleItemView) => void;
+  onDelete: (item: ScheduleItemView) => void;
+  onManageRiding: (item: ScheduleItemView) => void;
+  compact?: boolean;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
   // Both the "all groups" grid view and the single-group list can merge two
   // or more real rows into one display card - a continuous same-title
   // activity, or a same-time cross-group pair - giving it a synthetic
   // "realId1+realId2" id that was never a real row. Real cuids never contain
   // "+", so splitting on it losslessly recovers the ordered list of real
   // source ids (see updateMergedScheduleItems), which is what makes editing
-  // a merged card possible without ever sending the fake id to Prisma.
+  // a merged card possible without ever sending the fake id to Prisma. The
+  // menu below passes the same `item` (composite id and all) through to
+  // onEdit/onDelete/onManageRiding unchanged, so a merged card's actions
+  // still target every original row, exactly as before.
   const sourceIds = item.id.split("+");
   const isMerged = sourceIds.length > 1;
 
   return (
     <div
-      key={item.id}
       className={`rounded-xl border-2 border-border ${getScheduleGroupColorClass(item.groupName)} ${
         compact ? "p-2.5" : "p-4"
       }`}
     >
-      {compact ? (
-        // Compact grid cards can be as short as a single time-slot row (see
-        // ScheduleTimeGrid), which clips card content from the bottom up.
-        // Time and tag stay on one in-flow line (so the header keeps its
-        // original height); edit is taken out of flow and absolutely
-        // positioned directly under the tag, so it stays visible near the
-        // top without pushing the title/instructor/location down. The
-        // upstream per-item wrapper's existing overflow-hidden (unchanged)
-        // still clips it the same way it clips everything else in a short
-        // slot.
-        <div className="relative mb-1 flex items-start justify-between gap-2">
-          <span className="font-semibold text-card-foreground text-sm">
-            {item.startTime}-{item.endTime}
-          </span>
-          <span className="rounded-full bg-muted text-muted-foreground px-2 py-0.5 text-xs">
-            {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
-          </span>
-          <Button
-            variant="ghost"
-            className="absolute left-0 top-full z-10 !h-auto !min-h-0 !px-1.5 !py-0 !text-xs leading-tight"
-            onClick={() => onEdit(item)}
-          >
-            עריכה
-          </Button>
-        </div>
-      ) : (
-        <div className="mb-1 flex flex-wrap items-center justify-between gap-1.5">
-          <span className="font-semibold text-card-foreground text-base">
-            {item.startTime}-{item.endTime}
-          </span>
-          <span className="rounded-full bg-muted text-muted-foreground px-3 py-1 text-sm">
-            {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
-          </span>
-        </div>
-      )}
-      <p
-        className={`font-bold text-card-foreground ${
-          compact ? "pl-12 text-base" : "text-lg"
-        }`}
+      <div
+        className={
+          compact
+            ? "relative mb-1 flex items-center justify-between gap-2"
+            : "mb-1 flex flex-wrap items-center justify-between gap-1.5"
+        }
       >
+        <span className={`font-semibold text-card-foreground ${compact ? "text-sm" : "text-base"}`}>
+          {item.startTime}-{item.endTime}
+        </span>
+        <span
+          className={`rounded-full bg-muted text-muted-foreground ${
+            compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm"
+          }`}
+        >
+          {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
+        </span>
+        <button
+          type="button"
+          onClick={(e) => {
+            // The card itself has no click behavior today, but this stays
+            // consistent with the same guard InstructorScheduleCard's info
+            // trigger uses, so opening the menu can never also trigger a
+            // future card-level handler.
+            e.stopPropagation();
+            setMenuOpen(true);
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
+          aria-label="פעולות לסשן"
+          className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-sm font-bold leading-none text-muted-foreground hover:bg-secondary hover:text-secondary-foreground"
+        >
+          ⋯
+        </button>
+      </div>
+      <p className={`font-bold text-card-foreground ${compact ? "text-base" : "text-lg"}`}>
         {cleanScheduleTitle(item.title)}
       </p>
       {item.instructorName && (
@@ -130,29 +147,47 @@ function renderScheduleCard(
           מיקום: {item.location}
         </p>
       )}
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        {!compact && (
-          <Button variant="ghost" className="!px-2 !py-1 !text-xs" onClick={() => onEdit(item)}>
+
+      <Modal open={menuOpen} onClose={() => setMenuOpen(false)} title="פעולות לסשן">
+        <div className="flex flex-col gap-2">
+          <Button
+            variant="secondary"
+            className="w-full"
+            onClick={() => {
+              setMenuOpen(false);
+              onEdit(item);
+            }}
+          >
             עריכה
           </Button>
-        )}
-        {isMerged ? (
-          <p className="text-xs italic text-muted-foreground">
-            מחיקה לא זמינה עבור פעילות ממוזגת - ניתן לערוך את כל הפריטים המקוריים יחד
-          </p>
-        ) : (
-          <Button variant="danger" className="!px-2 !py-1 !text-xs" onClick={() => onDelete(item)}>
-            מחיקה
+          <Button
+            variant="secondary"
+            className="w-full"
+            onClick={() => {
+              setMenuOpen(false);
+              onManageRiding(item);
+            }}
+          >
+            ניהול רכיבה
           </Button>
-        )}
-        <Button
-          variant="secondary"
-          className="!px-2 !py-1 !text-xs"
-          onClick={() => onManageRiding(item)}
-        >
-          ניהול רכיבה
-        </Button>
-      </div>
+          {isMerged ? (
+            <p className="text-xs italic text-muted-foreground">
+              מחיקה לא זמינה עבור פעילות ממוזגת - ניתן לערוך את כל הפריטים המקוריים יחד
+            </p>
+          ) : (
+            <Button
+              variant="danger"
+              className="w-full"
+              onClick={() => {
+                setMenuOpen(false);
+                onDelete(item);
+              }}
+            >
+              מחיקה
+            </Button>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -500,9 +535,15 @@ export function WeeklyScheduleDetailClient({
                 {groupFilter === "all" ? (
                   <ScheduleTimeGrid
                     items={dayItems}
-                    renderCard={(item) =>
-                      renderScheduleCard(item, openEdit, openDelete, openManageRiding, true)
-                    }
+                    renderCard={(item) => (
+                      <ScheduleCard
+                        item={item}
+                        onEdit={openEdit}
+                        onDelete={openDelete}
+                        onManageRiding={openManageRiding}
+                        compact
+                      />
+                    )}
                   />
                 ) : (
                   // A single-group filter can still include both the target
@@ -520,9 +561,15 @@ export function WeeklyScheduleDetailClient({
                           a.startTime.localeCompare(b.startTime) ||
                           a.endTime.localeCompare(b.endTime)
                       )
-                      .map((item) =>
-                        renderScheduleCard(item, openEdit, openDelete, openManageRiding)
-                      )}
+                      .map((item) => (
+                        <ScheduleCard
+                          key={item.id}
+                          item={item}
+                          onEdit={openEdit}
+                          onDelete={openDelete}
+                          onManageRiding={openManageRiding}
+                        />
+                      ))}
                   </div>
                 )}
               </div>
