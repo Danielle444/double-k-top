@@ -7,7 +7,28 @@ import { parseDateKey } from "@/lib/dates";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { blockedGroupsForDayPlan } from "@/lib/duty-constraints";
 import { subgroupKey } from "@/lib/subgroup-identity";
+import { isDutyEligible } from "@/lib/course/duty-eligibility-core";
 import type { ActionResult } from "@/lib/actions/students";
+
+// P1 DUTY LEVEL-2-ONLY FILTER: server-side eligibility for the manual duty
+// write paths (create / reassign / upsert). A trainee may be assigned a duty
+// only if they are active AND hold an active Level 1 enrollment; a Level-2-only
+// id submitted directly is rejected, never silently dropped. The rule itself
+// lives in the shared pure core, so writes and the pool readers cannot diverge.
+const DUTY_INELIGIBLE_ERROR =
+  "לא ניתן לשבץ תורנות: החניך/ה אינו/ה רשום/ה לקורס פעיל ברמה 1";
+
+async function isStudentDutyEligible(studentId: string): Promise<boolean> {
+  const student = await prisma.student.findUnique({
+    where: { id: studentId },
+    select: {
+      isActive: true,
+      courseEnrollments: { select: { courseOfferingId: true, status: true } },
+    },
+  });
+  if (!student) return false;
+  return isDutyEligible(student);
+}
 
 export interface GenerateResult extends ActionResult {
   daysProcessed?: number;
@@ -82,6 +103,10 @@ export async function reassignDuty(
     return { success: false, error: "השיבוץ לא נמצא" };
   }
 
+  if (!(await isStudentDutyEligible(newStudentId))) {
+    return { success: false, error: DUTY_INELIGIBLE_ERROR };
+  }
+
   const conflict = await prisma.dutyAssignment.findUnique({
     where: { date_studentId: { date: assignment.date, studentId: newStudentId } },
   });
@@ -106,6 +131,11 @@ export async function createManualAssignment(
   await requireAdmin();
 
   const date = parseDateKey(dateKeyStr);
+
+  if (!(await isStudentDutyEligible(studentId))) {
+    return { success: false, error: DUTY_INELIGIBLE_ERROR };
+  }
+
   const conflict = await prisma.dutyAssignment.findUnique({
     where: { date_studentId: { date, studentId } },
   });
@@ -145,7 +175,10 @@ export async function upsertManualAssignment(
   const date = parseDateKey(dateKeyStr);
 
   const [student, dutyType, existing, dayPlan, constraints] = await Promise.all([
-    prisma.student.findUnique({ where: { id: studentId } }),
+    prisma.student.findUnique({
+      where: { id: studentId },
+      include: { courseEnrollments: { select: { courseOfferingId: true, status: true } } },
+    }),
     prisma.dutyType.findUnique({ where: { id: dutyTypeId } }),
     prisma.dutyAssignment.findUnique({ where: { date_studentId: { date, studentId } } }),
     prisma.courseDayPlan.findUnique({ where: { date } }),
@@ -154,6 +187,9 @@ export async function upsertManualAssignment(
 
   if (!student) {
     return { success: false, error: "החניך/ה לא נמצא/ה" };
+  }
+  if (!isDutyEligible(student)) {
+    return { success: false, error: DUTY_INELIGIBLE_ERROR };
   }
   if (!dutyType) {
     return { success: false, error: "סוג התורנות לא נמצא" };

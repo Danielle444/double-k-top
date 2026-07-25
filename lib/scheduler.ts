@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { dateKey, enumerateDateKeys, parseDateKey, weekKey } from "@/lib/dates";
 import { formatSubgroupLabel, subgroupKey } from "@/lib/subgroup-identity";
+import { dutyEligibleStudentWhere } from "@/lib/course/duty-eligibility-core";
 import type { CourseDayPlan, DutyConstraint, Student } from "@/app/generated/prisma/client";
 
 // Scoring weights - each tier must dominate the ones after it, so a student is
@@ -59,7 +60,11 @@ export async function generateSchedule({
 
   const [students, dutyTypes, allAssignments, availabilityRows, dayPlans, constraints, noDutyDates] =
     await Promise.all([
-      prisma.student.findMany({ where: { isActive: true } }),
+      // P1 DUTY LEVEL-2-ONLY FILTER: the generator pool is the Level 1 duty
+      // pool - active students WITH an active Level 1 enrollment, so Level-2-only
+      // trainees are excluded. Same rule as export/diagnostics and the write
+      // paths (see lib/course/duty-eligibility-core.ts).
+      prisma.student.findMany({ where: dutyEligibleStudentWhere }),
       prisma.dutyType.findMany({ where: { isActive: true } }),
       prisma.dutyAssignment.findMany(),
       prisma.studentAvailability.findMany({

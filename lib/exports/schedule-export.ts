@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { dateKey, enumerateDateKeys, parseDateKey } from "@/lib/dates";
 import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
+import { dutyEligibleStudentWhere } from "@/lib/course/duty-eligibility-core";
 
 // Nulls-last Hebrew-aware ordering used to re-sort export rows by the
 // effective-dated (not current-mirror) group they resolved to.
@@ -54,7 +55,10 @@ export async function buildScheduleGridExport(
 
   const [studentRows, assignments, noDutyDates, dutyTypes] = await Promise.all([
     prisma.student.findMany({
-      where: { isActive: true },
+      // P1 DUTY LEVEL-2-ONLY FILTER: one grid row per Level 1 duty-pool trainee
+      // (active + active Level 1 enrollment), so Level-2-only trainees do not
+      // appear as empty rows in a Level 1 export. Same rule as the generator.
+      where: dutyEligibleStudentWhere,
       select: { id: true, fullName: true, lastName: true },
     }),
     prisma.dutyAssignment.findMany({

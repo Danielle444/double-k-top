@@ -3,6 +3,7 @@ import { dateKey, enumerateDateKeys } from "@/lib/dates";
 import { computeCoverageByDate, type DateCoverage } from "@/lib/schedule-coverage";
 import { formatSubgroupLabel, subgroupKey } from "@/lib/subgroup-identity";
 import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
+import { dutyEligibleStudentWhere } from "@/lib/course/duty-eligibility-core";
 
 export type CoverageStatus = "תקין" | "חסר" | "עודף";
 
@@ -53,7 +54,10 @@ export async function buildScheduleDiagnostics(
 
   const [students, dutyTypes, assignments, noDutyDates] = await Promise.all([
     prisma.student.findMany({
-      where: { isActive: true },
+      // P1 DUTY LEVEL-2-ONLY FILTER: the "active" roster diagnostics measure
+      // coverage against is the Level 1 duty pool (active + active Level 1
+      // enrollment), so Level-2-only trainees never inflate the expected pool.
+      where: dutyEligibleStudentWhere,
       select: { id: true, groupName: true, subgroupNumber: true },
     }),
     prisma.dutyType.findMany({ where: { isActive: true } }),

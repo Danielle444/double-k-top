@@ -4,6 +4,7 @@ import { dateKey } from "@/lib/dates";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { blockedGroupsForDayPlan } from "@/lib/duty-constraints";
 import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
+import { dutyEligibleStudentWhere } from "@/lib/course/duty-eligibility-core";
 
 export const dynamic = "force-dynamic";
 
@@ -15,8 +16,13 @@ export default async function SchedulePage() {
         include: { student: true, dutyType: true },
         orderBy: [{ date: "asc" }, { dutyType: { name: "asc" } }],
       }),
+      // P1 DUTY LEVEL-2-ONLY FILTER: this roster is the manual-assignment /
+      // reassign picker in ScheduleClient. It must be the Level 1 duty pool
+      // (active + active Level 1 enrollment), so Level-2-only trainees never
+      // appear in the dropdown. Same shared rule as the generator/export/
+      // diagnostics readers and the write-path re-check.
       prisma.student.findMany({
-        where: { isActive: true },
+        where: dutyEligibleStudentWhere,
         orderBy: { fullName: "asc" },
         select: {
           id: true,
