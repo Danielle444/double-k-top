@@ -14,6 +14,7 @@ import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { coalesceAdjacentSameActivity } from "@/lib/schedule-grouping";
 import { formatScheduleLocationLabel } from "@/lib/schedule-location";
+import { Modal } from "@/lib/components/Modal";
 
 // Combined-participation ("משולב") business indication for the trainee card,
 // DISPLAY-ONLY. Mirrors the server tri-state verbatim: true -> "עם משולב",
@@ -222,12 +223,21 @@ function ScheduleCard({
   studentId: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  // Compact/grid cards (rendered inside ScheduleTimeGrid's fixed-height,
+  // duration-proportional cell) have no room to show every detail inline.
+  // Rather than clamp/truncate content into unreadable fragments, secondary
+  // details move into this on-demand dialog - reusing the same authorized
+  // ScheduleItemView already held by this card, nothing fetched or invented.
+  // Full view has no such height constraint and never opens this dialog.
+  const [showDetails, setShowDetails] = useState(false);
 
   // COMBINED PARTICIPATION SLICE 2.1 - a compact, neutral stand-in for one or
   // more hidden Level 2 items. Rendered through its own branch, never the
   // riding-title/complex-plan pipeline below: item.title/item.description are
   // already the fixed placeholder wording, and every other content field on
   // a placeholder item is null by construction (see getScheduleForStudent).
+  // It never gets an info control - there is no hidden detail to reveal, and
+  // revealing one would defeat the whole point of the placeholder.
   if (item.isCombinedParticipationPlaceholder) {
     return (
       <div
@@ -245,6 +255,47 @@ function ScheduleCard({
   }
 
   const ridingPresentation = resolveStudentRidingPresentation(item);
+  const location = formatScheduleLocationLabel(item.location);
+  const note = item.description?.trim() || null;
+  const hasRidingInfo =
+    ridingPresentation.showGenericRidingInfo &&
+    item.ridingInfo !== null &&
+    Boolean(item.ridingInfo.instructorName || item.ridingInfo.arena || item.ridingInfo.subgroupLabel);
+  const hasComplexPlan = ridingPresentation.showComplexPlan && item.publishedComplexRidingPlan !== null;
+  // Deterministic compact-card rule (no DOM/height measurement): the info
+  // control appears exactly when at least one secondary detail exists beyond
+  // time/title/badges - never for a card with only the essentials.
+  const hasSecondaryDetails = Boolean(location) || Boolean(note) || hasRidingInfo || hasComplexPlan;
+
+  // Built once, rendered verbatim either inline (full view, unconstrained) or
+  // inside the details dialog (compact view) - the same authorized fields
+  // either way, never duplicated data, never a second/different source.
+  const detailsContent = (
+    <>
+      {location && <p className="mt-1 text-sm text-muted-foreground">מיקום: {location}</p>}
+      {note && (
+        <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
+          <span className="font-medium text-card-foreground">הערה לסשן: </span>
+          {note}
+        </p>
+      )}
+      {hasRidingInfo && item.ridingInfo && (
+        <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-sm text-muted-foreground">
+          {item.ridingInfo.instructorName && <span>מאמן/ת: {item.ridingInfo.instructorName}</span>}
+          {item.ridingInfo.arena && <span>מגרש: {item.ridingInfo.arena}</span>}
+          {item.ridingInfo.subgroupLabel && <span>{item.ridingInfo.subgroupLabel}</span>}
+        </div>
+      )}
+      {hasComplexPlan && item.publishedComplexRidingPlan && (
+        <ComplexRidingPlanSection
+          plan={item.publishedComplexRidingPlan}
+          studentId={studentId}
+          isExpanded={isExpanded}
+          onToggle={() => setIsExpanded((v) => !v)}
+        />
+      )}
+    </>
+  );
 
   return (
     <div
@@ -282,55 +333,40 @@ function ScheduleCard({
           })()}
         </div>
       </div>
-      <p className={`font-bold text-card-foreground ${compact ? "text-base" : "text-lg"}`}>
-        {ridingPresentation.title}
-      </p>
-      {(() => {
-        const location = formatScheduleLocationLabel(item.location);
-        if (!location) return null;
-        return (
-          <p className={`mt-1 text-muted-foreground ${compact ? "text-xs" : "text-sm"}`}>
-            מיקום: {location}
-          </p>
-        );
-      })()}
-      {(() => {
-        // Real item only - this branch never runs for the combined-participation
-        // placeholder (that card returns earlier, above). item.description is a
-        // manager-authored free-text note; a null/empty/whitespace-only value must
-        // render nothing, not an empty label or blank line.
-        const note = item.description?.trim();
-        if (!note) return null;
-        return (
-          <p className={`mt-1 whitespace-pre-wrap text-muted-foreground ${compact ? "text-xs" : "text-sm"}`}>
-            <span className="font-medium text-card-foreground">הערה לסשן: </span>
-            {note}
-          </p>
-        );
-      })()}
-      {ridingPresentation.showGenericRidingInfo && item.ridingInfo && (
-        <div
-          className={`mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-muted-foreground ${
-            compact ? "text-xs" : "text-sm"
-          }`}
-        >
-          {item.ridingInfo.instructorName && <span>מאמן/ת: {item.ridingInfo.instructorName}</span>}
-          {item.ridingInfo.arena && <span>מגרש: {item.ridingInfo.arena}</span>}
-          {item.ridingInfo.subgroupLabel && <span>{item.ridingInfo.subgroupLabel}</span>}
-        </div>
-      )}
+      <div className="flex items-start justify-between gap-2">
+        <p className={`font-bold text-card-foreground ${compact ? "line-clamp-2 text-base" : "text-lg"}`}>
+          {ridingPresentation.title}
+        </p>
+        {compact && hasSecondaryDetails && (
+          <button
+            type="button"
+            onClick={(e) => {
+              // The card itself has no click-to-open/edit behaviour today, but
+              // this stays defensive against ever gaining one around it.
+              e.stopPropagation();
+              setShowDetails(true);
+            }}
+            aria-label="מידע נוסף על הסשן"
+            className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-bold leading-none text-muted-foreground hover:bg-secondary hover:text-secondary-foreground"
+          >
+            i
+          </button>
+        )}
+      </div>
+      {!compact && detailsContent}
       {active && (
         <span className="mt-2 inline-block rounded-full bg-accent px-3 py-1 text-sm font-medium text-accent-foreground">
           מתקיים עכשיו
         </span>
       )}
-      {ridingPresentation.showComplexPlan && item.publishedComplexRidingPlan && (
-        <ComplexRidingPlanSection
-          plan={item.publishedComplexRidingPlan}
-          studentId={studentId}
-          isExpanded={isExpanded}
-          onToggle={() => setIsExpanded((v) => !v)}
-        />
+      {compact && hasSecondaryDetails && (
+        <Modal
+          open={showDetails}
+          onClose={() => setShowDetails(false)}
+          title={`${item.startTime}-${item.endTime} · ${ridingPresentation.title}`}
+        >
+          <div className="flex flex-col gap-1.5">{detailsContent}</div>
+        </Modal>
       )}
     </div>
   );

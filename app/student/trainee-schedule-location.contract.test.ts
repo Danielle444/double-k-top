@@ -55,12 +55,12 @@ test("the real-item branch derives the location line from the helper, not a raw 
   );
 });
 
-test("the location paragraph renders the derived label, with the מיקום label text", () => {
+test("the location paragraph renders the derived label, guarded by the derived value, not a raw field", () => {
   const helperCallIdx = SECTION.indexOf("const location = formatScheduleLocationLabel(item.location);");
   assert.notEqual(helperCallIdx, -1);
-  const nearby = SECTION.slice(helperCallIdx, helperCallIdx + 400);
-  assert.ok(nearby.includes("if (!location) return null;"), "expected a null guard before rendering");
-  assert.ok(nearby.includes("מיקום: {location}"), "expected the מיקום label to render the trimmed value");
+  const guardIdx = SECTION.indexOf("{location && <p", helperCallIdx);
+  assert.notEqual(guardIdx, -1, "expected a truthy guard on the derived `location` value before rendering, after it is declared");
+  assert.ok(SECTION.includes("מיקום: {location}"), "expected the מיקום label to render the derived value");
 });
 
 // ---------------------------------------------------------------------------

@@ -99,8 +99,8 @@ function realItemBranch(): string {
 
 test("the real-item branch renders the trimmed note, labelled 'הערה לסשן', only when non-empty", () => {
   const branch = realItemBranch();
-  assert.ok(branch.includes("item.description?.trim()"), "must trim before checking/rendering");
-  assert.ok(/if\s*\(!note\)\s*return null;/.test(branch), "a falsy trimmed note must render nothing");
+  assert.ok(branch.includes("item.description?.trim() || null"), "must trim before checking/rendering, and normalize a falsy trim to null");
+  assert.ok(branch.includes("{note && ("), "a falsy trimmed note must render nothing");
   assert.ok(branch.includes("הערה לסשן"), "the note must carry the required Hebrew label");
 });
 
@@ -128,9 +128,17 @@ test("the note is never rendered inside the placeholder branch and never duplica
 
 test("the note block sits after location and before the riding-info block, alongside the existing content fields", () => {
   const branch = realItemBranch();
-  const locationIdx = branch.indexOf("מיקום:");
-  const noteIdx = branch.indexOf("הערה לסשן");
-  const ridingInfoIdx = branch.indexOf("ridingPresentation.showGenericRidingInfo");
+  // location/note/riding-info/complex-plan are all built once as detailsContent
+  // (reused verbatim inline in full view and inside the compact details dialog) -
+  // so their relative order is asserted within that single JSX block, not across
+  // the whole function body (which also declares hasRidingInfo/hasComplexPlan
+  // earlier, ahead of any of these render fragments).
+  const detailsContentIdx = branch.indexOf("const detailsContent = (");
+  assert.notEqual(detailsContentIdx, -1, "expected the shared detailsContent block");
+  const jsx = branch.slice(detailsContentIdx);
+  const locationIdx = jsx.indexOf("מיקום:");
+  const noteIdx = jsx.indexOf("הערה לסשן");
+  const ridingInfoIdx = jsx.indexOf("hasRidingInfo && item.ridingInfo");
   assert.ok(locationIdx !== -1 && noteIdx !== -1 && ridingInfoIdx !== -1);
   assert.ok(locationIdx < noteIdx, "the note renders after location");
   assert.ok(noteIdx < ridingInfoIdx, "the note renders before the riding-info block");
