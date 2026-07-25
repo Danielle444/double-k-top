@@ -687,7 +687,7 @@ export function RidingSlotModal({
                       disabled={isChoosingComplex}
                       onClick={handleChooseComplex}
                     >
-                      {isChoosingComplex ? "יוצר..." : "תכנון רכיבה מורכבת — בלוקים וזוגות"}
+                      {isChoosingComplex ? "יוצר..." : "תכנון רכיבה מורכבת — בלוקים ושיבוצים"}
                     </Button>
                   </div>
                 </div>

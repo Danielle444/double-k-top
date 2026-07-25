@@ -371,9 +371,8 @@ function buildStationWarningMessages(w: RidingSlotComplexSaveWarnings): string[]
   const messages: string[] = [];
   if (w.noInstructor) messages.push("לא נבחר/ה מאמן/ת לתחנה זו");
   if (w.noArena) messages.push("לא הוגדר מגרש לתחנה זו");
-  if (w.zeroPairs) messages.push("לא נוספו זוגות לתחנה זו");
-  if (w.pairsMissingTrainee2 > 0) messages.push(`${w.pairsMissingTrainee2} זוג/ות ללא חניכ/ה שני/ה`);
-  if (w.pairsMissingHorse > 0) messages.push(`${w.pairsMissingHorse} זוג/ות ללא סוס`);
+  if (w.zeroPairs) messages.push("לא נוספו שיבוצים לתחנה זו");
+  if (w.pairsMissingHorse > 0) messages.push(`${w.pairsMissingHorse} שיבוצים ללא סוס`);
   return messages;
 }
 
@@ -387,7 +386,7 @@ function blockStationWarningBadges(block: RidingSlotComplexBlockRow): string[] {
   const zeroPairs = block.stations.filter((s) => s.pairs.length === 0).length;
   if (noCoach > 0) badges.push(`${noCoach} תחנות ללא מאמן`);
   if (noArena > 0) badges.push(`${noArena} תחנות ללא מגרש`);
-  if (zeroPairs > 0) badges.push(`${zeroPairs} תחנות ללא זוגות`);
+  if (zeroPairs > 0) badges.push(`${zeroPairs} תחנות ללא שיבוצים`);
   return badges;
 }
 
@@ -396,9 +395,7 @@ function stationWarningBadges(station: RidingSlotComplexStationRow): string[] {
   const badges: string[] = [];
   if (!station.instructorId) badges.push("ללא מאמן");
   if (!station.arena) badges.push("ללא מגרש");
-  if (station.pairs.length === 0) badges.push("ללא זוגות");
-  const missingTrainee2 = station.pairs.filter((p) => p.trainee1Id && !p.trainee2Id).length;
-  if (missingTrainee2 > 0) badges.push(`${missingTrainee2} ללא חניכ/ה שני/ה`);
+  if (station.pairs.length === 0) badges.push("ללא שיבוצים");
   const missingHorse = station.pairs.filter((p) => p.trainee1Id && !p.horseName).length;
   if (missingHorse > 0) badges.push(`${missingHorse} ללא סוס`);
   return badges;
@@ -436,13 +433,11 @@ function buildPlanPublishWarnings(blocks: RidingSlotComplexBlockRow[]): string[]
   const noArena = allStations.filter((s) => !s.arena).length;
   if (noArena > 0) warnings.push(`${noArena} תחנות ללא מגרש`);
   const zeroPairs = allStations.filter((s) => s.pairs.length === 0).length;
-  if (zeroPairs > 0) warnings.push(`${zeroPairs} תחנות ללא זוגות`);
+  if (zeroPairs > 0) warnings.push(`${zeroPairs} תחנות ללא שיבוצים`);
 
   const allPairs = allStations.flatMap((s) => s.pairs);
-  const missingTrainee2 = allPairs.filter((p) => p.trainee1Id && !p.trainee2Id).length;
-  if (missingTrainee2 > 0) warnings.push(`${missingTrainee2} זוג/ות ללא בן/בת זוג שני/ה`);
   const missingHorse = allPairs.filter((p) => p.trainee1Id && !p.horseName).length;
-  if (missingHorse > 0) warnings.push(`${missingHorse} זוג/ות ללא סוס`);
+  if (missingHorse > 0) warnings.push(`${missingHorse} שיבוצים ללא סוס`);
 
   return warnings;
 }
@@ -571,7 +566,7 @@ function PublishConfirmModal({
       ]
     : [
         "החניכים יוכלו לראות את השיבוץ האישי שפורסם עבורם",
-        "הפרסום כולל שעות, מאמן/ת, מגרש, בן/בת זוג וסוס",
+        "הפרסום כולל שעות, מאמן/ת, מגרש, חניכים וסוס",
         "הערות פנימיות אינן מוצגות לחניכים",
         "שינויים עתידיים בטיוטה לא יוצגו עד לפרסום מחדש",
       ];
@@ -713,7 +708,7 @@ function ReturnToNormalConfirmModal({
       : decision.kind === "confirm-draft"
         ? [
             "פעולה זו תמחק את התכנון המורכב של הרכיבה",
-            "כל טווחי השעות, תחנות המאמנים, הזוגות והסוסים המשובצים יימחקו",
+            "כל טווחי השעות, תחנות המאמנים, השיבוצים והסוסים המשובצים יימחקו",
             "כל השיבוצים המורכבים יימחקו לצמיתות",
             "לא ניתן לשחזר את הפעולה",
           ]
@@ -1085,13 +1080,13 @@ function computeStationClientIssues(
 
   const hasMalformed = pairs.some((p) => !p.trainee1Id && (p.trainee2Id || p.horseName.trim() || p.note.trim()));
   if (hasMalformed) {
-    issues.push("יש לבחור חניכ/ה ראשונ/ה לכל זוג שמכיל פרטים (סוס, הערה או חניכ/ה שני/ה)");
+    issues.push("יש לבחור חניכ/ה ראשונ/ה לכל שיבוץ שמכיל פרטים (סוס, הערה או חניכ/ה שני/ה)");
   }
 
   const meaningfulPairs = pairs.filter((p) => p.trainee1Id);
 
   if (meaningfulPairs.some((p) => p.trainee2Id && p.trainee2Id === p.trainee1Id)) {
-    issues.push("לא ניתן לבחור את אותו/ה חניכ/ה פעמיים באותו זוג");
+    issues.push("לא ניתן לבחור את אותו/ה חניכ/ה פעמיים באותו שיבוץ");
   }
 
   const traineeCounts = new Map<string, number>();
@@ -1295,7 +1290,7 @@ function ContextualPairPicker({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex shrink-0 items-center justify-between gap-2">
-        <p className="text-sm font-semibold text-card-foreground">בחירת חניכים לזוג</p>
+        <p className="text-sm font-semibold text-card-foreground">בחירת חניך/ים</p>
         <span className="text-xs text-muted-foreground">נבחרו {selectedIds.length} מתוך 2</span>
       </div>
       {notYetScheduledCount !== null && (
@@ -1371,7 +1366,7 @@ function ContextualPairPicker({
                           <div className="flex flex-wrap gap-1.5">
                             {isUsed && (
                               <span className="rounded-full bg-warning-muted px-2 py-0.5 text-[10px] font-medium text-warning">
-                                כבר בזוג אחר בטווח הזה
+                                כבר בשיבוץ אחר בטווח הזה
                               </span>
                             )}
                             {isCoachMatch && (
@@ -1553,7 +1548,7 @@ function PairRowEditor({
         </Button>
         {onRemove && (
           <Button type="button" variant="ghost" className="!px-2 !py-1 !text-xs text-danger" onClick={onRemove}>
-            הסרת זוג
+            הסרת שיבוץ
           </Button>
         )}
       </div>
@@ -1798,9 +1793,9 @@ function StationEditorForm({
             {arena || "לא הוגדר מגרש"}
           </p>
           <div className="flex flex-col gap-2">
-            <p className="font-semibold text-card-foreground">זוגות</p>
+            <p className="font-semibold text-card-foreground">שיבוצים</p>
             {pairs.length === 0 ? (
-              <p className="text-muted-foreground">אין זוגות בתחנה זו</p>
+              <p className="text-muted-foreground">אין שיבוצים בתחנה זו</p>
             ) : (
               pairs.map((pair) => {
                 const trainee1 = candidates.find((c) => c.studentId === pair.trainee1Id);
@@ -1862,18 +1857,18 @@ function StationEditorForm({
 
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-card-foreground">זוגות</p>
+            <p className="text-sm font-semibold text-card-foreground">שיבוצים</p>
             <Button
               type="button"
               variant="secondary"
               className="!px-2 !py-1 !text-xs"
               onClick={() => setPickerOpen(true)}
             >
-              + הוספת זוג
+              + הוספת שיבוץ
             </Button>
           </div>
           {pairs.length === 0 ? (
-            <p className="text-sm text-muted-foreground">אין עדיין זוגות בתחנה זו</p>
+            <p className="text-sm text-muted-foreground">אין עדיין שיבוצים בתחנה זו</p>
           ) : (
             <div className="flex flex-col gap-2">
               {pairs.map((pair) => (
@@ -1953,7 +1948,7 @@ function BlockCard({
           <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
             {block.stations.length} תחנות
           </span>
-          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{totalPairs} זוגות</span>
+          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">{totalPairs} שיבוצים</span>
           {hasOverlap && (
             <span className="rounded-full bg-warning-muted px-2 py-0.5 text-xs font-medium text-warning">
               חופף לטווח אחר
@@ -2043,7 +2038,7 @@ function StationCard({
           {station.instructor?.fullName ?? "לא הוגדר מאמן"}
         </span>
         <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-          {station.pairs.length} זוגות
+          {station.pairs.length} שיבוצים
         </span>
       </div>
       <p className="truncate text-sm text-card-foreground">מגרש: {station.arena ?? "לא הוגדר מגרש"}</p>
@@ -2116,7 +2111,7 @@ function StationOverviewCard({
           {station.instructor?.fullName ?? "לא הוגדר מאמן"}
         </span>
         <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-          {station.pairs.length} זוגות
+          {station.pairs.length} שיבוצים
         </span>
       </div>
       <p className="truncate text-sm text-card-foreground">מגרש: {station.arena ?? "לא הוגדר מגרש"}</p>
@@ -2130,7 +2125,7 @@ function StationOverviewCard({
         </div>
       )}
       {station.pairs.length === 0 ? (
-        <p className="text-sm text-muted-foreground">אין זוגות בתחנה זו</p>
+        <p className="text-sm text-muted-foreground">אין שיבוצים בתחנה זו</p>
       ) : (
         <div className="flex flex-col gap-1.5">
           {station.pairs.map((pair) => {
@@ -2532,7 +2527,7 @@ function InlinePairDialog({
   return (
     <Modal
       open
-      title={proposal ? proposal.title : mode === "create" ? "הוספת זוג" : "עריכת זוג"}
+      title={proposal ? proposal.title : mode === "create" ? "הוספת שיבוץ" : "עריכת שיבוץ"}
       size="wide"
       onClose={() => {
         // Never dismiss mid-save/mid-submit via backdrop click or the header X.
@@ -2602,7 +2597,7 @@ function InlinePairDialog({
             <div>
               {mode === "edit" && onRemove && (
                 <Button type="button" variant="danger" className="!text-xs" disabled={saving} onClick={onRemove}>
-                  הסרת זוג
+                  הסרת שיבוץ
                 </Button>
               )}
             </div>
@@ -2936,11 +2931,11 @@ export function RidingComplexPlanEditor({
   function pairSnapshotErrorMessage(reason: Extract<PairSnapshotResult, { ok: false }>["reason"]): string {
     switch (reason) {
       case "NO_TRAINEE":
-        return "יש לבחור לפחות חניכ/ה אחת לזוג.";
+        return "יש לבחור לפחות חניכ/ה אחת לשיבוץ.";
       case "DUPLICATE_TARGET":
-        return "אירעה שגיאה בזיהוי הזוג. רעננו ונסו שוב.";
+        return "אירעה שגיאה בזיהוי השיבוץ. רעננו ונסו שוב.";
       default:
-        return "הזוג כבר לא קיים. רעננו ונסו שוב.";
+        return "השיבוץ כבר לא קיים. רעננו ונסו שוב.";
     }
   }
 
@@ -3886,7 +3881,7 @@ export function RidingComplexPlanEditor({
 
   function handleDeleteBlock(blockId: string) {
     if (anyBlockActionPending || !plan) return;
-    if (!window.confirm("למחוק את טווח השעות הזה? כל התחנות והזוגות בו יימחקו. לא ניתן לשחזר את הפעולה.")) return;
+    if (!window.confirm("למחוק את טווח השעות הזה? כל התחנות והשיבוצים בו יימחקו. לא ניתן לשחזר את הפעולה.")) return;
     const expectedVersion = plan.version;
     setListError(null);
     setBusyBlockId(blockId);
@@ -3942,7 +3937,7 @@ export function RidingComplexPlanEditor({
 
   function handleDeleteStation(blockId: string, stationId: string) {
     if (anyStationActionPending || !plan) return;
-    if (!window.confirm("למחוק את תחנת המאמן הזו? כל הזוגות בה יימחקו. לא ניתן לשחזר את הפעולה.")) return;
+    if (!window.confirm("למחוק את תחנת המאמן הזו? כל השיבוצים בה יימחקו. לא ניתן לשחזר את הפעולה.")) return;
     const expectedVersion = plan.version;
     setStationListError(null);
     setBusyStationId(stationId);

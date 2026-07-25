@@ -635,7 +635,7 @@ export function InstructorRidingSlotsSection({
                                     >
                                       {isCreatingComplex && creatingComplexForId === ridingSlotId
                                         ? "יוצר..."
-                                        : "תכנון רכיבה מורכבת — בלוקים וזוגות"}
+                                        : "תכנון רכיבה מורכבת — בלוקים ושיבוצים"}
                                     </Button>
                                   </>
                                 );
