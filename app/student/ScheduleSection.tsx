@@ -13,6 +13,7 @@ import { resolveStudentRidingPresentation } from "./student-riding-presentation"
 import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { coalesceAdjacentSameActivity } from "@/lib/schedule-grouping";
+import { formatScheduleLocationLabel } from "@/lib/schedule-location";
 
 // Combined-participation ("משולב") business indication for the trainee card,
 // DISPLAY-ONLY. Mirrors the server tri-state verbatim: true -> "עם משולב",
@@ -284,11 +285,15 @@ function ScheduleCard({
       <p className={`font-bold text-card-foreground ${compact ? "text-base" : "text-lg"}`}>
         {ridingPresentation.title}
       </p>
-      {item.location && (
-        <p className={`mt-1 text-muted-foreground ${compact ? "text-xs" : "text-sm"}`}>
-          מיקום: {item.location}
-        </p>
-      )}
+      {(() => {
+        const location = formatScheduleLocationLabel(item.location);
+        if (!location) return null;
+        return (
+          <p className={`mt-1 text-muted-foreground ${compact ? "text-xs" : "text-sm"}`}>
+            מיקום: {location}
+          </p>
+        );
+      })()}
       {ridingPresentation.showGenericRidingInfo && item.ridingInfo && (
         <div
           className={`mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-muted-foreground ${
