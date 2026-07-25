@@ -10,6 +10,8 @@ import { dateKey, parseDateKey } from "@/lib/dates";
 import { buildScheduleSlots } from "@/lib/schedule-grouping";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
 import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
+import { getCurrentCourseEnrollmentRoster } from "@/lib/course/current-enrollments";
+import { selectRidingRosterCandidates } from "@/lib/actions/riding-slot-roster-scope";
 import { getKnownHorseNames } from "@/lib/actions/horse-feeding";
 import type { ActionResult } from "@/lib/actions/students";
 import type { AttendanceStatusValue } from "@/lib/actions/attendance";
@@ -949,7 +951,22 @@ async function buildRidingSlotStudentNotes(ridingSlotId: string): Promise<Riding
       notes: {
         include: { taughtStudents: { include: { student: { select: { id: true, fullName: true } } } } },
       },
-      scheduleItem: { select: { groupName: true, date: true } },
+      // L2-RIDING-ROSTER - the slot's server-owned CourseOffering + level are
+      // resolved here (RidingSlot -> anchor ScheduleItem -> WeeklySchedule ->
+      // CourseOffering), so the Level 2 branch below never trusts a client value
+      // and never re-queries per row.
+      scheduleItem: {
+        select: {
+          groupName: true,
+          date: true,
+          weeklySchedule: {
+            select: {
+              courseOfferingId: true,
+              courseOffering: { select: { level: true } },
+            },
+          },
+        },
+      },
     },
   });
   if (!slot) return [];
@@ -986,19 +1003,69 @@ async function buildRidingSlotStudentNotes(ridingSlotId: string): Promise<Riding
   });
   const complexTraineeIds = collectComplexPlanTraineeIds(complexPlan);
 
-  const students = await prisma.student.findMany({
-    where: {
-      isActive: true,
-      OR: [
-        ...filters.map((f) => ({
-          ...(f.groupName !== null ? { groupName: f.groupName } : {}),
-          ...(f.subgroupNumber !== null ? { subgroupNumber: f.subgroupNumber } : {}),
-        })),
-        ...(complexTraineeIds.length > 0 ? [{ id: { in: complexTraineeIds } }] : []),
-      ],
-    },
-    orderBy: { fullName: "asc" },
-  });
+  // L2-RIDING-ROSTER - offering-aware candidate scope.
+  //
+  // Level 1 (or an offering-less legacy week): UNCHANGED. The parent group still
+  // lives in Student.groupName, so the original global Student.groupName OR-query
+  // is preserved byte-for-byte - same counts, grouping, ordering and horse
+  // defaults as today.
+  //
+  // Level 2+: the parent group ("ג") lives only in the effective-dated
+  // GroupMembership spine, never in Student.groupName, so that legacy query
+  // returns nobody. Instead scope from the offering's ACTIVE-enrollment roster
+  // (getCurrentCourseEnrollmentRoster, resolved AS-OF the ScheduleItem date, so
+  // memberships that only start on the course's first day are current), then
+  // load exactly those Student rows for the horse/notes payload. One roster read
+  // + one Student IN read (+ the existing single attendance read) - no N+1, no
+  // per-row group query, and no global active-student fallback.
+  const courseOfferingId = slot.scheduleItem.weeklySchedule?.courseOfferingId ?? null;
+  const offeringLevel = slot.scheduleItem.weeklySchedule?.courseOffering?.level ?? null;
+  const useCourseRoster = courseOfferingId !== null && offeringLevel !== null && offeringLevel >= 2;
+
+  // For Level 2, studentId -> GroupMembership-derived parent group + subgroup, so
+  // the returned row exposes ג / subgroup 1-4 from the spine, never the legacy
+  // Student columns. Null for Level 1 (rows keep their Student.groupName values).
+  let groupOverrideByStudentId:
+    | Map<string, { groupName: string | null; subgroupNumber: number | null }>
+    | null = null;
+
+  let students: Awaited<ReturnType<typeof prisma.student.findMany>>;
+  if (useCourseRoster) {
+    const roster = await getCurrentCourseEnrollmentRoster(courseOfferingId, {
+      asOf: slot.scheduleItem.date,
+    });
+    const scope = selectRidingRosterCandidates(
+      roster.rows.map((r) => ({
+        studentId: r.id,
+        groupName: r.groupName,
+        subgroupNumber: r.subgroupNumber,
+      })),
+      filters,
+      complexTraineeIds,
+    );
+    groupOverrideByStudentId = scope.groupByStudentId;
+    students =
+      scope.candidateStudentIds.length > 0
+        ? await prisma.student.findMany({
+            where: { id: { in: scope.candidateStudentIds }, isActive: true },
+            orderBy: { fullName: "asc" },
+          })
+        : [];
+  } else {
+    students = await prisma.student.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          ...filters.map((f) => ({
+            ...(f.groupName !== null ? { groupName: f.groupName } : {}),
+            ...(f.subgroupNumber !== null ? { subgroupNumber: f.subgroupNumber } : {}),
+          })),
+          ...(complexTraineeIds.length > 0 ? [{ id: { in: complexTraineeIds } }] : []),
+        ],
+      },
+      orderBy: { fullName: "asc" },
+    });
+  }
 
   const noteByStudentId = new Map(slot.notes.map((n) => [n.studentId, n]));
 
@@ -1010,11 +1077,17 @@ async function buildRidingSlotStudentNotes(ridingSlotId: string): Promise<Riding
   return students.map((s) => {
     const note = noteByStudentId.get(s.id);
     const attendance = attendanceByStudentId.get(s.id);
+    // L2-RIDING-ROSTER - for a Level 2 slot the group/subgroup shown come from
+    // the GroupMembership spine (parent group ג + subgroup 1-4), never the legacy
+    // Student columns. Null override map (Level 1) keeps the existing Student
+    // values exactly. Horse fields are always read from Student as a display
+    // default only - never written here (this reader performs no mutation).
+    const groupOverride = groupOverrideByStudentId?.get(s.id);
     return {
       studentId: s.id,
       studentName: s.fullName,
-      groupName: s.groupName,
-      subgroupNumber: s.subgroupNumber,
+      groupName: groupOverride ? groupOverride.groupName : s.groupName,
+      subgroupNumber: groupOverride ? groupOverride.subgroupNumber : s.subgroupNumber,
       hasPrivateHorse: s.hasPrivateHorse,
       privateHorseName: s.privateHorseName,
       assignedHorseName: s.assignedHorseName,
