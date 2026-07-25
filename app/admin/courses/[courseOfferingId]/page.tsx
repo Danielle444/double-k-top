@@ -69,6 +69,7 @@ export default async function CourseDashboardPage({
 
   const groupsHref = `/admin/courses/${encodeURIComponent(context.id)}/groups`;
   const enrollmentsHref = `/admin/courses/${encodeURIComponent(context.id)}/enrollments`;
+  const horsesHref = `/admin/courses/${encodeURIComponent(context.id)}/horses`;
   const scheduleHref = `/admin/courses/${encodeURIComponent(context.id)}/schedule`;
 
   // The rename affordance is shown only when a name change is permitted for this
@@ -136,6 +137,17 @@ export default async function CourseDashboardPage({
         <h3 className="text-base font-semibold text-card-foreground">חניכים בקורס</h3>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           רישום חניך קיים אחד לקורס ושיוכו לתת־קבוצה, וצפייה בחניכים הרשומים.
+        </p>
+      </Link>
+
+      <Link
+        href={horsesHref}
+        className="rounded-xl border border-border bg-card p-5 transition-colors hover:bg-muted"
+      >
+        <h3 className="text-base font-semibold text-card-foreground">שיוך סוסים</h3>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          סוס ברירת המחדל של חניכי הקורס. חניך/ה הרשום/ה לקורס זה בלבד ניתן/ת
+          לעריכה; חניך/ה דו־קורסי/ת מוצג/ת לקריאה בלבד עם הסוס שבירושה.
         </p>
       </Link>
 
