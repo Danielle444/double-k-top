@@ -3,9 +3,17 @@
  * combined-participation ("משולב") card badge.
  *
  * DISPLAY-ONLY. This slice adds combinedParticipation to the TRAINEE schedule
- * projection/result and renders a badge on the trainee card. It must add NO
- * visibility filtering (Slice 2 is out of scope), hide no item, and leave the
+ * projection/result and renders a badge on the trainee card, and leaves the
  * instructor/admin readers untouched.
+ *
+ * UPDATED FOR SLICE 2: visibility filtering (dual trainee + Level 2 selected +
+ * combinedParticipation === false -> hidden) is now wired into
+ * getScheduleForStudent. That filtering is proven DB-free against the pure
+ * core in combined-participation-visibility-core.test.ts and its wiring/order
+ * is proven in student-schedule.course-scope.test.ts; THIS file keeps proving
+ * only what it always proved - the badge wording/rendering contract and that
+ * combinedParticipation still reaches the client verbatim on every SURVIVING
+ * item (the Slice 2 filter removes whole items, it never rewrites this field).
  *
  * WHY SOURCE-CONTRACT, NOT AN IMPORTED UNIT TEST
  * ----------------------------------------------
@@ -61,13 +69,16 @@ test("getScheduleForStudent projects combinedParticipation verbatim from the ite
 });
 
 // ---------------------------------------------------------------------------
-// (8) No item is filtered or hidden by combinedParticipation.
+// (8) The group/day item filter stays independent of combinedParticipation -
+// SLICE 2's visibility rule is a SEPARATE step, never folded into this predicate.
 // ---------------------------------------------------------------------------
 
-test("the reader's item filter never consults combinedParticipation", () => {
+test("the group/day item filter never consults combinedParticipation", () => {
   const fn = readerFunction();
-  // Isolate the single item-filter predicate and prove it only ever tests the
-  // group filter and the day key - never the new field.
+  // Isolate the single group/day-filter predicate and prove it only ever tests
+  // the group filter and the day key - never the combined-participation field.
+  // The Slice 2 hide rule is applied afterwards, as its own separate step (see
+  // the next test) - it must never be folded into this predicate.
   const filterStart = fn.indexOf("weekItems.filter((i) => {");
   assert.notEqual(filterStart, -1, "expected the item filter predicate");
   const filterEnd = fn.indexOf("});", filterStart);
@@ -116,21 +127,60 @@ test("the card renders the badge only when the label is non-null", () => {
 });
 
 // ---------------------------------------------------------------------------
-// (9)(10) No Slice-2 filtering, no dual-enrollment query, reader path intact.
+// (9)(10) Slice 2 filtering is wired as its own step, after the group/day
+// filter and before the riding-slot batch fetch; combinedParticipation still
+// reaches the client verbatim on every item that survives it; the pre-existing
+// authorization/resolver wiring is untouched.
 // ---------------------------------------------------------------------------
 
-test("no combinedParticipation visibility filtering or new dual-enrollment query is added", () => {
+test("Slice 2 filtering runs as a separate step, between the group/day filter and the riding-slot batch fetch", () => {
   const fn = readerFunction();
-  // The field is READ exactly once, as the verbatim projection value; it never
-  // appears in a where-clause, an early return, or a filter predicate.
+  assert.ok(
+    fn.includes("filterTraineeScheduleItemsForCombinedParticipation(groupFilteredItems,"),
+    "the Slice 2 filter must be applied to the already group/day-filtered list",
+  );
+  const groupDayFilter = requiredIndex(fn, "weekItems.filter((i) => {", "group/day filter");
+  const slice2Filter = requiredIndex(
+    fn,
+    "filterTraineeScheduleItemsForCombinedParticipation(groupFilteredItems,",
+    "Slice 2 filter call",
+  );
+  const ridingSlotBatch = requiredIndex(
+    fn,
+    "getPublishedComplexRidingPlansForStudentInternal(",
+    "riding-slot batch fetch",
+  );
+  assert.ok(groupDayFilter < slice2Filter, "group/day filtering must precede the Slice 2 hide rule");
+  assert.ok(slice2Filter < ridingSlotBatch, "Slice 2 filtering must precede the riding-slot batch fetch");
+});
+
+test("the dual-enrollment lookup only runs for a Level 2 selected offering, never unconditionally", () => {
+  const fn = readerFunction();
+  assert.match(
+    fn,
+    /offeringLevel === COMBINED_PARTICIPATION_HIDDEN_LEVEL\s*\n?\s*\?\s*await isTraineeDualEnrolledForSelectedOffering\(authorization\.courseOfferingId\)\s*\n?\s*:\s*false/,
+    "the dual-enrollment fetch must be gated on the resolved offering's level",
+  );
+  // Exactly one dual-enrollment call per request - no loop over items.
+  assert.equal(
+    (fn.match(/isTraineeDualEnrolledForSelectedOffering\(/g) ?? []).length,
+    1,
+    "the dual-enrollment helper must be called at most once, never per item",
+  );
+});
+
+test("combinedParticipation still reaches the client verbatim on every surviving item", () => {
+  const fn = readerFunction();
   assert.equal(
     (fn.match(/i\.combinedParticipation/g) ?? []).length,
     1,
-    "combinedParticipation is read exactly once (the projection value)",
+    "combinedParticipation is read exactly once (the projection value) - Slice 2 filters whole items, it never rewrites this field",
   );
-  assert.ok(!/where:\s*\{[^}]*combinedParticipation/.test(fn), "combinedParticipation is never a query filter");
-  // The gate/authorization wiring is unchanged - still the S1A course-scoped path,
-  // so Level 1 loading is unaffected.
+  assert.ok(!/where:\s*\{[^}]*combinedParticipation/.test(fn), "combinedParticipation is never a Prisma query filter");
+});
+
+test("the pre-existing authorization/resolver wiring is untouched by Slice 2", () => {
+  const fn = readerFunction();
   assert.ok(
     fn.includes("authorizeTraineeWeekReadWithDeps(weeklyScheduleId, {"),
     "the course-scoped authorization gate is untouched",
@@ -140,3 +190,9 @@ test("no combinedParticipation visibility filtering or new dual-enrollment query
     "the offering resolver wiring is untouched",
   );
 });
+
+function requiredIndex(haystack: string, needle: string, label: string): number {
+  const i = haystack.indexOf(needle);
+  assert.notEqual(i, -1, `${label}: expected to find \`${needle}\``);
+  return i;
+}

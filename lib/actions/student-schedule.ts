@@ -30,6 +30,14 @@ import {
   resolveTraineeCourseOffering,
   resolveTraineeSelectedCourseOffering,
 } from "@/lib/course/actor-course-offering";
+// COMBINED PARTICIPATION SLICE 2 - the pure visibility rule plus its narrow
+// server-side dual-enrollment binding. Trainee schedule read ONLY: no admin or
+// instructor reader imports either module.
+import {
+  COMBINED_PARTICIPATION_HIDDEN_LEVEL,
+  filterTraineeScheduleItemsForCombinedParticipation,
+} from "@/lib/course/combined-participation-visibility-core";
+import { isTraineeDualEnrolledForSelectedOffering } from "@/lib/course/schedule-dual-enrollment";
 import { getEffectiveCapabilities } from "@/lib/course/capabilities/offering-capabilities";
 import {
   authorizeTraineeWeekReadWithDeps,
@@ -86,10 +94,11 @@ export interface ScheduleItemView {
   // the ScheduleItem.combinedParticipation tri-state verbatim: true -> the session
   // runs WITH combined participation, false -> WITHOUT, null -> not stated (the
   // trainee card shows no badge). This is projection metadata for the trainee card
-  // badge ONLY - it is NEVER used to filter or hide an item here, and this slice
-  // deliberately does not add any combinedParticipation VISIBILITY filtering (that
-  // is Slice 2, out of scope). Level-2-only and dual trainees receive it
-  // identically; a Level 1 item with a null value is unchanged (no badge).
+  // badge ONLY. Items hidden by the SLICE 2 visibility rule (dual trainee, Level 2
+  // selected, combinedParticipation === false) are removed from the list entirely
+  // upstream, in getScheduleForStudent, before this shape is built - so a
+  // surviving item's badge value here is always exactly what should render; this
+  // field itself is never used to filter or hide anything at THIS layer.
   combinedParticipation: boolean | null;
   // RIDING-COMPLEX-PUBLICATION P7C - a separate field/variant from ridingInfo
   // above, never a replacement for it. For a complex-mode slot, ridingInfo is
@@ -234,10 +243,30 @@ export async function getScheduleForStudent(
     },
   });
 
-  const items = weekItems.filter((i) => {
+  const groupFilteredItems = weekItems.filter((i) => {
     if (groupFilter === "mine" && i.groupName && i.groupName !== student.groupName) return false;
     if (dayKey !== "all" && dateKey(i.date) !== dayKey) return false;
     return true;
+  });
+
+  // COMBINED PARTICIPATION SLICE 2 - server-owned hide rule. The offering
+  // level comes from the already-authorized, server-resolved offering id
+  // (never a client value or a hardcoded constant); the dual-enrollment fetch
+  // is issued ONLY when that offering is Level 2 (the only level the rule can
+  // ever apply to), so a Level 1 read never pays for it. Exactly one
+  // enrollment query when it does run - see schedule-dual-enrollment.ts.
+  const offering = await prisma.courseOffering.findUnique({
+    where: { id: authorization.courseOfferingId },
+    select: { level: true },
+  });
+  const offeringLevel = offering?.level ?? 0;
+  const isDualEnrolled =
+    offeringLevel === COMBINED_PARTICIPATION_HIDDEN_LEVEL
+      ? await isTraineeDualEnrolledForSelectedOffering(authorization.courseOfferingId)
+      : false;
+  const items = filterTraineeScheduleItemsForCombinedParticipation(groupFilteredItems, {
+    offeringLevel,
+    isDualEnrolled,
   });
 
   // RIDING-COMPLEX-PUBLICATION P7C - collected from the already-filtered
