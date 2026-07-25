@@ -84,24 +84,45 @@ export function isTraineeCourseContextDenial(error: unknown): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// SCHEDULE capability
+// Trainee capability gate (per-module)
 // ---------------------------------------------------------------------------
 
 /** The single capability key that authorizes any trainee schedule reading. */
 export const TRAINEE_SCHEDULE_CAPABILITY_KEY: CapabilityKey = "SCHEDULE";
 
 /**
- * Positive-ENABLED test, deliberately `!== "ENABLED"` rather than
- * `=== "DISABLED"`: a missing capability row (effective DISABLED under CAP-1), a
- * retired catalog entry, a malformed status and READ_ONLY all DENY. Schedule
- * viewing is served only on a positively ENABLED SCHEDULE capability for the
- * resolved offering. A partial/absent map denies rather than throwing.
+ * The capability key that authorizes the trainee DUTIES week list. Duties are a
+ * Level 1 module; a Level-2-only trainee (DUTIES DISABLED) therefore gets the
+ * uniform empty selection from the same gate as schedule.
+ */
+export const TRAINEE_DUTIES_CAPABILITY_KEY: CapabilityKey = "DUTIES";
+
+/**
+ * Positive-ENABLED test for ONE required capability key, deliberately
+ * `!== "ENABLED"` rather than `=== "DISABLED"`: a missing capability row
+ * (effective DISABLED under CAP-1), a retired catalog entry, a malformed status
+ * and READ_ONLY all DENY. A partial/absent map denies rather than throwing. This
+ * is the single gate both the schedule and duties selection loaders use, so
+ * neither can drift from the other.
+ */
+export function isTraineeCapabilityEnabled(
+  capabilities: Partial<Record<CapabilityKey, EffectiveCapabilityStatus>> | null | undefined,
+  requiredCapability: CapabilityKey,
+): boolean {
+  if (!capabilities) return false;
+  return capabilities[requiredCapability] === "ENABLED";
+}
+
+/**
+ * SCHEDULE-specific wrapper, preserved verbatim in behaviour and signature so
+ * every existing schedule caller and test is unchanged. Schedule viewing is
+ * served only on a positively ENABLED SCHEDULE capability for the resolved
+ * offering.
  */
 export function isTraineeScheduleCapabilityEnabled(
   capabilities: Partial<Record<CapabilityKey, EffectiveCapabilityStatus>> | null | undefined,
 ): boolean {
-  if (!capabilities) return false;
-  return capabilities[TRAINEE_SCHEDULE_CAPABILITY_KEY] === "ENABLED";
+  return isTraineeCapabilityEnabled(capabilities, TRAINEE_SCHEDULE_CAPABILITY_KEY);
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +339,13 @@ export interface TraineeWeeklyScheduleSelectionDeps extends TraineeCourseContext
     query: TraineeWeekOptionsQuery,
   ) => Promise<readonly TraineeWeekOptionRow[]>;
   todayDateKey: () => string;
+  /**
+   * The capability that must be ENABLED for the resolved offering. Defaults to
+   * SCHEDULE, so every pre-existing schedule caller is unchanged; the duties
+   * selection loader passes DUTIES. It never changes the offering resolution or
+   * the query - only which module gate is required.
+   */
+  requiredCapability?: CapabilityKey;
 }
 
 /**
@@ -326,7 +354,8 @@ export interface TraineeWeeklyScheduleSelectionDeps extends TraineeCourseContext
  * Order is deliberate and fail-closed at every step:
  *  1. resolve the trainee's own offering server-side (denial -> empty selection,
  *     any other error propagates);
- *  2. read THAT EXACT offering's effective capabilities and require SCHEDULE to
+ *  2. read THAT EXACT offering's effective capabilities and require the
+ *     `requiredCapability` (SCHEDULE by default, DUTIES for the duty picker) to
  *     be ENABLED (denial -> empty selection, before any week is queried);
  *  3. query weeks by that exact offering id AND isPublished;
  *  4. hand the ALREADY-FILTERED list to pickDefaultWeekId - which therefore can
@@ -345,8 +374,9 @@ export async function loadTraineeWeeklyScheduleSelectionWithDeps(
     throw error;
   }
 
+  const requiredCapability = deps.requiredCapability ?? TRAINEE_SCHEDULE_CAPABILITY_KEY;
   const capabilities = await deps.getEffectiveCapabilities(courseOfferingId);
-  if (!isTraineeScheduleCapabilityEnabled(capabilities)) {
+  if (!isTraineeCapabilityEnabled(capabilities, requiredCapability)) {
     return emptyTraineeWeeklyScheduleSelection();
   }
 

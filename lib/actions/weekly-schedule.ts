@@ -17,11 +17,15 @@ import { hasUnresolvedMalformedCombinedParticipation } from "@/lib/course/combin
 // requested course id and therefore binds the SELECTION resolver instead of the
 // single-course one. Every other trainee module keeps the committed no-argument
 // resolveTraineeCourseOffering() and is untouched by that slice.
-import { resolveTraineeSelectedCourseOffering } from "@/lib/course/actor-course-offering";
+import {
+  resolveTraineeSelectedCourseOffering,
+  resolveTraineeCourseOffering,
+} from "@/lib/course/actor-course-offering";
 import { getEffectiveCapabilities } from "@/lib/course/capabilities/offering-capabilities";
 import {
   loadTraineeWeeklyScheduleSelectionWithDeps,
   pickDefaultWeekId,
+  TRAINEE_DUTIES_CAPABILITY_KEY,
 } from "@/lib/course/course-scoped-week-options-core";
 
 // The real-world weekly schedule Excel files this needs to tolerate don't
@@ -955,5 +959,35 @@ export async function getWeeklyScheduleSelectionForTrainee(
     getEffectiveCapabilities,
     fetchPublishedWeekRows: (query) => prisma.weeklySchedule.findMany(query),
     todayDateKey,
+  });
+}
+
+// TRAINEE DUTIES WEEK VISIBILITY FIX - the DUTIES week picker, and the only week
+// option reader the trainee Duties tab may use. Duties are a Level 1 module and
+// are deliberately NOT course-selectable, so this must never follow the
+// currently-selected schedule course.
+//
+// It takes NO argument at all - no requested courseOfferingId is accepted from
+// the client for duties. Identity and the offering both come from the signed
+// session via the committed no-argument resolveTraineeCourseOffering(), which
+// injects the launch dual-enrollment compatibility: a dual-enrolled trainee
+// therefore resolves to their LEVEL 1 offering here (never Level 2), while a
+// Level-1-only trainee resolves to their single offering. Every other ambiguous
+// or absent course context (including a Level-2-only trainee, who has no Level 1
+// enrollment to resolve to) fails closed to the SAME uniform empty selection.
+//
+// It reuses loadTraineeWeeklyScheduleSelectionWithDeps unchanged, passing DUTIES
+// as the required capability (default is SCHEDULE), so a Level-2-only / duties-
+// disabled context yields the contained empty selection BEFORE any week is
+// queried, and only published weeks scoped to the resolved offering are loaded.
+// The returned { weeks, defaultWeekId } shape is identical to the schedule
+// picker, so the trainee client needs no new shape.
+export async function getDutyWeekSelectionForTrainee(): Promise<WeeklyScheduleSelection> {
+  return loadTraineeWeeklyScheduleSelectionWithDeps({
+    resolveTraineeCourseOffering,
+    getEffectiveCapabilities,
+    fetchPublishedWeekRows: (query) => prisma.weeklySchedule.findMany(query),
+    todayDateKey,
+    requiredCapability: TRAINEE_DUTIES_CAPABILITY_KEY,
   });
 }

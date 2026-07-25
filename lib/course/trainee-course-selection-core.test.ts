@@ -517,8 +517,11 @@ test("ONLY the schedule and contacts actions bind the selection resolver", () =>
     ["../actions/contacts.ts", "../actions/student-schedule.ts", "../actions/weekly-schedule.ts"],
     "no other trainee module may accept a requested course",
   );
-  // Duties live in student-schedule.ts and keep the committed no-argument
-  // resolver, which is why that file legitimately imports BOTH.
+  // Duties keep the committed no-argument resolver: the duty DATA reader in
+  // student-schedule.ts and the duty WEEK reader (getDutyWeekSelectionForTrainee)
+  // in weekly-schedule.ts. Those two files therefore legitimately import BOTH -
+  // the selectable resolver for their schedule/contacts surface and the
+  // single-course one for duties.
   assert.deepEqual(
     single.sort(),
     [
@@ -528,6 +531,7 @@ test("ONLY the schedule and contacts actions bind the selection resolver", () =>
       "../actions/student-schedule.ts",
       "../actions/teaching-practice-student.ts",
       "../actions/weekly-feedback.ts",
+      "../actions/weekly-schedule.ts",
     ],
     "every other trainee module must keep the single-course resolver",
   );

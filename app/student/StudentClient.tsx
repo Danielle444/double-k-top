@@ -14,7 +14,10 @@ import {
   type StudentProfile,
   type StudentSearchResult,
 } from "@/lib/actions/auth";
-import { getWeeklyScheduleSelectionForTrainee } from "@/lib/actions/weekly-schedule";
+import {
+  getWeeklyScheduleSelectionForTrainee,
+  getDutyWeekSelectionForTrainee,
+} from "@/lib/actions/weekly-schedule";
 import {
   listTraineeCourseOptions,
   type TraineeCourseOptionView,
@@ -227,6 +230,17 @@ export function StudentClient() {
   // from "could not load", so the schedule shows SCHEDULE_LOAD_ERROR_MESSAGE
   // instead of a permanent "טוען...".
   const [scheduleLoadError, setScheduleLoadError] = useState(false);
+
+  // TRAINEE DUTIES WEEK VISIBILITY FIX - duty-only week state, kept SEPARATE from
+  // the schedule week state above. Duties are a Level 1 module and are not
+  // course-selectable, so they must never follow selectedCourseOfferingId:
+  // getDutyWeekSelectionForTrainee takes no argument and server-resolves the duty
+  // offering (dual -> Level 1). Because this state is independent, switching the
+  // schedule course (which only touches `weeks`/`selectedWeekId`/`dayFilter`
+  // above) can never clear or replace the selected duty week.
+  const [dutyWeeks, setDutyWeeks] = useState<WeekOption[] | null>(null);
+  const [dutySelectedWeekId, setDutySelectedWeekId] = useState<string | null>(null);
+  const [dutyDayFilter, setDutyDayFilter] = useState<string | "all">("all");
 
   // Drives the "עוד" tab / "עדכונים" menu-row dot - a real unread-notification
   // count, kept in sync afterward by NotificationsList's onUnreadChange.
@@ -482,6 +496,37 @@ export function StudentClient() {
     };
   }, [session, courseOptions, selectedCourseOfferingId]);
 
+  // TRAINEE DUTIES WEEK VISIBILITY FIX - load the duty week list INDEPENDENTLY of
+  // the selected schedule course. Deliberately depends only on `session`, NOT on
+  // selectedCourseOfferingId, so switching the schedule/today course never
+  // re-runs this and never resets dutySelectedWeekId. getDutyWeekSelectionForTrainee
+  // takes no argument: the server resolves the duty offering (dual -> Level 1)
+  // and requires DUTIES; a Level-2-only/denied trainee gets the uniform empty
+  // selection. The `cancelled` guard means a stale run can never overwrite a
+  // newer one, and the catch fails closed to an empty (non-null) list so the
+  // Duties tab can never be stuck on "טוען...".
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    getDutyWeekSelectionForTrainee()
+      .then((sel) => {
+        if (cancelled) return;
+        setDutyWeeks(sel.weeks);
+        setDutySelectedWeekId(sel.defaultWeekId);
+        const defaultWeek = sel.weeks.find((w) => w.id === sel.defaultWeekId) ?? null;
+        setDutyDayFilter(getDefaultDayFilter(defaultWeek, getLocalDateKey()));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDutyWeeks([]);
+        setDutySelectedWeekId(null);
+        setDutyDayFilter("all");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
   useEffect(() => {
     if (selected || query.trim().length < 2) return;
     const timeout = setTimeout(() => {
@@ -684,13 +729,20 @@ export function StudentClient() {
   const todayKey = getLocalDateKey(now);
   const todayWeek = weeks?.find((w) => w.startDate <= todayKey && todayKey <= w.endDate) ?? null;
 
-  const selectedWeek = weeks?.find((w) => w.id === selectedWeekId) ?? null;
-  const rangeStart = selectedWeek
-    ? dayFilter === "all"
-      ? selectedWeek.startDate
-      : dayFilter
+  // TRAINEE DUTIES WEEK VISIBILITY FIX - the Duties tab's range, derived ONLY from
+  // the independent duty-week state, so it is unaffected by the schedule course
+  // selection above.
+  const dutySelectedWeek = dutyWeeks?.find((w) => w.id === dutySelectedWeekId) ?? null;
+  const dutyRangeStart = dutySelectedWeek
+    ? dutyDayFilter === "all"
+      ? dutySelectedWeek.startDate
+      : dutyDayFilter
     : null;
-  const rangeEnd = selectedWeek ? (dayFilter === "all" ? selectedWeek.endDate : dayFilter) : null;
+  const dutyRangeEnd = dutySelectedWeek
+    ? dutyDayFilter === "all"
+      ? dutySelectedWeek.endDate
+      : dutyDayFilter
+    : null;
 
   const activeTabLabel = STUDENT_ALL_TABS.find((t) => t.id === activeTab)?.label ?? "";
   const isMoreItem = STUDENT_MORE_ITEMS.some((item) => item.id === activeTab);
@@ -894,24 +946,38 @@ export function StudentClient() {
           </div>
         )}
 
-        {activeTab === "duties" && (
+        {/* Defense in depth: duties are hidden from every nav surface for a
+            Level-2-only trainee (filterTraineeNavEntries), so this block is
+            normally unreachable - but guard the CONTENT too, with the SAME rule
+            the home duty card uses, so a "duties" activeTab set by any other
+            path still renders nothing for a Level-2-only trainee. While course
+            options are loading the eligible set is [] (not Level-2-only), which
+            matches the nav's own loading-safe behaviour. The duty-week state is
+            independent of the schedule course selection. */}
+        {activeTab === "duties" &&
+          !courseOptionsLoading &&
+          !isLevel2OnlyTrainee(eligibleCourseOptions) && (
           <div className="flex flex-col gap-4">
-            {weeks === null ? (
+            {dutyWeeks === null ? (
               <p className="text-base text-muted-foreground">טוען...</p>
             ) : (
               <WeekDayPicker
-                weeks={weeks}
-                selectedWeekId={selectedWeekId}
+                weeks={dutyWeeks}
+                selectedWeekId={dutySelectedWeekId}
                 onSelectWeek={(id) => {
-                  setSelectedWeekId(id);
-                  const week = weeks?.find((w) => w.id === id) ?? null;
-                  setDayFilter(getDefaultDayFilter(week, getLocalDateKey()));
+                  setDutySelectedWeekId(id);
+                  const week = dutyWeeks?.find((w) => w.id === id) ?? null;
+                  setDutyDayFilter(getDefaultDayFilter(week, getLocalDateKey()));
                 }}
-                dayFilter={dayFilter}
-                onSelectDay={setDayFilter}
+                dayFilter={dutyDayFilter}
+                onSelectDay={setDutyDayFilter}
               />
             )}
-            <DutiesSection studentId={session.id} startDateKey={rangeStart} endDateKey={rangeEnd} />
+            <DutiesSection
+              studentId={session.id}
+              startDateKey={dutyRangeStart}
+              endDateKey={dutyRangeEnd}
+            />
           </div>
         )}
 

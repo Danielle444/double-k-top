@@ -338,14 +338,18 @@ const TRAINEE_DUTIES_CAPABILITY_KEY: CapabilityKey = "DUTIES";
 // and INACTIVE sessions - which is why the old Student.isActive re-read is gone
 // rather than merely moved), the offering from the committed no-argument
 // resolveTraineeCourseOffering(), and that exact offering's capabilities. No
-// courseOfferingId parameter, no legacy singleton offering resolver, no Level 1
-// fallback, no group/name/level/date inference.
+// courseOfferingId parameter is accepted from the client, and no
+// group/name/level/date inference is used.
 //
 // DELIBERATELY NOT MIGRATED BY L2-DUAL. Duties are not one of the two modules a
 // trainee may switch course for, so this keeps the committed no-argument
-// resolveTraineeCourseOffering() and its "exactly one eligible enrollment"
-// invariant: a dual-enrolled trainee therefore fails closed here (Ambiguous ->
-// the uniform empty result), which is the intended containment, not a bug.
+// resolveTraineeCourseOffering(). That resolver injects the launch
+// dual-enrollment compatibility (see actor-course-offering.ts), so a
+// dual-enrolled trainee resolves to their LEVEL 1 offering here - duties belong
+// to Level 1 - rather than failing closed. A trainee with no single resolvable
+// Level 1 context (e.g. a Level-2-only trainee, who has no Level 1 enrollment)
+// still fails closed to the uniform empty result, which is the intended
+// containment.
 const TRAINEE_DUTIES_DEPS: TraineeModuleContextDeps = {
   requireTraineeId: async () => (await requireCurrentTrainee()).id,
   resolveTraineeCourseOffering,

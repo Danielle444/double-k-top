@@ -898,10 +898,17 @@ test("the schedule and contacts actions still bind EXPLICIT selection, unchanged
   }
 });
 
-test("exactly the six non-selectable trainee modules inherit the exception", () => {
+test("exactly the seven non-selectable trainee module surfaces inherit the exception", () => {
   // These are the modules that import the ZERO-ARGUMENT resolver and therefore
   // gain the Level 1 compatibility. Any new entry here is a module silently
   // acquiring a Level 1 fallback and must be a deliberate, reviewed decision.
+  //
+  // weekly-schedule.ts is a DELIBERATE, REVIEWED addition (TRAINEE DUTIES WEEK
+  // VISIBILITY FIX): its getDutyWeekSelectionForTrainee resolves the DUTY
+  // offering with the no-argument resolver so a dual trainee's duty week list is
+  // Level 1, exactly like the duty DATA reader in student-schedule.ts. The file
+  // ALSO still uses the selectable resolver for the SCHEDULE picker; importing
+  // both is intended.
   const inheriting: string[] = [];
   for (const relative of [
     "../actions/completion.ts",
@@ -931,5 +938,6 @@ test("exactly the six non-selectable trainee modules inherit the exception", () 
     "../actions/student-schedule.ts",
     "../actions/teaching-practice-student.ts",
     "../actions/weekly-feedback.ts",
+    "../actions/weekly-schedule.ts",
   ]);
 });

@@ -21,11 +21,13 @@ import assert from "node:assert/strict";
 
 import {
   TRAINEE_SCHEDULE_CAPABILITY_KEY,
+  TRAINEE_DUTIES_CAPABILITY_KEY,
   TRAINEE_WEEK_META_SELECT,
   TRAINEE_WEEK_OPTION_SELECT,
   authorizeTraineeWeekReadWithDeps,
   buildTraineeWeekOptionsQuery,
   emptyTraineeWeeklyScheduleSelection,
+  isTraineeCapabilityEnabled,
   isTraineeCourseContextDenial,
   isTraineeScheduleCapabilityEnabled,
   isTraineeWeekReadAuthorized,
@@ -646,4 +648,109 @@ test("neither orchestration exposes a parameter through which a client could nam
   // The trainee resolver dep is no-argument by design.
   assert.equal(selectionDeps().resolveTraineeCourseOffering.length, 0);
   assert.equal(readDeps().resolveTraineeCourseOffering.length, 0);
+});
+
+// ===========================================================================
+// TRAINEE DUTIES WEEK VISIBILITY FIX - the requiredCapability parameterization.
+// The same loader now serves the DUTIES week picker; these lock that the gate
+// keys on the passed capability, that SCHEDULE behaviour is unchanged, and that
+// a Level-2-only / duties-disabled context is contained to the empty selection.
+// ===========================================================================
+
+test("DUTIES key is a real capability and distinct from SCHEDULE", () => {
+  assert.equal(TRAINEE_DUTIES_CAPABILITY_KEY, "DUTIES");
+  assert.ok(CAPABILITY_KEYS.includes(TRAINEE_DUTIES_CAPABILITY_KEY));
+  assert.notEqual(TRAINEE_DUTIES_CAPABILITY_KEY, TRAINEE_SCHEDULE_CAPABILITY_KEY);
+});
+
+test("the generic capability gate is positively-ENABLED per the passed key", () => {
+  assert.equal(isTraineeCapabilityEnabled({ DUTIES: "ENABLED" }, "DUTIES"), true);
+  assert.equal(isTraineeCapabilityEnabled({ DUTIES: "READ_ONLY" }, "DUTIES"), false);
+  assert.equal(isTraineeCapabilityEnabled({ DUTIES: "DISABLED" }, "DUTIES"), false);
+  assert.equal(isTraineeCapabilityEnabled({}, "DUTIES"), false);
+  assert.equal(isTraineeCapabilityEnabled(null, "DUTIES"), false);
+  assert.equal(isTraineeCapabilityEnabled(undefined, "DUTIES"), false);
+  // It keys on the SPECIFIC capability: SCHEDULE ENABLED does not satisfy DUTIES.
+  assert.equal(isTraineeCapabilityEnabled({ SCHEDULE: "ENABLED" }, "DUTIES"), false);
+  // The schedule wrapper stays behaviourally identical to the generic gate.
+  assert.equal(
+    isTraineeScheduleCapabilityEnabled({ SCHEDULE: "ENABLED", DUTIES: "DISABLED" }),
+    true,
+  );
+});
+
+test("requiredCapability=DUTIES, DUTIES enabled -> that offering's published weeks", async () => {
+  let queriedWhere: unknown = null;
+  const selection = await loadTraineeWeeklyScheduleSelectionWithDeps(
+    selectionDeps({
+      requiredCapability: TRAINEE_DUTIES_CAPABILITY_KEY,
+      resolveTraineeCourseOffering: async () => ({ id: LEVEL_1_OFFERING_ID }),
+      getEffectiveCapabilities: async () => effectiveCapabilities({ DUTIES: "ENABLED" }),
+      fetchPublishedWeekRows: async (query) => {
+        queriedWhere = query.where;
+        return LEVEL_1_WEEK_ROWS;
+      },
+    }),
+  );
+  // Only the resolved Level 1 offering's published weeks were queried.
+  assert.deepEqual(queriedWhere, { courseOfferingId: LEVEL_1_OFFERING_ID, isPublished: true });
+  assert.deepEqual(
+    selection.weeks.map((w) => w.id),
+    ["wk-l1-a", "wk-l1-b"],
+  );
+  // today (2026-06-03, from selectionDeps) falls inside wk-l1-a (06-01..06-05).
+  assert.equal(selection.defaultWeekId, "wk-l1-a");
+});
+
+test("requiredCapability=DUTIES, DUTIES disabled -> contained empty selection, no week query", async () => {
+  let weeksQueried = false;
+  const selection = await loadTraineeWeeklyScheduleSelectionWithDeps(
+    selectionDeps({
+      requiredCapability: TRAINEE_DUTIES_CAPABILITY_KEY,
+      getEffectiveCapabilities: async () => effectiveCapabilities({ DUTIES: "DISABLED" }),
+      fetchPublishedWeekRows: async () => {
+        weeksQueried = true;
+        return LEVEL_1_WEEK_ROWS;
+      },
+    }),
+  );
+  assert.deepEqual(selection, { weeks: [], defaultWeekId: null });
+  assert.equal(weeksQueried, false);
+});
+
+test("requiredCapability=DUTIES gates on DUTIES ONLY: SCHEDULE enabled but DUTIES disabled -> empty", async () => {
+  const selection = await loadTraineeWeeklyScheduleSelectionWithDeps(
+    selectionDeps({
+      requiredCapability: TRAINEE_DUTIES_CAPABILITY_KEY,
+      // A Level-2-only trainee's offering: SCHEDULE on, DUTIES off.
+      getEffectiveCapabilities: async () => effectiveCapabilities({ SCHEDULE: "ENABLED", DUTIES: "DISABLED" }),
+    }),
+  );
+  assert.deepEqual(selection, { weeks: [], defaultWeekId: null });
+});
+
+test("SCHEDULE behaviour is unchanged: default (no requiredCapability) still gates on SCHEDULE", async () => {
+  // DUTIES disabled must NOT affect the default schedule loader.
+  const scheduleSelection = await loadTraineeWeeklyScheduleSelectionWithDeps(
+    selectionDeps({
+      getEffectiveCapabilities: async () => effectiveCapabilities({ SCHEDULE: "ENABLED", DUTIES: "DISABLED" }),
+    }),
+  );
+  assert.deepEqual(
+    scheduleSelection.weeks.map((w) => w.id),
+    ["wk-l1-a", "wk-l1-b"],
+  );
+  // And the default loader denies when SCHEDULE is off even if DUTIES is on.
+  const denied = await loadTraineeWeeklyScheduleSelectionWithDeps(
+    selectionDeps({
+      getEffectiveCapabilities: async () => effectiveCapabilities({ SCHEDULE: "DISABLED", DUTIES: "ENABLED" }),
+    }),
+  );
+  assert.deepEqual(denied, { weeks: [], defaultWeekId: null });
+});
+
+test("adding requiredCapability did not add a positional arg to the loader", () => {
+  // Still exactly one argument (the deps object) - requiredCapability rides
+  // inside deps, so no client-facing positional course/capability parameter.
+  assert.equal(loadTraineeWeeklyScheduleSelectionWithDeps.length, 1);
 });

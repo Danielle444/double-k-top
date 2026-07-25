@@ -333,9 +333,12 @@ test("getWeeklyScheduleSelectionForTrainee wires the trainee resolver, capabilit
 });
 
 test("weekly-schedule.ts imports the trainee SELECTION resolver, not the legacy singleton one", () => {
+  // Tolerates additional named imports from the same module (the duties fix also
+  // imports the no-argument resolveTraineeCourseOffering); the intent asserted is
+  // that the SELECTION resolver is imported and the legacy singleton is not.
   assert.match(
     weeklyScheduleSrc,
-    /import\s*\{\s*resolveTraineeSelectedCourseOffering\s*\}\s*from\s*["']@\/lib\/course\/actor-course-offering["']/,
+    /import\s*\{[^}]*\bresolveTraineeSelectedCourseOffering\b[^}]*\}\s*from\s*["']@\/lib\/course\/actor-course-offering["']/,
   );
   assert.ok(!weeklyScheduleSrc.includes("resolveCurrentCourseOffering"));
   for (const forbidden of ["LEVEL_1_COURSE_OFFERING_ID", "temporary-level2-compatibility"]) {
@@ -391,14 +394,17 @@ test("pickDefaultWeekId has ONE implementation, imported from the pure core", ()
 // ===========================================================================
 
 test("StudentClient calls getWeeklyScheduleSelectionForTrainee with the selected course", () => {
+  // Tolerates the duties fix's added getDutyWeekSelectionForTrainee import from
+  // the same module (now a multi-name import).
   assert.match(
     studentClientSrc,
-    /import \{ getWeeklyScheduleSelectionForTrainee \} from "@\/lib\/actions\/weekly-schedule"/,
+    /import \{[\s\S]*?\bgetWeeklyScheduleSelectionForTrainee\b[\s\S]*?\} from "@\/lib\/actions\/weekly-schedule"/,
   );
-  // SUPERSEDED BY L2-DUAL: previously a literal no-argument call.
+  // SUPERSEDED BY L2-DUAL: previously a literal no-argument call. The chained
+  // .then sits on the next line (prettier), so tolerate whitespace between them.
   assert.match(
     studentClientSrc,
-    /getWeeklyScheduleSelectionForTrainee\(selectedCourseOfferingId\)\.then\(\(sel\) => \{/,
+    /getWeeklyScheduleSelectionForTrainee\(selectedCourseOfferingId\)\s*\.then\(\(sel\) => \{/,
   );
   assert.ok(
     !studentClientSrc.includes("getWeeklyScheduleSelectionForStudent"),
