@@ -14,6 +14,7 @@ import { cleanScheduleTitle } from "@/lib/schedule-title";
 import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { resolveActivityForScheduleCardId } from "@/app/instructor/instructor-riding-schedule-map-core";
+import { Modal } from "@/lib/components/Modal";
 
 function isItemActiveNow(item: InstructorScheduleItem, now: Date): boolean {
   const todayKey = now.toISOString().slice(0, 10);
@@ -25,28 +26,69 @@ function isItemActiveNow(item: InstructorScheduleItem, now: Date): boolean {
   return nowMinutes >= sh * 60 + sm && nowMinutes < eh * 60 + em;
 }
 
-function renderScheduleCard(
-  item: InstructorScheduleItem,
-  active: boolean,
-  compact: boolean,
+// A real component (not a plain function returning JSX) specifically so its
+// own showDetails state can live here, scoped per card the same way the
+// student ScheduleCard's isExpanded/showDetails state is (see that file's
+// own comment for why per-item keying makes this safe with zero extra
+// bookkeeping). Compact/grid cards (ScheduleTimeGrid) sit in a fixed-height,
+// duration-proportional cell (see ScheduleTimeGrid.tsx / schedule-timegrid.ts,
+// untouched here) with no room to show every field inline for a short
+// session - so secondary details (location, session note, which instructor is
+// teaching) move into this on-demand dialog, reusing the exact same
+// authorized InstructorScheduleItem fields the card already holds. Riding
+// assignment/horse detail already has its own, separate, richer interaction
+// (the existing "צפייה בחניכים" click-through to the riding-students modal),
+// left untouched and not duplicated here.
+function InstructorScheduleCard({
+  item,
+  active,
+  compact,
   // The configured riding activity this exact card's id resolves to, or null.
   // Clickability comes ONLY from a successful id -> real-activity mapping here,
   // never from the (Hebrew) title text - so meals, duties, lessons and any
   // unconfigured riding item stay non-interactive with their styling, layout
   // and text untouched.
-  ridingActivity: WeeklyRidingActivity | null,
-  onOpenRidingActivity: ((activity: WeeklyRidingActivity) => void) | undefined
-) {
+  ridingActivity,
+  onOpenRidingActivity,
+}: {
+  item: InstructorScheduleItem;
+  active: boolean;
+  compact: boolean;
+  ridingActivity: WeeklyRidingActivity | null;
+  onOpenRidingActivity: ((activity: WeeklyRidingActivity) => void) | undefined;
+}) {
+  const [showDetails, setShowDetails] = useState(false);
+
   const clickable = Boolean(ridingActivity && ridingActivity.ridingSlot && onOpenRidingActivity);
-  // The card has no nested interactive elements, so a single handler on the
-  // card can never be reached twice for one activation and needs no
-  // stopPropagation; the outer ScheduleTimeGrid wrapper is layout-only and
-  // binds no click handler of its own.
   const open = clickable ? () => onOpenRidingActivity!(ridingActivity!) : undefined;
+
+  const location = item.location;
+  const note = item.description?.trim() || null;
+  // Deterministic rule (no DOM/height measurement): the info control appears
+  // exactly when at least one secondary detail exists beyond time/title/badges.
+  const hasSecondaryDetails = Boolean(location) || Boolean(note) || Boolean(item.instructorName);
+
+  // Built once, rendered verbatim either inline (a hypothetical non-compact
+  // caller - none exists today, every current call site passes compact=true)
+  // or inside the details dialog - the same authorized fields either way,
+  // never duplicated data.
+  const detailsContent = (
+    <>
+      {location && <p className="mt-1 text-sm text-muted-foreground">מיקום: {location}</p>}
+      {note && (
+        <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
+          <span className="font-medium text-card-foreground">הערה: </span>
+          {note}
+        </p>
+      )}
+      {item.instructorName && (
+        <p className="mt-1 text-sm text-muted-foreground">מדריך/ה: {item.instructorName}</p>
+      )}
+    </>
+  );
 
   return (
     <div
-      key={item.id}
       // Interactive attributes are added ONLY for a clickable riding card, so an
       // ordinary card renders byte-for-byte as before (no role, no tabIndex, no
       // handlers). role="button" + tabIndex + Enter/Space keep the card
@@ -82,19 +124,29 @@ function renderScheduleCard(
           {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
         </span>
       </div>
-      <p className={`font-bold text-card-foreground ${compact ? "text-base" : "text-lg"}`}>
-        {cleanScheduleTitle(item.title)}
-      </p>
-      {item.instructorName && (
-        <p className={`mt-1 text-muted-foreground ${compact ? "text-xs" : "text-sm"}`}>
-          מדריך/ה: {item.instructorName}
+      <div className="flex items-start justify-between gap-2">
+        <p className={`font-bold text-card-foreground ${compact ? "line-clamp-2 text-base" : "text-lg"}`}>
+          {cleanScheduleTitle(item.title)}
         </p>
-      )}
-      {item.location && (
-        <p className={`text-muted-foreground ${compact ? "text-xs" : "text-sm"}`}>
-          מיקום: {item.location}
-        </p>
-      )}
+        {compact && hasSecondaryDetails && (
+          <button
+            type="button"
+            onClick={(e) => {
+              // This card can itself be clickable (a configured riding slot
+              // opens the riding-students modal) - stop the event here so
+              // opening the info dialog never also opens that modal.
+              e.stopPropagation();
+              setShowDetails(true);
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            aria-label="מידע נוסף על הסשן"
+            className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-bold leading-none text-muted-foreground hover:bg-secondary hover:text-secondary-foreground"
+          >
+            i
+          </button>
+        )}
+      </div>
+      {!compact && detailsContent}
       {active && (
         <span className="mt-2 inline-block rounded-full bg-accent px-3 py-1 text-sm font-medium text-accent-foreground">
           מתקיים עכשיו
@@ -109,6 +161,15 @@ function renderScheduleCard(
         >
           צפייה בחניכים ›
         </span>
+      )}
+      {compact && hasSecondaryDetails && (
+        <Modal
+          open={showDetails}
+          onClose={() => setShowDetails(false)}
+          title={`${item.startTime}-${item.endTime} · ${cleanScheduleTitle(item.title)}`}
+        >
+          <div className="flex flex-col gap-1.5">{detailsContent}</div>
+        </Modal>
       )}
     </div>
   );
@@ -267,19 +328,19 @@ export function InstructorScheduleSection({
               </div>
               <ScheduleTimeGrid
                 items={items}
-                renderCard={(item) =>
-                  renderScheduleCard(
-                    item,
-                    isItemActiveNow(item, now),
-                    true,
+                renderCard={(item) => (
+                  <InstructorScheduleCard
+                    item={item}
+                    active={isItemActiveNow(item, now)}
+                    compact
                     // item.id may be a "+"-joined composite of atomic ScheduleItem
                     // ids (merged/coalesced cards); the activity map is keyed by
                     // atomic ids, so resolve through the composite-aware helper
                     // rather than looking the composite up directly.
-                    resolveActivityForScheduleCardId(resolveRidingActivity, item.id),
-                    onOpenRidingActivity
-                  )
-                }
+                    ridingActivity={resolveActivityForScheduleCardId(resolveRidingActivity, item.id)}
+                    onOpenRidingActivity={onOpenRidingActivity}
+                  />
+                )}
               />
             </div>
           ))}
