@@ -524,7 +524,7 @@ export function OfferingWeekEditorClient({
           </div>
 
           <label className="flex flex-col gap-1 text-sm">
-            הערות (אופציונלי)
+            הערה לסשן (אופציונלי, מוצג לחניכים)
             <textarea
               value={itemForm.description}
               onChange={(e) => setItemForm((f) => ({ ...f, description: e.target.value }))}

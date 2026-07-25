@@ -619,7 +619,7 @@ export function WeeklyScheduleDetailClient({
           </div>
 
           <label className="flex flex-col gap-1 text-sm">
-            תיאור (אופציונלי)
+            הערה לסשן (אופציונלי, מוצג לחניכים)
             <textarea
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}

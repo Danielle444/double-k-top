@@ -294,6 +294,20 @@ function ScheduleCard({
           </p>
         );
       })()}
+      {(() => {
+        // Real item only - this branch never runs for the combined-participation
+        // placeholder (that card returns earlier, above). item.description is a
+        // manager-authored free-text note; a null/empty/whitespace-only value must
+        // render nothing, not an empty label or blank line.
+        const note = item.description?.trim();
+        if (!note) return null;
+        return (
+          <p className={`mt-1 whitespace-pre-wrap text-muted-foreground ${compact ? "text-xs" : "text-sm"}`}>
+            <span className="font-medium text-card-foreground">הערה לסשן: </span>
+            {note}
+          </p>
+        );
+      })()}
       {ridingPresentation.showGenericRidingInfo && item.ridingInfo && (
         <div
           className={`mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-muted-foreground ${
