@@ -158,13 +158,23 @@ const SCHEDULE_LOAD_ERROR_MESSAGE = "לא ניתן לטעון כרגע את הל
 // falls back to today (if today falls inside the currently navigated week)
 // or otherwise that week's own start date - it never invents a date outside
 // the week the trainee is currently looking at.
+//
+// selectedWeek is null both before the course-scoped week list has loaded AND,
+// structurally, for the whole time a dual trainee has not yet picked an
+// explicit course (the week effect deliberately issues no request and leaves
+// weeks/selectedWeek empty until a course is chosen - see its own comment).
+// Since a dual trainee now lands on "הלו״ז שלי" by default with no course
+// picked yet (see resolveDefaultScheduleSubView), waiting on selectedWeek here
+// would leave the unified view stuck on "טוען..." indefinitely. todayKey is
+// always already available synchronously (see its own derivation), so it is
+// the same safe fallback the home/today mount already passes directly.
 export function resolveUnifiedScheduleDayKey(
   dayFilter: string | "all",
   selectedWeek: WeekOption | null,
   todayKey: string,
-): string | null {
+): string {
   if (dayFilter !== "all") return dayFilter;
-  if (!selectedWeek) return null;
+  if (!selectedWeek) return todayKey;
   if (todayKey >= selectedWeek.startDate && todayKey <= selectedWeek.endDate) return todayKey;
   return selectedWeek.startDate;
 }

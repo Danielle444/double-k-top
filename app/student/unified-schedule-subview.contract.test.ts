@@ -247,12 +247,22 @@ test("resolveUnifiedScheduleDayKey falls back to today (if in range) or the week
   const start = SRC.indexOf("export function resolveUnifiedScheduleDayKey(");
   const end = SRC.indexOf("export function StudentClient()");
   const body = SRC.slice(start, end);
-  assert.match(body, /if \(!selectedWeek\) return null;/);
   assert.match(
     body,
     /if \(todayKey >= selectedWeek\.startDate && todayKey <= selectedWeek\.endDate\) return todayKey;/,
   );
   assert.match(body, /return selectedWeek\.startDate;/);
+});
+
+test("resolveUnifiedScheduleDayKey falls back to todayKey (never null) when no week has loaded yet - a dual trainee defaults to unified with no course picked, so selectedWeek never resolves until they explicitly pick one", () => {
+  const start = SRC.indexOf("export function resolveUnifiedScheduleDayKey(");
+  const end = SRC.indexOf("export function StudentClient()");
+  const body = SRC.slice(start, end);
+  assert.match(body, /if \(!selectedWeek\) return todayKey;/);
+  assert.ok(
+    !/\): string \| null \{/.test(SRC.slice(start, SRC.indexOf("{", start) + 1)),
+    "expected the return type to no longer advertise a null case now that every branch returns a string",
+  );
 });
 
 test("the WeekDayPicker date-navigation control in the schedule tab is shared (rendered once) and not duplicated per sub-view", () => {
