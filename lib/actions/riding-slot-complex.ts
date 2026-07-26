@@ -30,6 +30,10 @@ import { buildHorseCandidates, type RidingHorseCandidate } from "@/lib/actions/r
 // here because it needs the just-created plan id. resolveTemplateForNewPlan
 // takes the interactive `tx` and issues NO global-prisma query.
 import { resolveTemplateForNewPlan } from "@/lib/actions/riding-complex-template-lookup";
+// RC-A2 - the committed pure title core (trim/empty->null/multiline/max-length).
+// The title writer delegates ALL normalization/validation here; none of that
+// logic is duplicated in this file.
+import { validateComplexSessionTitle } from "@/lib/riding-complex/complex-session-title-core";
 
 const NOT_FOUND_RIDING_SLOT = 'ניהול הרכיבה לא נמצא. נסי לרענן את העמוד.';
 const NOT_FOUND_COMPLEX_PLAN = "תכנון הרכיבה המורכבת לא נמצא. ייתכן שטרם נוצר - נסי לרענן את העמוד.";
@@ -763,6 +767,136 @@ export async function createRidingSlotComplexPlanAsInstructor(
       const editing = await buildComplexPlanForEditing(ridingSlotId, { canEdit: true });
       return { success: true, plan: editing?.plan };
     },
+  });
+}
+
+// ---------- Save plan title (session-level custom title) ----------
+//
+// RC-A2 - the smallest safe writer for the WHOLE-session custom title
+// (RidingSlotComplexPlan.title). It mirrors the exact optimistic-concurrency
+// shape of withLockedComplexPlan (advisory lock first, re-read after the lock,
+// version check before any mutation, ONE conditional version-guarded update),
+// but is a dedicated writer for two deliberate reasons the shared helper cannot
+// express: (a) it must NOT bump the version on a no-op (same normalized title),
+// whereas withLockedComplexPlan always increments; and (b) it writes a
+// plan-level scalar, folding `title` into the same conditional claim so the
+// change and its version bump are one atomic guarded update. Title validation/
+// normalization is delegated entirely to the RC-A0 core - never re-implemented.
+const titleSaveInputSchema = z.object({
+  ridingSlotId: z.string().min(1),
+  // RIDING-COMPLEX-SCHEDULE-BOARD Stage 3B.1 optimistic-concurrency guard, same
+  // convention as every other complex-plan writer: the plan.version of the exact
+  // snapshot the client edited. Never optional, never defaulted server-side.
+  expectedVersion: z.number().int(),
+  // Raw manager input. null clears the title; a string is normalized/validated
+  // by the RC-A0 core below (trim, empty->null, single-line, max 60). Never
+  // trimmed/length-checked here.
+  title: z.string().nullable(),
+});
+
+export type RidingSlotComplexTitleSaveInput = z.infer<typeof titleSaveInputSchema>;
+
+async function saveComplexPlanTitleInternal(
+  input: RidingSlotComplexTitleSaveInput,
+  actor: ComplexPlanActor
+): Promise<RidingSlotComplexPlanActionResult> {
+  const parsed = titleSaveInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
+  }
+  const data = parsed.data;
+
+  // Pure (DB-free) validation/normalization via the committed RC-A0 core -
+  // trim/empty->null/multiline/max-length all live there. A rejection surfaces
+  // the core's own stable Hebrew message; nothing is ever silently truncated.
+  const titleValidation = validateComplexSessionTitle(data.title);
+  if (!titleValidation.ok) {
+    return { success: false, error: titleValidation.message };
+  }
+  const normalizedTitle = titleValidation.value; // string | null
+
+  const actorData = actorWriteFields(actor);
+
+  let result: { ok: true } | { ok: false; error: string; staleConflict: boolean };
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      // (1) Advisory lock FIRST - same per-slot transaction-scoped key every
+      // other complex-plan writer uses, so this serializes against them.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${data.ridingSlotId}))`;
+
+      // (2) Re-read AFTER the lock - id + version + current title only.
+      const plan = await tx.ridingSlotComplexPlan.findUnique({
+        where: { ridingSlotId: data.ridingSlotId },
+        select: { id: true, version: true, title: true },
+      });
+      if (!plan) {
+        return { ok: false as const, error: NOT_FOUND_COMPLEX_PLAN, staleConflict: false };
+      }
+
+      // (3) Optimistic-concurrency check before any mutation.
+      if (plan.version !== data.expectedVersion) {
+        return { ok: false as const, error: STALE_PLAN, staleConflict: true };
+      }
+
+      // (4) No-op: the normalized title is unchanged. Do NOT bump the version
+      // and write NOTHING - an unchanged title must never invalidate an existing
+      // publication. null===null and string===string both count as unchanged.
+      if (plan.title === normalizedTitle) {
+        return { ok: true as const };
+      }
+
+      // (5) Changed (incl. null->value and value->null): fold the title write
+      // into ONE conditional version-guarded update. increment:1 makes any
+      // existing publication STALE (sourceVersion mismatch). A zero-row match
+      // means a cooperating writer slipped in despite the lock - fail closed.
+      const bumped = await tx.ridingSlotComplexPlan.updateMany({
+        where: { id: plan.id, version: data.expectedVersion },
+        data: { ...actorData, title: normalizedTitle, version: { increment: 1 } },
+      });
+      if (bumped.count === 0) {
+        throw new StalePlanRollback();
+      }
+      return { ok: true as const };
+    });
+  } catch (err) {
+    if (err instanceof StalePlanRollback) {
+      return { success: false, error: STALE_PLAN, staleConflict: true };
+    }
+    if (prismaErrorCode(err) === "P2028") {
+      return { success: false, error: LOCK_TIMEOUT };
+    }
+    throw err;
+  }
+
+  if (!result.ok) {
+    return { success: false, error: result.error, staleConflict: result.staleConflict || undefined };
+  }
+
+  revalidatePath("/admin/weekly-schedule");
+  revalidatePath("/instructor");
+
+  const editing = await buildComplexPlanForEditing(data.ridingSlotId, { canEdit: true });
+  return { success: true, plan: editing?.plan };
+}
+
+export async function saveRidingSlotComplexPlanTitleAsAdmin(
+  input: RidingSlotComplexTitleSaveInput
+): Promise<RidingSlotComplexPlanActionResult> {
+  const admin = await requireAdmin();
+  return saveComplexPlanTitleInternal(input, adminActor(admin));
+}
+
+// RS-SEC-1I-CP - identity comes ONLY from the signed session
+// (runComplexPlanInstructorWrite -> getCurrentInstructor + canEditRidingNotes);
+// no client-supplied instructorId is accepted, exactly like the other instructor
+// complex-plan writers.
+export async function saveRidingSlotComplexPlanTitleAsInstructor(
+  input: RidingSlotComplexTitleSaveInput
+): Promise<RidingSlotComplexPlanActionResult> {
+  return runComplexPlanInstructorWrite({
+    getCurrentInstructor,
+    denied: { success: false, error: NO_PERMISSION },
+    onAuthorized: (actor) => saveComplexPlanTitleInternal(input, instructorActor(actor)),
   });
 }
 

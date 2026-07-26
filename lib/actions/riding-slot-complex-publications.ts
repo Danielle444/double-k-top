@@ -11,6 +11,10 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 import { getCurrentInstructor } from "@/lib/auth/actor";
 import { loadComplexPublicationStatusForInstructorWithDeps } from "@/lib/actions/riding-slot-complex-read-auth";
 import type { ActionResult } from "@/lib/actions/students";
+// RC-A2 - the committed pure title core, used to normalize the live plan.title
+// into the frozen publication snapshot at publish time. The generated fallback
+// ("תרגול הדרכה") is a READER concern and is never resolved or persisted here.
+import { validateComplexSessionTitle } from "@/lib/riding-complex/complex-session-title-core";
 
 const NOT_FOUND_COMPLEX_PLAN = "תכנון הרכיבה המורכבת לא נמצא. ייתכן שטרם נוצר - נסי לרענן את העמוד.";
 const NO_BLOCKS = "לא ניתן לפרסם תכנון ללא טווחי שעות - יש להוסיף לפחות טווח שעות אחד לפני הפרסום.";
@@ -222,11 +226,23 @@ async function publishComplexRidingPlanInternal(
       return { ok: false as const, error: NO_BLOCKS };
     }
 
+    // RC-A2 - freeze the CURRENT normalized live title into the snapshot at
+    // publish/republish time. plan.title is already read above (findUnique with
+    // `include` returns every scalar), re-normalized through the RC-A0 core as
+    // defence-in-depth: a null (or legacy-malformed) live title becomes a null
+    // snapshot, and the fallback string is NEVER stored. This is the ONLY place
+    // titleSnapshot is written, so a later live-title edit (which bumps
+    // plan.version and makes the publication STALE) never mutates it until an
+    // explicit republish writes the then-current title here.
+    const titleValidation = validateComplexSessionTitle(plan.title);
+    const titleSnapshot = titleValidation.ok ? titleValidation.value : null;
+
     const publication = await tx.ridingSlotComplexPublication.upsert({
       where: { planId: plan.id },
       create: {
         planId: plan.id,
         sourceVersion: plan.version,
+        titleSnapshot,
         ...actorData,
         // firstPublishedAt intentionally omitted - uses the schema default
         // (now()) on create, and is never listed in `update` below, so an
@@ -234,6 +250,7 @@ async function publishComplexRidingPlanInternal(
       },
       update: {
         sourceVersion: plan.version,
+        titleSnapshot,
         ...actorData,
       },
     });
