@@ -18,6 +18,7 @@ import {
   getWeeklyScheduleSelectionForTrainee,
   getDutyWeekSelectionForTrainee,
 } from "@/lib/actions/weekly-schedule";
+import { getUnifiedWeekOptionsForTrainee } from "@/lib/actions/unified-trainee-week-options";
 import {
   listTraineeCourseOptions,
   type TraineeCourseOptionView,
@@ -300,6 +301,16 @@ export function StudentClient() {
   // from "could not load", so the schedule shows SCHEDULE_LOAD_ERROR_MESSAGE
   // instead of a permanent "טוען...".
   const [scheduleLoadError, setScheduleLoadError] = useState(false);
+
+  // UNIFIED TRAINEE SCHEDULE - week/day navigation: kept SEPARATE from the
+  // course-specific `weeks`/`selectedWeekId` above (never repurposed), so
+  // switching between "לפי קורס" and "הלו״ז שלי" always restores each side's
+  // own week/day state instead of conflating them. null = not yet
+  // loaded/loading; [] = loaded, genuinely empty (matches the loading/empty
+  // convention `weeks` already uses). The shared `dayFilter` state above is
+  // reused by both sub-views (see the schedule tab render).
+  const [unifiedWeeks, setUnifiedWeeks] = useState<WeekOption[] | null>(null);
+  const [unifiedSelectedWeekId, setUnifiedSelectedWeekId] = useState<string | null>(null);
 
   // TRAINEE DUTIES WEEK VISIBILITY FIX - duty-only week state, kept SEPARATE from
   // the schedule week state above. Duties are a Level 1 module and are not
@@ -611,6 +622,46 @@ export function StudentClient() {
     };
   }, [session, courseOptions, selectedCourseOfferingId]);
 
+  // UNIFIED TRAINEE SCHEDULE - load the merged week-option list for "הלו״ז
+  // שלי" whenever that sub-view is active. Deliberately does NOT depend on
+  // selectedCourseOfferingId (the unified view never carries a course id -
+  // see getUnifiedWeekOptionsForTrainee's own comment), so switching between
+  // real courses never re-triggers this fetch. Guarded on
+  // scheduleSubView === "unified" so this never fires for a single-course
+  // trainee (whose sub-view can never leave "course", see
+  // resolveDefaultScheduleSubView) or while "לפי קורס" is active.
+  useEffect(() => {
+    if (!session || courseOptions === null) return;
+    if (scheduleSubView !== "unified") return;
+    if (courseOptions.length < 2) return;
+
+    let cancelled = false;
+    getUnifiedWeekOptionsForTrainee()
+      .then((sel) => {
+        if (cancelled) return;
+        setUnifiedWeeks(sel.weeks);
+        // Preserve an already-explicit selection across a re-fetch unless it
+        // no longer exists in the new list (e.g. a week was unpublished) -
+        // only THEN fall back to the server's own default pick.
+        setUnifiedSelectedWeekId((previous) => {
+          if (previous !== null && sel.weeks.some((w) => w.id === previous)) {
+            return previous;
+          }
+          return sel.defaultWeekId;
+        });
+      })
+      .catch(() => {
+        // Fails closed to an empty (non-null) list so the unified week
+        // picker can never be stuck on "טוען...".
+        if (cancelled) return;
+        setUnifiedWeeks([]);
+        setUnifiedSelectedWeekId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session, courseOptions, scheduleSubView]);
+
   // TRAINEE DUTIES WEEK VISIBILITY FIX - load the duty week list INDEPENDENTLY of
   // the selected schedule course. Deliberately depends only on `session`, NOT on
   // selectedCourseOfferingId, so switching the schedule/today course never
@@ -843,10 +894,29 @@ export function StudentClient() {
 
   const todayKey = getLocalDateKey(now);
   const todayWeek = weeks?.find((w) => w.startDate <= todayKey && todayKey <= w.endDate) ?? null;
+
+  // Whether the trainee is dual-enrolled (2+ eligible options) - moved ahead
+  // of `selectedWeek` below (still the SAME derivation, see viewingLevel2's
+  // own comment further down) so the unified week source can be chosen
+  // before that computation.
+  const eligibleCourseOptions = courseOptions ?? [];
+  const dualEnrolled = eligibleCourseOptions.length >= 2;
+
+  // UNIFIED TRAINEE SCHEDULE - week/day navigation: whether the schedule
+  // tab's SHARED WeekDayPicker (and resolveUnifiedScheduleDayKey below)
+  // should read from the unified week list or the course-specific one.
+  const isUnifiedSubViewActive = scheduleSubView === "unified" && dualEnrolled;
+
   // UNIFIED TRAINEE SCHEDULE - SLICE U1: the currently navigated week (by
   // id), used only to resolve a single day for the unified reader when
-  // dayFilter is "all" - see resolveUnifiedScheduleDayKey.
-  const selectedWeek = weeks?.find((w) => w.id === selectedWeekId) ?? null;
+  // dayFilter is "all" - see resolveUnifiedScheduleDayKey. Reads from the
+  // unified week list while the unified sub-view is active, and from the
+  // course-specific week list otherwise - so this SAME call site keeps
+  // working for both week sources without a second parameter.
+  const selectedWeek =
+    (isUnifiedSubViewActive ? unifiedWeeks : weeks)?.find(
+      (w) => w.id === (isUnifiedSubViewActive ? unifiedSelectedWeekId : selectedWeekId),
+    ) ?? null;
 
   // TRAINEE DUTIES WEEK VISIBILITY FIX - the Duties tab's range, derived ONLY from
   // the independent duty-week state, so it is unaffected by the schedule course
@@ -868,14 +938,12 @@ export function StudentClient() {
   const bottomActiveTab: MainTabId = isMoreItem ? "more" : activeTab;
 
   // TEMPORARY LAUNCH HOTFIX (Level 2 group view) - drives ScheduleSection's group
-  // filter behaviour. Both signals are derived purely from the server-returned
-  // course options already in state: whether the SELECTED course is Level 2 (see
-  // isSelectedOfferingLevel2), and whether the trainee is dual-enrolled (2+
-  // eligible options). Level 2 -> default "both"; Level-2-only (Level 2 and not
-  // dual) -> also hide the group controls in ScheduleSection.
-  const eligibleCourseOptions = courseOptions ?? [];
+  // filter behaviour. Derived purely from the server-returned course options
+  // already in state (eligibleCourseOptions, computed above): whether the
+  // SELECTED course is Level 2 (see isSelectedOfferingLevel2). Level 2 ->
+  // default "both"; Level-2-only (Level 2 and not dual) -> also hide the
+  // group controls in ScheduleSection.
   const viewingLevel2 = isSelectedOfferingLevel2(eligibleCourseOptions, selectedCourseOfferingId);
-  const dualEnrolled = eligibleCourseOptions.length >= 2;
 
   // TEMPORARY LAUNCH RULE (see app/student/trainee-nav-visibility.ts):
   // Level-2-only navigation is derived from the single eligible option's level.
@@ -1082,23 +1150,34 @@ export function StudentClient() {
               }
             />
 
-            {weeks === null ? (
+            {(isUnifiedSubViewActive ? unifiedWeeks === null : weeks === null) ? (
               <p className="text-base text-muted-foreground">טוען...</p>
-            ) : scheduleLoadError ? (
+            ) : !isUnifiedSubViewActive && scheduleLoadError ? (
               <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
                 {SCHEDULE_LOAD_ERROR_MESSAGE}
               </p>
             ) : (
               <>
-                {/* The date-navigation control is SHARED, unchanged, and reused
-                    verbatim by both sub-views (see resolveUnifiedScheduleDayKey) -
-                    switching to "הלו״ז שלי" never introduces a second/conflicting
-                    date state, and switching back preserves the normal
-                    course-specific week/day selection exactly as before. */}
+                {/* The date-navigation control is SHARED (one mount, reused by
+                    both sub-views) - switching to "הלו״ז שלי" never introduces a
+                    second/conflicting date-picker state, and switching back
+                    preserves the normal course-specific week/day selection
+                    exactly as before. Its `weeks`/`selectedWeekId`/`onSelectWeek`
+                    source switches between the unified and course-specific week
+                    lists (never conflated - see the separate `unifiedWeeks`/
+                    `unifiedSelectedWeekId` state above); `dayFilter`/`onSelectDay`
+                    stay the SAME shared state for both sub-views (see
+                    resolveUnifiedScheduleDayKey). */}
                 <WeekDayPicker
-                  weeks={weeks}
-                  selectedWeekId={selectedWeekId}
+                  weeks={(isUnifiedSubViewActive ? unifiedWeeks : weeks) ?? []}
+                  selectedWeekId={isUnifiedSubViewActive ? unifiedSelectedWeekId : selectedWeekId}
                   onSelectWeek={(id) => {
+                    if (isUnifiedSubViewActive) {
+                      setUnifiedSelectedWeekId(id);
+                      const week = unifiedWeeks?.find((w) => w.id === id) ?? null;
+                      setDayFilter(getDefaultDayFilter(week, getLocalDateKey()));
+                      return;
+                    }
                     setSelectedWeekId(id);
                     const week = weeks?.find((w) => w.id === id) ?? null;
                     setDayFilter(getDefaultDayFilter(week, getLocalDateKey()));
