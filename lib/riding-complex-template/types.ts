@@ -83,6 +83,14 @@ export type AnchorResolution =
 // ---------------------------------------------------------------------------
 
 /**
+ * RC-B0 - coarse day-part classification of a slot's anchor start time, matching
+ * the existing `getDayPartLabel` convention in `lib/dates.ts`: "בוקר" (morning,
+ * hour < 12), "אחה\"צ" (afternoon), or "" when the start time is
+ * unknown/unparsable. A "" value can never anchor an automatic recommendation.
+ */
+export type ComplexSourceDayPart = "בוקר" | "אחה\"צ" | "";
+
+/**
  * The already-resolved destination slot a template is being selected FOR. Built
  * by the integration from an eligible {@link AnchorResolution} plus the slot's
  * own id. `resolvedGroup` is the single non-null group the destination anchored
@@ -92,6 +100,21 @@ export interface DestinationSlotDescriptor {
   readonly slotId: string;
   readonly anchorDateKey: string;
   readonly resolvedGroup: string;
+  /**
+   * RC-B0 - the destination's day-part, used to prefer a same-day-part source.
+   * OPTIONAL so the pre-existing dormant constructors (`select-source.ts`,
+   * `riding-complex-template-lookup.ts`) that predate day-part ranking keep
+   * type-checking unchanged; an absent value is treated exactly like "" (no
+   * automatic recommendation) by `rankSources`.
+   */
+  readonly dayPart?: ComplexSourceDayPart;
+  /**
+   * RC-B0 - the CourseOffering this destination belongs to, or null for a
+   * legacy/unassigned slot. OPTIONAL for the same backward-compat reason as
+   * `dayPart`. null matches null ONLY - null is never treated as a level, so
+   * Level 1 and Level 2 can never be mixed by the ranking core.
+   */
+  readonly courseOfferingId?: string | null;
 }
 
 /**
@@ -105,6 +128,20 @@ export interface SourceCandidateDescriptor {
   readonly startTime: string;
   readonly resolvedGroup: string;
   readonly blockCount: number;
+  /**
+   * RC-B0 - the candidate's day-part. OPTIONAL for the same backward-compat
+   * reason as {@link DestinationSlotDescriptor.dayPart}; a candidate whose
+   * day-part is absent or "" is well-formed for MANUAL selection but can never
+   * be auto-recommended.
+   */
+  readonly dayPart?: ComplexSourceDayPart;
+  /**
+   * RC-B0 - the CourseOffering this candidate belongs to, or null for a
+   * legacy/unassigned slot. OPTIONAL for backward compat; when absent the
+   * candidate cannot be proven offering-compatible and `rankSources` treats it
+   * as malformed (excluded), never as a silent match. null matches null ONLY.
+   */
+  readonly courseOfferingId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
