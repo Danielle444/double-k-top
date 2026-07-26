@@ -15,19 +15,28 @@
 //  - It is NOT a server action ("use server" is deliberately absent) - it is an
 //    internal helper imported by the create action, never a callable endpoint.
 //  - The source plan and its schedule items are READ ONLY; nothing here ever
-//    updates or deletes any row. No publication model is read or written. No
-//    course-offering resolution and no Student-identity fallback are used.
+//    updates or deletes any row. No publication model is read or written.
+//  - Offering identity IS resolved here (RC-B2b), but ONLY structurally from the
+//    linked WeeklySchedule.courseOfferingId of each schedule item - never from
+//    the session/actor/resolveCurrentCourseOffering and never with a
+//    Student-identity fallback.
 //
 // The pure eligibility/ordering/sanitization decisions are made by the
-// committed pure core (resolveAnchor / selectPreviousSource / copyPlanForTemplate);
-// the Prisma queries below only prefilter conservatively for performance.
+// committed pure core (resolveAnchor / resolveOffering / rankSources /
+// copyPlanForTemplate); the Prisma queries below only prefilter conservatively
+// for performance. RC-B2b replaced the old chronological selectPreviousSource
+// with rankSources so the automatic path recommends ONLY a same-offering,
+// same-group, strictly-earlier, SAME-day-part source (morning -> morning,
+// afternoon -> afternoon) - never yesterday's afternoon into today's morning.
 
 import { Prisma } from "@/app/generated/prisma/client";
-import { dateKey, parseDateKey } from "@/lib/dates";
+import { dateKey, getDayPartLabel, parseDateKey } from "@/lib/dates";
 import { resolveAnchor } from "@/lib/riding-complex-template/resolve-anchor";
-import { selectPreviousSource } from "@/lib/riding-complex-template/select-source";
+import { rankSources } from "@/lib/riding-complex-template/rank-sources";
+import { resolveOffering } from "@/lib/riding-complex-template/resolve-offering";
 import { copyPlanForTemplate } from "@/lib/riding-complex-template/copy-plan";
 import type {
+  ComplexSourceDayPart,
   DestinationPlanCreate,
   DestinationSlotDescriptor,
   LinkedScheduleItemDescriptor,
@@ -36,13 +45,31 @@ import type {
 } from "@/lib/riding-complex-template/types";
 
 // The minimal schedule-item projection the anchor resolver needs, plus the id
-// (never any group beyond groupName, no title/description/instructorName/etc).
+// and the linked WeeklySchedule.courseOfferingId (never any group beyond
+// groupName, no title/description/instructorName/etc). RC-B2b - the offering is
+// read via the existing RidingSlot -> RidingSlotScheduleItem -> ScheduleItem ->
+// WeeklySchedule.courseOfferingId relation; it is nullable and a null is a real
+// legacy identity, never coerced to a level.
 const SCHEDULE_ITEM_SELECT = {
-  scheduleItem: { select: { id: true, date: true, startTime: true, groupName: true } },
+  scheduleItem: {
+    select: {
+      id: true,
+      date: true,
+      startTime: true,
+      groupName: true,
+      weeklySchedule: { select: { courseOfferingId: true } },
+    },
+  },
 } as const;
 
 type LinkedScheduleItemRow = {
-  scheduleItem: { id: string; date: Date; startTime: string; groupName: string | null };
+  scheduleItem: {
+    id: string;
+    date: Date;
+    startTime: string;
+    groupName: string | null;
+    weeklySchedule: { courseOfferingId: string | null };
+  };
 };
 
 // Map raw linked-schedule-item rows to the pure anchor descriptors. dateKey()
@@ -56,6 +83,20 @@ function toDescriptors(links: readonly LinkedScheduleItemRow[]): LinkedScheduleI
     startTime: link.scheduleItem.startTime,
     groupName: link.scheduleItem.groupName,
   }));
+}
+
+// RC-B2b - the offering-id of every linked schedule item, for resolveOffering.
+// The offering comes ONLY from the linked WeeklySchedule (never the session /
+// actor / resolveCurrentCourseOffering), so this stays a pure structural read.
+function toOfferingIds(links: readonly LinkedScheduleItemRow[]): (string | null)[] {
+  return links.map((link) => link.scheduleItem.weeklySchedule.courseOfferingId);
+}
+
+// RC-B2b - narrow getDayPartLabel's `string` return to the descriptor day-part
+// union. getDayPartLabel already yields only "בוקר" / "אחה\"צ" / ""; anything
+// else (defensively) collapses to "" so it can never anchor an auto-recommendation.
+function toDayPart(value: string): ComplexSourceDayPart {
+  return value === "בוקר" || value === "אחה\"צ" ? value : "";
 }
 
 /**
@@ -92,10 +133,22 @@ export async function resolveTemplateForNewPlan(
     return null;
   }
 
+  // RC-B2b - destination offering identity from ALL linked items. NO_ITEMS or
+  // AMBIGUOUS (e.g. a merged slot spanning two offerings, or a null mixed with a
+  // real id) fails closed to no template - the empty plan the caller created
+  // stands. A RESOLVED null is a real identity kept as-is, never coerced to a
+  // level.
+  const destinationOffering = resolveOffering(toOfferingIds(destinationLinks));
+  if (destinationOffering.status !== "RESOLVED") {
+    return null;
+  }
+
   const destination: DestinationSlotDescriptor = {
     slotId: destinationRidingSlotId,
     anchorDateKey: destinationAnchor.anchorDateKey,
     resolvedGroup: destinationAnchor.resolvedGroup,
+    dayPart: toDayPart(getDayPartLabel(destinationAnchor.startTime.value)),
+    courseOfferingId: destinationOffering.courseOfferingId,
   };
 
   // 2) Candidate prefilter (conservative). Same-group, strictly-earlier-dated
@@ -133,18 +186,31 @@ export async function resolveTemplateForNewPlan(
     if (!candidateAnchor.eligible) {
       continue;
     }
+    // RC-B2b - resolve the candidate's OWN offering independently; exclude any
+    // NO_ITEMS/AMBIGUOUS candidate. A RESOLVED null offering can only match a
+    // RESOLVED null destination (rankSources enforces exact offering equality).
+    const candidateOffering = resolveOffering(toOfferingIds(plan.ridingSlot.scheduleItems));
+    if (candidateOffering.status !== "RESOLVED") {
+      continue;
+    }
     candidates.push({
       slotId: plan.ridingSlotId,
       anchorDateKey: candidateAnchor.anchorDateKey,
       startTime: candidateAnchor.startTime.value,
       resolvedGroup: candidateAnchor.resolvedGroup,
       blockCount: plan._count.blocks,
+      dayPart: toDayPart(getDayPartLabel(candidateAnchor.startTime.value)),
+      courseOfferingId: candidateOffering.courseOfferingId,
     });
   }
 
-  // 3) Final deterministic selection (strictly earlier, exact same group,
-  //    >= 1 block, most-recent-then-latest-start-then-largest-slotId).
-  const chosen = selectPreviousSource(destination, candidates);
+  // 3) Day-part-aware, offering-scoped recommendation (RC-B2b). rankSources
+  //    keeps only same-offering, same-group, strictly-earlier, >= 1 block
+  //    candidates and AUTO-recommends ONLY a same-day-part source (morning ->
+  //    morning, afternoon -> afternoon). A null recommendation means no safe
+  //    automatic source: return no template rather than fall back to another
+  //    day-part or to the old chronological selector.
+  const chosen = rankSources(destination, candidates).recommended;
   if (chosen === null) {
     return null;
   }

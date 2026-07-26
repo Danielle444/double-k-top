@@ -133,3 +133,68 @@ test("no global-prisma helper is invoked from inside the tx callback", () => {
   assert.ok(!/\bprisma\./.test(tail), "no global prisma client may be used inside the tx callback");
   assert.ok(!tail.includes("buildHorseCandidates"), "buildHorseCandidates must never be called inside the tx callback");
 });
+
+// ---------------------------------------------------------------------------
+// RC-B2b - day-part-aware + offering-aware automatic recommendation.
+// ---------------------------------------------------------------------------
+
+// The single object literal that builds the destination descriptor
+// (`const destination: DestinationSlotDescriptor = { ... };`).
+function destinationDescriptorRegion(): string {
+  const start = lookupSrc.indexOf("DestinationSlotDescriptor = {");
+  assert.ok(start > -1, "destination descriptor constructor not found");
+  const end = lookupSrc.indexOf("};", start);
+  assert.ok(end > start, "destination descriptor end not found");
+  return lookupSrc.slice(start, end);
+}
+
+// The single object literal pushed as a candidate (`candidates.push({ ... });`).
+function candidateDescriptorRegion(): string {
+  const start = lookupSrc.indexOf("candidates.push({");
+  assert.ok(start > -1, "candidate descriptor constructor not found");
+  const end = lookupSrc.indexOf("});", start);
+  assert.ok(end > start, "candidate descriptor end not found");
+  return lookupSrc.slice(start, end);
+}
+
+test("the runtime lookup uses rankSources for the automatic recommendation", () => {
+  assert.ok(lookupSrc.includes("rankSources("), "lookup must call rankSources");
+  // The recommendation is taken ONLY from rankSources(...).recommended.
+  assert.ok(
+    /rankSources\([^)]*\)\.recommended/.test(lookupSrc.replace(/\s+/g, " ")),
+    "lookup must select rankSources(...).recommended"
+  );
+});
+
+test("the runtime lookup no longer uses the old chronological selectPreviousSource", () => {
+  assert.ok(!lookupSrc.includes("selectPreviousSource"), "lookup must not use selectPreviousSource anymore");
+});
+
+test("the runtime lookup resolves offering identity via resolveOffering", () => {
+  assert.ok(lookupSrc.includes("resolveOffering("), "lookup must call resolveOffering");
+});
+
+test("the runtime lookup derives the day-part via getDayPartLabel", () => {
+  assert.ok(lookupSrc.includes("getDayPartLabel("), "lookup must derive day-part via getDayPartLabel");
+});
+
+test("both descriptor constructors populate dayPart and courseOfferingId", () => {
+  const destination = destinationDescriptorRegion();
+  assert.ok(destination.includes("dayPart:"), "destination descriptor must set dayPart");
+  assert.ok(destination.includes("courseOfferingId:"), "destination descriptor must set courseOfferingId");
+  const candidate = candidateDescriptorRegion();
+  assert.ok(candidate.includes("dayPart:"), "candidate descriptor must set dayPart");
+  assert.ok(candidate.includes("courseOfferingId:"), "candidate descriptor must set courseOfferingId");
+});
+
+test("the lookup reads offering via the linked WeeklySchedule relation, not the actor", () => {
+  // Offering identity must come from the schedule-item relation, never from the
+  // session/actor course-offering resolver. Whitespace-normalized so formatting
+  // changes don't break the assertion.
+  const normalized = lookupSrc.replace(/\s+/g, " ");
+  assert.ok(
+    normalized.includes("weeklySchedule: { select: { courseOfferingId: true } }"),
+    "lookup must select weeklySchedule.courseOfferingId"
+  );
+  assert.ok(!lookupSrc.includes("resolveCurrentCourseOffering"), "lookup must not use resolveCurrentCourseOffering");
+});
