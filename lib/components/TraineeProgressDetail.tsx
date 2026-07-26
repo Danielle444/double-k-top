@@ -841,6 +841,7 @@ export function TraineeProgressDetail({
   capabilities,
   actorInstructorId,
   dataSource,
+  defaultSectionsOpen,
 }: {
   student: TraineeProgressDetailStudent;
   capabilities: TraineeProgressCapabilities;
@@ -850,15 +851,20 @@ export function TraineeProgressDetail({
   // unnecessary) for admin, who may edit any row.
   actorInstructorId?: string;
   dataSource: TraineeProgressDataSource;
+  // Initial open/closed state for the top-level topic sections below.
+  // Defaults to true (open) to preserve existing admin behavior for callers
+  // that don't pass this prop.
+  defaultSectionsOpen?: boolean;
 }) {
   const studentId = student.id;
+  const defaultSectionsOpenValue = defaultSectionsOpen ?? true;
 
-  const [isGeneralNotesOpen, setIsGeneralNotesOpen] = useState(true);
-  const [isRidingProgressOpen, setIsRidingProgressOpen] = useState(true);
-  const [isRidingOpen, setIsRidingOpen] = useState(true);
-  const [isTeachingPracticeOpen, setIsTeachingPracticeOpen] = useState(true);
-  const [isLungeProgressOpen, setIsLungeProgressOpen] = useState(true);
-  const [isPresentationProgressOpen, setIsPresentationProgressOpen] = useState(true);
+  const [isGeneralNotesOpen, setIsGeneralNotesOpen] = useState(defaultSectionsOpenValue);
+  const [isRidingProgressOpen, setIsRidingProgressOpen] = useState(defaultSectionsOpenValue);
+  const [isRidingOpen, setIsRidingOpen] = useState(defaultSectionsOpenValue);
+  const [isTeachingPracticeOpen, setIsTeachingPracticeOpen] = useState(defaultSectionsOpenValue);
+  const [isLungeProgressOpen, setIsLungeProgressOpen] = useState(defaultSectionsOpenValue);
+  const [isPresentationProgressOpen, setIsPresentationProgressOpen] = useState(defaultSectionsOpenValue);
   const [isTimelineOpen, setIsTimelineOpen] = useState(false);
 
   const [generalNoteRows, setGeneralNoteRows] = useState<StudentGeneralNoteRow[] | null>(null);

@@ -376,6 +376,7 @@ export function InstructorTraineeProgressSection({
           capabilities={capabilities}
           actorInstructorId={instructorId}
           dataSource={dataSource}
+          defaultSectionsOpen={false}
         />
       )}
     </div>
