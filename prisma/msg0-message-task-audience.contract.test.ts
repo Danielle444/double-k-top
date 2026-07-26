@@ -30,6 +30,12 @@ const SCHEMA = readRepoFile("prisma/schema.prisma");
 const MIGRATION = readRepoFile(
   "prisma/migrations/20260726120000_add_message_task_audience/migration.sql",
 );
+// The follow-up corrective migration that makes TRAINEE uniqueness offering-scoped.
+// The final audience-uniqueness contract is the NET of these two migrations, so the
+// tests below reason over the chain, not the MSG0 file alone.
+const CORRECTIVE_MIGRATION = readRepoFile(
+  "prisma/migrations/20260726140000_fix_message_task_audience_trainee_unique/migration.sql",
+);
 
 // ---------------------------------------------------------------------------
 // schema.prisma - enum
@@ -148,7 +154,7 @@ test("migration creates the enum type and the table", () => {
   assert.match(MIGRATION, /CREATE TABLE "message_task_audiences"/);
 });
 
-test("migration declares all three partial unique indexes", () => {
+test("MSG0 migration declares the COURSE and GROUP partial unique indexes (final, unchanged)", () => {
   assert.match(
     MIGRATION,
     /CREATE UNIQUE INDEX "message_task_audiences_course_unique" ON "message_task_audiences"\("messageTaskId", "courseOfferingId"\) WHERE "kind" = 'COURSE'/,
@@ -157,10 +163,121 @@ test("migration declares all three partial unique indexes", () => {
     MIGRATION,
     /CREATE UNIQUE INDEX "message_task_audiences_group_unique" ON "message_task_audiences"\("messageTaskId", "courseGroupId"\) WHERE "kind" = 'GROUP'/,
   );
+});
+
+test("MSG0 migration's ORIGINAL TRAINEE index is person-scoped and is later superseded", () => {
+  // The MSG0 file is never edited: it still creates the original 2-column index.
+  // The corrective migration below drops exactly this and recreates the 3-column
+  // form, so the FINAL uniqueness is offering-scoped (proven in the chain test).
   assert.match(
     MIGRATION,
     /CREATE UNIQUE INDEX "message_task_audiences_trainee_unique" ON "message_task_audiences"\("messageTaskId", "studentId"\) WHERE "kind" = 'TRAINEE'/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// FINAL AUDIENCE-UNIQUENESS CONTRACT - the NET of the MSG0 migration and the
+// 20260726140000 corrective migration. Offering context is preserved on every
+// audience kind: COURSE by offering, GROUP by group, TRAINEE by offering+student.
+// ---------------------------------------------------------------------------
+
+test("the migration chain yields offering-scoped uniqueness for all three audience kinds", () => {
+  // COURSE + GROUP come entirely from MSG0 and are never dropped/recreated.
+  assert.match(
+    MIGRATION,
+    /CREATE UNIQUE INDEX "message_task_audiences_course_unique" ON "message_task_audiences"\("messageTaskId", "courseOfferingId"\) WHERE "kind" = 'COURSE'/,
+  );
+  assert.equal(/message_task_audiences_course_unique/.test(CORRECTIVE_MIGRATION), false);
+  assert.match(
+    MIGRATION,
+    /CREATE UNIQUE INDEX "message_task_audiences_group_unique" ON "message_task_audiences"\("messageTaskId", "courseGroupId"\) WHERE "kind" = 'GROUP'/,
+  );
+  assert.equal(/message_task_audiences_group_unique/.test(CORRECTIVE_MIGRATION), false);
+
+  // TRAINEE: the corrective migration drops the person-scoped index and recreates
+  // it offering-scoped as (messageTaskId, courseOfferingId, studentId).
+  assert.match(
+    CORRECTIVE_MIGRATION,
+    /DROP INDEX "message_task_audiences_trainee_unique";/,
+  );
+  assert.match(
+    CORRECTIVE_MIGRATION,
+    /CREATE UNIQUE INDEX "message_task_audiences_trainee_unique" ON "message_task_audiences"\("messageTaskId", "courseOfferingId", "studentId"\) WHERE "kind" = 'TRAINEE'/,
+  );
+});
+
+test("recipient deduplication stays SEPARATELY owned by MessageTaskRecipient", () => {
+  // Recipient uniqueness is messageTaskId+studentId on the recipient table, NOT on
+  // the audience table - so multiple offering-scoped TRAINEE audience rows for one
+  // dual trainee still materialize exactly one recipient.
+  const recipientBody = modelBlock("MessageTaskRecipient");
+  assert.match(recipientBody, /@@unique\(\[messageTaskId,\s*studentId\]\)/);
+  // Neither audience migration may touch the recipient table in executable SQL.
+  // (Comment lines legitimately NAME it - e.g. "adds no column to
+  // message_task_recipients" - so strip comments before asserting.)
+  const stripComments = (sql: string): string =>
+    sql
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("--"))
+      .join("\n");
+  assert.equal(/message_task_recipients/.test(stripComments(MIGRATION)), false);
+  assert.equal(/message_task_recipients/.test(stripComments(CORRECTIVE_MIGRATION)), false);
+});
+
+// ---------------------------------------------------------------------------
+// The corrective migration is index-only: no table/enum/column/FK/CHECK/data.
+// ---------------------------------------------------------------------------
+
+test("corrective migration drops ONLY the old TRAINEE index and recreates ONLY the corrected one", () => {
+  const drops = [...CORRECTIVE_MIGRATION.matchAll(/\bDROP\s+INDEX\s+"([^"]+)"/gi)].map((m) => m[1]);
+  assert.deepEqual(drops, ["message_task_audiences_trainee_unique"]);
+
+  const creates = [...CORRECTIVE_MIGRATION.matchAll(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+"([^"]+)"/gi)].map(
+    (m) => m[1],
+  );
+  assert.deepEqual(creates, ["message_task_audiences_trainee_unique"]);
+});
+
+test("corrective migration modifies no table, enum, column, FK, or CHECK", () => {
+  const sql = CORRECTIVE_MIGRATION.split("\n")
+    .filter((line) => !line.trim().startsWith("--"))
+    .join("\n");
+  const forbidden: [string, RegExp][] = [
+    ["CREATE TABLE", /\bCREATE\s+TABLE\b/i],
+    ["ALTER TABLE", /\bALTER\s+TABLE\b/i],
+    ["CREATE TYPE", /\bCREATE\s+TYPE\b/i],
+    ["a CHECK constraint", /\bCHECK\b/i],
+    ["a foreign key", /\bFOREIGN\s+KEY\b/i],
+    ["any CONSTRAINT clause", /\bCONSTRAINT\b/i],
+    ["a column ADD/DROP", /\b(ADD|DROP)\s+COLUMN\b/i],
+  ];
+  for (const [label, pattern] of forbidden) {
+    assert.equal(pattern.test(sql), false, `corrective migration must not contain ${label}`);
+  }
+});
+
+test("corrective migration contains NO data mutation or backfill statement", () => {
+  const sql = CORRECTIVE_MIGRATION.split("\n")
+    .filter((line) => !line.trim().startsWith("--"))
+    .join("\n");
+  const forbidden: [string, RegExp][] = [
+    ["INSERT INTO", /\bINSERT\s+INTO\b/i],
+    ["DELETE FROM", /\bDELETE\s+FROM\b/i],
+    ["UPDATE ... SET", /\bUPDATE\s+"[^"]+"\s+SET\b/i],
+    ["TRUNCATE", /\bTRUNCATE\b/i],
+    ["MERGE INTO", /\bMERGE\s+INTO\b/i],
+    ["COPY", /\bCOPY\s+"/i],
+  ];
+  for (const [label, pattern] of forbidden) {
+    assert.equal(pattern.test(sql), false, `corrective migration must not contain a ${label} statement`);
+  }
+});
+
+test("every corrective-migration DDL identifier is within PostgreSQL's 63-character limit", () => {
+  const tooLong = [...CORRECTIVE_MIGRATION.matchAll(/"([^"]+)"/g)]
+    .map((match) => match[1])
+    .filter((identifier) => identifier.length > 63);
+  assert.deepEqual(tooLong, []);
 });
 
 test("migration declares the kind-shape CHECK constraint", () => {
