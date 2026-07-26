@@ -91,6 +91,10 @@ import {
   reorderRidingSlotComplexBlocksAsInstructor,
   deleteRidingSlotComplexPlanAsAdmin,
   deleteRidingSlotComplexPlanAsInstructor,
+  // RC-A3 - the committed RC-A2 session-title writers (whole-plan custom title).
+  saveRidingSlotComplexPlanTitleAsAdmin,
+  saveRidingSlotComplexPlanTitleAsInstructor,
+  type RidingSlotComplexTitleSaveInput,
   type RidingSlotComplexPlanForEditing,
   type RidingSlotComplexPlanRow,
   type RidingSlotComplexBlockRow,
@@ -191,6 +195,20 @@ function saveComplexBlock(
   return actor.type === "admin"
     ? saveRidingSlotComplexBlockAsAdmin(input)
     : saveRidingSlotComplexBlockAsInstructor(input);
+}
+
+// RC-A3 - route the whole-session title save to the committed RC-A2 writer,
+// mirroring the established admin/instructor routing of every sibling
+// complex-plan writer. Authorization is the server action's sole responsibility
+// (identity comes from requireAdmin / the signed-session instructor); no client
+// actor id is ever passed here.
+function saveComplexPlanTitle(
+  actor: RidingComplexPlanEditorActor,
+  input: RidingSlotComplexTitleSaveInput
+): Promise<RidingSlotComplexPlanActionResult> {
+  return actor.type === "admin"
+    ? saveRidingSlotComplexPlanTitleAsAdmin(input)
+    : saveRidingSlotComplexPlanTitleAsInstructor(input);
 }
 
 // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 3C.2) - route one atomic trainee Move/Swap
@@ -2712,6 +2730,15 @@ export function RidingComplexPlanEditor({
   const [isDeletingStation, startDeleteStationTransition] = useTransition();
   const [isDeletingPlan, startDeletePlanTransition] = useTransition();
   const [deletePlanError, setDeletePlanError] = useState<string | null>(null);
+  // RC-A3 - the whole-session custom title editor. `titleDraft` is the raw
+  // (un-trimmed) input value; normalization/validation happens ONLY on the
+  // server via the RC-A2 writer. Initialized from plan.title on load and reset
+  // to the returned normalized value after a successful save. Its own save
+  // transition + a synchronous ref prevent duplicate submissions.
+  const [titleDraft, setTitleDraft] = useState("");
+  const [titleError, setTitleError] = useState<string | null>(null);
+  const [isSavingTitle, startSaveTitleTransition] = useTransition();
+  const isSavingTitleRef = useRef(false);
   // RIDING-COMPLEX-SCHEDULE-BOARD - "return to a normal riding session" recovery
   // confirmation modal. Opening it performs NO write; the actual delete only
   // fires from its confirm button (handleConfirmReturnToNormal), and only in a
@@ -2775,6 +2802,10 @@ export function RidingComplexPlanEditor({
     setDeletePlanError(null);
     setRecoverModalOpen(false);
     setShowAllStations(false);
+    // RC-A3 - reset the title editor on every open / target change; the initial
+    // value is set from the loaded plan below.
+    setTitleDraft("");
+    setTitleError(null);
 
     readComplexPlan(actor, ridingSlotId)
       .then((result) => {
@@ -2784,6 +2815,8 @@ export function RidingComplexPlanEditor({
           return;
         }
         setEditing(result);
+        // RC-A3 - initialize the title draft from the loaded plan (null -> "").
+        setTitleDraft(result.plan.title ?? "");
         setStatus("loaded");
       })
       .catch(() => {
@@ -2875,6 +2908,47 @@ export function RidingComplexPlanEditor({
     // area already shows something, this only updates it once the server
     // confirms the new version (e.g. UNPUBLISHED/CURRENT -> STALE).
     loadPublicationStatus(false);
+  }
+
+  // RC-A3 - save the whole-session custom title through the committed RC-A2
+  // writer. Mirrors every other writer handler in this file: read the current
+  // plan.version as expectedVersion, route by actor, and on success refresh the
+  // local plan/version via refreshPlan (trusting the returned, server-normalized
+  // plan). No client-side trim, no optimistic version bump, no titleSnapshot
+  // touch. A synchronous ref + the disabled/dirty gates prevent duplicate saves.
+  function handleSaveTitle() {
+    if (!plan || !canEdit) return;
+    const savedTitle = plan.title ?? "";
+    // Client-side no-op guard (the server also no-ops an unchanged title): never
+    // submit an unchanged draft.
+    if (titleDraft === savedTitle) return;
+    if (isSavingTitleRef.current) return;
+    isSavingTitleRef.current = true;
+    setTitleError(null);
+    const expectedVersion = plan.version;
+    startSaveTitleTransition(async () => {
+      try {
+        const result = await saveComplexPlanTitle(actor, {
+          ridingSlotId,
+          expectedVersion,
+          // Raw draft - the server trims/normalizes. "" is normalized to null.
+          title: titleDraft,
+        });
+        if (!result.success || !result.plan) {
+          setTitleError(result.error ?? "אירעה שגיאה. נסו שוב.");
+          // Lost update: reuse the existing stale-plan reload path (refreshes the
+          // authoritative plan/version + publication status). Never overwrite the
+          // newer server state; the user re-decides with the refreshed version.
+          if (result.staleConflict) reloadPlanAfterStaleConflict();
+          return;
+        }
+        refreshPlan(result.plan);
+        // Reflect the server-normalized value and clear dirty state.
+        setTitleDraft(result.plan.title ?? "");
+      } finally {
+        isSavingTitleRef.current = false;
+      }
+    });
   }
 
   // RIDING-COMPLEX-SCHEDULE-BOARD (Stage 2B - inline editing) ------------------
@@ -4290,6 +4364,54 @@ export function RidingComplexPlanEditor({
                 עודכן ע&quot;י {plan.updatedByName} · {formatHebrewDateTime(new Date(plan.updatedAt))}
               </p>
             </div>
+
+            {/* RC-A3 - whole-session custom title (RidingSlotComplexPlan.title),
+                shown to חניכים; empty falls back to the generated title in the
+                reader. Editable only by an authorized actor (canEdit); saved via
+                the committed RC-A2 writer. Placed before blocks/stations. */}
+            {canEdit && (
+              <div className="shrink-0 rounded-lg border border-border bg-card p-2.5">
+                <label
+                  htmlFor="complex-session-title"
+                  className="block text-xs font-semibold text-card-foreground"
+                >
+                  שם הרכיבה המורכבת (יוצג לחניכים)
+                </label>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  אפשר להשאיר ריק כדי להציג את שם ברירת המחדל
+                </p>
+                <div className="mt-1.5 flex flex-col gap-1.5 sm:flex-row sm:items-start">
+                  <div className="min-w-0 flex-1">
+                    <input
+                      id="complex-session-title"
+                      type="text"
+                      dir="rtl"
+                      maxLength={60}
+                      value={titleDraft}
+                      onChange={(e) => {
+                        setTitleDraft(e.target.value);
+                        if (titleError) setTitleError(null);
+                      }}
+                      disabled={isSavingTitle}
+                      placeholder="ברירת מחדל: תרגול הדרכה"
+                      className="w-full rounded-lg border border-border px-3 py-2 text-sm"
+                    />
+                    <div className="mt-0.5 flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-muted-foreground">{titleDraft.length}/60</span>
+                      {titleError && <span className="text-[11px] text-danger">{titleError}</span>}
+                    </div>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    className="!py-2 !text-xs sm:!w-auto"
+                    disabled={isSavingTitle || titleDraft === (plan.title ?? "")}
+                    onClick={handleSaveTitle}
+                  >
+                    {isSavingTitle ? "שומר..." : "שמירת שם"}
+                  </Button>
+                </div>
+              </div>
+            )}
 
             {/* RIDING-COMPLEX-SCHEDULE-BOARD - read-only presentation switch.
                 Defaults to the existing editor ("עריכה קיימת"); "תצוגת לוז"
