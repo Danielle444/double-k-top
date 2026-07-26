@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState, useTransition } from "react";
+import { FormEvent, useEffect, useRef, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
 import { Logo } from "@/lib/components/Logo";
 import { WeekDayPicker, type WeekOption } from "@/lib/components/WeekDayPicker";
@@ -191,6 +191,30 @@ export function isSelectedOfferingLevel2(
   return selected !== undefined && selected.level === 2;
 }
 
+// UNIFIED TRAINEE SCHEDULE - default sub-view: a dual-enrolled trainee (2+
+// eligible courses) opens on "הלו״ז שלי" the FIRST time this signed-in
+// trainee's dual eligibility is known for the current mounted session, never
+// on every render/refetch after that - so a manual "לפי קורס"/course pick, or
+// a manual return to "הלו״ז שלי", survives ordinary rerenders and date/week
+// navigation untouched. A single-course trainee is unaffected: dual is false,
+// so this always resolves to "course", its existing default. If eligibility
+// later drops below two while already showing "הלו״ז שלי", it falls back to
+// "course" rather than keep showing a now-unreachable unified view; leaving
+// "הלו״ז שלי" for any other reason (a real course pick) is handled by the
+// existing selectedCourseOfferingId effect below, not here. Extracted as a
+// pure decision so this once-per-trainee contract is unit-testable without
+// mounting the client (see its own contract test).
+export function resolveDefaultScheduleSubView(
+  alreadyDefaultedForCurrentTrainee: boolean,
+  eligibleCourseOptionsCount: number,
+  currentSubView: "course" | "unified",
+): "course" | "unified" {
+  const dual = eligibleCourseOptionsCount >= 2;
+  if (!alreadyDefaultedForCurrentTrainee) return dual ? "unified" : "course";
+  if (!dual && currentSubView === "unified") return "course";
+  return currentSubView;
+}
+
 // PURE selection decision for the trainee's course context, extracted from the
 // options effect so its cardinality contract is unit-testable without mounting
 // the client (see trainee-client-course-selection.contract.test.ts):
@@ -249,6 +273,14 @@ export function StudentClient() {
   // id, student id, or dual flag - it independently re-derives and
   // re-authorizes eligibility server-side (see its own comment).
   const [scheduleSubView, setScheduleSubView] = useState<"course" | "unified">("course");
+  // UNIFIED TRAINEE SCHEDULE - default sub-view: which signed-in trainee id
+  // the once-per-trainee "הלו״ז שלי" default (resolveDefaultScheduleSubView)
+  // has already been applied for. Reset to null by the course-options effect
+  // below whenever it restarts for a NEW trainee id, so a trainee switch
+  // always gets a fresh default instead of inheriting the previous trainee's
+  // choice - a ref (not state) because it is bookkeeping for that effect, not
+  // something that should itself trigger a render.
+  const defaultedUnifiedForTraineeIdRef = useRef<string | null>(null);
   const [weeks, setWeeks] = useState<WeekOption[] | null>(null);
   const [selectedWeekId, setSelectedWeekId] = useState<string | null>(null);
   const [dayFilter, setDayFilter] = useState<string | "all">("all");
@@ -446,6 +478,21 @@ export function StudentClient() {
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
+    // UNIFIED TRAINEE SCHEDULE - default sub-view: this effect depends only on
+    // session?.id, so it restarts on a genuine trainee SWITCH, never on a
+    // background profile refresh of the SAME trainee (see
+    // refreshStudentProfile above, which keeps the same id). Reset the
+    // once-per-trainee default tracking and clear the stale course options
+    // BEFORE the fetch below, so the defaulting effect further down can never
+    // read a previous trainee's option count while this new session is
+    // already active - which would otherwise apply the wrong trainee's
+    // dual/single default. courseOptions === null is the same "loading" state
+    // already used everywhere else in this file.
+    defaultedUnifiedForTraineeIdRef.current = null;
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setScheduleSubView("course");
+    setCourseOptions(null);
+    /* eslint-enable react-hooks/set-state-in-effect */
     listTraineeCourseOptions()
       .then((options) => {
         if (cancelled) return;
@@ -468,6 +515,23 @@ export function StudentClient() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id]);
+
+  // UNIFIED TRAINEE SCHEDULE - default sub-view: apply the once-per-trainee
+  // "הלו״ז שלי" default (resolveDefaultScheduleSubView) as soon as this
+  // trainee's course options are known. Guarded on courseOptions !== null so
+  // it never runs against the stale/loading state the reset above leaves in
+  // place while a new trainee's options are still in flight. Runs again
+  // whenever courseOptions is refetched for the SAME trainee (defensive: the
+  // "already defaulted" branch is then a no-op unless dual eligibility has
+  // dropped below two, in which case it safely falls back to "course").
+  useEffect(() => {
+    if (!session || courseOptions === null) return;
+    const alreadyDefaulted = defaultedUnifiedForTraineeIdRef.current === session.id;
+    defaultedUnifiedForTraineeIdRef.current = session.id;
+    setScheduleSubView((prev) =>
+      resolveDefaultScheduleSubView(alreadyDefaulted, courseOptions.length, prev),
+    );
+  }, [session, courseOptions]);
 
   // UNIFIED TRAINEE SCHEDULE - SLICE U1: picking a course via the existing,
   // UNCHANGED TraineeCourseSelector (whose onSelect wiring must keep writing
