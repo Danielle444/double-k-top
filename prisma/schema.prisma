@@ -33,6 +33,9 @@ model Student {
   availability                 StudentAvailability[]
   assignments                  DutyAssignment[]
   messageTaskRecipients        MessageTaskRecipient[]
+  // MSG0 - additive back-relation for MessageTaskAudience.student (nullable FK,
+  // onDelete: Restrict). Empty and unread in MSG0.
+  messageTaskAudiences         MessageTaskAudience[]
   attendance                   StudentAttendance[]
   ridingLessonNotes            RidingLessonNote[]
   ridingLessonNotesTaught      RidingLessonNoteTaughtStudent[]
@@ -1258,6 +1261,9 @@ model MessageTask {
   updatedAt     DateTime        @updatedAt
 
   recipients MessageTaskRecipient[]
+  // MSG0 - additive back-relation for MessageTaskAudience.messageTask (onDelete
+  // Cascade). Empty and unread in MSG0; no existing column changes.
+  audiences  MessageTaskAudience[]
 
   @@map("message_tasks")
 }
@@ -1281,6 +1287,76 @@ model MessageTaskRecipient {
   @@unique([messageTaskId, studentId])
   @@index([studentId])
   @@map("message_task_recipients")
+}
+
+// MSG0 - the kind of one audience SEGMENT chosen at send time. Separate,
+// additive enum: the legacy MessageAudience (ALL/GROUP/SPECIFIC) is UNCHANGED
+// and keeps rendering the 7 historical rows; this one drives the new
+// course-scoped audience layer only. There is deliberately no ALL member -
+// "everyone in a course" is one COURSE segment per targeted offering.
+enum MessageAudienceSegmentKind {
+  COURSE
+  GROUP
+  TRAINEE
+}
+
+// MSG0 - additive course-scoped audience layer for MessageTask. Messages AND
+// tasks share this table, exactly like MessageTaskRecipient. ONE ROW = ONE
+// audience SEGMENT chosen at send time; `kind` discriminates COURSE / GROUP /
+// TRAINEE. A send may hold several segments (multiple offerings/groups/trainees).
+//
+// courseOfferingId is ALWAYS set - every segment is offering-scoped, which is
+// what makes a dual trainee reachable through a specific course. courseGroupId
+// is set ONLY for GROUP, studentId ONLY for TRAINEE. That shape is enforced by a
+// hand-written CHECK (message_task_audiences_kind_shape_check) in the migration,
+// since schema.prisma has no CHECK syntax - same "hand-append to the generated
+// migration" pattern as the partial unique indexes on course_groups.
+//
+// UNIQUENESS: the per-kind unique key differs and the discriminating columns are
+// nullable, so a plain @@unique cannot express "one segment per kind per message"
+// (Postgres treats each NULL as distinct). Three hand-written PARTIAL unique
+// indexes in the migration carry that invariant instead:
+//   message_task_audiences_course_unique  UNIQUE(messageTaskId, courseOfferingId) WHERE kind='COURSE'
+//   message_task_audiences_group_unique   UNIQUE(messageTaskId, courseGroupId)    WHERE kind='GROUP'
+//   message_task_audiences_trainee_unique UNIQUE(messageTaskId, studentId)        WHERE kind='TRAINEE'
+//
+// labelSnapshot freezes the COURSE / GROUP-subgroup / TRAINEE display name at
+// send time, so labels never drift with later renames or roster moves. It is NOT
+// NULL with no default - safe because the table is created EMPTY and every future
+// writer sets it (same reasoning as capability_catalog.label).
+//
+// Audience is IMMUTABLE after send, so there is deliberately no updatedAt.
+//
+// DELETE BEHAVIOUR: onDelete Cascade on the messageTask edge (an audience row is
+// meaningless without its message; mirrors MessageTaskRecipient), Restrict on the
+// offering/group/student edges (the multi-course spine's uniform policy - and,
+// unlike MessageTaskRecipient.student's Cascade, a frozen send-record must not be
+// erased by deleting a referenced entity; hard student deletion is already
+// blocked by CourseEnrollment's Restrict, so this adds no new obstacle).
+//
+// MSG0 CREATES THIS TABLE EMPTY AND UNWIRED: nothing in the repository writes or
+// reads it in this slice. Recipient materialization still runs through the
+// unchanged MessageTaskRecipient layer.
+model MessageTaskAudience {
+  id               String                     @id @default(cuid())
+  messageTaskId    String
+  kind             MessageAudienceSegmentKind
+  courseOfferingId String
+  courseGroupId    String?
+  studentId        String?
+  labelSnapshot    String
+  createdAt        DateTime                   @default(now())
+
+  messageTask    MessageTask    @relation(fields: [messageTaskId], references: [id], onDelete: Cascade)
+  courseOffering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Restrict)
+  courseGroup    CourseGroup?   @relation(fields: [courseGroupId], references: [id], onDelete: Restrict)
+  student        Student?       @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  @@index([messageTaskId])
+  @@index([courseOfferingId])
+  @@index([courseGroupId])
+  @@index([studentId])
+  @@map("message_task_audiences")
 }
 
 enum CourseMaterialType {
@@ -2035,6 +2111,9 @@ model CourseOffering {
   // (nullable FK, onDelete: Restrict). Sparse for now: no week is scoped until a
   // later backfill slice. Nothing reads this relation at this stage.
   weeklySchedules WeeklySchedule[]
+  // MSG0 - additive back-relation for MessageTaskAudience.courseOffering
+  // (onDelete: Restrict). Empty and unread in MSG0.
+  messageTaskAudiences MessageTaskAudience[]
 
   @@unique([activityYearId, name])
   @@index([activityYearId])
@@ -2131,6 +2210,9 @@ model CourseGroup {
   parentGroup    CourseGroup?      @relation("CourseGroupHierarchy", fields: [parentGroupId], references: [id], onDelete: Restrict)
   childGroups    CourseGroup[]     @relation("CourseGroupHierarchy")
   memberships    GroupMembership[]
+  // MSG0 - additive back-relation for MessageTaskAudience.courseGroup
+  // (nullable FK, onDelete: Restrict). Empty and unread in MSG0.
+  messageTaskAudiences MessageTaskAudience[]
 
   @@unique([courseOfferingId, parentGroupId, name])
   @@index([courseOfferingId])
