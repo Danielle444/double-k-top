@@ -780,6 +780,13 @@ model RidingSlotComplexPlan {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  // RC-A1 - manager-editable custom display title for the WHOLE complex-riding
+  // session (never a block/station/pair/trainee/horse/ScheduleItem). Nullable
+  // with no default: existing rows stay null and keep the generated fallback
+  // ("תרגול הדרכה") resolved by the RC-A0 title core. No unique/index/relation;
+  // no value is copied from ScheduleItem.title.
+  title String?
+
   // RIDING-COMPLEX-PUBLICATION P7A - live counter, bumped (never reset)
   // whenever a persisted change affects trainee-visible published content
   // (block/station/pair create/update/delete/reorder/duplicate) - see the
@@ -950,6 +957,13 @@ model RidingSlotComplexPublication {
   firstPublishedAt DateTime @default(now())
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  // RC-A1 - frozen snapshot of the session title captured at publish time, so a
+  // later live-title edit never silently changes an already-published trainee
+  // view (the existing stale-warning flow governs re-publish). Nullable, no
+  // default; a null snapshot resolves to the generated fallback via the RC-A0
+  // title core.
+  titleSnapshot String?
 
   // Same dual-actor-identity convention as RidingSlotComplexPlan/
   // RidingSlotHorseList above - admin and instructor use two different auth
