@@ -23,6 +23,7 @@ import {
   sortUnifiedScheduleItems,
   mergeUnifiedScheduleSources,
   computeCrossCourseOverlaps,
+  hideLevel1ItemsFullyCoveredByLevel2,
   type UnifiedScheduleSourceOffering,
 } from "./unified-trainee-schedule-core";
 
@@ -284,4 +285,155 @@ test("a non-overlapping item's metadata is an empty array, not undefined/null", 
   for (const item of merged) {
     assert.deepEqual(item.overlappingSourceCourseOfferingIds, []);
   }
+});
+
+// ---------------------------------------------------------------------------
+// hideLevel1ItemsFullyCoveredByLevel2
+//
+// Locked rule: a visible Level 1 item is hidden only when a SINGLE visible
+// Level 2 item, same date, fully covers it (level2Start <= level1Start &&
+// level2End >= level1End). Partial overlap, touching boundaries, different
+// dates, and multi-item synthetic coverage all keep the Level 1 item. Level 2
+// items are never removed, in either direction.
+// ---------------------------------------------------------------------------
+
+function ids(items: readonly { id: string }[]): string[] {
+  return items.map((i) => i.id).sort();
+}
+
+test("exact same time range -> Level 1 fully covered, hidden", () => {
+  const l1 = tagged(realItem("l1", "2026-07-05", "10:00", "11:00"), L1_OFFERING);
+  const l2 = tagged(realItem("l2", "2026-07-05", "10:00", "11:00"), L2_OFFERING);
+  assert.deepEqual(ids(hideLevel1ItemsFullyCoveredByLevel2([l1, l2])), ["l2"]);
+});
+
+test("Level 2 starts earlier and ends later -> Level 1 hidden", () => {
+  const l1 = tagged(realItem("l1", "2026-07-05", "10:00", "11:00"), L1_OFFERING);
+  const l2 = tagged(realItem("l2", "2026-07-05", "09:30", "11:30"), L2_OFFERING);
+  assert.deepEqual(ids(hideLevel1ItemsFullyCoveredByLevel2([l1, l2])), ["l2"]);
+});
+
+test("Level 2 starts same time and ends later -> Level 1 hidden", () => {
+  const l1 = tagged(realItem("l1", "2026-07-05", "10:00", "11:00"), L1_OFFERING);
+  const l2 = tagged(realItem("l2", "2026-07-05", "10:00", "11:30"), L2_OFFERING);
+  assert.deepEqual(ids(hideLevel1ItemsFullyCoveredByLevel2([l1, l2])), ["l2"]);
+});
+
+test("Level 2 starts earlier and ends same time -> Level 1 hidden", () => {
+  const l1 = tagged(realItem("l1", "2026-07-05", "10:00", "11:00"), L1_OFFERING);
+  const l2 = tagged(realItem("l2", "2026-07-05", "09:30", "11:00"), L2_OFFERING);
+  assert.deepEqual(ids(hideLevel1ItemsFullyCoveredByLevel2([l1, l2])), ["l2"]);
+});
+
+test("partial overlap at start (Level 2 ends before Level 1 ends) -> keep both", () => {
+  const l1 = tagged(realItem("l1", "2026-07-05", "10:00", "11:00"), L1_OFFERING);
+  const l2 = tagged(realItem("l2", "2026-07-05", "09:30", "10:30"), L2_OFFERING);
+  assert.deepEqual(ids(hideLevel1ItemsFullyCoveredByLevel2([l1, l2])), ["l1", "l2"]);
+});
+
+test("partial overlap at end (Level 2 starts after Level 1 starts) -> keep both", () => {
+  const l1 = tagged(realItem("l1", "2026-07-05", "10:00", "11:00"), L1_OFFERING);
+  const l2 = tagged(realItem("l2", "2026-07-05", "10:30", "11:30"), L2_OFFERING);
+  assert.deepEqual(ids(hideLevel1ItemsFullyCoveredByLevel2([l1, l2])), ["l1", "l2"]);
+});
+
+test("Level 2 fully inside Level 1 (Level 1 is the wider range) -> keep both", () => {
+  const l1 = tagged(realItem("l1", "2026-07-05", "09:00", "11:00"), L1_OFFERING);
+  const l2 = tagged(realItem("l2", "2026-07-05", "09:30", "10:30"), L2_OFFERING);
+  assert.deepEqual(ids(hideLevel1ItemsFullyCoveredByLevel2([l1, l2])), ["l1", "l2"]);
+});
+
+test("touching boundaries (10:00-11:00 and 11:00-12:00) -> keep both, not coverage", () => {
+  const l1 = tagged(realItem("l1", "2026-07-05", "10:00", "11:00"), L1_OFFERING);
+  const l2 = tagged(realItem("l2", "2026-07-05", "11:00", "12:00"), L2_OFFERING);
+  assert.deepEqual(ids(hideLevel1ItemsFullyCoveredByLevel2([l1, l2])), ["l1", "l2"]);
+});
+
+test("identical times on DIFFERENT dates -> keep both", () => {
+  const l1 = tagged(realItem("l1", "2026-07-05", "10:00", "11:00"), L1_OFFERING);
+  const l2 = tagged(realItem("l2", "2026-07-06", "10:00", "11:00"), L2_OFFERING);
+  assert.deepEqual(ids(hideLevel1ItemsFullyCoveredByLevel2([l1, l2])), ["l1", "l2"]);
+});
+
+test("two adjacent Level 2 items that together cover Level 1 do NOT combine into coverage -> Level 1 kept", () => {
+  const l1 = tagged(realItem("l1", "2026-07-05", "09:00", "11:00"), L1_OFFERING);
+  const l2a = tagged(realItem("l2a", "2026-07-05", "09:00", "10:00"), L2_OFFERING);
+  const l2b = tagged(realItem("l2b", "2026-07-05", "10:00", "11:00"), L2_OFFERING);
+  assert.deepEqual(ids(hideLevel1ItemsFullyCoveredByLevel2([l1, l2a, l2b])), ["l1", "l2a", "l2b"]);
+});
+
+test("Level 1 / Level 1: a wider Level 1 item never hides a narrower Level 1 item", () => {
+  const narrow = tagged(realItem("narrow", "2026-07-05", "10:00", "11:00"), L1_OFFERING);
+  const wide = tagged(realItem("wide", "2026-07-05", "09:00", "12:00"), L1_OFFERING);
+  assert.deepEqual(ids(hideLevel1ItemsFullyCoveredByLevel2([narrow, wide])), ["narrow", "wide"]);
+});
+
+test("Level 2 / Level 2: a wider Level 2 item never hides a narrower Level 2 item", () => {
+  const narrow = tagged(realItem("narrow", "2026-07-05", "10:00", "11:00"), L2_OFFERING);
+  const wide = tagged(realItem("wide", "2026-07-05", "09:00", "12:00"), L2_OFFERING);
+  assert.deepEqual(ids(hideLevel1ItemsFullyCoveredByLevel2([narrow, wide])), ["narrow", "wide"]);
+});
+
+// ---------------------------------------------------------------------------
+// mergeUnifiedScheduleSources - full pipeline with the coverage-hide step
+// ---------------------------------------------------------------------------
+
+test("full pipeline: a fully-covered Level 1 item is removed and stale overlap metadata is cleared", () => {
+  const merged = mergeUnifiedScheduleSources([
+    { offering: L1_OFFERING, items: [realItem("l1", "2026-07-05", "10:00", "11:00")] },
+    { offering: L2_OFFERING, items: [realItem("l2", "2026-07-05", "09:30", "11:30")] },
+  ]);
+  assert.deepEqual(ids(merged), ["l2"]);
+  // l1 is gone, so l2 has nothing left in the merged set to overlap with.
+  assert.deepEqual(merged[0].overlappingSourceCourseOfferingIds, []);
+});
+
+test("full pipeline: a partial overlap preserves both items and their mutual overlap metadata", () => {
+  const merged = mergeUnifiedScheduleSources([
+    { offering: L1_OFFERING, items: [realItem("l1", "2026-07-05", "10:00", "11:00")] },
+    { offering: L2_OFFERING, items: [realItem("l2", "2026-07-05", "10:30", "11:30")] },
+  ]);
+  assert.deepEqual(ids(merged), ["l1", "l2"]);
+  const byId = new Map(merged.map((i) => [i.id, i.overlappingSourceCourseOfferingIds]));
+  assert.deepEqual(byId.get("l1"), ["off-l2"]);
+  assert.deepEqual(byId.get("l2"), ["off-l1"]);
+});
+
+test("an absent/empty Level 2 contribution (denied or unpublished) cannot suppress Level 1", () => {
+  const merged = mergeUnifiedScheduleSources([
+    { offering: L1_OFFERING, items: [realItem("l1", "2026-07-05", "10:00", "11:00")] },
+    { offering: L2_OFFERING, items: [] },
+  ]);
+  assert.deepEqual(ids(merged), ["l1"]);
+});
+
+test("a placeholder Level 2 item cannot suppress Level 1 (excluded before tagging/coverage)", () => {
+  const merged = mergeUnifiedScheduleSources([
+    { offering: L1_OFFERING, items: [realItem("l1", "2026-07-05", "10:00", "11:00")] },
+    // Would fully cover l1 if it were real - must never be allowed to, since
+    // placeholders are dropped before the coverage check ever sees them.
+    { offering: L2_OFFERING, items: [placeholderItem("l2-placeholder", "2026-07-05", "09:00", "12:00")] },
+  ]);
+  assert.deepEqual(ids(merged), ["l1"]);
+});
+
+test("ordering remains deterministic after coverage filtering removes a middle item", () => {
+  const merged = mergeUnifiedScheduleSources([
+    {
+      offering: L1_OFFERING,
+      items: [
+        realItem("l1-early", "2026-07-05", "07:00", "08:00"),
+        realItem("l1-covered", "2026-07-05", "10:00", "11:00"),
+        realItem("l1-late", "2026-07-05", "12:00", "13:00"),
+      ],
+    },
+    {
+      offering: L2_OFFERING,
+      items: [realItem("l2-cover", "2026-07-05", "09:30", "11:30")],
+    },
+  ]);
+  assert.deepEqual(
+    merged.map((i) => i.id),
+    ["l1-early", "l2-cover", "l1-late"],
+  );
 });

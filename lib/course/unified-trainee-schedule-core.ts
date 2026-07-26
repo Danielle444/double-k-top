@@ -23,7 +23,9 @@
  *    trainee's Student.group compatibility fields still describe Level 1),
  *    "mine" for every other level (the unchanged Level 1 default).
  *  - Tagging each already-mapped item with its source offering, excluding the
- *    neutral Level 1-time placeholder, and merging + chronologically sorting
+ *    neutral Level 1-time placeholder, hiding a Level 1 item fully covered by
+ *    a single visible Level 2 item (a partial overlap keeps both items and
+ *    their mutual overlap metadata), and merging + chronologically sorting
  *    every eligible offering's contribution for the day into one list.
  *
  * WHAT THIS DELIBERATELY DOES NOT OWN
@@ -226,6 +228,71 @@ export function computeCrossCourseOverlaps<
   });
 }
 
+/**
+ * Is `item` (a Level 1 item) fully covered, on the SAME date, by `other` (a
+ * Level 2 item)? Coverage, not overlap: `other.start <= item.start &&
+ * other.end >= item.end`. Deliberately does NOT reuse {@link timeRangesOverlap}
+ * - that predicate answers "do these ranges intersect at all", which a
+ * partial overlap also satisfies; this one answers the strictly narrower
+ * "does the other range fully contain this one", using `<=`/`>=` so an
+ * identical range counts as covering. Touching boundaries can never satisfy
+ * this (a range that only touches item's start or end cannot also reach past
+ * the other end while starting after/ending before this one - the two
+ * inequalities cannot both hold from touching alone).
+ */
+function isFullyCoveredByLevel2Item(
+  item: { readonly dateKey: string; readonly startTime: string; readonly endTime: string },
+  other: {
+    readonly sourceCourseLevel: number;
+    readonly dateKey: string;
+    readonly startTime: string;
+    readonly endTime: string;
+  },
+): boolean {
+  if (other.sourceCourseLevel !== COMBINED_PARTICIPATION_HIDDEN_LEVEL) return false;
+  if (other.dateKey !== item.dateKey) return false;
+  return (
+    timeStringToMinutesOfDay(other.startTime) <= timeStringToMinutesOfDay(item.startTime) &&
+    timeStringToMinutesOfDay(other.endTime) >= timeStringToMinutesOfDay(item.endTime)
+  );
+}
+
+/**
+ * The locked full-coverage hide rule: a visible Level 1 item is dropped from
+ * the unified view only when a SINGLE other item already in this same
+ * already-tagged set is Level 2, same date, and fully covers its entire time
+ * range (see {@link isFullyCoveredByLevel2Item}). Level 2 items are never
+ * removed by this function, in either direction - a Level 1 item that fully
+ * covers a Level 2 item leaves both untouched, since the rule only ever hides
+ * Level 1.
+ *
+ * Multiple Level 2 items are never combined into synthetic coverage: each
+ * candidate `other` is checked independently against the FULL Level 1 range,
+ * so two adjacent Level 2 items that only jointly span a Level 1 item (e.g.
+ * 09:00-10:00 and 10:00-11:00 against a 09:00-11:00 Level 1 item) do not hide
+ * it - neither one alone covers the full range.
+ *
+ * Only items already present in `items` can cover anything: a denied,
+ * unpublished, or placeholder-excluded Level 2 item never reaches this
+ * function's input in the first place (placeholders are dropped, and
+ * unauthorized offerings contribute no items, upstream in
+ * {@link mergeUnifiedScheduleSources}), so it can never suppress a Level 1
+ * item here.
+ *
+ * A partially-overlapping (not fully covered) Level 1/Level 2 pair is left
+ * completely untouched by this function - both items pass through, and their
+ * mutual overlap metadata is computed unchanged by
+ * {@link computeCrossCourseOverlaps} afterward.
+ */
+export function hideLevel1ItemsFullyCoveredByLevel2<
+  T extends UnifiedScheduleSourceTag & UnifiedScheduleOverlapComparable,
+>(items: readonly T[]): T[] {
+  return items.filter((item) => {
+    if (item.sourceCourseLevel !== 1) return true;
+    return !items.some((other) => other !== item && isFullyCoveredByLevel2Item(item, other));
+  });
+}
+
 /** Chronological sort - the same comparator every other trainee schedule view already uses. */
 export function sortUnifiedScheduleItems<T extends { dateKey: string; startTime: string; endTime: string }>(
   items: readonly T[],
@@ -246,19 +313,28 @@ export interface UnifiedScheduleSource<T extends UnifiedScheduleMergeableItem> {
 
 /**
  * Merge every eligible offering's contribution for one day into one
- * chronological, placeholder-free, source-tagged, overlap-tagged unified
- * list.
+ * chronological, placeholder-free, source-tagged, coverage-filtered,
+ * overlap-tagged unified list.
  *
  * Order is deliberate:
  *  1. placeholders are excluded from EACH source BEFORE tagging (so a
  *     placeholder can never carry a misleading source label or participate
- *     in overlap detection);
+ *     in overlap/coverage detection);
  *  2. every remaining real item across every source is tagged with its
  *     source offering;
- *  3. cross-course overlap is computed over the FULL merged set (an item can
- *     only be flagged against items from a DIFFERENT offering, which is only
- *     knowable once every source's items are tagged and combined);
- *  4. the result is sorted together as one set - never sorted within a
+ *  3. a Level 1 item FULLY covered by a single visible Level 2 item is
+ *     dropped (hideLevel1ItemsFullyCoveredByLevel2) - this must run over the
+ *     FULL merged, tagged set (a Level 1 item can only be covered by a Level
+ *     2 item from a DIFFERENT offering, which is only knowable once every
+ *     source's items are tagged and combined) and BEFORE overlap is computed,
+ *     so a hidden item can never contribute stale overlap metadata to its
+ *     survivors;
+ *  4. cross-course overlap is computed over the SURVIVING set only - a
+ *     partially-overlapping pair that both survive keeps its full mutual
+ *     overlap metadata unchanged, while a fully-covered Level 1 item's own
+ *     removal means the covering Level 2 item's overlap list no longer names
+ *     it;
+ *  5. the result is sorted together as one set - never sorted within a
  *     source first and concatenated afterward, which would only interleave
  *     correctly by coincidence.
  */
@@ -268,6 +344,7 @@ export function mergeUnifiedScheduleSources<
   const tagged = sources.flatMap(({ offering, items }) =>
     tagUnifiedScheduleItems(excludeUnifiedSchedulePlaceholders(items), offering),
   );
-  const withOverlaps = computeCrossCourseOverlaps(tagged);
+  const visible = hideLevel1ItemsFullyCoveredByLevel2(tagged);
+  const withOverlaps = computeCrossCourseOverlaps(visible);
   return sortUnifiedScheduleItems(withOverlaps);
 }
