@@ -84,6 +84,16 @@ export interface ScheduleItemView {
   // slots. Drives the student-facing title ("תרגול הדרכה" vs "רכיבה") and the
   // suppression of ridingInfo below.
   isComplex: boolean;
+  // LEVEL 2 COMPLEX-TITLE FIX - presentation-only. true means a complex-mode
+  // riding slot should keep its ORIGINAL trainee-formatted title instead of
+  // the fixed "תרגול הדרכה" override; false keeps the legacy override. Derived
+  // SERVER-SIDE below from the already-authorized, server-resolved offering
+  // level (offeringLevel === Level 2) - never a client value, never a
+  // hardcoded CourseOffering id. Only meaningful when isComplex is true; it is
+  // always false for non-complex items and for placeholders. An unknown/unre-
+  // solved level falls conservatively to false (legacy override), so this
+  // never opts a slot into preservation by accident.
+  preserveOriginalComplexTitle: boolean;
   // Null for non-riding items, for a complex-mode riding slot (its
   // coach/arena come only from the published complex plan below, never from
   // the generic assignment box - see the isComplex suppression in the
@@ -162,6 +172,15 @@ export interface StudentScheduleResult {
 }
 
 export type GroupFilter = "mine" | "both";
+
+// LEVEL 2 COMPLEX-TITLE FIX - the single offering level whose complex-mode
+// riding items preserve their original trainee-formatted title instead of the
+// fixed "תרגול הדרכה" override. Compared ONLY against the server-resolved
+// offeringLevel below (never a client value, never a hardcoded CourseOffering
+// id). Any other level - including the `?? 0` unknown/unresolved fallback -
+// keeps the legacy Level 1 override, so an unresolved level fails
+// conservatively rather than silently opting into preservation.
+const PRESERVE_ORIGINAL_COMPLEX_TITLE_LEVEL = 2;
 
 // The single, uniform "you get nothing" result. Every denial - unknown student,
 // unresolvable course context, SCHEDULE not ENABLED, missing week, NULL-scoped
@@ -338,6 +357,11 @@ export async function getScheduleForStudent(
       instructorName: ridingSlot ? null : i.instructorName,
       location: ridingSlot ? null : i.location,
       isComplex,
+      // Derived from the already-authorized, server-resolved offeringLevel
+      // (see the COMBINED PARTICIPATION block above) - never a client value.
+      // Level 2 preserves the original complex title; every other level keeps
+      // the legacy "תרגול הדרכה" override.
+      preserveOriginalComplexTitle: offeringLevel === PRESERVE_ORIGINAL_COMPLEX_TITLE_LEVEL,
       ridingInfo,
       // Verbatim tri-state passthrough (the item query uses `include`, so this
       // scalar is already loaded). Display-only; never a filter input.
@@ -367,6 +391,9 @@ export async function getScheduleForStudent(
     instructorName: null,
     location: null,
     isComplex: false,
+    // Inert here (isComplex is false), fixed false for shape completeness -
+    // never sourced from a hidden item.
+    preserveOriginalComplexTitle: false,
     ridingInfo: null,
     combinedParticipation: null,
     isCombinedParticipationPlaceholder: true,

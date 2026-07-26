@@ -24,7 +24,12 @@ import type { ScheduleItemView } from "@/lib/actions/student-schedule";
 type PresentationInput = Pick<
   ScheduleItemView,
   "isComplex" | "title" | "ridingInfo" | "publishedComplexRidingPlan"
->;
+> & {
+  // LEVEL 2 COMPLEX-TITLE FIX - optional here (as in the resolver) so a fixture
+  // can OMIT it to simulate an absent server flag, which must behave exactly
+  // like false (legacy "תרגול הדרכה" override).
+  preserveOriginalComplexTitle?: boolean;
+};
 
 const GENERIC_RIDING_INFO: ScheduleItemView["ridingInfo"] = {
   instructorName: "מאמן/ת",
@@ -194,4 +199,155 @@ test("resolver is pure: deterministic output and does not mutate its input", () 
   const b = resolveStudentRidingPresentation(item);
   assert.deepEqual(a, b);
   assert.deepEqual(item, snapshot);
+});
+
+// ---------------------------------------------------------------------------
+// LEVEL 2 COMPLEX-TITLE FIX - preserveOriginalComplexTitle precedence.
+//
+// The server (getScheduleForStudent) sets preserveOriginalComplexTitle from the
+// authorized, server-resolved offering level (Level 2 -> true). These tests pin
+// the pure presentation contract only; the level derivation itself is server-
+// side and not exercised here.
+//   - Level 1 complex (flag false/absent) -> fixed "תרגול הדרכה" override.
+//   - Level 2 complex (flag true)          -> original title via getStudentScheduleTitle.
+// getStudentScheduleTitle is NOT modified by this fix.
+// ---------------------------------------------------------------------------
+
+// Level 1 complex item: the flag is false -> legacy fixed override, unchanged.
+test("L2 fix: Level 1 complex (flag false) -> תרגול הדרכה", () => {
+  const item: PresentationInput = {
+    isComplex: true,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: null,
+    preserveOriginalComplexTitle: false,
+  };
+  const p = resolveStudentRidingPresentation(item);
+  assert.equal(p.title, COMPLEX_RIDING_TITLE);
+  assert.equal(p.title, "תרגול הדרכה");
+});
+
+// Level 2 complex item: the flag is true -> original title, run through
+// getStudentScheduleTitle (never the fixed override, never the raw title).
+test("L2 fix: Level 2 complex (flag true) -> original title via getStudentScheduleTitle", () => {
+  const item: PresentationInput = {
+    isComplex: true,
+    title: "רכיבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: null,
+    preserveOriginalComplexTitle: true,
+  };
+  const p = resolveStudentRidingPresentation(item);
+  assert.notEqual(p.title, COMPLEX_RIDING_TITLE);
+  assert.equal(p.title, "רכיבה");
+});
+
+// Level 2 complex item whose title contains the "main - topic" separator is
+// shortened by getStudentScheduleTitle exactly like any other trainee title
+// (raw unprocessed title is never shown): "רכיבה - ישיבה יציבה" -> "רכיבה".
+test("L2 fix: Level 2 complex title with separator is shortened, not shown raw", () => {
+  const item: PresentationInput = {
+    isComplex: true,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: PUBLISHED_PLAN,
+    preserveOriginalComplexTitle: true,
+  };
+  const p = resolveStudentRidingPresentation(item);
+  assert.equal(p.title, "רכיבה");
+  assert.notEqual(p.title, "רכיבה - ישיבה יציבה"); // never the raw title
+  assert.notEqual(p.title, COMPLEX_RIDING_TITLE);
+  // Published complex section and generic-info suppression are unaffected by
+  // the title flag.
+  assert.equal(p.showComplexPlan, true);
+  assert.equal(p.showGenericRidingInfo, false);
+});
+
+// Non-complex item is unaffected by the flag - Level 1 (flag false).
+test("L2 fix: non-complex Level 1 (flag false) unchanged", () => {
+  const item: PresentationInput = {
+    isComplex: false,
+    title: "רכיבה - מעברים",
+    ridingInfo: GENERIC_RIDING_INFO,
+    publishedComplexRidingPlan: null,
+    preserveOriginalComplexTitle: false,
+  };
+  const p = resolveStudentRidingPresentation(item);
+  assert.equal(p.title, "רכיבה");
+  assert.equal(p.showGenericRidingInfo, true);
+});
+
+// Non-complex item is unaffected by the flag - Level 2 (flag true) yields the
+// identical result as Level 1: the flag only ever gates the complex override.
+test("L2 fix: non-complex Level 2 (flag true) unchanged, identical to Level 1", () => {
+  const base = {
+    isComplex: false as const,
+    title: "רכיבה - מעברים",
+    ridingInfo: GENERIC_RIDING_INFO,
+    publishedComplexRidingPlan: null,
+  };
+  const l1 = resolveStudentRidingPresentation({ ...base, preserveOriginalComplexTitle: false });
+  const l2 = resolveStudentRidingPresentation({ ...base, preserveOriginalComplexTitle: true });
+  assert.deepEqual(l1, l2);
+  assert.equal(l2.title, "רכיבה");
+  assert.equal(l2.showGenericRidingInfo, true);
+});
+
+// Placeholder shape (isComplex false, flag false) - as built by
+// buildHiddenCombinedParticipationPlaceholders. Placeholders bypass this
+// resolver entirely in the UI (ScheduleSection renders them through their own
+// branch), but even if routed here the flag is inert and the title is the
+// plain getStudentScheduleTitle result - never the complex override.
+test("L2 fix: placeholder-shaped item (non-complex, flag false) unchanged", () => {
+  const item: PresentationInput = {
+    isComplex: false,
+    title: "שיבוץ מוסתר",
+    ridingInfo: null,
+    publishedComplexRidingPlan: null,
+    preserveOriginalComplexTitle: false,
+  };
+  const p = resolveStudentRidingPresentation(item);
+  assert.equal(p.title, "שיבוץ מוסתר");
+  assert.notEqual(p.title, COMPLEX_RIDING_TITLE);
+  assert.equal(p.showGenericRidingInfo, false);
+  assert.equal(p.showComplexPlan, false);
+});
+
+// Missing flag (server field absent) is treated identically to false: a complex
+// slot retains the legacy "תרגול הדרכה" override, never opting into
+// preservation by accident. This is the `!== true` contract.
+test("L2 fix: missing/absent preserve flag on a complex slot retains תרגול הדרכה", () => {
+  const missing: PresentationInput = {
+    isComplex: true,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: null,
+    // preserveOriginalComplexTitle deliberately omitted (undefined)
+  };
+  assert.equal(resolveStudentRidingPresentation(missing).title, COMPLEX_RIDING_TITLE);
+
+  const explicitFalse: PresentationInput = { ...missing, preserveOriginalComplexTitle: false };
+  assert.equal(resolveStudentRidingPresentation(explicitFalse).title, COMPLEX_RIDING_TITLE);
+});
+
+// The server flag is the SOLE determinant of the complex-title override: with
+// every other field held identical, only preserveOriginalComplexTitle flips the
+// title. No title-text, ridingInfo, or publication value substitutes for it -
+// so the unified/source metadata (which lives outside this shape) can never
+// alter title selection independently of the server-set flag.
+test("L2 fix: only the server flag flips the complex title, nothing else", () => {
+  const shared = {
+    isComplex: true as const,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: GENERIC_RIDING_INFO,
+    publishedComplexRidingPlan: PUBLISHED_PLAN,
+  };
+  const preserved = resolveStudentRidingPresentation({ ...shared, preserveOriginalComplexTitle: true });
+  const overridden = resolveStudentRidingPresentation({ ...shared, preserveOriginalComplexTitle: false });
+  assert.equal(preserved.title, "רכיבה");
+  assert.equal(overridden.title, COMPLEX_RIDING_TITLE);
+  assert.notEqual(preserved.title, overridden.title);
+  // Everything OTHER than the title is identical regardless of the flag.
+  assert.equal(preserved.showGenericRidingInfo, overridden.showGenericRidingInfo);
+  assert.equal(preserved.showComplexPlan, overridden.showComplexPlan);
 });

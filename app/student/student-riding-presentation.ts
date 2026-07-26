@@ -33,10 +33,27 @@ export interface StudentRidingPresentation {
 // from the typed isComplex flag threaded from the data layer - never inferred
 // from the Hebrew title text or from publication state.
 export function resolveStudentRidingPresentation(
-  item: Pick<ScheduleItemView, "isComplex" | "title" | "ridingInfo" | "publishedComplexRidingPlan">
+  item: Pick<ScheduleItemView, "isComplex" | "title" | "ridingInfo" | "publishedComplexRidingPlan"> & {
+    // LEVEL 2 COMPLEX-TITLE FIX - typed optional here on purpose so the resolver
+    // is robust to an absent flag (treated identically to false via the
+    // `!== true` check below). The server mapper in getScheduleForStudent always
+    // sets it (required on ScheduleItemView); a required→optional shape is
+    // assignable, so real callers are unaffected while tests can omit it.
+    preserveOriginalComplexTitle?: boolean;
+  }
 ): StudentRidingPresentation {
   return {
-    title: item.isComplex ? COMPLEX_RIDING_TITLE : getStudentScheduleTitle(item.title),
+    // Title precedence:
+    //  - a complex-mode slot with preserveOriginalComplexTitle !== true (Level 1,
+    //    or an absent/false flag) shows the fixed "תרגול הדרכה" override;
+    //  - otherwise (a non-complex item, OR a Level 2 complex slot with the flag
+    //    true) the original title runs through getStudentScheduleTitle.
+    // `!== true` means an absent/false flag keeps the legacy override and never
+    // opts into preservation by accident.
+    title:
+      item.isComplex && item.preserveOriginalComplexTitle !== true
+        ? COMPLEX_RIDING_TITLE
+        : getStudentScheduleTitle(item.title),
     showGenericRidingInfo: !item.isComplex && item.ridingInfo !== null,
     showComplexPlan: item.publishedComplexRidingPlan !== null,
   };
