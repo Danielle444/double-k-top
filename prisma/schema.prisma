@@ -1385,7 +1385,42 @@ model CourseMaterial {
   createdAt    DateTime                 @default(now())
   updatedAt    DateTime                 @updatedAt
 
+  // P-MATERIALS M0 - additive back-relation for CourseMaterialAudience.material
+  // (onDelete: Cascade). Governs TRAINEE visibility only; zero rows = fail-closed
+  // (invisible to trainees). Empty and unread in M0.
+  audiences CourseMaterialAudience[]
+
   @@map("course_materials")
+}
+
+// P-MATERIALS M0 - additive many-to-many audience join between a CourseMaterial
+// and the CourseOffering(s) it is visible to for TRAINEES. One material may
+// target one or several offerings (a shared material has several rows). ZERO
+// rows for a material = fail-closed: invisible to every trainee (never
+// fail-open / global). No column is added to CourseMaterial; scope is
+// metadata-only and never touches Supabase Storage. Instructors are NOT scoped
+// by this table in phase 1 - they remain global material readers; this relation
+// governs trainee visibility only.
+//
+// No updatedAt: an audience row is an immutable fact (create/delete only), so an
+// app-managed touch column would carry no meaning - it is deliberately absent.
+//
+// onDelete: Cascade on the material edge (audience rows are meaningless without
+// their material); onDelete: Restrict on the offering edge (matches the spine's
+// uniform policy - deleting an offering must never silently erase audience
+// config). Created empty in M0 and read/written by nothing in this slice.
+model CourseMaterialAudience {
+  id               String   @id @default(cuid())
+  materialId       String
+  courseOfferingId String
+  createdAt        DateTime @default(now())
+
+  material       CourseMaterial @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  courseOffering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Restrict)
+
+  @@unique([materialId, courseOfferingId])
+  @@index([courseOfferingId])
+  @@map("course_material_audiences")
 }
 
 enum NotificationType {
@@ -2114,6 +2149,9 @@ model CourseOffering {
   // MSG0 - additive back-relation for MessageTaskAudience.courseOffering
   // (onDelete: Restrict). Empty and unread in MSG0.
   messageTaskAudiences MessageTaskAudience[]
+  // P-MATERIALS M0 - additive back-relation for CourseMaterialAudience.courseOffering
+  // (onDelete: Restrict). Empty and unread in M0.
+  materialAudiences CourseMaterialAudience[]
 
   @@unique([activityYearId, name])
   @@index([activityYearId])
