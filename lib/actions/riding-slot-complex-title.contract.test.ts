@@ -197,3 +197,33 @@ test('the generated fallback "תרגול הדרכה" is never persisted by eithe
 test("RC-A2 does not add title to the complex-plan create/copy path", () => {
   assert.ok(!createRegion().includes("title"), "create/copy path must remain title-free in RC-A2");
 });
+
+// --- RC-A2b: the editing DTO exposes and maps the title -------------------
+
+test("RC-A2b - RidingSlotComplexPlanRow exposes title: string | null", () => {
+  const iface = slice(writerSrc, "export interface RidingSlotComplexPlanRow {", "}");
+  assert.ok(/title:\s*string\s*\|\s*null/.test(iface), "RidingSlotComplexPlanRow must declare title: string | null");
+});
+
+test("RC-A2b - toPlanRow maps title from the Prisma plan into the returned row", () => {
+  const region = slice(writerSrc, "function toPlanRow(", "}");
+  assert.ok(region.includes("title: p.title"), "toPlanRow must map title: p.title");
+});
+
+test("RC-A2b - the save result can therefore return the normalized plan.title", () => {
+  // The RC-A2 writer returns { success, plan: editing?.plan }, and editing.plan
+  // is built by toPlanRow (buildComplexPlanForEditing -> toPlanRow). With
+  // toPlanRow now mapping title, the returned plan carries the normalized title.
+  const internal = titleInternalRegion();
+  assert.ok(internal.includes("buildComplexPlanForEditing(data.ridingSlotId"), "writer must return the fresh editing snapshot");
+  assert.ok(internal.includes("plan: editing?.plan"), "writer must return editing.plan (which now carries title)");
+});
+
+test("RC-A2b - no extra title query or alternate title source was added for the DTO", () => {
+  // The DTO builder still reads via the shared include (which returns all plan
+  // scalars, including title, once migrated) and never adds a title-specific
+  // query/select; the title reaches the row only through toPlanRow(p.title).
+  const region = slice(writerSrc, "async function buildComplexPlanForEditing(", "return {");
+  assert.ok(region.includes("include: COMPLEX_PLAN_INCLUDE"), "DTO builder must keep using the shared include read");
+  assert.ok(!region.includes("title"), "DTO builder must not add a title-specific query/select");
+});

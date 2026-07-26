@@ -110,6 +110,11 @@ export interface RidingSlotComplexBlockRow {
 export interface RidingSlotComplexPlanRow {
   id: string;
   ridingSlotId: string;
+  // RC-A2b - the whole-session custom title (RidingSlotComplexPlan.title), or
+  // null when unset (the reader/UI applies the generated fallback). Exposed so
+  // the editor can initialize its input and reflect the normalized value the
+  // RC-A2 writer returns. Read-only projection - never a second source of truth.
+  title: string | null;
   updatedAt: string;
   updatedByName: string;
   // RIDING-COMPLEX-SCHEDULE-BOARD Stage 3B.1 - the live optimistic-concurrency
@@ -262,6 +267,7 @@ type BlockWithRelations = {
 type PlanWithRelations = {
   id: string;
   ridingSlotId: string;
+  title: string | null;
   updatedAt: Date;
   updatedByName: string;
   version: number;
@@ -327,6 +333,7 @@ function toPlanRow(p: PlanWithRelations): RidingSlotComplexPlanRow {
   return {
     id: p.id,
     ridingSlotId: p.ridingSlotId,
+    title: p.title,
     updatedAt: p.updatedAt.toISOString(),
     updatedByName: p.updatedByName,
     version: p.version,
