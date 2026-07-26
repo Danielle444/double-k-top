@@ -486,6 +486,11 @@ export interface PublishedComplexRidingPlanBlockForStudent {
 // convention.
 export interface PublishedComplexRidingPlanForStudent {
   ridingSlotId: string;
+  // RC-A4 - the frozen published session title snapshot (RC-A2), or null. The
+  // trainee reader resolves the displayed title via the RC-A0 PUBLISHED path
+  // (this snapshot, else the caller's generated fallback) - NEVER the live
+  // plan.title. A null here means the generated fallback applies.
+  titleSnapshot: string | null;
   blocks: PublishedComplexRidingPlanBlockForStudent[];
 }
 
@@ -540,6 +545,8 @@ export async function getPublishedComplexRidingPlansForStudentInternal(
     },
     select: {
       plan: { select: { ridingSlotId: true } },
+      // RC-A4 - read-only: the published title snapshot for the trainee reader.
+      titleSnapshot: true,
       blocks: {
         orderBy: { sortOrder: "asc" },
         select: {
@@ -574,6 +581,7 @@ export async function getPublishedComplexRidingPlansForStudentInternal(
   for (const pub of publications) {
     result.set(pub.plan.ridingSlotId, {
       ridingSlotId: pub.plan.ridingSlotId,
+      titleSnapshot: pub.titleSnapshot,
       blocks: pub.blocks.map((block) => ({
         startTime: block.startTime,
         endTime: block.endTime,

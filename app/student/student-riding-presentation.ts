@@ -1,17 +1,20 @@
 // Pure presentation-core for a student's riding schedule card. No "use client"
 // / "use server" directive and no React, server action, Prisma, auth, headers,
-// cookies, env, or DB import - the only runtime dependency is the pure
-// getStudentScheduleTitle helper. ScheduleItemView is imported type-only, so it
-// contributes nothing at runtime. This keeps the logic deterministic,
-// side-effect-free, and unit-testable without loading the Client Component or
-// instantiating the shared Prisma client.
+// cookies, env, or DB import - the only runtime dependencies are the pure
+// getStudentScheduleTitle and resolveComplexSessionTitle (RC-A0) helpers.
+// ScheduleItemView is imported type-only, so it contributes nothing at runtime.
+// This keeps the logic deterministic, side-effect-free, and unit-testable
+// without loading the Client Component or instantiating the shared Prisma client.
 
 import { getStudentScheduleTitle } from "@/lib/schedule-title";
+import { resolveComplexSessionTitle } from "@/lib/riding-complex/complex-session-title-core";
 import type { ScheduleItemView } from "@/lib/actions/student-schedule";
 
-// A complex-mode riding slot (RidingSlot with a complexPlan relation) is
-// shown to trainees as "תרגול הדרכה" (instruction practice), never the
-// generic "רכיבה" title - regardless of whether its plan is published yet.
+// RC-A4 - the GENERATED FALLBACK for a complex riding slot: a Level 1 slot (or
+// an absent/false preserve flag) falls back to "תרגול הדרכה"; a Level 2 slot
+// falls back to the preserved (shortened) ScheduleItem title. This is no longer
+// the forced FINAL title - a manager's custom published title snapshot overrides
+// it (see resolveStudentRidingPresentation below); it remains the fallback only.
 export const COMPLEX_RIDING_TITLE = "תרגול הדרכה";
 
 export interface StudentRidingPresentation {
@@ -42,18 +45,36 @@ export function resolveStudentRidingPresentation(
     preserveOriginalComplexTitle?: boolean;
   }
 ): StudentRidingPresentation {
+  // GENERATED FALLBACK (unchanged precedence):
+  //  - a complex-mode slot with preserveOriginalComplexTitle !== true (Level 1,
+  //    or an absent/false flag) falls back to the fixed "תרגול הדרכה";
+  //  - otherwise (a non-complex item, OR a Level 2 complex slot with the flag
+  //    true) the original title runs through getStudentScheduleTitle.
+  // `!== true` means an absent/false flag keeps the legacy fallback and never
+  // opts into preservation by accident.
+  const generatedFallback =
+    item.isComplex && item.preserveOriginalComplexTitle !== true
+      ? COMPLEX_RIDING_TITLE
+      : getStudentScheduleTitle(item.title);
+
+  // RC-A4 - a trainee only ever sees a complex session once it is PUBLISHED
+  // (publishedComplexRidingPlan is non-null iff a publication exists for this
+  // student's published week). When it is, the displayed title comes from the
+  // PUBLISHED snapshot via the RC-A0 core (the custom title if present, else the
+  // generated fallback) - it NEVER reads the live plan.title, so a post-publish
+  // live edit cannot change what the trainee sees until re-publish. An
+  // unpublished (or non-complex) slot always shows the generated fallback.
+  const title =
+    item.publishedComplexRidingPlan !== null
+      ? resolveComplexSessionTitle({
+          surface: "PUBLISHED",
+          publishedTitleSnapshot: item.publishedComplexRidingPlan.titleSnapshot,
+          generatedFallback,
+        })
+      : generatedFallback;
+
   return {
-    // Title precedence:
-    //  - a complex-mode slot with preserveOriginalComplexTitle !== true (Level 1,
-    //    or an absent/false flag) shows the fixed "תרגול הדרכה" override;
-    //  - otherwise (a non-complex item, OR a Level 2 complex slot with the flag
-    //    true) the original title runs through getStudentScheduleTitle.
-    // `!== true` means an absent/false flag keeps the legacy override and never
-    // opts into preservation by accident.
-    title:
-      item.isComplex && item.preserveOriginalComplexTitle !== true
-        ? COMPLEX_RIDING_TITLE
-        : getStudentScheduleTitle(item.title),
+    title,
     showGenericRidingInfo: !item.isComplex && item.ridingInfo !== null,
     showComplexPlan: item.publishedComplexRidingPlan !== null,
   };

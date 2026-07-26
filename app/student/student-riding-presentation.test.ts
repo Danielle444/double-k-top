@@ -37,11 +37,21 @@ const GENERIC_RIDING_INFO: ScheduleItemView["ridingInfo"] = {
   subgroupLabel: null,
 };
 
-// Minimal stand-in for a published complex plan - the resolver only checks
-// presence (!== null), never reads into it.
-const PUBLISHED_PLAN = { blocks: [] } as unknown as NonNullable<
+// Minimal stand-in for a published complex plan. RC-A4 - the resolver now reads
+// `titleSnapshot` (via the RC-A0 PUBLISHED path); this default has a null
+// snapshot, so it still resolves to the generated fallback. Helper below builds
+// one carrying a specific snapshot.
+const PUBLISHED_PLAN = { titleSnapshot: null, blocks: [] } as unknown as NonNullable<
   ScheduleItemView["publishedComplexRidingPlan"]
 >;
+
+function publishedPlanWithSnapshot(
+  titleSnapshot: string | null
+): NonNullable<ScheduleItemView["publishedComplexRidingPlan"]> {
+  return { titleSnapshot, blocks: [] } as unknown as NonNullable<
+    ScheduleItemView["publishedComplexRidingPlan"]
+  >;
+}
 
 // 1. complex + published: complex title, generic info suppressed, published
 // complex details remain available.
@@ -350,4 +360,105 @@ test("L2 fix: only the server flag flips the complex title, nothing else", () =>
   // Everything OTHER than the title is identical regardless of the flag.
   assert.equal(preserved.showGenericRidingInfo, overridden.showGenericRidingInfo);
   assert.equal(preserved.showComplexPlan, overridden.showComplexPlan);
+});
+
+// ---------------------------------------------------------------------------
+// RC-A4 - published custom title overrides the generated fallback (PUBLISHED
+// resolution via the RC-A0 core). A trainee only ever sees a complex session
+// when published, so the title source here is titleSnapshot, never live.
+// ---------------------------------------------------------------------------
+
+// 1. PUBLISHED custom snapshot overrides the Level 1 "תרגול הדרכה" fallback.
+test("RC-A4: published snapshot overrides the Level 1 fallback", () => {
+  const p = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: publishedPlanWithSnapshot("קפיצות בוקר"),
+    preserveOriginalComplexTitle: false,
+  });
+  assert.equal(p.title, "קפיצות בוקר");
+  assert.notEqual(p.title, COMPLEX_RIDING_TITLE);
+});
+
+// 2. PUBLISHED null snapshot -> Level 1 fallback.
+test("RC-A4: published null snapshot keeps the Level 1 fallback", () => {
+  const p = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: publishedPlanWithSnapshot(null),
+    preserveOriginalComplexTitle: false,
+  });
+  assert.equal(p.title, COMPLEX_RIDING_TITLE);
+});
+
+// 3. PUBLISHED custom snapshot overrides the preserved Level 2 ScheduleItem title.
+test("RC-A4: published snapshot overrides the Level 2 preserved title", () => {
+  const p = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: publishedPlanWithSnapshot("מקצה מתקדמים"),
+    preserveOriginalComplexTitle: true,
+  });
+  assert.equal(p.title, "מקצה מתקדמים");
+});
+
+// 4. PUBLISHED null snapshot -> preserved Level 2 ScheduleItem title fallback.
+test("RC-A4: published null snapshot keeps the Level 2 preserved fallback", () => {
+  const p = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: publishedPlanWithSnapshot(null),
+    preserveOriginalComplexTitle: true,
+  });
+  assert.equal(p.title, "רכיבה");
+});
+
+// 5. UNPUBLISHED complex slot never shows a title (publication is null) - the
+//    trainee always sees the generated fallback, never a live title (there is no
+//    live-title field on the presentation input at all - PUBLISHED-only).
+test("RC-A4: an unpublished complex slot shows only the fallback (no live title read)", () => {
+  const p = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: null,
+    preserveOriginalComplexTitle: false,
+  });
+  assert.equal(p.title, COMPLEX_RIDING_TITLE);
+});
+
+// 6. A malformed published snapshot (multiline / overlong) falls back safely.
+test("RC-A4: a malformed published snapshot falls back safely", () => {
+  const multiline = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: publishedPlanWithSnapshot("שורה\nשנייה"),
+    preserveOriginalComplexTitle: false,
+  });
+  assert.equal(multiline.title, COMPLEX_RIDING_TITLE);
+  const overlong = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: publishedPlanWithSnapshot("א".repeat(61)),
+    preserveOriginalComplexTitle: false,
+  });
+  assert.equal(overlong.title, COMPLEX_RIDING_TITLE);
+});
+
+// 7. A non-complex ordinary riding slot is unaffected by RC-A4 (no complex
+//    publication resolution path).
+test("RC-A4: ordinary riding is unaffected", () => {
+  const p = resolveStudentRidingPresentation({
+    isComplex: false,
+    title: "רכיבה - מעברים",
+    ridingInfo: GENERIC_RIDING_INFO,
+    publishedComplexRidingPlan: null,
+  });
+  assert.equal(p.title, "רכיבה");
 });
