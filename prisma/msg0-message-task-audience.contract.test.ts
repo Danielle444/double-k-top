@@ -332,13 +332,25 @@ test("every DDL identifier is within PostgreSQL's 63-character limit", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The unwired invariant - nothing in the app reads or writes the new table
+// The write-unwired invariant - nothing in the app READS OR WRITES the new
+// table. Post-MSG1A this is deliberately about ACTUAL Prisma table access, NOT
+// textual mentions: MSG1A added read-only audience actions
+// (lib/actions/message-audience.ts, lib/course/message-audience-input-core.ts)
+// and their contract test, which NAME the model in comments / assertion strings
+// while never touching it. Those must not trip this check. The real read/write
+// surface is the Prisma client accessor `prisma.messageTaskAudience` (or the raw
+// table name in any hand-written SQL), so detect exactly that, after stripping
+// comments. MSG2 - which genuinely writes the table - WILL trip this, which is
+// the intended, visible signal that the table is being wired for the first time.
 // ---------------------------------------------------------------------------
 
-test("no application module imports, reads, or writes MessageTaskAudience in MSG0", () => {
+test("no application module READS OR WRITES the message_task_audiences table (MSG1A: read-only names are fine)", () => {
   const repoRoot = fileURLToPath(new URL("../", import.meta.url));
   const skippedDirs = new Set(["node_modules", ".next", ".git", "generated"]);
   const referencers: string[] = [];
+
+  const stripComments = (src: string): string =>
+    src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
   function walk(dir: string, relative: string): void {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -348,8 +360,10 @@ test("no application module imports, reads, or writes MessageTaskAudience in MSG
         continue;
       }
       if (!/\.(ts|tsx)$/.test(entry.name)) continue;
-      const source = readFileSync(`${dir}/${entry.name}`, "utf8").toLowerCase();
-      if (source.includes("messagetaskaudience") || source.includes("message_task_audiences")) {
+      const code = stripComments(readFileSync(`${dir}/${entry.name}`, "utf8")).toLowerCase();
+      // Actual read/write surface only: the Prisma client accessor, or the raw
+      // table name appearing in code (never in a normal TS module).
+      if (/prisma\s*\.\s*messagetaskaudience\b/.test(code) || code.includes("message_task_audiences")) {
         referencers.push(`${relative}${entry.name}`);
       }
     }
@@ -367,6 +381,6 @@ test("no application module imports, reads, or writes MessageTaskAudience in MSG
   assert.deepEqual(
     referencers,
     [],
-    `MessageTaskAudience must stay unwired in MSG0, but is referenced by: ${referencers}`,
+    `message_task_audiences must stay write-unwired, but is accessed by: ${referencers}`,
   );
 });
