@@ -21,7 +21,10 @@ import {
   computeInstructorCrossCourseOverlaps,
   hideLevel1ItemsFullyCoveredByPublishedLevel2,
   mergeUnifiedInstructorScheduleSources,
+  findUnifiedInstructorWeeksForRange,
+  filterUnifiedInstructorItemsToRange,
   type UnifiedInstructorScheduleSourceOffering,
+  type UnifiedInstructorWeekRange,
 } from "./unified-instructor-schedule-core";
 
 // ---------------------------------------------------------------------------
@@ -382,4 +385,147 @@ test("computeInstructorCrossCourseOverlaps does not mutate its input items", () 
   const snapshot = JSON.stringify([a, b]);
   computeInstructorCrossCourseOverlaps([a, b]);
   assert.equal(JSON.stringify([a, b]), snapshot);
+});
+
+// ---------------------------------------------------------------------------
+// IUS-2: selected-range -> per-offering week resolution
+// ---------------------------------------------------------------------------
+
+function weekRange(id: string, startDate: string, endDate: string): UnifiedInstructorWeekRange {
+  return { id, startDate, endDate };
+}
+
+test("findUnifiedInstructorWeeksForRange: no weeks at all yields []", () => {
+  assert.deepEqual(findUnifiedInstructorWeeksForRange([], "2026-07-05", "2026-07-09"), []);
+});
+
+test("findUnifiedInstructorWeeksForRange: a week wholly inside the range matches", () => {
+  const w = weekRange("w", "2026-07-06", "2026-07-08");
+  assert.deepEqual(findUnifiedInstructorWeeksForRange([w], "2026-07-05", "2026-07-09"), [w]);
+});
+
+test("findUnifiedInstructorWeeksForRange: a week wholly CONTAINING the range matches", () => {
+  const w = weekRange("w", "2026-07-01", "2026-07-31");
+  assert.deepEqual(findUnifiedInstructorWeeksForRange([w], "2026-07-05", "2026-07-09"), [w]);
+});
+
+test("findUnifiedInstructorWeeksForRange: an IDENTICAL range matches (exact equality is a special case of overlap)", () => {
+  const w = weekRange("w", "2026-07-05", "2026-07-09");
+  assert.deepEqual(findUnifiedInstructorWeeksForRange([w], "2026-07-05", "2026-07-09"), [w]);
+});
+
+test("findUnifiedInstructorWeeksForRange: boundaries are INCLUSIVE on both ends", () => {
+  // Shares only its LAST day with the range's FIRST day.
+  const touchesStart = weekRange("start", "2026-07-01", "2026-07-05");
+  // Shares only its FIRST day with the range's LAST day.
+  const touchesEnd = weekRange("end", "2026-07-09", "2026-07-15");
+  assert.deepEqual(
+    findUnifiedInstructorWeeksForRange([touchesStart, touchesEnd], "2026-07-05", "2026-07-09"),
+    [touchesStart, touchesEnd],
+  );
+});
+
+test("findUnifiedInstructorWeeksForRange: a week one day clear on either side does NOT match", () => {
+  const before = weekRange("before", "2026-06-29", "2026-07-04");
+  const after = weekRange("after", "2026-07-10", "2026-07-16");
+  assert.deepEqual(
+    findUnifiedInstructorWeeksForRange([before, after], "2026-07-05", "2026-07-09"),
+    [],
+  );
+});
+
+test("findUnifiedInstructorWeeksForRange: MULTIPLE overlapping weeks are all returned, sorted by startDate", () => {
+  const later = weekRange("later", "2026-07-08", "2026-07-14");
+  const earlier = weekRange("earlier", "2026-07-01", "2026-07-07");
+  const missed = weekRange("missed", "2026-07-20", "2026-07-24");
+  assert.deepEqual(
+    findUnifiedInstructorWeeksForRange([later, earlier, missed], "2026-07-05", "2026-07-09"),
+    [earlier, later],
+  );
+});
+
+test("findUnifiedInstructorWeeksForRange: ordering is total and input-order-independent", () => {
+  // Same startDate: endDate then id break the tie, so both input orders agree.
+  const a = weekRange("aaa", "2026-07-05", "2026-07-09");
+  const b = weekRange("bbb", "2026-07-05", "2026-07-09");
+  const c = weekRange("ccc", "2026-07-05", "2026-07-11");
+  const forward = findUnifiedInstructorWeeksForRange([a, b, c], "2026-07-05", "2026-07-09");
+  const reversed = findUnifiedInstructorWeeksForRange([c, b, a], "2026-07-05", "2026-07-09");
+  assert.deepEqual(forward.map((w) => w.id), ["aaa", "bbb", "ccc"]);
+  assert.deepEqual(reversed, forward);
+});
+
+test("findUnifiedInstructorWeeksForRange: returns the REAL week objects, never a synthesized id", () => {
+  const w = weekRange("real-week-cuid", "2026-07-05", "2026-07-09");
+  const [match] = findUnifiedInstructorWeeksForRange([w], "2026-07-05", "2026-07-09");
+  assert.equal(match.id, "real-week-cuid");
+  assert.equal(match, w, "the same object reference must pass through");
+});
+
+test("findUnifiedInstructorWeeksForRange: does not mutate or reorder the input array", () => {
+  const later = weekRange("later", "2026-07-08", "2026-07-14");
+  const earlier = weekRange("earlier", "2026-07-01", "2026-07-07");
+  const input = [later, earlier];
+  const snapshot = JSON.stringify(input);
+  findUnifiedInstructorWeeksForRange(input, "2026-07-05", "2026-07-09");
+  assert.equal(JSON.stringify(input), snapshot);
+  assert.equal(input[0], later, "input order must be untouched");
+});
+
+// ---------------------------------------------------------------------------
+// IUS-2: range narrowing of an overlapping week's items
+// ---------------------------------------------------------------------------
+
+test("filterUnifiedInstructorItemsToRange: keeps only items inside the inclusive range", () => {
+  const items = [
+    { id: "before", dateKey: "2026-07-04" },
+    { id: "first", dateKey: "2026-07-05" },
+    { id: "middle", dateKey: "2026-07-07" },
+    { id: "last", dateKey: "2026-07-09" },
+    { id: "after", dateKey: "2026-07-10" },
+  ];
+  assert.deepEqual(
+    filterUnifiedInstructorItemsToRange(items, "2026-07-05", "2026-07-09").map((i) => i.id),
+    ["first", "middle", "last"],
+  );
+});
+
+test("filterUnifiedInstructorItemsToRange: both boundary days are INCLUDED", () => {
+  const items = [
+    { id: "start", dateKey: "2026-07-05" },
+    { id: "end", dateKey: "2026-07-09" },
+  ];
+  assert.equal(filterUnifiedInstructorItemsToRange(items, "2026-07-05", "2026-07-09").length, 2);
+});
+
+test("filterUnifiedInstructorItemsToRange: nothing in range yields []", () => {
+  const items = [{ id: "far", dateKey: "2026-08-01" }];
+  assert.deepEqual(filterUnifiedInstructorItemsToRange(items, "2026-07-05", "2026-07-09"), []);
+});
+
+test("filterUnifiedInstructorItemsToRange: preserves the received order and does not mutate", () => {
+  const items = [
+    { id: "c", dateKey: "2026-07-09" },
+    { id: "a", dateKey: "2026-07-05" },
+    { id: "b", dateKey: "2026-07-07" },
+  ];
+  const snapshot = JSON.stringify(items);
+  const filtered = filterUnifiedInstructorItemsToRange(items, "2026-07-05", "2026-07-09");
+  // Order is NOT sorted here - the merge sorts once, later, over the whole set.
+  assert.deepEqual(filtered.map((i) => i.id), ["c", "a", "b"]);
+  assert.equal(JSON.stringify(items), snapshot);
+});
+
+test("IUS-2 helpers leave the committed merge behaviour untouched", () => {
+  // An overlapping week can carry out-of-range days; narrowing them away before
+  // the merge must not disturb the coverage-hide or overlap rules.
+  const l1 = item("l1", "2026-07-05", "10:00", "11:00");
+  const l2 = item("l2", "2026-07-05", "09:30", "11:30", true);
+  const merged = mergeUnifiedInstructorScheduleSources([
+    { offering: L1_OFFERING, items: filterUnifiedInstructorItemsToRange([l1], "2026-07-05", "2026-07-09") },
+    { offering: L2_OFFERING, items: filterUnifiedInstructorItemsToRange([l2], "2026-07-05", "2026-07-09") },
+  ]);
+  // Unchanged expectation: the published Level 2 item fully covers the Level 1
+  // item, so only the Level 2 item survives.
+  assert.deepEqual(merged.map((i) => i.id), ["l2"]);
 });

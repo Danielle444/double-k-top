@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   getCourseScopedScheduleForInstructor,
   getTodayScheduleForInstructor,
@@ -16,7 +16,10 @@ import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { resolveActivityForScheduleCardId } from "@/app/instructor/instructor-riding-schedule-map-core";
 import { Modal } from "@/lib/components/Modal";
 
-function isItemActiveNow(item: InstructorScheduleItem, now: Date): boolean {
+// IUS-2 - exported so the unified sub-view reuses the SAME "מתקיים עכשיו" rule
+// rather than cloning it (the trainee ScheduleSection exports its twin for the
+// same reason). Behaviour is unchanged.
+export function isItemActiveNow(item: InstructorScheduleItem, now: Date): boolean {
   const todayKey = now.toISOString().slice(0, 10);
   if (item.dateKey !== todayKey) return false;
   const [sh, sm] = item.startTime.split(":").map(Number);
@@ -39,7 +42,7 @@ function isItemActiveNow(item: InstructorScheduleItem, now: Date): boolean {
 // assignment/horse detail already has its own, separate, richer interaction
 // (the existing "צפייה בחניכים" click-through to the riding-students modal),
 // left untouched and not duplicated here.
-function InstructorScheduleCard({
+export function InstructorScheduleCard({
   item,
   active,
   compact,
@@ -50,12 +53,20 @@ function InstructorScheduleCard({
   // and text untouched.
   ridingActivity,
   onOpenRidingActivity,
+  // IUS-2 - optional caller-supplied pills rendered in the EXISTING badge row,
+  // after the group badge. Used by the unified sub-view for its source-course
+  // and cross-offering-overlap badges, so that view needs no card of its own.
+  // Omitted by every per-course call site, which therefore renders exactly as
+  // before. Presentation only: this never changes what the card reads, gates or
+  // opens.
+  extraBadges,
 }: {
   item: InstructorScheduleItem;
   active: boolean;
   compact: boolean;
   ridingActivity: WeeklyRidingActivity | null;
   onOpenRidingActivity: ((activity: WeeklyRidingActivity) => void) | undefined;
+  extraBadges?: ReactNode;
 }) {
   const [showDetails, setShowDetails] = useState(false);
 
@@ -116,13 +127,20 @@ function InstructorScheduleCard({
         >
           {item.startTime}-{item.endTime}
         </span>
-        <span
-          className={`rounded-full bg-muted text-muted-foreground ${
-            compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm"
-          }`}
-        >
-          {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
-        </span>
+        {/* The group badge and any caller-supplied extras share one wrapping
+            row, so extra pills wrap onto a new line on narrow screens instead
+            of squeezing the time/group pair. With no extras this renders the
+            same single group badge as before. */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span
+            className={`rounded-full bg-muted text-muted-foreground ${
+              compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm"
+            }`}
+          >
+            {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
+          </span>
+          {extraBadges}
+        </div>
       </div>
       <div className="flex items-start justify-between gap-2">
         <p className={`font-bold text-card-foreground ${compact ? "line-clamp-2 text-base" : "text-lg"}`}>

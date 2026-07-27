@@ -257,6 +257,77 @@ export function hideLevel1ItemsFullyCoveredByPublishedLevel2<
   });
 }
 
+// ---------------------------------------------------------------------------
+// IUS-2: selected-range -> per-offering week resolution
+//
+// Each offering owns its OWN WeeklySchedule rows, so the unified week picker's
+// merged entry (which keeps exactly ONE real id per date range - see
+// unified-instructor-week-options-core) cannot address the other offering's
+// week. These two helpers close that gap WITHOUT inventing an id: the caller
+// re-reads each offering's own week list and asks which of ITS real weeks
+// intersect the selected range.
+// ---------------------------------------------------------------------------
+
+/** The minimum an already-fetched week option needs for the range match below. */
+export interface UnifiedInstructorWeekRange {
+  readonly id: string;
+  readonly startDate: string;
+  readonly endDate: string;
+}
+
+/**
+ * Which of ONE offering's own already-fetched (already authorized,
+ * capability-gated) weeks intersect the selected inclusive range.
+ *
+ * OVERLAP, DELIBERATELY NOT EXACT-RANGE EQUALITY. Level 1 and Level 2 weeks are
+ * separate rows and are not guaranteed to share identical start/end dates (one
+ * course may run Sun-Thu while the other runs Sun-Fri). Matching on equality
+ * would silently contribute ZERO items for a whole offering whenever its week
+ * boundaries differ by even a day - the exact failure this view exists to
+ * prevent. Overlap is inclusive on BOTH ends: a week that shares only its last
+ * day with the range still matches, because that day's items are genuinely
+ * inside the selected range.
+ *
+ * Returns EVERY match, not just the first: a selected range can legitimately
+ * straddle two of an offering's weeks, and dropping the second would hide real
+ * items. Order is total and input-order-independent (startDate, then endDate,
+ * then the real id as a unique tie-break), so the fan-out below is
+ * deterministic. Only real WeeklySchedule ids are ever returned - this function
+ * never synthesizes one - and neither the input array nor its items are
+ * mutated (`filter` already allocates, so the `sort` is on a fresh array).
+ */
+export function findUnifiedInstructorWeeksForRange<T extends UnifiedInstructorWeekRange>(
+  weeks: readonly T[],
+  rangeStart: string,
+  rangeEnd: string,
+): T[] {
+  return weeks
+    .filter((week) => week.startDate <= rangeEnd && rangeStart <= week.endDate)
+    .sort(
+      (a, b) =>
+        a.startDate.localeCompare(b.startDate) ||
+        a.endDate.localeCompare(b.endDate) ||
+        a.id.localeCompare(b.id),
+    );
+}
+
+/**
+ * Narrow an offering's contributed items to the selected inclusive range.
+ *
+ * Required because {@link findUnifiedInstructorWeeksForRange} matches a week
+ * that merely OVERLAPS the range: such a week legitimately carries items on
+ * days outside it, and those must not leak into the merged list. Inclusive on
+ * both ends, order preserved exactly as received (the merge sorts later, once,
+ * over the whole set), no mutation.
+ */
+export function filterUnifiedInstructorItemsToRange<T extends { readonly dateKey: string }>(
+  items: readonly T[],
+  rangeStart: string,
+  rangeEnd: string,
+): T[] {
+  return items.filter((item) => rangeStart <= item.dateKey && item.dateKey <= rangeEnd);
+}
+
 /** Stable chronological sort - by dateKey, then startTime, then endTime. */
 export function sortUnifiedInstructorScheduleItems<
   T extends { dateKey: string; startTime: string; endTime: string },
