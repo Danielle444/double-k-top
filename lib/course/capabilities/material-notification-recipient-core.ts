@@ -43,6 +43,32 @@
  * would turn a data defect into a partial send that is indistinguishable from a
  * correct one, and silently repairing it would invent a recipient.
  *
+ * P-MATERIALS M3A - EXTENDED WITH THE FULL PURE DECISION SET
+ * ----------------------------------------------------------
+ * The original slice supplied the visibility predicate, the capability key and
+ * the two identifier dedupers. M3A adds the remaining pure decisions the later
+ * IO shell needs, all of them additive - no existing export changed shape or
+ * behaviour:
+ *
+ *   - shouldMaterialNotifyTrainees ................ the material gate;
+ *   - resolveEligibleMaterialNotificationOfferingIds  which audience offerings
+ *                                                    may notify at all;
+ *   - resolveMaterialNotificationRecipientIds ..... offerings -> trainee ids,
+ *                                                    collapsed to one per
+ *                                                    trainee;
+ *   - resolveNewlyEligibleMaterialNotificationRecipientIds ... the delta that
+ *                                                    keeps an audience edit from
+ *                                                    re-notifying trainees who
+ *                                                    could already see the
+ *                                                    material.
+ *
+ * Every lifecycle and capability verdict arrives as an ALREADY-RESOLVED boolean.
+ * This module accepts no status string, compares no lifecycle value, and reads
+ * no database column, so it cannot become a second interpretation of any rule
+ * that is owned elsewhere. The new functions return FROZEN arrays; the two
+ * original dedupers keep returning ordinary arrays exactly as before, since
+ * changing that would be a behaviour change to a committed contract.
+ *
  * UNWIRED IN THIS SLICE: nothing in the repository imports this module.
  */
 import type { CapabilityKey } from "./capability-keys";
@@ -193,4 +219,276 @@ export function dedupeMaterialNotificationRecipientIds(
   rows: readonly { studentId: string }[],
 ): string[] {
   return dedupeIds(rows, "studentId", (row) => (row as { studentId: unknown }).studentId);
+}
+
+// ---------------------------------------------------------------------------
+// M3A - shared internals for the eligibility / recipient / delta decisions
+// ---------------------------------------------------------------------------
+
+/**
+ * TWO DIFFERENT FAILURE MODES, DELIBERATELY NOT UNIFIED
+ * -----------------------------------------------------
+ * An IDENTIFIER defect and a FLAG defect are not the same kind of problem, and
+ * this module treats them differently on purpose:
+ *
+ *  - a malformed IDENTIFIER (blank / non-string) THROWS and refuses the whole
+ *    fan-out. Skipping it would turn a data defect into a partial send that is
+ *    indistinguishable from a correct one, and repairing it would invent a
+ *    recipient;
+ *  - a malformed FLAG (anything that is not the boolean `true`) EXCLUDES that
+ *    row and never throws. Every flag reaching this module has already been
+ *    decided upstream, so "not positively true" is a complete answer and must
+ *    fail CLOSED - the row simply does not qualify. Throwing instead would let a
+ *    single odd row block a fan-out that is otherwise perfectly resolvable.
+ *
+ * An ABSENT LIST (a non-array argument) is likewise not an identifier defect: it
+ * carries no ids to be wrong about. It resolves to "no rows", which for a
+ * fan-out means "notify nobody" - the safe direction. Malformed ids *inside* a
+ * real array still throw.
+ */
+
+/** Read one property off a possibly-malformed row without ever throwing. */
+function readRowField(row: unknown, field: string): unknown {
+  if (row === null || row === undefined) return undefined;
+  return (row as Record<string, unknown>)[field];
+}
+
+/** Coerce a possibly-absent list argument to an array, never throwing. */
+function asRowList<T>(rows: unknown): readonly T[] {
+  return Array.isArray(rows) ? (rows as readonly T[]) : [];
+}
+
+/**
+ * Return `value` when it is a usable identifier, else refuse with the typed,
+ * PII-free {@link MaterialNotificationIdError}. Never trims, never repairs.
+ */
+function requireUsableId(
+  value: unknown,
+  field: MaterialNotificationIdField,
+  index: number,
+): string {
+  if (!isUsableId(value)) {
+    throw new MaterialNotificationIdError(field, index);
+  }
+  return value;
+}
+
+/**
+ * Validate + first-seen-deduplicate a bare list of offering ids by routing it
+ * through the already-tested row-shaped dedupe above, so there is exactly ONE
+ * identifier-refusal implementation for offering ids in this module. Indices in
+ * a refusal refer to positions in the supplied list.
+ */
+function usableOfferingIdList(ids: unknown): readonly string[] {
+  return dedupeMaterialNotificationOfferingIds(
+    asRowList<unknown>(ids).map((courseOfferingId) => ({ courseOfferingId })) as {
+      courseOfferingId: string;
+    }[],
+  );
+}
+
+/**
+ * Validate + first-seen-deduplicate a bare list of trainee ids, routed through
+ * the already-tested row-shaped dedupe for the same single-implementation
+ * reason as {@link usableOfferingIdList}.
+ */
+function usableRecipientIdList(ids: unknown): readonly string[] {
+  return dedupeMaterialNotificationRecipientIds(
+    asRowList<unknown>(ids).map((studentId) => ({ studentId })) as { studentId: string }[],
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The material gate
+// ---------------------------------------------------------------------------
+
+/**
+ * May this material notify TRAINEES at all?
+ *
+ * Both halves are already-read values and both must be positively satisfied:
+ * the material is live (`materialActive` is the boolean `true`, never a truthy
+ * stand-in) AND its visibility addresses trainees via the existing
+ * {@link shouldNotifyTrainees} allow-list. The visibility half is DELEGATED, not
+ * restated - there is exactly one trainee-visibility predicate in this module
+ * and a second one could silently drift from it.
+ *
+ * Both parameters are `unknown` on purpose, for the same reason
+ * {@link shouldNotifyTrainees} is: these values are read back from the database,
+ * and a compile-time type says nothing about what actually arrived. A hidden,
+ * de-activated or instructor-only material therefore answers `false` rather than
+ * quietly opening the trainee path.
+ */
+export function shouldMaterialNotifyTrainees(
+  materialActive: unknown,
+  visibility: unknown,
+): boolean {
+  return materialActive === true && shouldNotifyTrainees(visibility);
+}
+
+// ---------------------------------------------------------------------------
+// Eligible offerings
+// ---------------------------------------------------------------------------
+
+/**
+ * One candidate audience offering, carrying ALREADY-RESOLVED booleans.
+ *
+ * Neither flag is a status string, and that is the whole point: the offering
+ * lifecycle decision and the effective-capability decision are both owned
+ * upstream (the committed capability reader and the offering row itself). This
+ * module receives their verdicts and must never re-derive, re-compare or
+ * re-interpret them - a second interpretation here would be a silently-drifting
+ * authorization path.
+ */
+export interface MaterialNotificationOfferingRow {
+  readonly courseOfferingId: string;
+  /** The offering itself is live. Resolved upstream from the offering row. */
+  readonly offeringActive: boolean;
+  /** The offering's effective course-materials capability is on. Resolved upstream. */
+  readonly materialsCapabilityEnabled: boolean;
+}
+
+/**
+ * The ordered, deduplicated offering ids whose trainees may be notified.
+ *
+ * An offering qualifies only when BOTH flags are strictly the boolean `true`.
+ * A truthy non-boolean (`1`, `"true"`, `"ENABLED"`, `[]`) does NOT qualify: the
+ * upstream decision must arrive as a real boolean, so a mis-shaped value fails
+ * closed instead of granting a fan-out.
+ *
+ * EVERY row's identifier is validated, including rows that go on to be excluded
+ * by their flags - a malformed id is a data defect wherever it sits, and letting
+ * it pass unnoticed just because its row did not qualify would hide exactly the
+ * kind of corruption this discipline exists to surface. The refusal's index is
+ * therefore the position in the SUPPLIED array.
+ *
+ * The result is frozen and the input is never mutated.
+ */
+export function resolveEligibleMaterialNotificationOfferingIds(
+  rows: readonly MaterialNotificationOfferingRow[],
+): readonly string[] {
+  const list = asRowList<MaterialNotificationOfferingRow>(rows);
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (let index = 0; index < list.length; index++) {
+    const row = list[index];
+    const courseOfferingId = requireUsableId(
+      readRowField(row, "courseOfferingId"),
+      "courseOfferingId",
+      index,
+    );
+    if (readRowField(row, "offeringActive") !== true) continue;
+    if (readRowField(row, "materialsCapabilityEnabled") !== true) continue;
+    if (seen.has(courseOfferingId)) continue;
+    seen.add(courseOfferingId);
+    ids.push(courseOfferingId);
+  }
+  return Object.freeze(ids);
+}
+
+// ---------------------------------------------------------------------------
+// Recipients
+// ---------------------------------------------------------------------------
+
+/**
+ * One trainee enrollment considered for the fan-out, with ALREADY-RESOLVED
+ * booleans (same rationale as {@link MaterialNotificationOfferingRow}).
+ */
+export interface MaterialNotificationEnrollmentRow {
+  readonly studentId: string;
+  readonly courseOfferingId: string;
+  /** This enrollment is live. Resolved upstream from the enrollment row. */
+  readonly enrollmentActive: boolean;
+  /** The trainee account itself is live. Resolved upstream. */
+  readonly traineeActive: boolean;
+}
+
+/**
+ * The ordered, deduplicated trainee ids to notify for one already-resolved
+ * eligible offering set.
+ *
+ * A row contributes its trainee only when `enrollmentActive` and `traineeActive`
+ * are both strictly the boolean `true` AND its offering is in
+ * `eligibleOfferingIds`.
+ *
+ * THE DEDUPLICATION IS THE POINT, not a tidiness pass. A trainee enrolled in two
+ * offerings that BOTH appear in the audience of one shared material matches
+ * twice; `Notification` has no uniqueness constraint, so without this collapse
+ * that trainee would receive the same material notification twice. One trainee
+ * appears at most once, at the position of their FIRST matching row.
+ *
+ * Both id columns of every row are validated (see
+ * {@link resolveEligibleMaterialNotificationOfferingIds} for why exclusion does
+ * not exempt a row), `studentId` before `courseOfferingId`, with the row's
+ * position as the refusal index. `eligibleOfferingIds` is validated FIRST, so a
+ * refusal that names an index in that list is reported before any row is read.
+ *
+ * The result is frozen and neither input is mutated.
+ */
+export function resolveMaterialNotificationRecipientIds(
+  rows: readonly MaterialNotificationEnrollmentRow[],
+  eligibleOfferingIds: readonly string[],
+): readonly string[] {
+  const eligible = new Set<string>(usableOfferingIdList(eligibleOfferingIds));
+  const list = asRowList<MaterialNotificationEnrollmentRow>(rows);
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (let index = 0; index < list.length; index++) {
+    const row = list[index];
+    const studentId = requireUsableId(readRowField(row, "studentId"), "studentId", index);
+    const courseOfferingId = requireUsableId(
+      readRowField(row, "courseOfferingId"),
+      "courseOfferingId",
+      index,
+    );
+    if (readRowField(row, "enrollmentActive") !== true) continue;
+    if (readRowField(row, "traineeActive") !== true) continue;
+    if (!eligible.has(courseOfferingId)) continue;
+    if (seen.has(studentId)) continue;
+    seen.add(studentId);
+    ids.push(studentId);
+  }
+  return Object.freeze(ids);
+}
+
+// ---------------------------------------------------------------------------
+// The newly-eligible delta
+// ---------------------------------------------------------------------------
+
+/**
+ * The trainees who become NEWLY able to see a material, given the recipients
+ * resolved for its new audience and the recipients resolved for its previous
+ * audience: `newAudienceRecipientIds` MINUS `previousAudienceRecipientIds`.
+ *
+ * WHY IT SUBTRACTS THE WHOLE PREVIOUS SET, NOT JUST THE RETAINED OFFERINGS
+ * -----------------------------------------------------------------------
+ * Consider a save that removes one offering and adds another (previous
+ * {Level 1}, new {Level 2}) for a trainee enrolled in both. Under a
+ * "still-reachable-through-a-retained-offering" rule they would be notified,
+ * because the offering they had access through is gone - yet they could already
+ * see the material before the save and can still see it after. Subtracting
+ * everyone who was ALREADY a recipient is the smallest rule that is correct for
+ * every combination of additions and removals, and it needs no notification
+ * history - which matters, because notification history is not a usable ledger
+ * of past access here.
+ *
+ * It follows that a pure removal, a re-save of an identical audience, and an
+ * edit that touches no offering all yield an EMPTY result: nobody became newly
+ * eligible, so nobody is notified.
+ *
+ * Both lists are validated with the same fail-closed identifier discipline
+ * (`newAudienceRecipientIds` first, in parameter order). Order is first-seen
+ * order within the new list; the result is frozen and neither input is mutated.
+ */
+export function resolveNewlyEligibleMaterialNotificationRecipientIds(
+  newAudienceRecipientIds: readonly string[],
+  previousAudienceRecipientIds: readonly string[],
+): readonly string[] {
+  const next = usableRecipientIdList(newAudienceRecipientIds);
+  const previous = new Set<string>(usableRecipientIdList(previousAudienceRecipientIds));
+  const ids: string[] = [];
+  for (const studentId of next) {
+    if (previous.has(studentId)) continue;
+    ids.push(studentId);
+  }
+  return Object.freeze(ids);
 }
