@@ -3,7 +3,17 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { getSupabaseClient, COURSE_MATERIALS_BUCKET } from "@/lib/supabase";
-import { createMaterialAddedNotifications } from "@/lib/actions/notifications";
+// P-MATERIALS M3B-0 - the INTERNAL fan-out is called directly here, NOT through
+// the createMaterialAddedNotifications Server Action boundary in
+// lib/actions/notifications.ts. This route is invoked by fetch() and its client
+// parses response.json(), while that boundary's requireAdmin() redirects on
+// failure - and a redirect thrown here, AFTER the material has already
+// committed, would emit a 307 that re-POSTs to /login and turn a SUCCESSFUL save
+// into a misleading upload error. This route's own admin check below is the
+// equivalent gate (same auth session, same adminEmail.isActive lookup, JSON
+// 401/403 instead of a redirect) and it runs BEFORE any storage upload or
+// database write, so authorization still precedes every side effect.
+import { fanOutMaterialAddedNotifications } from "@/lib/course/capabilities/material-notification-fanout";
 // P-MATERIALS M2B - offering-scoped audience persistence, shared with the LINK
 // server action so both write paths authorize offerings and persist audiences
 // identically.
@@ -223,9 +233,9 @@ export async function POST(request: Request) {
 
   // Only a brand-new material notifies - replacing an existing file's content is
   // not "new material added". The trainee branch is suppressed in M2B (see
-  // createMaterialAddedNotifications); instructor notifications are unchanged.
+  // fanOutMaterialAddedNotifications); instructor notifications are unchanged.
   if (!existing) {
-    await createMaterialAddedNotifications({
+    await fanOutMaterialAddedNotifications({
       materialId: id,
       title,
       visibility: visibility as CourseMaterialVisibility,

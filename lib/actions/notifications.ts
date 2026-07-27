@@ -1,6 +1,8 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
+import { requireAdmin } from "@/lib/auth/require-admin";
+import { fanOutMaterialAddedNotifications } from "@/lib/course/capabilities/material-notification-fanout";
 import { getCurrentInstructor, getCurrentTrainee } from "@/lib/auth/actor";
 import { authorizeSelfActingClientId } from "@/lib/auth/self-actor-authorization";
 import {
@@ -231,46 +233,46 @@ export async function syncAttendanceMarkedNotification(params: {
   });
 }
 
-// Called from createLinkMaterial (lib/actions/materials.ts) and the file
-// upload route whenever a brand-new CourseMaterial row is created - never on
-// update/replace of an existing one. Fans recipients out at creation time
-// (one Notification row per currently-active student/instructor in scope),
-// mirroring how MessageTaskRecipient already materializes recipients for
-// MessageTask, so a later roster change never retroactively adds/removes
-// notifications for an already-added material.
+// P-MATERIALS M3B-0 - THE AUTHORIZATION BOUNDARY for material-added
+// notification fan-out.
+//
+// This module carries "use server", so this export is a PUBLICLY DISPATCHABLE
+// Server Action endpoint: reachable by a direct POST, not only through the
+// application's UI, and even though no Client Component imports it (verified
+// against the build's server-reference-manifest, where it is registered with its
+// own action id). Page-level /admin gating is therefore NOT its authorization
+// boundary - the proxy's session check is deliberately optimistic and does no
+// database lookup, so a REVOKED admin still holding a valid session token would
+// otherwise reach this fan-out and push attacker-chosen text to every active
+// instructor. Before M3B widens this path to trainees, the gate lands here.
+//
+// requireAdmin() is the canonical shared helper (no local session/cookie/role
+// check, no client-supplied admin identity, no inference from a name or role
+// string) and it FAILS CLOSED: an anonymous, expired or non-allow-listed caller
+// is redirected, never fanned out. It is the FIRST awaited operation, so an
+// unauthorized direct invocation performs ZERO Prisma reads and ZERO writes and
+// learns nothing about instructors, materials or notifications.
+//
+// The IO itself lives in lib/course/capabilities/material-notification-fanout.ts,
+// which holds NO "use server" directive and therefore mints no endpoint of its
+// own - architectural containment beside the explicit gate. This wrapper does no
+// Prisma work itself; it authorizes and delegates.
+//
+// NOTE ON THE OTHER CALLER: the admin FILE upload Route Handler
+// (app/api/admin/materials/upload/route.ts) deliberately calls the internal
+// fan-out DIRECTLY rather than passing through this wrapper. It is invoked by
+// fetch() and parses response.json(), and it already performs an equivalent
+// fail-closed admin check (auth + adminEmail.isActive -> JSON 401/403) BEFORE
+// any storage upload or database write. A redirect-throwing guard called there
+// AFTER the material has committed would emit a 307 that re-POSTs to /login,
+// turning a SUCCESSFUL save into a misleading client-side error. Authorization
+// still precedes every side effect on that path; it simply happens at the top of
+// the route instead of at the bottom of the write.
 export async function createMaterialAddedNotifications(params: {
   materialId: string;
   title: string;
   visibility: CourseMaterialVisibilityValue;
 }): Promise<void> {
-  const notificationTitle = "נוסף חומר קורס חדש";
-
-  // P-MATERIALS M2B - TRAINEE (STUDENT) MATERIAL_ADDED notifications are
-  // TEMPORARILY SUPPRESSED. The previous branch fanned this notification out to
-  // EVERY active student via a global Student.isActive query, so a material
-  // scoped (from M2B onward) to only some offerings still leaked its title (in
-  // `body`) to trainees who cannot see it - e.g. a Level-1 material notified
-  // Level-2-only trainees. The course-scoped trainee fanout is restored in M3
-  // via the already-built lib/course/capabilities/material-notification-recipient-core.ts
-  // (deliberately NOT deleted). Until then NO student notification is created.
-  // Instructor notifications below are unchanged.
-
-  if (params.visibility === "INSTRUCTORS" || params.visibility === "BOTH") {
-    const instructors = await prisma.instructor.findMany({
-      where: { isActive: true },
-      select: { id: true },
-    });
-    if (instructors.length > 0) {
-      await prisma.notification.createMany({
-        data: instructors.map((i) => ({
-          type: "MATERIAL_ADDED" as const,
-          recipientRole: "INSTRUCTOR" as const,
-          instructorId: i.id,
-          relatedId: params.materialId,
-          title: notificationTitle,
-          body: params.title,
-        })),
-      });
-    }
-  }
+  await requireAdmin();
+  await fanOutMaterialAddedNotifications(params);
 }

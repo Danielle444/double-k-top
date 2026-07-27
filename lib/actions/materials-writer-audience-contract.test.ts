@@ -11,6 +11,20 @@
  * outside the confinement walk in
  * prisma/m0-course-material-audience.contract.test.ts.
  *
+ * HISTORY - P-MATERIALS M3B-0 (auth-gate hardening) MOVED the MATERIAL_ADDED
+ * fan-out IO out of the "use server" module lib/actions/notifications.ts and into
+ * the internal, non-Server-Action module
+ * lib/course/capabilities/material-notification-fanout.ts, leaving
+ * createMaterialAddedNotifications as a thin requireAdmin()-guarded boundary. The
+ * three notification tripwires below (trainee suppression, instructor branch,
+ * and the upload route's call site) were MOVED WITH THE CODE they guard - not
+ * relaxed, not weakened, not deleted. Every assertion they made about the
+ * fan-out body still holds, byte for byte; only the file they read changed. The
+ * same-slice-update discipline is the one established by
+ * lib/course/capabilities/course-materials-capability.contract.test.ts. The NEW
+ * authorization invariants (guard order, no-IO-before-guard, containment) are
+ * pinned separately in lib/actions/material-notification-auth.contract.test.ts.
+ *
  * Uses the existing `tsx` + node:test approach. Run with:
  *   npx tsx --test lib/actions/materials-writer-audience-contract.test.ts
  */
@@ -26,6 +40,8 @@ function readSource(relative: string): string {
 const MATERIALS = readSource("./materials.ts");
 const NOTIFICATIONS = readSource("./notifications.ts");
 const ROUTE = readSource("../../app/api/admin/materials/upload/route.ts");
+// M3B-0 - the fan-out body now lives here (see HISTORY above).
+const FANOUT = readSource("../course/capabilities/material-notification-fanout.ts");
 
 /**
  * The source of one exported function, from its declaration up to the next
@@ -173,7 +189,9 @@ test("the old-file cleanup happens AFTER the successful commit, not before", () 
 test("the upload route still notifies only for a brand-new material", () => {
   assert.ok(ROUTE.includes("if (!existing) {"), "notification guarded to new materials");
   const guard = ROUTE.indexOf("if (!existing) {");
-  const notify = ROUTE.indexOf("createMaterialAddedNotifications", guard);
+  // M3B-0 - the route calls the INTERNAL fan-out directly (it is fetch()-invoked
+  // and must keep its JSON error contract); the new-material guard is unchanged.
+  const notify = ROUTE.indexOf("await fanOutMaterialAddedNotifications({", guard);
   assert.ok(notify > guard, "notification is inside the new-material branch");
 });
 
@@ -181,18 +199,22 @@ test("the upload route still notifies only for a brand-new material", () => {
 // Notification suppression
 // ===========================================================================
 
-test("createMaterialAddedNotifications suppresses the trainee branch", () => {
-  const body = functionSource(NOTIFICATIONS, "createMaterialAddedNotifications");
+test("the material fan-out suppresses the trainee branch", () => {
+  const body = functionSource(FANOUT, "fanOutMaterialAddedNotifications");
   assert.ok(!body.includes("prisma.student.findMany"), "no global student fanout remains");
   assert.ok(!body.includes('recipientRole: "STUDENT"'), "no STUDENT notification is created");
   assert.ok(
     /M2B[\s\S]*suppress/i.test(body),
     "an explicit comment must record that trainee notifications are temporarily suppressed",
   );
+  // The suppression must not have leaked back into the authorized boundary
+  // either - the wrapper creates no notification of any kind.
+  const wrapper = functionSource(NOTIFICATIONS, "createMaterialAddedNotifications");
+  assert.ok(!wrapper.includes('recipientRole: "STUDENT"'), "the boundary creates no STUDENT row");
 });
 
-test("createMaterialAddedNotifications preserves the instructor branch exactly", () => {
-  const body = functionSource(NOTIFICATIONS, "createMaterialAddedNotifications");
+test("the material fan-out preserves the instructor branch exactly", () => {
+  const body = functionSource(FANOUT, "fanOutMaterialAddedNotifications");
   assert.ok(body.includes('params.visibility === "INSTRUCTORS" || params.visibility === "BOTH"'));
   assert.ok(body.includes("prisma.instructor.findMany"), "instructor recipients still resolved");
   assert.ok(body.includes('recipientRole: "INSTRUCTOR"'), "instructor notifications still created");
