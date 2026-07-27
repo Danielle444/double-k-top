@@ -1,6 +1,6 @@
 /**
- * UNIFIED INSTRUCTOR SCHEDULE - SLICE IUS-2: SOURCE-CONTRACT tests for the
- * instructor schedule tab's two sub-views.
+ * UNIFIED INSTRUCTOR SCHEDULE - SLICE IUS-2 / IUS-2D: SOURCE-CONTRACT tests for
+ * the instructor schedule tab's two sub-views.
  *
  * These components transitively import "use server" modules (Prisma +
  * next/headers), so they cannot be imported into a plain `tsx --test` process.
@@ -9,13 +9,39 @@
  * app/student/unified-schedule-subview.contract.test.ts) to assert STRUCTURAL
  * properties a behavioural test cannot easily reach:
  *
- *  1. the unified view is a chronological STACKED list, never ScheduleTimeGrid;
+ *  1. the unified view renders through ScheduleTimeGrid, ONE grid per
+ *     (day, source CourseOffering), with the grouping delegated to a pure core;
  *  2. it reuses the EXISTING InstructorScheduleCard and shows source-course +
  *     overlap badges through the new extraBadges slot;
  *  3. it calls ONLY the unified readers, with no identity and no course id;
  *  4. the sub-view toggle is screen-local and stays OUT of InstructorClient;
  *  5. the existing per-course branch (selector + keyed week browser) is intact;
  *  6. no persistence, no context, no module-level mutable state anywhere.
+ *
+ * WHY (1) IS THE REVERSE OF WHAT THIS FILE ORIGINALLY ASSERTED
+ * -----------------------------------------------------------
+ * IUS-2 shipped the unified view as a flat stacked list and this file LOCKED
+ * that in ("never ScheduleTimeGrid", "one flat map", "never re-grouped"). The
+ * reasoning was that one grid cannot represent two offerings - which is true,
+ * and is precisely why those assertions are now obsolete rather than merely
+ * relaxed. The flat list also threw away two things the per-course view has
+ * always had and which the product direction requires: Level 1's simultaneous
+ * group א / group ב activities side by side (and its full-width "שתי הקבוצות"
+ * blocks), and the per-day header of a multi-day week. IUS-2C temporarily
+ * defaulted BOTH instructor schedule surfaces away from the unified view for
+ * exactly that reason.
+ *
+ * IUS-2D keeps the original safety property and drops only the layout
+ * consequence: the view now renders MANY grids, split by day and then by source
+ * offering, so NO grid ever receives more than one offering's items. That
+ * closes the real hazard the old assertions were protecting against - the grid
+ * and lib/schedule-grouping pair/span/coalesce with no offering awareness and
+ * keep only the first item's fields, so a mixed grid could fabricate one merged
+ * card carrying the wrong sourceCourseOfferingId / sourceCourseLabel /
+ * sourceCourseLevel / combinedParticipation / overlap metadata. The tests below
+ * therefore assert the SPLIT, not the absence of the grid. With the layout
+ * restored, both temporary IUS-2C defaults revert to "unified" (asserted here
+ * and in instructor-today-schedule-selector.contract.test.ts).
  *
  * Run with:
  *   npx tsx --test app/instructor/unified-instructor-schedule-subview.contract.test.ts
@@ -45,30 +71,105 @@ const SECTION = "app/instructor/InstructorScheduleSection.tsx";
 const CLIENT = "app/instructor/InstructorClient.tsx";
 const WEEK_BROWSER = "app/instructor/InstructorScheduleWeekBrowser.tsx";
 const TODAY_CARD = "app/instructor/InstructorTodayScheduleCard.tsx";
+const GROUPING_CORE = "lib/course/unified-instructor-day-grouping-core.ts";
 
 // ---------------------------------------------------------------------------
-// (13) Stacked list, never ScheduleTimeGrid.
+// IUS-2D (1) Real timetable layout: ScheduleTimeGrid, one grid per day/offering.
+// (Replaces the obsolete IUS-2 "never ScheduleTimeGrid / flat list" contract -
+// see this file's header for why it was reversed.)
 // ---------------------------------------------------------------------------
 
-test("the unified view never uses ScheduleTimeGrid", () => {
+test("the unified view renders through the EXISTING ScheduleTimeGrid", () => {
   const body = code(UNIFIED);
-  assert.equal(
-    /ScheduleTimeGrid/.test(body),
-    false,
-    "the grid's single-course group-א/group-ב column model cannot represent two offerings",
+  assert.match(
+    body,
+    /import \{ ScheduleTimeGrid \} from "@\/lib\/components\/ScheduleTimeGrid";/,
+    "Level 1 group א / group ב must lay out side by side, as in the per-course view",
   );
+  assert.match(body, /<ScheduleTimeGrid/);
+  // The grid itself is reused verbatim - the unified view never clones one.
+  assert.equal(/function .*TimeGrid|gridTemplateColumns/.test(body), false,
+    "the unified view must not reimplement the timetable grid");
 });
 
-test("the unified view renders a chronological stacked list", () => {
+test("the unified view delegates day/offering grouping to the PURE core", () => {
   const body = code(UNIFIED);
-  assert.match(body, /<div className="flex flex-col gap-3">/, "expected a stacked list container");
-  assert.match(body, /itemsState\.items\.map\(\(item\) =>/, "expected a flat map over the merged items");
+  assert.match(
+    body,
+    /import \{ groupUnifiedInstructorItemsByDayAndOffering \} from "@\/lib\/course\/unified-instructor-day-grouping-core";/,
+  );
+  assert.match(body, /groupUnifiedInstructorItemsByDayAndOffering\(itemsState\.items\)/);
+  // Ordering still belongs to the cores, never to this file.
+  assert.equal(/\.sort\(/.test(body), false,
+    "day/block order belongs to the grouping core, item order to the merge core");
 });
 
-test("the unified view never re-sorts or re-groups - the pure core already ordered the items", () => {
+test("the grouping core is pure - no React, no DB, no clock, no server action", () => {
+  const body = code(GROUPING_CORE);
+  assert.equal(/from "react"|useMemo|prisma|next\/headers|"use server"|"use client"/.test(body), false);
+  assert.equal(/new Date\(|Date\.now\(|Math\.random\(/.test(body), false);
+  assert.equal(/@\/lib\/actions\//.test(body), false, "a pure core must not import a server action");
+});
+
+test("exactly one grid is rendered per day/offering block", () => {
   const body = code(UNIFIED);
-  assert.equal(/\.sort\(/.test(body), false, "ordering belongs to mergeUnifiedInstructorScheduleSources");
-  assert.equal(/groupedByDay|new Map</.test(body), false, "the unified list must not regroup by day");
+  // days -> blocks -> exactly one grid, and nothing else maps into a grid.
+  assert.match(body, /\{days\.map\(\(day\) => \(/, "expected an outer per-day map");
+  assert.match(body, /\{day\.blocks\.map\(\(block\) => \(/, "expected an inner per-offering-block map");
+  assert.equal(body.match(/<ScheduleTimeGrid/g)?.length, 1,
+    "exactly one grid element exists, rendered once per block");
+  const blockMap = body.indexOf("{day.blocks.map((block) => (");
+  assert.ok(blockMap !== -1 && blockMap < body.indexOf("<ScheduleTimeGrid"),
+    "the grid must be rendered INSIDE the per-block map");
+});
+
+test("NO grid can receive items from more than one sourceCourseOfferingId", () => {
+  const body = code(UNIFIED);
+  // The only value ever handed to the grid is ONE block's items, and a block is
+  // single-offering by construction in the pure core (locked by its own tests).
+  assert.match(body, /<ScheduleTimeGrid\s*\n\s*items=\{block\.items\}/);
+  assert.equal(/items=\{itemsState\.items\}|items=\{day\./.test(body), false,
+    "a whole day's or a whole week's items must never reach a single grid");
+  const core = code(GROUPING_CORE);
+  assert.match(core, /byOffering/, "the core splits a day by sourceCourseOfferingId");
+  assert.match(core, /sourceCourseOfferingId: first\.sourceCourseOfferingId/);
+});
+
+test("cards inside the grid use compact mode", () => {
+  const body = code(UNIFIED);
+  assert.match(body, /renderCard=\{\(item\) => \(/);
+  assert.match(body, /<InstructorScheduleCard[\s\S]*?\n\s*compact\n/,
+    "grid cells are fixed-height - the card must render in compact mode");
+  assert.equal(/compact=\{false\}/.test(body), false, "the pre-IUS-2D non-compact card is gone");
+});
+
+test("the sticky per-day header is restored, with the same Today marker convention", () => {
+  const body = code(UNIFIED);
+  assert.match(
+    body,
+    /className="sticky top-0 z-10 rounded-lg bg-secondary px-3 py-2 text-base font-bold text-secondary-foreground"/,
+    "expected the per-course section's own sticky day-header classes",
+  );
+  assert.match(body, /\{day\.dayLabel\} · \{day\.dateLabel\}/);
+  assert.match(body, /day\.dateKey === todayMarkerKey && <span className="mr-2 text-sm font-normal">\(היום\)<\/span>/);
+  // The marker uses the shared local-day helper, never a value sent to a reader.
+  assert.match(body, /const todayMarkerKey = todayDateKey\(\);/);
+});
+
+test("the source-course sub-header is conditional on a day having MORE THAN ONE block", () => {
+  const body = code(UNIFIED);
+  assert.match(body, /\{day\.blocks\.length > 1 && \(/,
+    "a single-offering day must look like the per-course layout, with no extra heading");
+  const guard = body.indexOf("{day.blocks.length > 1 && (");
+  const label = body.indexOf("{block.sourceCourseLabel}");
+  assert.notEqual(label, -1, "expected the block's own course label in the sub-header");
+  assert.ok(guard < label, "the label must render inside the multi-block guard");
+});
+
+test("days and blocks are keyed so no card key can collide across offerings", () => {
+  const body = code(UNIFIED);
+  assert.match(body, /key=\{day\.dateKey\}/);
+  assert.match(body, /key=\{block\.sourceCourseOfferingId\}/);
 });
 
 // ---------------------------------------------------------------------------
@@ -106,10 +207,19 @@ test("the overlap badge is wired to the merge core's own overlap metadata", () =
   assert.ok(body.includes('חפיפה בלו&quot;ז'), "expected the Hebrew overlap badge text");
 });
 
-test("cards keep a stable, collision-free key across offerings", () => {
-  // Two offerings can legitimately contribute items; keying on the offering id
-  // plus the item id keeps React keys unique even in pathological data.
-  assert.match(code(UNIFIED), /key=\{`\$\{item\.sourceCourseOfferingId\}:\$\{item\.id\}`\}/);
+test("the Level 2 combined badge still reaches the card, per item, through courseLevel", () => {
+  const body = code(UNIFIED);
+  // IUS-3 - the item's OWN source offering level (never a per-view level): a
+  // merged list mixes Level 1 and Level 2 blocks and only the Level 2 ones may
+  // carry the "משולב" badge. The wording and the rule live in the shared card +
+  // its pure helper, never here.
+  assert.match(body, /courseLevel=\{item\.sourceCourseLevel\}/);
+  // (The view's own title contains "המשולב", so the label text itself cannot be
+  // asserted-absent here; the badge's data and its helper can.)
+  assert.equal(/instructorCombinedParticipationBadgeLabel|combinedParticipation/.test(body), false,
+    "the combined badge must come through InstructorScheduleCard, never be re-implemented here");
+  const section = code(SECTION);
+  assert.match(section, /instructorCombinedParticipationBadgeLabel\(\s*courseLevel,\s*item\.combinedParticipation,\s*\)/);
 });
 
 test("the per-course path still renders through the same card and is untouched", () => {
@@ -217,11 +327,10 @@ test("the weekly caller and the today caller each declare their mode", () => {
 
 test("the sub-view toggle lives in the schedule screen, not in InstructorClient", () => {
   const outer = code(OUTER);
-  // IUS-2C - the default is TEMPORARILY "byCourse" while the unified view does
-  // not yet preserve the Level 1 parallel-group layout. The unified sub-view
-  // itself is unchanged and still reachable via the toggle (asserted below);
-  // only the initial value moved. Flip this back to "unified" with the layout fix.
-  assert.match(outer, /const \[subView, setSubView\] = useState<ScheduleSubView>\("byCourse"\)/);
+  // IUS-2D - the default is back to "unified": the Level 1 parallel-group
+  // layout and the per-day headers are restored, so the temporary IUS-2C
+  // "byCourse" fallback no longer has a reason to exist.
+  assert.match(outer, /const \[subView, setSubView\] = useState<ScheduleSubView>\("unified"\)/);
   assert.ok(outer.includes('הלו&quot;ז המשולב שלי'), "expected the unified toggle label");
   assert.ok(outer.includes("לפי קורס"), "expected the per-course toggle label");
 

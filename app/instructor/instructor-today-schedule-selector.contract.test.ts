@@ -66,11 +66,11 @@ test("the Today card adds the unified destination", () => {
   const body = code(TODAY_CARD);
   assert.ok(body.includes('הלו&quot;ז המשולב שלי'), "expected the unified option label");
   assert.ok(body.includes("לפי קורס"), "expected the per-course option label");
-  // IUS-2C - the default is TEMPORARILY "byCourse" while the unified view does
-  // not yet preserve the Level 1 parallel-group layout. The unified option
-  // itself is unchanged and still offered (asserted by the labels above); only
-  // the initial value moved. Flip this back to "unified" with the layout fix.
-  assert.match(body, /const \[todayMode, setTodayMode\] = useState<TodayScheduleMode>\("byCourse"\)/);
+  // IUS-2D - the default is back to "unified": the unified view now renders one
+  // ScheduleTimeGrid per (day, source offering), so the Level 1 parallel-group
+  // layout and the per-day headers are restored and the temporary IUS-2C
+  // "byCourse" fallback no longer has a reason to exist.
+  assert.match(body, /const \[todayMode, setTodayMode\] = useState<TodayScheduleMode>\("unified"\)/);
 });
 
 // ---------------------------------------------------------------------------

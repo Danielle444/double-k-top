@@ -18,15 +18,29 @@
  * course's whole timetable.)
  *
  * Calls ONLY the unified readers - no course offering id, no instructor id, no
- * filter, no eligibility flag. Renders every already-authorized item they
- * return as a plain chronological STACKED list, deliberately NEVER
- * ScheduleTimeGrid: that grid lays items out in fixed group-א / group-ב columns
- * for ONE course, a model that cannot represent two offerings side-by-side (and
- * whose contiguous-same-title coalescing would merge items across offerings).
- * Every item's time/title/location/note/instructor/riding-click-through/
- * compact-details-modal behaviour - and its Level 2 "משולב" badge - is reused
- * verbatim from the EXISTING InstructorScheduleCard; no card, no server logic
- * and no filtering is duplicated here.
+ * filter, no eligibility flag. Every item's time/title/location/note/instructor/
+ * riding-click-through/compact-details-modal behaviour - and its Level 2 "משולב"
+ * badge - is reused verbatim from the EXISTING InstructorScheduleCard; no card,
+ * no server logic and no filtering is duplicated here.
+ *
+ * IUS-2D - REAL TIMETABLE LAYOUT, ONE GRID PER OFFERING. The first cut rendered
+ * a flat stacked list, which lost two things the per-course view has always had:
+ * Level 1's simultaneous group א / group ב activities SIDE BY SIDE (plus its
+ * full-width "שתי הקבוצות" blocks), and the per-day header on a multi-day week.
+ * Both are restored by rendering through the EXISTING, untouched
+ * ScheduleTimeGrid - but strictly ONE GRID PER (day, source CourseOffering):
+ *
+ *   the grid and lib/schedule-grouping beneath it pair/span/coalesce purely by
+ *   groupName + cleaned title + adjacent times, with NO offering awareness, and
+ *   their merge helpers keep only the FIRST item's fields. A grid fed two
+ *   offerings could therefore fabricate one merged card carrying the wrong
+ *   sourceCourseOfferingId / sourceCourseLabel / sourceCourseLevel /
+ *   combinedParticipation / overlap metadata.
+ *
+ * The day/offering split is decided by the PURE core
+ * (groupUnifiedInstructorItemsByDayAndOffering), which also owns the deterministic
+ * day and block order; this file only renders it. Item order inside a block is
+ * still the merge core's - nothing is re-sorted here.
  *
  * ALL STATE IS COMPONENT-LOCAL. No localStorage, no cookie, no React context,
  * no module-level mutable variable, and nothing is persisted or restored across
@@ -35,7 +49,8 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { WeekDayPicker } from "@/lib/components/WeekDayPicker";
-import { getDefaultDayFilter, getLocalDateKey } from "@/lib/dates";
+import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
+import { getDefaultDayFilter, getLocalDateKey, todayDateKey } from "@/lib/dates";
 import type { WeeklyRidingActivity } from "@/lib/actions/riding-slots";
 import {
   getUnifiedInstructorWeekOptions,
@@ -45,6 +60,7 @@ import { getUnifiedScheduleForInstructor } from "@/lib/actions/unified-instructo
 import { getUnifiedTodayScheduleForInstructor } from "@/lib/actions/unified-instructor-today-schedule";
 import type { InstructorScheduleItem } from "@/lib/actions/instructor-schedule-course-scoped";
 import type { UnifiedInstructorScheduleItemView } from "@/lib/course/unified-instructor-schedule-core";
+import { groupUnifiedInstructorItemsByDayAndOffering } from "@/lib/course/unified-instructor-day-grouping-core";
 import { resolveActivityForScheduleCardId } from "@/app/instructor/instructor-riding-schedule-map-core";
 import { InstructorScheduleCard, isItemActiveNow } from "./InstructorScheduleSection";
 
@@ -188,6 +204,23 @@ export function UnifiedInstructorScheduleSection({
     [weeks],
   );
 
+  // IUS-2D - the day -> source-offering split, decided entirely by the pure core.
+  // Memoised so a grid's own layout memo keeps a stable `items` identity across
+  // the every-60s `now` tick; the per-block copy exists only because
+  // ScheduleTimeGrid's prop is a mutable T[] while the core (correctly) returns
+  // frozen arrays - the grid itself is untouched by this slice.
+  const days = useMemo(() => {
+    if (itemsState.status !== "loaded") return [];
+    return groupUnifiedInstructorItemsByDayAndOffering(itemsState.items).map((day) => ({
+      ...day,
+      blocks: day.blocks.map((block) => ({ ...block, items: [...block.items] })),
+    }));
+  }, [itemsState]);
+
+  // Same "(היום)" convention as the per-course section: the LOCAL day key, used
+  // for a marker only - it is never sent to a reader and never filters anything.
+  const todayMarkerKey = todayDateKey();
+
   const itemsPanel = (
     <div className="rounded-2xl border border-border bg-card p-5">
       <h2 className="mb-4 text-xl font-bold text-card-foreground">
@@ -203,45 +236,76 @@ export function UnifiedInstructorScheduleSection({
       ) : itemsState.items.length === 0 ? (
         <p className="text-base text-muted-foreground">אין פריטים להצגה</p>
       ) : (
-        // Chronological STACKED list only - never ScheduleTimeGrid, and never
-        // re-grouped or re-sorted here: the pure core
-        // (mergeUnifiedInstructorScheduleSources) already returns items in one
-        // global chronological order across both offerings.
-        <div className="flex flex-col gap-3">
-          {itemsState.items.map((item) => (
-            <InstructorScheduleCard
-              key={`${item.sourceCourseOfferingId}:${item.id}`}
-              item={item}
-              active={isItemActiveNow(item, now)}
-              compact={false}
-              ridingActivity={resolveActivityForScheduleCardId(resolveRidingActivity, item.id)}
-              onOpenRidingActivity={onOpenRidingActivity}
-              // IUS-3 - this item's OWN source offering level, tagged by the
-              // merge core. Per item, not per view: a merged list mixes Level 1
-              // and Level 2 blocks, and only the Level 2 ones may carry the
-              // "משולב" badge. The shared card renders it; this view never
-              // duplicates the wording or the rule.
-              courseLevel={item.sourceCourseLevel}
-              extraBadges={
-                <>
-                  {/* Always-visible source-course badge - the whole point of
-                      the merged list is knowing which course an item came
-                      from, so it is never hidden behind the compact-details
-                      dialog. */}
-                  <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground">
-                    {item.sourceCourseLabel}
-                  </span>
-                  {/* Minimal cross-offering overlap indicator: a visible badge
-                      only, never conflict resolution and never a link to the
-                      other course. */}
-                  {item.overlappingSourceCourseOfferingIds.length > 0 && (
-                    <span className="rounded-full bg-warning-muted px-2 py-0.5 text-xs font-medium text-warning">
-                      חפיפה בלו&quot;ז
-                    </span>
+        <div className="flex flex-col gap-5">
+          {days.map((day) => (
+            <div key={day.dateKey} className="flex flex-col gap-2">
+              {/* The same sticky day header the per-course section renders -
+                  restored here so a multi-day week is divided by day again. */}
+              <div className="sticky top-0 z-10 rounded-lg bg-secondary px-3 py-2 text-base font-bold text-secondary-foreground">
+                {day.dayLabel} · {day.dateLabel}
+                {day.dateKey === todayMarkerKey && <span className="mr-2 text-sm font-normal">(היום)</span>}
+              </div>
+              {day.blocks.map((block) => (
+                <div key={block.sourceCourseOfferingId} className="flex flex-col gap-1.5">
+                  {/* Only when this day genuinely has more than one contributing
+                      course: with a single block the source is already on every
+                      card's badge, and an extra heading would make the merged
+                      view look unlike the per-course one for no gain. */}
+                  {day.blocks.length > 1 && (
+                    <p className="text-sm font-semibold text-muted-foreground">
+                      {block.sourceCourseLabel}
+                    </p>
                   )}
-                </>
-              }
-            />
+                  {/* ONE offering per grid - see this file's header. Level 1
+                      group א / group ב therefore lay out side by side exactly as
+                      in the per-course view, and no card can ever be merged
+                      across courses. */}
+                  <ScheduleTimeGrid
+                    items={block.items}
+                    renderCard={(item) => (
+                      <InstructorScheduleCard
+                        item={item}
+                        active={isItemActiveNow(item, now)}
+                        compact
+                        // item.id may be a "+"-joined composite of atomic
+                        // ScheduleItem ids (merged/coalesced cards); the activity
+                        // map is keyed by atomic ids, so resolve through the
+                        // composite-aware helper rather than looking the
+                        // composite up directly.
+                        ridingActivity={resolveActivityForScheduleCardId(resolveRidingActivity, item.id)}
+                        onOpenRidingActivity={onOpenRidingActivity}
+                        // IUS-3 - this item's OWN source offering level, tagged
+                        // by the merge core. Per item, not per view: a merged
+                        // list mixes Level 1 and Level 2 blocks, and only the
+                        // Level 2 ones may carry the "משולב" badge. The shared
+                        // card renders it; this view never duplicates the
+                        // wording or the rule.
+                        courseLevel={item.sourceCourseLevel}
+                        extraBadges={
+                          <>
+                            {/* Always-visible source-course badge - the whole
+                                point of the merged list is knowing which course
+                                an item came from, so it is never hidden behind
+                                the compact-details dialog. */}
+                            <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground">
+                              {item.sourceCourseLabel}
+                            </span>
+                            {/* Minimal cross-offering overlap indicator: a
+                                visible badge only, never conflict resolution and
+                                never a link to the other course. */}
+                            {item.overlappingSourceCourseOfferingIds.length > 0 && (
+                              <span className="rounded-full bg-warning-muted px-2 py-0.5 text-xs font-medium text-warning">
+                                חפיפה בלו&quot;ז
+                              </span>
+                            )}
+                          </>
+                        }
+                      />
+                    )}
+                  />
+                </div>
+              ))}
+            </div>
           ))}
         </div>
       )}
