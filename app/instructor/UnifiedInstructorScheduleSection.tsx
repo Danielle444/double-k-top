@@ -231,6 +231,12 @@ export function UnifiedInstructorScheduleSection({
                     compact={false}
                     ridingActivity={resolveActivityForScheduleCardId(resolveRidingActivity, item.id)}
                     onOpenRidingActivity={onOpenRidingActivity}
+                    // IUS-3 - this item's OWN source offering level, tagged by
+                    // the merge core. Per item, not per view: a merged list
+                    // mixes Level 1 and Level 2 blocks, and only the Level 2
+                    // ones may carry the "משולב" badge. The shared card renders
+                    // it; this view never duplicates the wording or the rule.
+                    courseLevel={item.sourceCourseLevel}
                     extraBadges={
                       <>
                         {/* Always-visible source-course badge - the whole point

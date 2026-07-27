@@ -14,6 +14,7 @@ import { cleanScheduleTitle } from "@/lib/schedule-title";
 import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { resolveActivityForScheduleCardId } from "@/app/instructor/instructor-riding-schedule-map-core";
+import { instructorCombinedParticipationBadgeLabel } from "@/lib/course/instructor-combined-participation-badge-core";
 import { Modal } from "@/lib/components/Modal";
 
 // IUS-2 - exported so the unified sub-view reuses the SAME "מתקיים עכשיו" rule
@@ -60,6 +61,12 @@ export function InstructorScheduleCard({
   // before. Presentation only: this never changes what the card reads, gates or
   // opens.
   extraBadges,
+  // IUS-3 - the SERVER-RESOLVED CourseOffering.level of the offering this item
+  // was read from: result.courseLevel for the per-course view,
+  // item.sourceCourseLevel for a unified item. Used ONLY to decide whether the
+  // Level 2 "משולב" badge renders. Never inferred here from a course name,
+  // title, week or date, and never used to filter, hide or reorder anything.
+  courseLevel,
 }: {
   item: InstructorScheduleItem;
   active: boolean;
@@ -67,6 +74,7 @@ export function InstructorScheduleCard({
   ridingActivity: WeeklyRidingActivity | null;
   onOpenRidingActivity: ((activity: WeeklyRidingActivity) => void) | undefined;
   extraBadges?: ReactNode;
+  courseLevel: number;
 }) {
   const [showDetails, setShowDetails] = useState(false);
 
@@ -75,9 +83,20 @@ export function InstructorScheduleCard({
 
   const location = item.location;
   const note = item.description?.trim() || null;
+  // IUS-3 - null for every Level 1 block and for an unstated tri-state, so the
+  // badge and the modal line below simply do not render. Display-only: this
+  // value never filters, hides or reorders an item.
+  const combinedLabel = instructorCombinedParticipationBadgeLabel(
+    courseLevel,
+    item.combinedParticipation,
+  );
   // Deterministic rule (no DOM/height measurement): the info control appears
   // exactly when at least one secondary detail exists beyond time/title/badges.
-  const hasSecondaryDetails = Boolean(location) || Boolean(note) || Boolean(item.instructorName);
+  // combinedLabel participates so a compact Level 2 card whose ONLY extra fact
+  // is the combined flag still exposes the dialog rather than silently dropping
+  // it in a short, fixed-height grid cell.
+  const hasSecondaryDetails =
+    Boolean(location) || Boolean(note) || Boolean(item.instructorName) || Boolean(combinedLabel);
 
   // Built once, rendered verbatim either inline (a hypothetical non-compact
   // caller - none exists today, every current call site passes compact=true)
@@ -94,6 +113,11 @@ export function InstructorScheduleCard({
       )}
       {item.instructorName && (
         <p className="mt-1 text-sm text-muted-foreground">מדריך/ה: {item.instructorName}</p>
+      )}
+      {/* IUS-3 - the same label as the header pill, repeated here so a compact
+          card that pushed its badges out of view still states it explicitly. */}
+      {combinedLabel && (
+        <p className="mt-1 text-sm text-muted-foreground">משולב: {combinedLabel}</p>
       )}
     </>
   );
@@ -139,6 +163,19 @@ export function InstructorScheduleCard({
           >
             {item.groupName ? `קבוצה ${item.groupName}` : "שתי הקבוצות"}
           </span>
+          {/* IUS-3 - Level 2 combined-participation indication. Display-only,
+              rendered only when the pure helper returned a label (Level 1 and
+              an unstated tri-state both yield null -> no element at all). It
+              hides no item and changes no stored value. */}
+          {combinedLabel && (
+            <span
+              className={`rounded-full bg-secondary text-secondary-foreground ${
+                compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm"
+              }`}
+            >
+              {combinedLabel}
+            </span>
+          )}
           {extraBadges}
         </div>
       </div>
@@ -357,6 +394,10 @@ export function InstructorScheduleSection({
                     // rather than looking the composite up directly.
                     ridingActivity={resolveActivityForScheduleCardId(resolveRidingActivity, item.id)}
                     onOpenRidingActivity={onOpenRidingActivity}
+                    // The SERVER-RESOLVED level of the offering this whole
+                    // result was read from (0 on any denial, which fails closed
+                    // to no badge).
+                    courseLevel={result.courseLevel}
                   />
                 )}
               />
