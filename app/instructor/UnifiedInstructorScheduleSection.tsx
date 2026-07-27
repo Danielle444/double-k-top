@@ -75,6 +75,25 @@ const UNIFIED_SCHEDULE_LOAD_ERROR_MESSAGE = "לא ניתן לטעון כרגע �
 // are addressable - an expected access outcome, distinct from an error.
 const UNIFIED_SCHEDULE_DENIED_MESSAGE = "הלו״ז המשולב אינו זמין עבורך כרגע";
 
+// IUS-2F - long-gap compression, enabled ONLY here. A mine-only merged list is
+// the one schedule surface where two of the same instructor's own assignments
+// are routinely hours apart, and rendering that emptiness fully proportionally
+// (44px per 15 minutes on mobile) pushes the afternoon off the screen. Anything
+// over an hour collapses to a two-row labelled band; up to and including an
+// hour stays fully proportional. The surrounding cards keep their real times,
+// and the band names the real range it stands for, so nothing ever reads as
+// "these are back to back". Module-level so the object identity is stable
+// across the every-60s `now` tick and the grid's layout memo holds.
+//
+// Deliberately NOT passed by the per-course instructor view, the trainee view
+// or the admin editors: those show a whole course's timetable, where an empty
+// stretch is real shared information rather than one person's idle time.
+const UNIFIED_COMPACT_LONG_GAPS = {
+  thresholdMinutes: 60,
+  compressedSlotCount: 2,
+  label: "הפסקה בלו״ז שלי",
+} as const;
+
 type WeeksState =
   | { status: "loading" }
   | { status: "denied" }
@@ -262,6 +281,9 @@ export function UnifiedInstructorScheduleSection({
                       across courses. */}
                   <ScheduleTimeGrid
                     items={block.items}
+                    // IUS-2F - both modes render through this one grid element,
+                    // so weekly and Today compress identically by construction.
+                    compactLongGaps={UNIFIED_COMPACT_LONG_GAPS}
                     renderCard={(item) => (
                       <InstructorScheduleCard
                         item={item}

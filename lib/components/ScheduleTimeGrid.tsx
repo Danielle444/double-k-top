@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, type ReactNode } from "react";
-import { buildTimeGridLayout } from "@/lib/schedule-timegrid";
+import { buildTimeGridLayout, formatTimeGridGapDurationLabel } from "@/lib/schedule-timegrid";
 import type { GroupableScheduleItem } from "@/lib/schedule-grouping";
 
 // Layout-only: renders a day's schedule items as a real timetable - fixed
@@ -14,18 +14,42 @@ import type { GroupableScheduleItem } from "@/lib/schedule-grouping";
 // to the caller via renderCard, so each role (student/instructor/admin)
 // keeps full control of title shortening, instructor-name visibility,
 // "active now" styling, etc.
+//
+// IUS-2F - OPTIONAL long-gap compression. compactLongGaps is undefined by
+// default, and while it is undefined this component behaves exactly as before:
+// no caller is required to pass it, and every existing caller (per-course
+// instructor, trainee, admin) deliberately does not. Only the unified mine-only
+// instructor schedule opts in, because only there is a very tall empty stretch
+// between two of the SAME instructor's own assignments the normal case.
 export function ScheduleTimeGrid<T extends GroupableScheduleItem>({
   items,
   renderCard,
   slotMinutes = 15,
+  compactLongGaps,
 }: {
   items: T[];
   renderCard: (item: T) => ReactNode;
   slotMinutes?: number;
+  compactLongGaps?: {
+    readonly thresholdMinutes: number;
+    readonly compressedSlotCount: number;
+    readonly label: string;
+  };
 }) {
-  const { totalSlots, positions } = useMemo(
-    () => buildTimeGridLayout(items, slotMinutes),
-    [items, slotMinutes]
+  // Read as primitives so a caller passing a fresh object literal every render
+  // cannot defeat the layout memo.
+  const thresholdMinutes = compactLongGaps?.thresholdMinutes;
+  const compressedSlotCount = compactLongGaps?.compressedSlotCount;
+  const { totalSlots, positions, compressedGaps } = useMemo(
+    () =>
+      buildTimeGridLayout(items, {
+        slotMinutes,
+        compactLongGaps:
+          thresholdMinutes !== undefined && compressedSlotCount !== undefined
+            ? { thresholdMinutes, compressedSlotCount }
+            : undefined,
+      }),
+    [items, slotMinutes, thresholdMinutes, compressedSlotCount]
   );
 
   if (positions.length === 0) return null;
@@ -47,6 +71,39 @@ export function ScheduleTimeGrid<T extends GroupableScheduleItem>({
         gridTemplateRows: `repeat(${totalSlots}, var(--slot-px))`,
       }}
     >
+      {/* Compressed-gap bands. Rendered from their OWN list, never from
+          positions - a gap is not an item, gets no card, and carries no
+          title/location/instructor/course. Purely informational: no onClick,
+          no key handler, no button role, no hover affordance and no dialog. */}
+      {compactLongGaps &&
+        compressedGaps.map((gap) => (
+          <div
+            key={gap.id}
+            className="flex h-full flex-col overflow-hidden p-0.5"
+            style={{
+              gridColumn: "1 / span 2",
+              gridRow: `${gap.startSlotIndex + 1} / span ${gap.rowSpan}`,
+            }}
+          >
+            <div
+              // aria-label replaces the inner text for assistive tech, so it
+              // repeats the label AND states the real range and duration the
+              // band stands for - the compressed height must never read as
+              // "these two activities are adjacent".
+              role="note"
+              aria-label={`${compactLongGaps.label}, ${gap.realStartTime} עד ${gap.realEndTime}, ${formatTimeGridGapDurationLabel(gap.realDurationMinutes)}`}
+              className="flex min-h-0 flex-1 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-lg border border-dashed border-border bg-muted px-2 text-center"
+            >
+              {/* Dashed border + explicit wording, not colour alone. */}
+              <span className="text-xs font-semibold text-muted-foreground">
+                {compactLongGaps.label}
+              </span>
+              <span className="text-xs text-muted-foreground" dir="ltr">
+                {gap.realStartTime}–{gap.realEndTime}
+              </span>
+            </div>
+          </div>
+        ))}
       {positions.map(({ items: cellItems, column, startSlotIndex, rowSpan }) => {
         const key = cellItems.map((i) => i.id).join("+");
         return (

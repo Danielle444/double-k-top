@@ -22,20 +22,195 @@ export interface TimeGridPosition<T> {
   rowSpan: number;
 }
 
+// IUS-2F - one long, entirely empty stretch BETWEEN two occupied stretches,
+// rendered as a short fixed-height band instead of its full proportional
+// height. NOT a schedule item and deliberately not shaped like one: it carries
+// no title/location/instructor/course and can never be fed back into the item
+// pipeline. It keeps the REAL clock times and the REAL duration it stands for,
+// so the renderer can say exactly what was compressed away.
+export interface TimeGridCompressedGap {
+  // Derived from the real clock times it replaces, so the same day always
+  // yields the same key regardless of input ordering.
+  readonly id: string;
+  readonly realStartTime: string;
+  readonly realEndTime: string;
+  readonly realDurationMinutes: number;
+  // Coordinates on the COMPRESSED axis - i.e. where the band itself sits.
+  readonly startSlotIndex: number;
+  readonly rowSpan: number;
+}
+
+export interface CompactLongGapsConfig {
+  // A gap is compressed only when its real duration is STRICTLY greater than
+  // this (so an exactly-threshold gap stays fully proportional).
+  readonly thresholdMinutes: number;
+  // Fixed height, in normal slot rows, that a compressed gap collapses to.
+  readonly compressedSlotCount: number;
+}
+
+export interface BuildTimeGridLayoutOptions {
+  readonly slotMinutes?: number;
+  // Absent (the default) = the pre-IUS-2F behaviour, byte for byte: every gap
+  // stays fully proportional and compressedGaps comes back empty.
+  readonly compactLongGaps?: CompactLongGapsConfig;
+}
+
 export interface TimeGridLayout<T> {
   totalSlots: number;
   slotMinutes: number;
   // Minutes since midnight for this day's own earliest item - lets the
   // renderer compute real clock-time labels for the time column, aligned to
-  // the same rows the items are placed in.
+  // the same rows the items are placed in. NOTE: row index -> clock time is a
+  // linear mapping ONLY while compressedGaps is empty; once a gap is
+  // compressed the axis is deliberately non-linear and each item's own
+  // startTime/endTime strings remain the authoritative times.
   dayStartMinutes: number;
   positions: TimeGridPosition<T>[];
+  // Always present; empty unless compactLongGaps was passed AND a qualifying
+  // gap was found. Returned SEPARATELY from positions - a gap is never a
+  // synthetic item.
+  compressedGaps: TimeGridCompressedGap[];
 }
 
 function timeToMinutes(t: string): number {
   const m = t.match(/^(\d{1,2}):(\d{2})/);
   if (!m) return 0;
   return Number(m[1]) * 60 + Number(m[2]);
+}
+
+// Ignores a nonsensical config rather than throwing, matching this module's
+// existing tolerance (timeToMinutes returns 0 for an unparseable time,
+// rowSpan/totalSlots clamp with Math.max) - a bad config degrades to the
+// unchanged proportional layout, never to a crashed schedule screen.
+function normalizeCompactLongGaps(
+  config: CompactLongGapsConfig | undefined
+): CompactLongGapsConfig | null {
+  if (!config) return null;
+  const { thresholdMinutes, compressedSlotCount } = config;
+  if (!Number.isFinite(thresholdMinutes) || thresholdMinutes <= 0) return null;
+  if (!Number.isFinite(compressedSlotCount) || compressedSlotCount <= 0) return null;
+  return { thresholdMinutes, compressedSlotCount: Math.max(1, Math.round(compressedSlotCount)) };
+}
+
+interface RealGap {
+  readonly startSlot: number;
+  readonly endSlot: number;
+  readonly gap: TimeGridCompressedGap;
+}
+
+// Finds every empty stretch that may be compressed. A stretch qualifies only
+// when ALL of these hold:
+//   - every one of its rows is empty in BOTH group columns (a "both"/shared
+//     item occupies the row exactly as a single-column item does, and group א
+//     being busy while group ב is idle means the row is OCCUPIED);
+//   - it has at least one occupied row before it AND at least one after it, so
+//     leading/trailing empty time is out of scope (the day axis already trims
+//     those away) and only genuinely internal gaps are considered;
+//   - its real duration exceeds thresholdMinutes;
+//   - it is actually taller than the compressed band, so compressing can only
+//     ever shrink the grid, never grow it.
+// Times come from the surrounding items' OWN HH:mm strings - the endTime of
+// the last item before the gap and the startTime of the first item after it -
+// so nothing is reformatted, invented or timezone-converted.
+function findCompressibleGaps<T extends GroupableScheduleItem>(
+  raw: RawPosition<T>[],
+  totalSlots: number,
+  config: CompactLongGapsConfig
+): RealGap[] {
+  const occupied = new Array<boolean>(totalSlots).fill(false);
+  for (const p of raw) {
+    const from = Math.max(0, p.startSlotIndex);
+    const to = Math.min(totalSlots, p.startSlotIndex + p.rowSpan);
+    for (let i = from; i < to; i++) occupied[i] = true;
+  }
+
+  const gaps: RealGap[] = [];
+  let i = 0;
+  while (i < totalSlots) {
+    if (occupied[i]) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < totalSlots && !occupied[j]) j++;
+
+    // i > 0 => occupied[i - 1]; j < totalSlots => occupied[j]. Anything else is
+    // leading or trailing empty time and is never compressed.
+    const internal = i > 0 && j < totalSlots;
+    if (internal) {
+      let realStartTime: string | null = null;
+      let realEndTime: string | null = null;
+      for (const p of raw) {
+        if (p.startSlotIndex + p.rowSpan === i) {
+          if (realStartTime === null || timeToMinutes(p.item.endTime) > timeToMinutes(realStartTime)) {
+            realStartTime = p.item.endTime;
+          }
+        }
+        if (p.startSlotIndex === j) {
+          if (realEndTime === null || timeToMinutes(p.item.startTime) < timeToMinutes(realEndTime)) {
+            realEndTime = p.item.startTime;
+          }
+        }
+      }
+
+      if (realStartTime !== null && realEndTime !== null) {
+        const realDurationMinutes = timeToMinutes(realEndTime) - timeToMinutes(realStartTime);
+        if (realDurationMinutes > config.thresholdMinutes && j - i > config.compressedSlotCount) {
+          gaps.push({
+            startSlot: i,
+            endSlot: j,
+            gap: {
+              id: `gap-${realStartTime}-${realEndTime}`,
+              realStartTime,
+              realEndTime,
+              realDurationMinutes,
+              // Rewritten onto the compressed axis below.
+              startSlotIndex: i,
+              rowSpan: config.compressedSlotCount,
+            },
+          });
+        }
+      }
+    }
+    i = j;
+  }
+
+  return gaps;
+}
+
+// Builds the real-row -> compressed-row boundary table. Every normal row keeps
+// height 1; a compressed gap's whole run collapses onto its first row with
+// height compressedSlotCount and its remaining rows to height 0. Because a gap
+// is empty by definition, no item's own [start, start + span) range ever
+// straddles a collapsed row, so every item's rowSpan survives unchanged and
+// everything after a gap simply shifts up by (runLength - compressedSlotCount).
+function buildCompressedBoundaries(
+  totalSlots: number,
+  gaps: RealGap[],
+  compressedSlotCount: number
+): number[] {
+  const sizes = new Array<number>(totalSlots).fill(1);
+  for (const g of gaps) {
+    for (let i = g.startSlot; i < g.endSlot; i++) sizes[i] = 0;
+    sizes[g.startSlot] = compressedSlotCount;
+  }
+  const boundary = new Array<number>(totalSlots + 1);
+  boundary[0] = 0;
+  for (let i = 0; i < totalSlots; i++) boundary[i + 1] = boundary[i] + sizes[i];
+  return boundary;
+}
+
+// Hebrew, accessible-text only: "6 שעות", "שעה וחצי"-style precision is not
+// attempted - just hours and/or minutes, so a screen reader states the real
+// span the compressed band stands for.
+export function formatTimeGridGapDurationLabel(minutes: number): string {
+  const total = Math.max(0, Math.round(minutes));
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  const minutesText = rest === 1 ? "דקה אחת" : `${rest} דקות`;
+  if (hours === 0) return minutesText;
+  const hoursText = hours === 1 ? "שעה אחת" : hours === 2 ? "שעתיים" : `${hours} שעות`;
+  return rest === 0 ? hoursText : `${hoursText} ו-${minutesText}`;
 }
 
 interface RawPosition<T> {
@@ -100,12 +275,26 @@ function groupOverlappingByColumn<T>(raw: RawPosition<T>[]): TimeGridPosition<T>
 //      axis, split into slotMinutes-sized rows.
 //   4. Detect any remaining same-column time overlap (a data-quality edge
 //      case) and merge those cells into one shared, stacked cell.
+//   5. IUS-2F, OPT-IN ONLY: when options.compactLongGaps is passed, collapse
+//      each long entirely-empty internal stretch to a fixed short band and
+//      shift everything after it up. Off by default - with no config the
+//      output is identical to the pre-IUS-2F layout.
+//
+// The second argument accepts either a plain slotMinutes number (the original
+// call shape, kept working verbatim) or the options object.
 export function buildTimeGridLayout<T extends GroupableScheduleItem>(
   rawItems: T[],
-  slotMinutes = 15
+  optionsOrSlotMinutes: number | BuildTimeGridLayoutOptions = 15
 ): TimeGridLayout<T> {
+  const options: BuildTimeGridLayoutOptions =
+    typeof optionsOrSlotMinutes === "number"
+      ? { slotMinutes: optionsOrSlotMinutes }
+      : optionsOrSlotMinutes;
+  const slotMinutes = options.slotMinutes ?? 15;
+  const compact = normalizeCompactLongGaps(options.compactLongGaps);
+
   if (rawItems.length === 0) {
-    return { totalSlots: 0, slotMinutes, dayStartMinutes: 0, positions: [] };
+    return { totalSlots: 0, slotMinutes, dayStartMinutes: 0, positions: [], compressedGaps: [] };
   }
 
   const coalesced = coalesceAdjacentSameActivity(rawItems);
@@ -155,10 +344,40 @@ export function buildTimeGridLayout<T extends GroupableScheduleItem>(
     };
   });
 
+  const positions = groupOverlappingByColumn(rawPositions);
+
+  // Occupancy is read off the RAW positions, i.e. the exact rows the renderer
+  // will fill: groupOverlappingByColumn only fuses cells that already overlap,
+  // so it can never open a hole the raw ranges did not have.
+  const realGaps = compact ? findCompressibleGaps(rawPositions, totalSlots, compact) : [];
+  if (!compact || realGaps.length === 0) {
+    return {
+      totalSlots,
+      slotMinutes,
+      dayStartMinutes: dayStart,
+      positions,
+      compressedGaps: [],
+    };
+  }
+
+  const boundary = buildCompressedBoundaries(totalSlots, realGaps, compact.compressedSlotCount);
+  const clamp = (slot: number) => boundary[Math.min(totalSlots, Math.max(0, slot))];
+
   return {
-    totalSlots,
+    totalSlots: boundary[totalSlots],
     slotMinutes,
     dayStartMinutes: dayStart,
-    positions: groupOverlappingByColumn(rawPositions),
+    positions: positions.map((p) => {
+      const start = clamp(p.startSlotIndex);
+      return {
+        ...p,
+        startSlotIndex: start,
+        rowSpan: Math.max(1, clamp(p.startSlotIndex + p.rowSpan) - start),
+      };
+    }),
+    compressedGaps: realGaps.map(({ startSlot, gap }) => ({
+      ...gap,
+      startSlotIndex: boundary[startSlot],
+    })),
   };
 }

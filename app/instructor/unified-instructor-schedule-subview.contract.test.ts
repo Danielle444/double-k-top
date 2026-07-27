@@ -173,6 +173,77 @@ test("days and blocks are keyed so no card key can collide across offerings", ()
 });
 
 // ---------------------------------------------------------------------------
+// IUS-2F Long internal gaps are compressed - HERE ONLY.
+//
+// A mine-only merged list is the one schedule surface where two of the SAME
+// instructor's own assignments are routinely hours apart, so the fully
+// proportional empty stretch between them dominates the screen (worst on
+// mobile, at 44px per 15 minutes). The grid gained an OPT-IN compact-gap mode
+// for exactly that; every other consumer deliberately stays on the unchanged
+// proportional layout. The layout maths and the band's own rendering are locked
+// by lib/schedule-timegrid.test.ts and
+// lib/components/ScheduleTimeGrid.contract.test.ts - this file locks only WHO
+// turns it on and WITH WHAT.
+// ---------------------------------------------------------------------------
+
+test("the unified view opts in to long-gap compression with the locked config", () => {
+  const body = code(UNIFIED);
+  assert.match(body, /const UNIFIED_COMPACT_LONG_GAPS = \{/);
+  assert.match(body, /thresholdMinutes: 60,/, "up to and including an hour stays proportional");
+  assert.match(body, /compressedSlotCount: 2,/, "a long gap collapses to two standard rows");
+  assert.ok(body.includes('label: "הפסקה בלו״ז שלי",'), "expected the locked Hebrew band label");
+  assert.match(body, /compactLongGaps=\{UNIFIED_COMPACT_LONG_GAPS\}/);
+  // A module-level constant, not an inline literal - a fresh object per render
+  // would defeat the grid's own layout memo on the every-60s `now` tick.
+  const decl = body.indexOf("const UNIFIED_COMPACT_LONG_GAPS");
+  const usage = body.indexOf("compactLongGaps={UNIFIED_COMPACT_LONG_GAPS}");
+  assert.ok(decl !== -1 && decl < body.indexOf("export function UnifiedInstructorScheduleSection"),
+    "the config must be module-level");
+  assert.ok(usage > decl);
+  assert.equal(/compactLongGaps=\{\{/.test(body), false, "no inline object literal");
+});
+
+test("compression is on the ONE shared grid, so week and today behave identically", () => {
+  const body = code(UNIFIED);
+  assert.equal(body.match(/compactLongGaps=/g)?.length, 1,
+    "exactly one grid element exists (asserted above), so it is passed exactly once");
+  assert.equal(/isToday[^\n]*compactLongGaps|compactLongGaps[^\n]*isToday/.test(body), false,
+    "the two modes must not be able to diverge");
+});
+
+test("compression changes NOTHING about what data the unified view asks for", () => {
+  const body = code(UNIFIED);
+  // The same two mine-only readers, still with no identity and no filter.
+  assert.match(body, /getUnifiedScheduleForInstructor\(rangeStart!, rangeEnd!, dayFilter\)/);
+  assert.match(body, /getUnifiedTodayScheduleForInstructor\(\)/);
+  // The grid is still fed ONE block's items and nothing else.
+  assert.match(body, /<ScheduleTimeGrid\s*\n\s*items=\{block\.items\}/);
+  assert.equal(/scheduleFilter|instructorId|courseOfferingId/.test(body), false);
+  // The band is layout only - it never becomes an item or a card.
+  assert.equal(/הפסקה בלו״ז שלי[\s\S]{0,200}InstructorScheduleCard/.test(body), false,
+    "a gap band must never be routed through the schedule card");
+});
+
+test("the per-course instructor view keeps the unchanged proportional layout", () => {
+  assert.equal(/compactLongGaps/.test(code(SECTION)), false,
+    "a whole course's timetable makes empty stretches real shared information");
+  assert.equal(/compactLongGaps/.test(code(OUTER)), false);
+  assert.equal(/compactLongGaps/.test(code(TODAY_CARD)), false);
+  assert.equal(/compactLongGaps/.test(code(CLIENT)), false);
+});
+
+test("existing source-course, overlap and combined badges are untouched by IUS-2F", () => {
+  const body = code(UNIFIED);
+  assert.match(body, /\{item\.sourceCourseLabel\}/);
+  assert.match(body, /item\.overlappingSourceCourseOfferingIds\.length > 0 &&/);
+  assert.match(body, /courseLevel=\{item\.sourceCourseLevel\}/);
+  // Still one grid per (day, offering) - compression is computed per grid, so
+  // no gap is ever measured across two CourseOfferings.
+  assert.equal(body.match(/<ScheduleTimeGrid/g)?.length, 1);
+  assert.match(body, /\{day\.blocks\.map\(\(block\) => \(/);
+});
+
+// ---------------------------------------------------------------------------
 // (14)(15) Card reuse, source-course badge, overlap badge.
 // ---------------------------------------------------------------------------
 
