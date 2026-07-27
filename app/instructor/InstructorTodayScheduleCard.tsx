@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { WeeklyRidingActivity } from "@/lib/actions/riding-slots";
+import type { InstructorCourseOptionView } from "@/lib/actions/instructor-course-options";
+import { pickInstructorDefaultOfferingId } from "@/lib/course/instructor-default-schedule-offering-core";
 import { InstructorScheduleCourseSelector } from "./InstructorScheduleCourseSelector";
 import { InstructorScheduleSection } from "./InstructorScheduleSection";
 import { UnifiedInstructorScheduleSection } from "./UnifiedInstructorScheduleSection";
@@ -34,10 +36,19 @@ import { UnifiedInstructorScheduleSection } from "./UnifiedInstructorScheduleSec
  * The unified branch is deliberately MINE-ONLY: its reader takes no filter and
  * fixes "mine" server-side, so this card can never ask for every instructor's
  * timetable. The per-course branch keeps its existing behaviour untouched.
+ *
+ * IUS-2E - PERSONALIZED DEFAULT, STILL INDEPENDENT. Which destination this card
+ * opens on now follows the SERVER-derived riding-notes edit permission, using the
+ * SAME expression as the schedule tab so the two surfaces cannot drift in what
+ * the permission means. Independence is unaffected: this card keeps its own mode
+ * state, its own `selectedOfferingId` and its own one-shot default latch, so a
+ * choice made here still never moves the schedule tab and vice versa. Both
+ * destinations remain available to every instructor.
  */
 type TodayScheduleMode = "unified" | "byCourse";
 export function InstructorTodayScheduleCard({
   todayKey,
+  canEditRidingNotes,
   onScheduleRangeChange,
   resolveRidingActivity,
   onOpenRidingActivity,
@@ -45,6 +56,11 @@ export function InstructorTodayScheduleCard({
   // Only used to report the riding-activity range upward - never sent to the
   // schedule reader, which derives today server-side.
   todayKey: string;
+  // IUS-2E - the SERVER-derived riding-notes edit permission (app/instructor/
+  // page.tsx, from the signed session's Actor DAL row). Read ONCE, at mount, to
+  // choose which destination opens first. It gates nothing and authorizes
+  // nothing; every riding-note write is authorized independently server-side.
+  canEditRidingNotes: boolean;
   onScheduleRangeChange: (range: { start: string; end: string } | null) => void;
   resolveRidingActivity?: (scheduleItemId: string) => WeeklyRidingActivity | null;
   onOpenRidingActivity?: (activity: WeeklyRidingActivity) => void;
@@ -54,12 +70,34 @@ export function InstructorTodayScheduleCard({
   // not app-wide state, not shared with any other tab, not persisted and not
   // restored across mounts. It lives HERE and never in InstructorClient.
   //
-  // IUS-2D - back to the intended "unified" default. IUS-2C had temporarily
-  // pointed this at "byCourse" because the unified view flattened simultaneous
-  // group א / group ב blocks into one vertical list and omitted the per-day
-  // headers; the unified view now renders one ScheduleTimeGrid per (day, source
-  // offering), so both are restored and the reason for the fallback is gone.
-  const [todayMode, setTodayMode] = useState<TodayScheduleMode>("unified");
+  // IUS-2D restored the "unified" default for everyone once the unified view
+  // regained its per-(day, offering) ScheduleTimeGrid layout. IUS-2E makes that
+  // default CONDITIONAL on the server-derived riding-notes permission - the same
+  // expression the schedule tab uses.
+  //
+  // Evaluated SYNCHRONOUSLY, in the lazy initializer, from a prop already present
+  // in the first server render: no async gap, no mode flash, and the unified view
+  // is never mounted-then-unmounted for an instructor who should have started on
+  // "byCourse". There is deliberately NO effect in this file that writes
+  // `todayMode` - the initializer runs once per mount and the toggle buttons are
+  // the only other writer, so a manual choice is never re-overridden.
+  const [todayMode, setTodayMode] = useState<TodayScheduleMode>(
+    canEditRidingNotes ? "unified" : "byCourse",
+  );
+
+  // IUS-2E - this card's OWN one-shot latch for the automatic course default,
+  // separate from the schedule tab's. A ref, not state: flipping it must never
+  // itself cause a render, and it must survive every rerender.
+  const autoSelectedRef = useRef(false);
+
+  const handleOptionsLoaded = useCallback((options: InstructorCourseOptionView[]) => {
+    if (autoSelectedRef.current) return;
+    autoSelectedRef.current = true;
+    // Second, independent guard: an already-made manual choice is kept verbatim
+    // and the computed default discarded. A null result - an empty menu - leaves
+    // the selection null and the existing empty state renders unchanged.
+    setSelectedOfferingId((prev) => prev ?? pickInstructorDefaultOfferingId(options));
+  }, []);
 
   // Report today's range while something is actually shown, and clear it on
   // unmount (tab switch) or deselection. The shared riding map this feeds is
@@ -122,6 +160,7 @@ export function InstructorTodayScheduleCard({
           <InstructorScheduleCourseSelector
             selectedOfferingId={selectedOfferingId}
             onSelectOffering={setSelectedOfferingId}
+            onOptionsLoaded={handleOptionsLoaded}
           />
 
           {selectedOfferingId === null ? (

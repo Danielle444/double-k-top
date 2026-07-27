@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   listInstructorContactCourseOptions,
   type InstructorCourseOptionView,
@@ -29,9 +29,16 @@ import {
  * (identity -> resolveInstructorCourseOffering -> SCHEDULE capability -> an
  * offering-scoped query), so nothing here can widen access.
  *
- * NO DEFAULT SELECTION is a hard rule: nothing auto-selects, not even when
- * exactly one option exists, and the mounting screen issues no schedule request
- * until an instructor picks a course. Ordering carries no selection meaning.
+ * THIS COMPONENT STILL NEVER SELECTS ANYTHING. It owns no selection and applies
+ * no default: it neither calls onSelectOffering on its own nor knows what a
+ * default would be, and its display ordering still carries no selection meaning.
+ *
+ * IUS-2E adds one OPTIONAL, purely informational callback - onOptionsLoaded -
+ * which hands the already-fetched, server-composed option list back to the
+ * MOUNTING SCREEN. A screen that wants an automatic default decides it there
+ * (see pickInstructorDefaultOfferingId), which keeps that policy out of this
+ * shared menu and out of the contacts surface entirely. Omitting the callback
+ * leaves this component's behaviour byte-for-byte as before.
  *
  * The action is named ...ContactCourseOptions for historical reasons (it shipped
  * with the contacts slice). It is course-agnostic - an instructor course MENU
@@ -41,18 +48,37 @@ import {
 export function InstructorScheduleCourseSelector({
   selectedOfferingId,
   onSelectOffering,
+  onOptionsLoaded,
 }: {
   selectedOfferingId: string | null;
   onSelectOffering: (courseOfferingId: string) => void;
+  // IUS-2E - OPTIONAL. Called at most once per mount, with the loaded
+  // server-composed option list, and ONLY on the success path: a failed or
+  // cancelled load never invokes it, so a mounting screen can never apply a
+  // default off a partial/absent menu. Purely informational - this component
+  // still selects nothing itself.
+  onOptionsLoaded?: (options: InstructorCourseOptionView[]) => void;
 }) {
   const [options, setOptions] = useState<InstructorCourseOptionView[] | null>(null);
   const [optionsFailed, setOptionsFailed] = useState(false);
+
+  // Latest-callback ref so the load effect below keeps its EMPTY dependency
+  // array: this shared selector must issue exactly ONE options request per
+  // mount, and taking the callback as a dependency would re-fetch on every
+  // render for any caller that passes an inline function.
+  const onOptionsLoadedRef = useRef(onOptionsLoaded);
+  useEffect(() => {
+    onOptionsLoadedRef.current = onOptionsLoaded;
+  }, [onOptionsLoaded]);
 
   useEffect(() => {
     let cancelled = false;
     listInstructorContactCourseOptions()
       .then((result) => {
-        if (!cancelled) setOptions(result);
+        if (cancelled) return;
+        setOptions(result);
+        // After the options are committed, and never on the catch path.
+        onOptionsLoadedRef.current?.(result);
       })
       .catch(() => {
         // The reader throws for an anonymous / wrong-audience / inactive

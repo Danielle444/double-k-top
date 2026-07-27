@@ -195,6 +195,7 @@ export function InstructorClient({
   authenticated,
   canViewAttendance,
   canWriteAttendance,
+  canEditRidingNotes,
   students,
   dutyTypes,
   instructors,
@@ -223,6 +224,21 @@ export function InstructorClient({
   // it authorizes nothing: ATT-3W is the authoritative server-side write boundary
   // and rejects regardless of this flag.
   canWriteAttendance: boolean;
+  // IUS-2E - server-owned RIDING-NOTES EDIT permission (page.tsx, from the signed
+  // session's own Actor DAL row). It is forwarded UNCHANGED to the two schedule
+  // surfaces below and is used for exactly one thing: which sub-view they OPEN ON.
+  // It gates nothing, hides nothing and authorizes nothing.
+  //
+  // DELIBERATELY DISTINCT FROM `session.canEditRidingNotes`. This component also
+  // holds a StoredSession restored from localStorage and refreshed through
+  // getInstructorProfile(instructorId) - a CLIENT-SUPPLIED id. That copy keeps
+  // driving the existing render gating it already drives (the riding known-values
+  // load, מעקב חניכים, the riding sections) and is deliberately left untouched.
+  // The two values are separate expressions - `canEditRidingNotes` (this prop,
+  // server-derived) and `session.canEditRidingNotes` (client-persisted) - and
+  // neither may be substituted for the other: every existing `session.` prefix
+  // must stay exactly as it is.
+  canEditRidingNotes: boolean;
   students: StudentOption[];
   dutyTypes: DutyTypeOption[];
   instructors: InstructorOption[];
@@ -890,6 +906,8 @@ export function InstructorClient({
                 bounded scroll box; the shell passes no course and no week. */}
             <InstructorTodayScheduleCard
               todayKey={todayKey}
+              // IUS-2E - the SERVER-derived flag, never session.canEditRidingNotes.
+              canEditRidingNotes={canEditRidingNotes}
               onScheduleRangeChange={handleScheduleRangeChange}
               resolveRidingActivity={(scheduleItemId) =>
                 scheduleActivityMap.get(scheduleItemId) ?? null
@@ -915,6 +933,8 @@ export function InstructorClient({
           // deliberately no longer shares `weeks`, `selectedWeekId` or
           // `dayFilter` with the duties tab, which keeps them unchanged.
           <InstructorCourseScopedScheduleSection
+            // IUS-2E - the SERVER-derived flag, never session.canEditRidingNotes.
+            canEditRidingNotes={canEditRidingNotes}
             onScheduleRangeChange={handleScheduleRangeChange}
             resolveRidingActivity={(scheduleItemId) =>
               scheduleActivityMap.get(scheduleItemId) ?? null

@@ -52,6 +52,26 @@ export default async function InstructorPage() {
           resolveAttendanceAccess: resolveCurrentAttendanceCapabilityAccess,
         });
 
+  // IUS-2E - server-owned RIDING-NOTES EDIT permission, read from the SAME actor
+  // the gate above already resolved. It costs no additional query: the canonical
+  // Actor DAL already projects canEditRidingNotes (lib/auth/actor.ts), and no
+  // caller-supplied identity participates - this is the signed session's own
+  // flag, not the browser-stored session copy the client shell keeps for its
+  // existing render gating.
+  //
+  // It is a DEFAULT-SELECTION signal only: it decides which schedule sub-view the
+  // two instructor schedule surfaces OPEN ON, and nothing else. It grants no
+  // module, removes no sub-view (both remain one tap away for everyone), widens
+  // no item visibility, and authorizes no riding-note write - every riding-note
+  // writer keeps re-deriving this same flag from its own signed actor and
+  // rejecting independently of anything rendered here.
+  //
+  // Fails closed by construction: a null actor (anonymous, wrong-audience,
+  // inactive, tampered/expired token, missing or weak SESSION_SECRET) yields
+  // false, i.e. the NON-privileged per-course default - an infrastructure failure
+  // can never hand out the privileged default.
+  const canEditRidingNotes = actor?.canEditRidingNotes === true;
+
   return (
     // Widens from tablet upward (mobile portrait keeps today's max-w-lg).
     // Each tier's cap is set to that breakpoint's own viewport width (px
@@ -77,6 +97,7 @@ export default async function InstructorPage() {
         authenticated={actor !== null}
         canViewAttendance={attendanceUiAccess.canViewAttendance}
         canWriteAttendance={attendanceUiAccess.canWriteAttendance}
+        canEditRidingNotes={canEditRidingNotes}
         students={data.students}
         dutyTypes={data.dutyTypes}
         instructors={data.instructors}

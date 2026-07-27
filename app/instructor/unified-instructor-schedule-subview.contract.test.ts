@@ -327,10 +327,15 @@ test("the weekly caller and the today caller each declare their mode", () => {
 
 test("the sub-view toggle lives in the schedule screen, not in InstructorClient", () => {
   const outer = code(OUTER);
-  // IUS-2D - the default is back to "unified": the Level 1 parallel-group
-  // layout and the per-day headers are restored, so the temporary IUS-2C
-  // "byCourse" fallback no longer has a reason to exist.
-  assert.match(outer, /const \[subView, setSubView\] = useState<ScheduleSubView>\("unified"\)/);
+  // IUS-2E - the default is no longer the same for everyone: it now follows the
+  // SERVER-derived riding-notes edit permission (unified for editors, byCourse
+  // for everyone else). The toggle itself is unchanged and still screen-local -
+  // this asserts only which sub-view opens first. The full default contract
+  // lives in instructor-schedule-default-mode.contract.test.ts.
+  assert.match(
+    outer.replace(/\s+/g, " "),
+    /const \[subView, setSubView\] = useState<ScheduleSubView>\( canEditRidingNotes \? "unified" : "byCourse", \)/,
+  );
   assert.ok(outer.includes('הלו&quot;ז המשולב שלי'), "expected the unified toggle label");
   assert.ok(outer.includes("לפי קורס"), "expected the per-course toggle label");
 

@@ -66,11 +66,15 @@ test("the Today card adds the unified destination", () => {
   const body = code(TODAY_CARD);
   assert.ok(body.includes('הלו&quot;ז המשולב שלי'), "expected the unified option label");
   assert.ok(body.includes("לפי קורס"), "expected the per-course option label");
-  // IUS-2D - the default is back to "unified": the unified view now renders one
-  // ScheduleTimeGrid per (day, source offering), so the Level 1 parallel-group
-  // layout and the per-day headers are restored and the temporary IUS-2C
-  // "byCourse" fallback no longer has a reason to exist.
-  assert.match(body, /const \[todayMode, setTodayMode\] = useState<TodayScheduleMode>\("unified"\)/);
+  // IUS-2E - the default is no longer the same for everyone: it now follows the
+  // SERVER-derived riding-notes edit permission (unified for editors, byCourse
+  // for everyone else). Both destinations remain available to every instructor -
+  // this asserts only which one opens first. The full default contract lives in
+  // instructor-schedule-default-mode.contract.test.ts.
+  assert.match(
+    body.replace(/\s+/g, " "),
+    /const \[todayMode, setTodayMode\] = useState<TodayScheduleMode>\( canEditRidingNotes \? "unified" : "byCourse", \)/,
+  );
 });
 
 // ---------------------------------------------------------------------------
