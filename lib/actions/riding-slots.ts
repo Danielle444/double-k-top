@@ -26,6 +26,15 @@ import {
   loadRidingSlotStudentNotesWithDeps,
   loadStudentRidingHistoryForInstructorWithDeps,
 } from "@/lib/actions/riding-slots-read-auth";
+// PERF-1 / P1 - the pure, DB-free batch-resolution core used by
+// buildActivitiesForDay below. It performs no IO, builds no query and makes no
+// authorization decision; it only indexes already-fetched rows.
+import {
+  collectActivityScheduleItemIds,
+  collectLinkedRidingSlotIds,
+  indexRidingSlotLinks,
+  resolveRidingSlotForActivity,
+} from "@/lib/actions/riding-slot-batch-resolve-core";
 import { upsertRidingLessonNoteWithDeps } from "@/lib/actions/riding-slots-write-auth";
 
 const NOT_FOUND_SCHEDULE_ITEM = 'פריט הלו"ז לא נמצא. נסי לרענן את העמוד.';
@@ -548,12 +557,65 @@ async function buildActivitiesForDay<T extends ScheduleItemForOverview>(
     }
   }
 
+  // PERF-1 / P1 - riding-slot resolution is BATCHED for the whole day.
+  //
+  // This loop used to call resolveRidingSlotForIds per activity, i.e. two
+  // awaited queries each (a link findFirst, then a slot findUnique with
+  // RIDING_SLOT_INCLUDE), strictly sequentially - so a twelve-activity day cost
+  // ~24 round trips, and buildInstructorRidingSlots paid it for every schedule
+  // item in the range including the unlinked ones it discards immediately
+  // afterwards. It is now exactly TWO queries per day regardless of activity
+  // count (and one, or zero, when nothing is linked), with every activity
+  // resolved from memory by the pure core.
+  //
+  // The id sets are derived ONCE here, in display order, and reused for the
+  // link query, the slot query and the per-activity lookup, so all three can
+  // never disagree about what an activity covers. Nothing else changes: the
+  // same RIDING_SLOT_INCLUDE is fetched, the same toRidingSlotRow maps it, the
+  // resulting WeeklyRidingActivity objects are built in the same order from the
+  // same fields, and the existing startTime/endTime sort below still has the
+  // final say.
+  const scheduleItemIdsByActivity = rawActivities.map((item) => item.id.split("+"));
+
+  // ONE link read for the day. Deliberately the same unnarrowed projection the
+  // previous findFirst used - only the predicate changed, from `in` over one
+  // activity's ids to `in` over the day's de-duplicated union.
+  const allScheduleItemIds = collectActivityScheduleItemIds(scheduleItemIdsByActivity);
+  const links =
+    allScheduleItemIds.length === 0
+      ? []
+      : await prisma.ridingSlotScheduleItem.findMany({
+          where: { scheduleItemId: { in: allScheduleItemIds } },
+        });
+  const linkIndex = indexRidingSlotLinks(links);
+
+  // ONE slot read for the day, covering only the slots the activities actually
+  // resolve to - so a merged card spanning two slots never drags the
+  // unselected slot's assignments and instructors along.
+  const linkedRidingSlotIds = collectLinkedRidingSlotIds(scheduleItemIdsByActivity, linkIndex);
+  const ridingSlots =
+    linkedRidingSlotIds.length === 0
+      ? []
+      : await prisma.ridingSlot.findMany({
+          where: { id: { in: linkedRidingSlotIds } },
+          include: RIDING_SLOT_INCLUDE,
+        });
+  // Mapped through the SAME toRidingSlotRow the per-activity path used. Several
+  // activities resolving to one slot share this single mapped row, exactly as
+  // two separate findUnique calls would have produced equal ones.
+  const ridingSlotRowsById = new Map(ridingSlots.map((slot) => [slot.id, toRidingSlotRow(slot)]));
+
   const activities: WeeklyRidingActivity[] = [];
-  for (const item of rawActivities) {
-    const scheduleItemIds = item.id.split("+");
+  for (const [index, item] of rawActivities.entries()) {
+    const scheduleItemIds = scheduleItemIdsByActivity[index];
     const isLikelyRiding =
       item.title.includes("רכיבה") || (item.description ?? "").includes("רכיבה");
-    const ridingSlot = await resolveRidingSlotForIds(scheduleItemIds);
+    // Same three null outcomes as before (no ids, no link, no fetched row).
+    const ridingSlot = resolveRidingSlotForActivity(
+      scheduleItemIds,
+      linkIndex,
+      ridingSlotRowsById,
+    );
     activities.push({
       scheduleItemIds,
       dateKey: dk,
