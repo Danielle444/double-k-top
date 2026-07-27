@@ -34,6 +34,11 @@ import {
 import { hasMeaningfulTeachingPracticeFeedback } from "@/lib/teaching-practice-feedback";
 import { decideTeachingPracticeRatingBadge } from "@/lib/teaching-practice-rating-badge-core";
 import {
+  buildLessonDisplayRowKey,
+  buildLessonInlineCellKey,
+  resolveLessonChildCellTarget,
+} from "@/lib/teaching-practice-lesson-row-keys";
+import {
   buildParentKeyByChildId,
   buildSameParentOtherNamesByChildId,
   type SameParentChildInput,
@@ -2885,7 +2890,7 @@ export function TeachingPracticeManager({
   // present in the input at all (see its own comment). endTime is never
   // sent - it stays server-derived exactly as today.
   function handleInlineUpdateLessonField(lesson: TeachingPracticeLessonSummary, startTime: string) {
-    const cellKey = `lesson-${lesson.id}-startTime`;
+    const cellKey = buildLessonInlineCellKey(lesson.id, { kind: "startTime" });
     const input: TeachingPracticeLessonInput = {
       date: lesson.date,
       startTime,
@@ -2919,7 +2924,7 @@ export function TeachingPracticeManager({
   // blur/Enter-commit control already used for horseName/equipmentNotes/
   // track notes, so this field's edit UX matches those exactly.
   function handleInlineUpdateLessonNotes(lesson: TeachingPracticeLessonSummary, notes: string) {
-    const cellKey = `lesson-${lesson.id}-notes`;
+    const cellKey = buildLessonInlineCellKey(lesson.id, { kind: "notes" });
     const input: TeachingPracticeLessonInput = {
       date: lesson.date,
       startTime: lesson.startTime,
@@ -2959,7 +2964,7 @@ export function TeachingPracticeManager({
     changedIndex: number,
     patch: Partial<LessonParticipantFormRow>
   ) {
-    const cellKey = `lesson-${lesson.id}-participant-${changedIndex}`;
+    const cellKey = buildLessonInlineCellKey(lesson.id, { kind: "participant", index: changedIndex });
     const roleIndex = new Map(roleSlots.map((role, i) => [role, i]));
     const sorted = [...lesson.participants].sort(
       (a, b) => (roleIndex.get(a.role) ?? roleSlots.length) - (roleIndex.get(b.role) ?? roleSlots.length)
@@ -2986,7 +2991,13 @@ export function TeachingPracticeManager({
         setLessonActionError(result.error ?? "אירעה שגיאה בשיבוץ החניך/ה או התפקיד");
         return;
       }
-      await refreshLessons();
+      // Only the selected date's detail is refreshed - refreshLessons() would
+      // re-fetch every lesson on every date to no effect here: a participant
+      // edit can't move a lesson to another date, so the date-tab set
+      // (availableLessonDates) can't change, and the summary fields it would
+      // update (participantCount/childCount) are never rendered. Dropping it
+      // also halves the window in which a refresh can land while the user has
+      // already tabbed into the next cell.
       if (selectedLessonDate) await refreshLessonDateDetail(selectedLessonDate);
     });
   }
@@ -3006,7 +3017,9 @@ export function TeachingPracticeManager({
     changedIndex: number,
     patch: { childId?: string; horseName?: string; equipmentNotes?: string }
   ) {
-    const cellKey = `lesson-${lesson.id}-child-${changedIndex}`;
+    // Field-specific: a horse save must disable the horse input, not this
+    // row's child-name picker (see resolveLessonChildCellTarget).
+    const cellKey = buildLessonInlineCellKey(lesson.id, resolveLessonChildCellTarget(changedIndex, patch));
     const expectedChildSlots = EXPECTED_CHILD_SLOTS_BY_PRACTICE_TYPE[lesson.practiceType];
     const rows = Array.from({ length: expectedChildSlots }, (_, i) => ({
       childId: lesson.childAssignments[i]?.childId ?? "",
@@ -3037,7 +3050,11 @@ export function TeachingPracticeManager({
         setLessonActionError(result.error ?? "אירעה שגיאה בשיבוץ הילד/ה או פרטי הסוס/ציוד");
         return;
       }
-      await refreshLessons();
+      // Selected-date detail only - same reasoning as
+      // handleInlineUpdateLessonParticipant above: a child/horse/equipment
+      // edit can't change which dates have lessons, so refreshLessons() was
+      // pure extra latency on the exact path where a late refresh steals
+      // focus from the next cell.
       if (selectedLessonDate) await refreshLessonDateDetail(selectedLessonDate);
     });
   }
@@ -7593,9 +7610,18 @@ function InlineTextEditCell({
 }) {
   const [draft, setDraft] = useState(value);
   const skipCommitRef = useRef(false);
+  // Whether this input currently owns focus - maintained by the onFocus/onBlur
+  // handlers below, never read during render (so it can't desync the UI).
+  const isFocusedRef = useRef(false);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // Only re-seed the draft from the committed value while the user is NOT
+    // typing here. A refresh landing mid-edit (a sibling cell's save finishing
+    // and replacing this row's data) would otherwise overwrite characters the
+    // user has already typed but not yet committed. Once focus leaves, the
+    // next `value` change re-seeds exactly as before - and blur itself already
+    // commits, so an out-of-date draft can't survive a blur either.
+    if (isFocusedRef.current) return;
     setDraft(value);
   }, [value]);
 
@@ -7636,7 +7662,13 @@ function InlineTextEditCell({
       <input
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
+        onFocus={() => {
+          isFocusedRef.current = true;
+        }}
         onBlur={() => {
+          // Cleared before the commit below so a refresh triggered by that
+          // commit is never treated as arriving mid-typing.
+          isFocusedRef.current = false;
           if (skipCommitRef.current) {
             skipCommitRef.current = false;
             return;
@@ -8299,9 +8331,14 @@ function LessonTableRow({
         });
         return (
         <tr
-          key={[lesson.id, row.participant?.participantId ?? "no-participant", row.child?.id ?? "no-child", i].join(
-            "-"
-          )}
+          // Positional (lessonId + display-row index), never derived from
+          // row.child?.id / row.participant?.participantId - see
+          // buildLessonDisplayRowKey. Child-assignment ids are regenerated by
+          // every horse/equipment/child save (deleteMany + createMany), so an
+          // identity-based key here remounted the whole row subtree after each
+          // save and destroyed the focused input, its uncommitted draft and the
+          // scroll position.
+          key={buildLessonDisplayRowKey(lesson.id, i)}
           className={`border-t border-border hover:bg-muted/60 ${!isEditing ? rowColorClass : ""}`}
         >
           {i === 0 && (
@@ -8309,7 +8346,7 @@ function LessonTableRow({
               startTime={lesson.startTime}
               endTime={lesson.endTime}
               editable={canEdit}
-              disabled={savingCellKey === `lesson-${lesson.id}-startTime`}
+              disabled={savingCellKey === buildLessonInlineCellKey(lesson.id, { kind: "startTime" })}
               onCommit={(startTime) => onInlineUpdateField(lesson, startTime)}
               rowSpan={rowCount}
             />
@@ -8320,7 +8357,7 @@ function LessonTableRow({
               label={row.participant?.traineeName ?? "—"}
               options={traineeSelectOptionsFor(row.participant?.traineeId ?? "")}
               editable
-              disabled={savingCellKey === `lesson-${lesson.id}-participant-${i}`}
+              disabled={savingCellKey === buildLessonInlineCellKey(lesson.id, { kind: "participant", index: i })}
               onAssign={(traineeId) => onInlineUpdateParticipant(lesson, roleSlots, i, { traineeId })}
               trailing={
                 ratingBadge.visible && ratingBadge.displayValue !== null ? (
@@ -8359,7 +8396,7 @@ function LessonTableRow({
                     role: e.target.value as TeachingPracticeRoleValue,
                   })
                 }
-                disabled={savingCellKey === `lesson-${lesson.id}-participant-${i}`}
+                disabled={savingCellKey === buildLessonInlineCellKey(lesson.id, { kind: "participant", index: i })}
                 className="w-full min-w-[90px] rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50"
               >
                 {roleSlots.map((r) => (
@@ -8385,7 +8422,7 @@ function LessonTableRow({
                     label={soleChild ? `${soleChild.childFullName}${soleChild.isAbsent ? " (נעדר/ת)" : ""}` : "—"}
                     options={childOptionsFor(soleChild?.childId ?? "")}
                     editable
-                    disabled={savingCellKey === `lesson-${lesson.id}-child-0`}
+                    disabled={savingCellKey === buildLessonInlineCellKey(lesson.id, { kind: "child", index: 0 })}
                     onAssign={(childId) => onInlineUpdateChild(lesson, 0, { childId })}
                     rowSpan={rowCount}
                   />
@@ -8411,7 +8448,10 @@ function LessonTableRow({
                     value={soleChild?.horseName ?? ""}
                     label={soleChild?.horseName ?? "—"}
                     editable
-                    disabled={savingCellKey === `lesson-${lesson.id}-child-0-horseName`}
+                    disabled={
+                      savingCellKey ===
+                      buildLessonInlineCellKey(lesson.id, { kind: "child", index: 0, field: "horseName" })
+                    }
                     onCommit={(value) => onInlineUpdateChild(lesson, 0, { horseName: value })}
                     rowSpan={rowCount}
                   />
@@ -8425,7 +8465,10 @@ function LessonTableRow({
                     value={soleChild?.equipmentNotes ?? ""}
                     label={soleChild?.equipmentNotes ?? "—"}
                     editable
-                    disabled={savingCellKey === `lesson-${lesson.id}-child-0-equipmentNotes`}
+                    disabled={
+                      savingCellKey ===
+                      buildLessonInlineCellKey(lesson.id, { kind: "child", index: 0, field: "equipmentNotes" })
+                    }
                     onCommit={(value) => onInlineUpdateChild(lesson, 0, { equipmentNotes: value })}
                     rowSpan={rowCount}
                   />
@@ -8453,7 +8496,7 @@ function LessonTableRow({
                   label={row.child ? `${row.child.childFullName}${row.child.isAbsent ? " (נעדר/ת)" : ""}` : "—"}
                   options={childOptionsFor(row.child?.childId ?? "")}
                   editable
-                  disabled={savingCellKey === `lesson-${lesson.id}-child-${i}`}
+                  disabled={savingCellKey === buildLessonInlineCellKey(lesson.id, { kind: "child", index: i })}
                   onAssign={(childId) => onInlineUpdateChild(lesson, i, { childId })}
                 />
               ) : (
@@ -8474,7 +8517,10 @@ function LessonTableRow({
                   value={row.child?.horseName ?? ""}
                   label={row.child?.horseName ?? "—"}
                   editable
-                  disabled={savingCellKey === `lesson-${lesson.id}-child-${i}-horseName`}
+                  disabled={
+                    savingCellKey ===
+                    buildLessonInlineCellKey(lesson.id, { kind: "child", index: i, field: "horseName" })
+                  }
                   onCommit={(value) => onInlineUpdateChild(lesson, i, { horseName: value })}
                 />
               ) : (
@@ -8485,7 +8531,10 @@ function LessonTableRow({
                   value={row.child?.equipmentNotes ?? ""}
                   label={row.child?.equipmentNotes ?? "—"}
                   editable
-                  disabled={savingCellKey === `lesson-${lesson.id}-child-${i}-equipmentNotes`}
+                  disabled={
+                    savingCellKey ===
+                    buildLessonInlineCellKey(lesson.id, { kind: "child", index: i, field: "equipmentNotes" })
+                  }
                   onCommit={(value) => onInlineUpdateChild(lesson, i, { equipmentNotes: value })}
                 />
               ) : (
@@ -8502,7 +8551,7 @@ function LessonTableRow({
               value={lesson.notes ?? ""}
               label={lesson.notes || "—"}
               editable={canEdit}
-              disabled={savingCellKey === `lesson-${lesson.id}-notes`}
+              disabled={savingCellKey === buildLessonInlineCellKey(lesson.id, { kind: "notes" })}
               truncateClassName="max-w-[220px] truncate"
               title={lesson.notes ?? undefined}
               onCommit={(value) => onInlineUpdateNotes(lesson, value)}
