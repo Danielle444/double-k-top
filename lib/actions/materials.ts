@@ -19,6 +19,19 @@ import {
   loadAuthorizedTraineeModuleRowsWithDeps,
   type TraineeModuleContextDeps,
 } from "@/lib/course/trainee-module-containment-core";
+// P-MATERIALS M2B - offering-scoped audience persistence. The identifier-shape
+// validation + reconcile diff come from the committed pure M2A core; the
+// offering authorization + Prisma bindings from the shared M2B write module.
+import {
+  normalizeMaterialAudienceOfferingIds,
+  MaterialAudienceInputError,
+} from "@/lib/course/material-audience-reconcile-core";
+import {
+  assertOfferingIdsAllowed,
+  applyMaterialAudiences,
+  NoCurrentActivityYearError,
+  OfferingNotAllowedError,
+} from "@/lib/course/material-audience-write";
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour, matches the booklet's TTL
 
@@ -204,6 +217,33 @@ export interface CreateLinkMaterialInput {
   description?: string;
   visibility: CourseMaterialVisibilityValue;
   externalUrl: string;
+  // P-MATERIALS M2B - the CourseOffering(s) this material is visible to for
+  // trainees. MANDATORY AT RUNTIME (at least one, deduped, only current-year
+  // ACTIVE/PLANNED ids; never defaults to all courses) - enforced by
+  // normalizeMaterialAudienceOfferingIds, which rejects undefined/empty. The
+  // TYPE is optional on purpose so the codebase still compiles before the M2D
+  // admin UI is wired to send it; an absent value fails the write at runtime.
+  courseOfferingIds?: string[];
+}
+
+// P-MATERIALS M2B - map an audience/offering write failure to a user-facing
+// ActionResult, or null when the error is not one of these (a real defect, which
+// must propagate). Shared by createLinkMaterial and updateMaterial. Kept
+// module-private (not exported) so it is never exposed as a Server Action.
+function audienceWriteErrorToResult(error: unknown): ActionResult | null {
+  if (error instanceof MaterialAudienceInputError) {
+    return {
+      success: false,
+      error: error.code === "EMPTY_SELECTION" ? "יש לבחור לפחות קורס אחד" : "בחירת קורס לא תקינה",
+    };
+  }
+  if (error instanceof OfferingNotAllowedError) {
+    return { success: false, error: "אחד הקורסים שנבחרו אינו זמין לשיוך" };
+  }
+  if (error instanceof NoCurrentActivityYearError) {
+    return { success: false, error: "לא ניתן לקבוע את שנת הפעילות הנוכחית" };
+  }
+  return null;
 }
 
 // File materials are created via app/api/admin/materials/upload/route.ts
@@ -217,21 +257,46 @@ export async function createLinkMaterial(input: CreateLinkMaterialInput): Promis
     return { success: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
   }
 
-  const created = await prisma.courseMaterial.create({
-    data: {
-      title: parsed.data.title,
-      description: parsed.data.description || null,
-      materialType: "LINK",
-      visibility: parsed.data.visibility,
-      externalUrl: parsed.data.externalUrl,
-    },
-  });
+  let offeringIds: readonly string[];
+  try {
+    offeringIds = normalizeMaterialAudienceOfferingIds(input.courseOfferingIds);
+  } catch (error) {
+    const mapped = audienceWriteErrorToResult(error);
+    if (mapped) return mapped;
+    throw error;
+  }
 
-  await createMaterialAddedNotifications({
-    materialId: created.id,
-    title: created.title,
-    visibility: created.visibility,
-  });
+  try {
+    // Material row + audience rows commit or roll back together; the offering
+    // authorization is re-checked INSIDE the transaction so an offering archived
+    // mid-write cannot slip through. No audience row is written outside it.
+    const created = await prisma.$transaction(async (tx) => {
+      await assertOfferingIdsAllowed(tx, offeringIds);
+      const material = await tx.courseMaterial.create({
+        data: {
+          title: parsed.data.title,
+          description: parsed.data.description || null,
+          materialType: "LINK",
+          visibility: parsed.data.visibility,
+          externalUrl: parsed.data.externalUrl,
+        },
+      });
+      await applyMaterialAudiences(tx, material.id, offeringIds);
+      return material;
+    });
+
+    // Only after the write commits. The trainee branch is suppressed in M2B (see
+    // createMaterialAddedNotifications); instructor notifications are unchanged.
+    await createMaterialAddedNotifications({
+      materialId: created.id,
+      title: created.title,
+      visibility: created.visibility,
+    });
+  } catch (error) {
+    const mapped = audienceWriteErrorToResult(error);
+    if (mapped) return mapped;
+    throw error;
+  }
 
   revalidatePath("/admin/materials");
   revalidatePath("/student");
@@ -251,6 +316,12 @@ export interface UpdateMaterialInput {
   description?: string;
   visibility: CourseMaterialVisibilityValue;
   externalUrl?: string;
+  // P-MATERIALS M2B - the full desired CourseOffering audience set. Replaces the
+  // existing set via a reconcile diff (unchanged rows untouched). MANDATORY AT
+  // RUNTIME (at least one, deduped, only current-year ACTIVE/PLANNED ids);
+  // optional in the TYPE only so the pre-M2D UI still compiles. An absent value
+  // fails the write at runtime.
+  courseOfferingIds?: string[];
 }
 
 // Title/description/visibility are editable for any material; externalUrl is
@@ -267,22 +338,45 @@ export async function updateMaterial(
     return { success: false, error: parsed.error.issues[0]?.message ?? "קלט לא תקין" };
   }
 
+  let offeringIds: readonly string[];
+  try {
+    offeringIds = normalizeMaterialAudienceOfferingIds(data.courseOfferingIds);
+  } catch (error) {
+    const mapped = audienceWriteErrorToResult(error);
+    if (mapped) return mapped;
+    throw error;
+  }
+
   const material = await prisma.courseMaterial.findUnique({ where: { id: materialId } });
   if (!material) {
     return { success: false, error: "המסמך לא נמצא" };
   }
 
-  await prisma.courseMaterial.update({
-    where: { id: materialId },
-    data: {
-      title: parsed.data.title,
-      description: parsed.data.description || null,
-      visibility: parsed.data.visibility,
-      ...(material.materialType === "LINK" && parsed.data.externalUrl
-        ? { externalUrl: parsed.data.externalUrl }
-        : {}),
-    },
-  });
+  try {
+    // Metadata update + audience reconcile in one transaction; offering
+    // authorization re-checked inside it. Reconcile deletes only removed rows and
+    // creates only new ones - editing the audience never deletes the material or
+    // its storage object.
+    await prisma.$transaction(async (tx) => {
+      await assertOfferingIdsAllowed(tx, offeringIds);
+      await tx.courseMaterial.update({
+        where: { id: materialId },
+        data: {
+          title: parsed.data.title,
+          description: parsed.data.description || null,
+          visibility: parsed.data.visibility,
+          ...(material.materialType === "LINK" && parsed.data.externalUrl
+            ? { externalUrl: parsed.data.externalUrl }
+            : {}),
+        },
+      });
+      await applyMaterialAudiences(tx, materialId, offeringIds);
+    });
+  } catch (error) {
+    const mapped = audienceWriteErrorToResult(error);
+    if (mapped) return mapped;
+    throw error;
+  }
 
   revalidatePath("/admin/materials");
   revalidatePath("/student");

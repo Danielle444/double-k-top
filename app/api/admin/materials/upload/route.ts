@@ -4,6 +4,19 @@ import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { getSupabaseClient, COURSE_MATERIALS_BUCKET } from "@/lib/supabase";
 import { createMaterialAddedNotifications } from "@/lib/actions/notifications";
+// P-MATERIALS M2B - offering-scoped audience persistence, shared with the LINK
+// server action so both write paths authorize offerings and persist audiences
+// identically.
+import {
+  normalizeMaterialAudienceOfferingIds,
+  MaterialAudienceInputError,
+} from "@/lib/course/material-audience-reconcile-core";
+import {
+  assertOfferingIdsAllowed,
+  applyMaterialAudiences,
+  NoCurrentActivityYearError,
+  OfferingNotAllowedError,
+} from "@/lib/course/material-audience-write";
 
 type CourseMaterialVisibility = "STUDENTS" | "INSTRUCTORS" | "BOTH";
 
@@ -63,6 +76,30 @@ export async function POST(request: Request) {
   if (!VALID_VISIBILITIES.includes(visibility as CourseMaterialVisibility)) {
     return NextResponse.json({ success: false, error: "יש לבחור קהל יעד" }, { status: 400 });
   }
+
+  // P-MATERIALS M2B - the CourseOffering audience selection. Parsed from repeated
+  // multipart `courseOfferingIds` fields; File entries or blanks are rejected by
+  // the pure normalizer (non-string / empty -> INVALID_ID). Mandatory: an empty
+  // selection is refused here, before any storage upload. (The current admin UI
+  // does not send this field yet - that is added in M2D, which is why M2B must
+  // not deploy without M2C + M2D.)
+  let offeringIds: readonly string[];
+  try {
+    offeringIds = normalizeMaterialAudienceOfferingIds(formData.getAll("courseOfferingIds"));
+  } catch (error) {
+    if (error instanceof MaterialAudienceInputError) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            error.code === "EMPTY_SELECTION" ? "יש לבחור לפחות קורס אחד" : "בחירת קורס לא תקינה",
+        },
+        { status: 400 }
+      );
+    }
+    throw error;
+  }
+
   if (!(file instanceof File)) {
     return NextResponse.json({ success: false, error: "לא נבחר קובץ" }, { status: 400 });
   }
@@ -120,38 +157,74 @@ export async function POST(request: Request) {
     );
   }
 
+  // Material metadata + audience rows commit or roll back together. Offering
+  // authorization is re-checked INSIDE the transaction. The previous file's
+  // cleanup is deliberately deferred until AFTER a successful commit (below), so
+  // a failed metadata write never destroys the file the surviving row still
+  // points to.
+  try {
+    await prisma.$transaction(async (tx) => {
+      await assertOfferingIdsAllowed(tx, offeringIds);
+      if (existing) {
+        await tx.courseMaterial.update({
+          where: { id: existing.id },
+          data: {
+            title,
+            description: description || null,
+            visibility: visibility as CourseMaterialVisibility,
+            filePath: storagePath,
+            fileName: file.name,
+          },
+        });
+      } else {
+        await tx.courseMaterial.create({
+          data: {
+            id,
+            title,
+            description: description || null,
+            materialType: "FILE",
+            visibility: visibility as CourseMaterialVisibility,
+            filePath: storagePath,
+            fileName: file.name,
+          },
+        });
+      }
+      await applyMaterialAudiences(tx, id, offeringIds);
+    });
+  } catch (error) {
+    // The DB write failed AFTER the object was uploaded. Best-effort remove the
+    // just-uploaded object so it is not orphaned - UNLESS it overwrote (upsert)
+    // the exact file the surviving material row still points to (a same-path
+    // replace), which must not be deleted.
+    if (!existing || storagePath !== existing.filePath) {
+      await supabase.storage.from(COURSE_MATERIALS_BUCKET).remove([storagePath]).catch(() => {});
+    }
+    if (error instanceof OfferingNotAllowedError) {
+      return NextResponse.json(
+        { success: false, error: "אחד הקורסים שנבחרו אינו זמין לשיוך" },
+        { status: 400 }
+      );
+    }
+    if (error instanceof NoCurrentActivityYearError) {
+      return NextResponse.json(
+        { success: false, error: "לא ניתן לקבוע את שנת הפעילות הנוכחית" },
+        { status: 400 }
+      );
+    }
+    return NextResponse.json({ success: false, error: "שמירת החומר נכשלה" }, { status: 500 });
+  }
+
   // Best-effort cleanup of the previous file when replacing with a
-  // differently-named one - never blocks the response on failure.
+  // differently-named one - now that the new metadata has committed. Never
+  // blocks the response on failure.
   if (existing?.filePath && existing.filePath !== storagePath) {
     await supabase.storage.from(COURSE_MATERIALS_BUCKET).remove([existing.filePath]).catch(() => {});
   }
 
-  if (existing) {
-    await prisma.courseMaterial.update({
-      where: { id: existing.id },
-      data: {
-        title,
-        description: description || null,
-        visibility: visibility as CourseMaterialVisibility,
-        filePath: storagePath,
-        fileName: file.name,
-      },
-    });
-  } else {
-    await prisma.courseMaterial.create({
-      data: {
-        id,
-        title,
-        description: description || null,
-        materialType: "FILE",
-        visibility: visibility as CourseMaterialVisibility,
-        filePath: storagePath,
-        fileName: file.name,
-      },
-    });
-
-    // Only a brand-new material notifies - replacing an existing file's
-    // content (the `existing` branch above) is not "new material added".
+  // Only a brand-new material notifies - replacing an existing file's content is
+  // not "new material added". The trainee branch is suppressed in M2B (see
+  // createMaterialAddedNotifications); instructor notifications are unchanged.
+  if (!existing) {
     await createMaterialAddedNotifications({
       materialId: id,
       title,

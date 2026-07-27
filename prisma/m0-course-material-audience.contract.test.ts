@@ -175,10 +175,23 @@ test("every DDL identifier is within PostgreSQL's 63-character limit", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The unwired invariant - nothing in the app reads or writes the new table
+// Wiring confinement (updated M0 -> M2B) - the audience table's Prisma access is
+// confined to the single approved M2B write module.
+//
+// In M0 this asserted the table was ENTIRELY unwired. P-MATERIALS M2B wires it,
+// but deliberately in ONE place: the shared server write module
+// lib/course/material-audience-write.ts, which owns the offering authorization
+// and the audience create/reconcile Prisma bindings for BOTH write paths. The
+// materials server action and the FILE upload route CONSUME that module and
+// never touch prisma.courseMaterialAudience directly, so this test still proves
+// no OTHER application module reads or writes the table - the M0 safety intent is
+// preserved, only narrowed to the one sanctioned wiring point.
 // ---------------------------------------------------------------------------
 
-test("no application module imports, reads, or writes CourseMaterialAudience in M0", () => {
+/** The only application file allowed to reference the audience table directly. */
+const ALLOWED_AUDIENCE_WIRING = new Set(["lib/course/material-audience-write.ts"]);
+
+test("audience-table Prisma access is confined to the approved M2B write module", () => {
   const repoRoot = fileURLToPath(new URL("../", import.meta.url));
   const skippedDirs = new Set(["node_modules", ".next", ".git", "generated"]);
   const referencers: string[] = [];
@@ -210,9 +223,17 @@ test("no application module imports, reads, or writes CourseMaterialAudience in 
     }
   }
 
+  const unexpected = referencers.filter((file) => !ALLOWED_AUDIENCE_WIRING.has(file));
   assert.deepEqual(
-    referencers,
+    unexpected,
     [],
-    `CourseMaterialAudience must stay unwired in M0, but is referenced by: ${referencers}`,
+    `Only ${[...ALLOWED_AUDIENCE_WIRING].join(", ")} may reference the audience table, ` +
+      `but it is also referenced by: ${unexpected}`,
+  );
+  // Positive pin: the sanctioned wiring point must actually be the referencer, so
+  // this test cannot silently pass if the wiring is later moved or removed.
+  assert.ok(
+    referencers.includes("lib/course/material-audience-write.ts"),
+    "the M2B write module must be the audience-table wiring point",
   );
 });

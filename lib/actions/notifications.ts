@@ -245,24 +245,15 @@ export async function createMaterialAddedNotifications(params: {
 }): Promise<void> {
   const notificationTitle = "נוסף חומר קורס חדש";
 
-  if (params.visibility === "STUDENTS" || params.visibility === "BOTH") {
-    const students = await prisma.student.findMany({
-      where: { isActive: true },
-      select: { id: true },
-    });
-    if (students.length > 0) {
-      await prisma.notification.createMany({
-        data: students.map((s) => ({
-          type: "MATERIAL_ADDED" as const,
-          recipientRole: "STUDENT" as const,
-          studentId: s.id,
-          relatedId: params.materialId,
-          title: notificationTitle,
-          body: params.title,
-        })),
-      });
-    }
-  }
+  // P-MATERIALS M2B - TRAINEE (STUDENT) MATERIAL_ADDED notifications are
+  // TEMPORARILY SUPPRESSED. The previous branch fanned this notification out to
+  // EVERY active student via a global Student.isActive query, so a material
+  // scoped (from M2B onward) to only some offerings still leaked its title (in
+  // `body`) to trainees who cannot see it - e.g. a Level-1 material notified
+  // Level-2-only trainees. The course-scoped trainee fanout is restored in M3
+  // via the already-built lib/course/capabilities/material-notification-recipient-core.ts
+  // (deliberately NOT deleted). Until then NO student notification is created.
+  // Instructor notifications below are unchanged.
 
   if (params.visibility === "INSTRUCTORS" || params.visibility === "BOTH") {
     const instructors = await prisma.instructor.findMany({
