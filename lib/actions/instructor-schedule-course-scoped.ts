@@ -57,13 +57,38 @@ export type {
  * infers a result type only from a literal select at the call site.
  *
  * It decides what is read BACK; the pure core decides what is REACHABLE (the
- * WHERE). Deliberately narrow: no uploadedFileName, no isPublished, no
- * courseOfferingId, no timestamps - only the columns the view contract needs.
- * The item ordering is the same one the deleted legacy reader used.
+ * WHERE). Deliberately narrow: no uploadedFileName, no courseOfferingId, no
+ * timestamps - only the columns the view contract needs. The item ordering is
+ * the same one the deleted legacy reader used.
+ *
+ * WHY `isPublished` IS SELECTED (IUS-1)
+ * -------------------------------------
+ * The committed unified instructor merge core
+ * (@/lib/course/unified-instructor-schedule-core) requires publication state
+ * PER ITEM for its coverage/hide rule: a Level 1 item may be hidden only by a
+ * SINGLE, PUBLISHED, fully-covering Level 2 item, so an unpublished (draft)
+ * Level 2 item can never conceal a Level 1 item. `isPublished` lives on
+ * WeeklySchedule (ScheduleItem has no such column), so it is selected at WEEK
+ * level here and stamped onto every item by the pure mapper.
+ *
+ * This adds NO predicate: the week queries still carry no isPublished filter,
+ * so instructors keep seeing unpublished weeks exactly as before. Selecting the
+ * column only reports the state; it never restricts what is reachable.
+ *
+ * WHY `combinedParticipation` IS SELECTED (IUS-1)
+ * -----------------------------------------------
+ * DISPLAY-ONLY metadata for the future Level 2 "משולב" badge - a verbatim
+ * tri-state passthrough of the item's own column. It MUST NEVER become a filter
+ * input on the instructor path: it never appears in a WHERE, it never narrows
+ * the item list, and it never hides a card. (The trainee-only visibility rule
+ * that DOES hide items lives in
+ * @/lib/course/combined-participation-visibility-core, which no instructor
+ * reader may call.)
  */
 const WEEK_WITH_ITEMS_SELECT = {
   id: true,
   name: true,
+  isPublished: true,
   items: {
     orderBy: [{ date: "asc" }, { startTime: "asc" }],
     select: {
@@ -76,6 +101,7 @@ const WEEK_WITH_ITEMS_SELECT = {
       groupName: true,
       instructorName: true,
       location: true,
+      combinedParticipation: true,
     },
   },
 } satisfies Prisma.WeeklyScheduleSelect;

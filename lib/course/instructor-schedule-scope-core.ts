@@ -87,11 +87,40 @@ export interface InstructorScheduleItem {
   groupName: string | null;
   instructorName: string | null;
   location: string | null;
+  // IUS-1 - the OWNING WEEK's publication state, stamped onto every item of
+  // that week. ScheduleItem itself has no isPublished column; this is
+  // WeeklySchedule.isPublished copied down, because the committed unified
+  // instructor merge core needs publication state per ITEM for its
+  // coverage/hide rule (only a SINGLE, PUBLISHED, fully-covering Level 2 item
+  // may hide a Level 1 item - a draft Level 2 item never conceals anything).
+  //
+  // MERGE METADATA, NOT A GATE. Instructors still see unpublished weeks: no
+  // query anywhere carries an isPublished predicate, and this field never
+  // narrows, reorders or hides an item at this layer.
+  isPublished: boolean;
+  // IUS-1 - combined-participation ("משולב") business indication, DISPLAY-ONLY.
+  // Mirrors the ScheduleItem.combinedParticipation tri-state VERBATIM: true ->
+  // the session runs WITH combined participation, false -> WITHOUT, null -> not
+  // stated. A `false` is never coerced to null.
+  //
+  // NEVER A FILTER INPUT on the instructor path. It does not appear in any
+  // WHERE, it does not narrow the item list, and it hides nothing. The
+  // trainee-only rule that DOES hide items lives in
+  // ./combined-participation-visibility-core, which this core - and every other
+  // instructor reader - must never call (see that module's own header).
+  combinedParticipation: boolean | null;
 }
 
 export interface InstructorScheduleResult {
   hasSchedule: boolean;
   weekName: string | null;
+  // IUS-1 - the DB-backed CourseOffering.level of the SERVER-RESOLVED offering
+  // this result was read from. Comes only from the offering row the resolver
+  // already verified - never from the requested id, never from a course name,
+  // title, week name, date window or any other heuristic. Carried so a later
+  // presentation slice can gate Level-2-only affordances on a server-owned
+  // fact. Display metadata: nothing in this core branches on it.
+  courseLevel: number;
   items: InstructorScheduleItem[];
 }
 
@@ -126,9 +155,15 @@ export function emptyInstructorWeekSelection(): InstructorWeekSelection {
  * returned for an unknown week id, so the client renders its existing
  * "עדיין לא הועלה לו״ז לשבוע זה" message. A denial is therefore indistinguishable
  * from "this course has no such week" - which is exactly the point.
+ *
+ * `courseLevel: 0` is the FAIL-CLOSED unknown level. No CourseOffering has
+ * level 0, so it can never equal a real level and must never opt a card into
+ * Level-2-only behaviour. A denial deliberately reports no level at all rather
+ * than leaking the requested offering's - which would also make denials
+ * distinguishable from "no such week".
  */
 export function emptyInstructorScheduleResult(): InstructorScheduleResult {
-  return { hasSchedule: false, weekName: null, items: [] };
+  return { hasSchedule: false, weekName: null, courseLevel: 0, items: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -324,12 +359,21 @@ export interface InstructorScheduleItemRow {
   groupName: string | null;
   instructorName: string | null;
   location: string | null;
+  // IUS-1 - the raw tri-state, passed through verbatim by the mapper below.
+  combinedParticipation: boolean | null;
 }
 
-/** A fetched week plus its ordered items. */
+/**
+ * A fetched week plus its ordered items.
+ *
+ * IUS-1 - `isPublished` is the WEEK's own column (ScheduleItem has none) and is
+ * stamped onto every mapped item by the mapper below. It is reported, never
+ * enforced: no query in this core carries an isPublished predicate.
+ */
 export interface InstructorWeekWithItemsRow {
   id: string;
   name: string;
+  isPublished: boolean;
   items: readonly InstructorScheduleItemRow[];
 }
 
@@ -414,12 +458,20 @@ export function isMealItem(title: string): boolean {
  * The caller must ONLY pass a row that came back from an offering-scoped query -
  * this function performs no ownership check of its own and must never become the
  * place where one is bolted on.
+ *
+ * IUS-1 adds `courseLevel` as the FINAL parameter and three projected values
+ * (courseLevel on the result, isPublished + combinedParticipation per item). The
+ * FILTER PREDICATE IS UNCHANGED: it still keys only on the "mine" match, meal
+ * items and the day key. None of the three new values is ever read by it - they
+ * are projection metadata, and folding any of them into the predicate would turn
+ * a display field into an access rule.
  */
 export function toInstructorScheduleResult(
   week: InstructorWeekWithItemsRow,
   dayKey: string | "all",
   filter: InstructorScheduleFilter,
   instructor: { firstName: string; fullName: string },
+  courseLevel: number,
 ): InstructorScheduleResult {
   const items = week.items.filter((i) => {
     if (
@@ -436,6 +488,7 @@ export function toInstructorScheduleResult(
   return {
     hasSchedule: true,
     weekName: week.name,
+    courseLevel,
     items: items.map((i) => ({
       id: i.id,
       dateKey: dateKey(i.date),
@@ -448,6 +501,11 @@ export function toInstructorScheduleResult(
       groupName: i.groupName,
       instructorName: i.instructorName,
       location: i.location,
+      // The WEEK's publication state, copied onto each of its items.
+      isPublished: week.isPublished,
+      // Verbatim tri-state passthrough - `false` is a real value and is never
+      // collapsed to null (no `||`, no `??` here, by design).
+      combinedParticipation: i.combinedParticipation,
     })),
   };
 }
@@ -475,11 +533,21 @@ export type RequireInstructorIdentity = () => Promise<{
   fullName: string;
 }>;
 
-/** The offering + capability boundary shared by all three orchestrations. */
+/**
+ * The offering + capability boundary shared by all three orchestrations.
+ *
+ * IUS-1 widens the resolver's return shape from `{ id }` to `{ id; level }`.
+ * This is not a new lookup: the real binding
+ * (resolveInstructorCourseOffering) already returns the full CourseOfferingView,
+ * which has always carried `level` - the dep type merely stopped narrowing it
+ * away. The level is therefore a DB-verified property of the SAME row whose id
+ * authorizes every query below; nothing new is fetched and no new trust is
+ * placed anywhere.
+ */
 export interface InstructorCourseScopeDeps {
   resolveInstructorCourseOffering: (
     requestedCourseOfferingId: string,
-  ) => Promise<{ id: string }>;
+  ) => Promise<{ id: string; level: number }>;
   getEffectiveCapabilities: (
     courseOfferingId: string,
   ) => Promise<Partial<Record<CapabilityKey, EffectiveCapabilityStatus>>>;
@@ -489,9 +557,15 @@ export interface InstructorCourseScopeDeps {
  * Authenticate, re-validate the requested offering, and require SCHEDULE.
  *
  * Returns the RESOLVED offering id (the DB-verified primary key, never the
- * requested string) or null when the caller is denied. Throws only for real
- * defects - a missing configured offering, a Prisma fault, a capability-reader
- * fault - which must never be laundered into an empty schedule.
+ * requested string) plus that same row's DB-backed level, or null when the
+ * caller is denied. Throws only for real defects - a missing configured
+ * offering, a Prisma fault, a capability-reader fault - which must never be
+ * laundered into an empty schedule.
+ *
+ * IUS-1: `offeringLevel` is read from `resolved.level` and from nowhere else.
+ * It is never derived from the requested id, a course name, an item title, a
+ * week name, a date window or any other heuristic, and it is never used to
+ * decide access - only carried onto the result as display metadata.
  *
  * Order is a HARD CONTRACT and is asserted by the focused tests:
  *   1. requireInstructorIdentity()   (FIRST awaited operation)
@@ -503,9 +577,13 @@ async function authorizeInstructorScheduleScope(
   requestedCourseOfferingId: string,
   requireInstructorIdentity: RequireInstructorIdentity,
   deps: InstructorCourseScopeDeps,
-): Promise<{ offeringId: string; instructor: { firstName: string; fullName: string } } | null> {
+): Promise<{
+  offeringId: string;
+  offeringLevel: number;
+  instructor: { firstName: string; fullName: string };
+} | null> {
   let instructor: { firstName: string; fullName: string };
-  let resolved: { id: string };
+  let resolved: { id: string; level: number };
   try {
     instructor = await requireInstructorIdentity();
     resolved = await deps.resolveInstructorCourseOffering(requestedCourseOfferingId);
@@ -520,7 +598,7 @@ async function authorizeInstructorScheduleScope(
   if (!isInstructorScheduleCapabilityEnabled(capabilities)) {
     return null;
   }
-  return { offeringId: resolved.id, instructor };
+  return { offeringId: resolved.id, offeringLevel: resolved.level, instructor };
 }
 
 export interface InstructorWeekSelectionDeps extends InstructorCourseScopeDeps {
@@ -601,7 +679,7 @@ export async function loadInstructorScheduleWithDeps(
   if (week === null) {
     return emptyInstructorScheduleResult();
   }
-  return toInstructorScheduleResult(week, dayKey, filter, scope.instructor);
+  return toInstructorScheduleResult(week, dayKey, filter, scope.instructor, scope.offeringLevel);
 }
 
 export interface InstructorTodayScheduleDeps extends InstructorCourseScopeDeps {
@@ -641,5 +719,5 @@ export async function loadInstructorTodayScheduleWithDeps(
   if (week === null) {
     return emptyInstructorScheduleResult();
   }
-  return toInstructorScheduleResult(week, todayKey, filter, scope.instructor);
+  return toInstructorScheduleResult(week, todayKey, filter, scope.instructor, scope.offeringLevel);
 }

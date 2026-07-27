@@ -17,6 +17,11 @@
  *  - the "mine"/meal filter behaviour is unchanged by the move out of
  *    lib/actions/instructor-schedule.ts.
  *
+ * IUS-1 EXTENSION: three additive projection fields (week-level isPublished
+ * stamped per item, a verbatim combinedParticipation tri-state, and the
+ * server-resolved courseLevel) are proven to reach the view WITHOUT touching
+ * any filter, predicate or gate. Every S2A assertion above still runs unchanged.
+ *
  * Uses the existing `tsx` + node:test approach. Run with:
  *   npx tsx --test lib/course/instructor-schedule-scope-core.test.ts
  */
@@ -59,7 +64,20 @@ import type { EffectiveCapabilityStatus } from "./capabilities/effective-capabil
 const L1 = "cmrqngqhn00017gcndjixzrh0";
 const L2 = "cmrxk58vc0000lscnfm54bpze";
 
+/** The DB-backed levels the fake resolver reports for the two ids above. */
+const L1_LEVEL = 1;
+const L2_LEVEL = 2;
+
 const INSTRUCTOR = { firstName: "דנה", fullName: "דנה כהן" };
+
+/**
+ * The fake offering resolver. Mirrors the real binding's shape - it returns the
+ * RESOLVED row's id AND its DB-backed level, never a level derived from a name
+ * or from the requested string's shape.
+ */
+function resolvedOffering(id: string): { id: string; level: number } {
+  return { id, level: id === L2 ? L2_LEVEL : L1_LEVEL };
+}
 
 function allCapabilities(
   status: EffectiveCapabilityStatus,
@@ -80,6 +98,10 @@ function weekRow(overrides: Partial<InstructorWeekWithItemsRow> = {}): Instructo
   return {
     id: "week-1",
     name: "שבוע א",
+    // IUS-1 - the week-level publication state. Defaults to an UNPUBLISHED
+    // (draft) week on purpose: instructors have always been able to see drafts,
+    // so the default fixture must exercise that path rather than hide it.
+    isPublished: false,
     items: [
       {
         id: "item-1",
@@ -91,6 +113,7 @@ function weekRow(overrides: Partial<InstructorWeekWithItemsRow> = {}): Instructo
         groupName: "א",
         instructorName: "דנה",
         location: "מגרש",
+        combinedParticipation: null,
       },
       {
         id: "item-2",
@@ -102,9 +125,37 @@ function weekRow(overrides: Partial<InstructorWeekWithItemsRow> = {}): Instructo
         groupName: null,
         instructorName: "יוסי",
         location: null,
+        combinedParticipation: null,
       },
     ],
     ...overrides,
+  };
+}
+
+/**
+ * A week whose three items carry the three distinct combinedParticipation
+ * values, so one mapping can prove all of them - including that `false`
+ * survives as `false`.
+ */
+function triStateWeekRow(isPublished: boolean): InstructorWeekWithItemsRow {
+  const date = new Date("2026-07-20T00:00:00.000Z");
+  const base = {
+    date,
+    title: "רכיבה",
+    description: null,
+    groupName: "א",
+    instructorName: "דנה",
+    location: null,
+  };
+  return {
+    id: "week-tri",
+    name: "שבוע משולב",
+    isPublished,
+    items: [
+      { ...base, id: "combined-true", startTime: "09:00", endTime: "10:00", combinedParticipation: true },
+      { ...base, id: "combined-false", startTime: "10:00", endTime: "11:00", combinedParticipation: false },
+      { ...base, id: "combined-null", startTime: "11:00", endTime: "12:00", combinedParticipation: null },
+    ],
   };
 }
 
@@ -221,20 +272,135 @@ test("the moved 'mine' helpers behave exactly as before", () => {
 });
 
 test("'mine' keeps my lessons and meals; 'all' keeps everything; dayKey narrows", () => {
-  const mine = toInstructorScheduleResult(weekRow(), "all", "mine", INSTRUCTOR);
+  const mine = toInstructorScheduleResult(weekRow(), "all", "mine", INSTRUCTOR, L1_LEVEL);
   assert.deepEqual(mine.items.map((i) => i.id), ["item-1", "item-2"]);
 
-  const other = toInstructorScheduleResult(weekRow(), "all", "mine", {
-    firstName: "רוני",
-    fullName: "רוני לוי",
-  });
+  const other = toInstructorScheduleResult(
+    weekRow(),
+    "all",
+    "mine",
+    { firstName: "רוני", fullName: "רוני לוי" },
+    L1_LEVEL,
+  );
   // Not their lesson, but the meal still shows.
   assert.deepEqual(other.items.map((i) => i.id), ["item-2"]);
 
-  const oneDay = toInstructorScheduleResult(weekRow(), "2026-07-20", "all", INSTRUCTOR);
+  const oneDay = toInstructorScheduleResult(weekRow(), "2026-07-20", "all", INSTRUCTOR, L1_LEVEL);
   assert.deepEqual(oneDay.items.map((i) => i.id), ["item-1"]);
   assert.equal(oneDay.weekName, "שבוע א");
   assert.equal(oneDay.hasSchedule, true);
+});
+
+// ---------------------------------------------------------------------------
+// IUS-1 - additive projection: week isPublished, combinedParticipation, courseLevel
+// ---------------------------------------------------------------------------
+
+test("IUS-1: an UNPUBLISHED week stamps isPublished=false onto EVERY returned item", () => {
+  const result = toInstructorScheduleResult(
+    triStateWeekRow(false),
+    "all",
+    "all",
+    INSTRUCTOR,
+    L2_LEVEL,
+  );
+  assert.equal(result.items.length, 3);
+  assert.deepEqual(result.items.map((i) => i.isPublished), [false, false, false]);
+});
+
+test("IUS-1: a PUBLISHED week stamps isPublished=true onto EVERY returned item", () => {
+  const result = toInstructorScheduleResult(
+    triStateWeekRow(true),
+    "all",
+    "all",
+    INSTRUCTOR,
+    L2_LEVEL,
+  );
+  assert.equal(result.items.length, 3);
+  assert.deepEqual(result.items.map((i) => i.isPublished), [true, true, true]);
+});
+
+test("IUS-1: instructors still see an UNPUBLISHED week - isPublished reports, it never filters", () => {
+  // The draft week's items are all returned; the field only labels them.
+  const draft = toInstructorScheduleResult(triStateWeekRow(false), "all", "all", INSTRUCTOR, L2_LEVEL);
+  const live = toInstructorScheduleResult(triStateWeekRow(true), "all", "all", INSTRUCTOR, L2_LEVEL);
+  assert.deepEqual(draft.items.map((i) => i.id), live.items.map((i) => i.id));
+  assert.equal(draft.hasSchedule, true);
+});
+
+test("IUS-1: combinedParticipation passes through verbatim - true, false and null", () => {
+  const result = toInstructorScheduleResult(triStateWeekRow(true), "all", "all", INSTRUCTOR, L2_LEVEL);
+  const byId = new Map(result.items.map((i) => [i.id, i.combinedParticipation]));
+  assert.equal(byId.get("combined-true"), true);
+  assert.equal(byId.get("combined-false"), false);
+  assert.equal(byId.get("combined-null"), null);
+});
+
+test("IUS-1: a `false` combinedParticipation is NEVER coerced to null", () => {
+  const result = toInstructorScheduleResult(triStateWeekRow(true), "all", "all", INSTRUCTOR, L2_LEVEL);
+  const falsy = result.items.find((i) => i.id === "combined-false");
+  assert.ok(falsy, "expected the false-valued item to survive");
+  // Strict identity, not truthiness: `false` and `null` are different states and
+  // a `||`/`??` collapse would silently turn "explicitly excluded" into "unstated".
+  assert.strictEqual(falsy.combinedParticipation, false);
+  assert.notStrictEqual(falsy.combinedParticipation, null);
+});
+
+test("IUS-1: combinedParticipation never removes an item - all three states survive", () => {
+  const result = toInstructorScheduleResult(triStateWeekRow(true), "all", "all", INSTRUCTOR, L2_LEVEL);
+  assert.deepEqual(result.items.map((i) => i.id), [
+    "combined-true",
+    "combined-false",
+    "combined-null",
+  ]);
+});
+
+test("IUS-1: courseLevel is the value the caller resolved, not a derived guess", () => {
+  assert.equal(toInstructorScheduleResult(weekRow(), "all", "all", INSTRUCTOR, L1_LEVEL).courseLevel, 1);
+  assert.equal(toInstructorScheduleResult(weekRow(), "all", "all", INSTRUCTOR, L2_LEVEL).courseLevel, 2);
+});
+
+test("IUS-1: the empty result reports courseLevel 0 (fail-closed unknown level)", () => {
+  const empty = emptyInstructorScheduleResult();
+  assert.equal(empty.courseLevel, 0);
+  // 0 is not a real CourseOffering level, so it can never match the Level-2 gate.
+  assert.notEqual(empty.courseLevel, L2_LEVEL);
+  assert.deepEqual(empty, { hasSchedule: false, weekName: null, courseLevel: 0, items: [] });
+});
+
+test("IUS-1: the item filter reads NEITHER isPublished NOR combinedParticipation", () => {
+  // Same week, same filter, two publication states and every tri-state value
+  // present: if the predicate consulted either field, these id lists would differ.
+  const published = toInstructorScheduleResult(triStateWeekRow(true), "all", "mine", INSTRUCTOR, L2_LEVEL);
+  const draft = toInstructorScheduleResult(triStateWeekRow(false), "all", "mine", INSTRUCTOR, L2_LEVEL);
+  assert.deepEqual(published.items.map((i) => i.id), draft.items.map((i) => i.id));
+  assert.deepEqual(published.items.map((i) => i.id), [
+    "combined-true",
+    "combined-false",
+    "combined-null",
+  ]);
+
+  // And the courseLevel itself is inert: it never narrows the list either.
+  const asLevel1 = toInstructorScheduleResult(triStateWeekRow(true), "all", "mine", INSTRUCTOR, L1_LEVEL);
+  assert.deepEqual(asLevel1.items.map((i) => i.id), published.items.map((i) => i.id));
+});
+
+test("IUS-1: the day filter still narrows normally with the new fields present", () => {
+  const oneDay = toInstructorScheduleResult(
+    triStateWeekRow(true),
+    "2026-07-20",
+    "all",
+    INSTRUCTOR,
+    L2_LEVEL,
+  );
+  assert.equal(oneDay.items.length, 3);
+  const otherDay = toInstructorScheduleResult(
+    triStateWeekRow(true),
+    "2026-07-21",
+    "all",
+    INSTRUCTOR,
+    L2_LEVEL,
+  );
+  assert.deepEqual(otherDay.items, []);
 });
 
 // ---------------------------------------------------------------------------
@@ -252,7 +418,7 @@ function weekSelectionDeps(
     },
     resolveInstructorCourseOffering: async (requested) => {
       trace.note(`resolve:${requested}`);
-      return { id: requested };
+      return resolvedOffering(requested);
     },
     getEffectiveCapabilities: async (id) => {
       trace.note(`capabilities:${id}`);
@@ -284,7 +450,7 @@ test("week selection: identity FIRST, then resolve, then capability, then a scop
 
 test("week selection: the RESOLVED id is queried, never the requested string", async () => {
   const { deps, trace } = weekSelectionDeps({
-    resolveInstructorCourseOffering: async () => ({ id: L1 }),
+    resolveInstructorCourseOffering: async () => resolvedOffering(L1),
   });
   await loadInstructorWeekSelectionWithDeps(L2, deps);
   assert.ok(trace.calls.includes(`capabilities:${L1}`));
@@ -335,7 +501,7 @@ function scheduleReadDeps(
     },
     resolveInstructorCourseOffering: async (requested) => {
       trace.note(`resolve:${requested}`);
-      return { id: requested };
+      return resolvedOffering(requested);
     },
     getEffectiveCapabilities: async () => allCapabilities("ENABLED"),
     fetchWeekWithItems: async (query) => {
@@ -352,6 +518,63 @@ test("week read: the composite where carries both the week id and the resolved o
   const result = await loadInstructorScheduleWithDeps(L2, "week-1", "all", "all", deps);
   assert.ok(trace.calls.includes(`fetch:week-1@${L2}`));
   assert.equal(result.hasSchedule, true);
+});
+
+test("IUS-1 week read: courseLevel comes from the RESOLVED offering, never the requested id", async () => {
+  // Request Level 2's id, but have the resolver hand back the Level 1 row - the
+  // result must report the RESOLVED row's level, exactly as the queries already
+  // use the resolved id rather than the requested string.
+  const { deps } = scheduleReadDeps({
+    resolveInstructorCourseOffering: async () => resolvedOffering(L1),
+  });
+  const result = await loadInstructorScheduleWithDeps(L2, "week-1", "all", "all", deps);
+  assert.equal(result.courseLevel, L1_LEVEL);
+
+  const { deps: level2 } = scheduleReadDeps();
+  assert.equal(
+    (await loadInstructorScheduleWithDeps(L2, "week-1", "all", "all", level2)).courseLevel,
+    L2_LEVEL,
+  );
+});
+
+test("IUS-1 week read: the week's publication state reaches every item through the orchestration", async () => {
+  const { deps } = scheduleReadDeps({
+    fetchWeekWithItems: async () => triStateWeekRow(true),
+  });
+  const result = await loadInstructorScheduleWithDeps(L2, "week-tri", "all", "all", deps);
+  assert.deepEqual(result.items.map((i) => i.isPublished), [true, true, true]);
+  assert.deepEqual(result.items.map((i) => i.combinedParticipation), [true, false, null]);
+});
+
+test("IUS-1 today read: courseLevel and the new item fields reach the result", async () => {
+  const deps: InstructorTodayScheduleDeps = {
+    requireInstructorIdentity: async () => INSTRUCTOR,
+    resolveInstructorCourseOffering: async (requested) => resolvedOffering(requested),
+    getEffectiveCapabilities: async () => allCapabilities("ENABLED"),
+    todayDateKey: () => "2026-07-20",
+    fetchTodayWeekWithItems: async () => triStateWeekRow(false),
+  };
+  const result = await loadInstructorTodayScheduleWithDeps(L2, "all", deps);
+  assert.equal(result.courseLevel, L2_LEVEL);
+  assert.deepEqual(result.items.map((i) => i.isPublished), [false, false, false]);
+  assert.deepEqual(result.items.map((i) => i.combinedParticipation), [true, false, null]);
+});
+
+test("IUS-1: every denial still reports the fail-closed courseLevel 0, leaking no level", async () => {
+  const { deps: unauthenticated } = scheduleReadDeps({
+    requireInstructorIdentity: async () => {
+      throw new UnauthenticatedActorError("no");
+    },
+  });
+  assert.equal((await loadInstructorScheduleWithDeps(L2, "week-1", "all", "all", unauthenticated)).courseLevel, 0);
+
+  const { deps: noCapability } = scheduleReadDeps({
+    getEffectiveCapabilities: async () => allCapabilities("DISABLED"),
+  });
+  assert.equal((await loadInstructorScheduleWithDeps(L2, "week-1", "all", "all", noCapability)).courseLevel, 0);
+
+  const { deps: foreignWeek } = scheduleReadDeps({ fetchWeekWithItems: async () => null });
+  assert.equal((await loadInstructorScheduleWithDeps(L2, "week-1", "all", "all", foreignWeek)).courseLevel, 0);
 });
 
 test("week read: a week the course does not own is indistinguishable from no week", async () => {
@@ -389,7 +612,7 @@ test("today read: the clock is read ONLY after identity, offering and capability
     },
     resolveInstructorCourseOffering: async (requested) => {
       trace.note("resolve");
-      return { id: requested };
+      return resolvedOffering(requested);
     },
     getEffectiveCapabilities: async () => {
       trace.note("capabilities");
@@ -417,7 +640,7 @@ test("today read: an unauthorized caller never even causes a clock read", async 
     requireInstructorIdentity: async () => {
       throw new UnauthenticatedActorError("no");
     },
-    resolveInstructorCourseOffering: async (requested) => ({ id: requested }),
+    resolveInstructorCourseOffering: async (requested) => resolvedOffering(requested),
     getEffectiveCapabilities: async () => allCapabilities("ENABLED"),
     todayDateKey: () => {
       trace.note("clock");
@@ -438,7 +661,7 @@ test("today read: an unauthorized caller never even causes a clock read", async 
 test("today read: a course with zero weeks yields the uniform empty result", async () => {
   const deps: InstructorTodayScheduleDeps = {
     requireInstructorIdentity: async () => INSTRUCTOR,
-    resolveInstructorCourseOffering: async (requested) => ({ id: requested }),
+    resolveInstructorCourseOffering: async (requested) => resolvedOffering(requested),
     getEffectiveCapabilities: async () => allCapabilities("ENABLED"),
     todayDateKey: () => "2026-07-20",
     fetchTodayWeekWithItems: async () => null,

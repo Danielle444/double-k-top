@@ -252,7 +252,7 @@ export function InstructorScheduleSection({
         if (!cancelled) setResult(r);
       })
       .catch(() => {
-        if (!cancelled) setResult({ hasSchedule: true, weekName: null, items: [] });
+        if (!cancelled) setResult({ hasSchedule: true, weekName: null, courseLevel: 0, items: [] });
       });
     return () => {
       cancelled = true;
