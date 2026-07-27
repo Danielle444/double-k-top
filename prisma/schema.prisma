@@ -118,6 +118,94 @@ model HorseFeedingMeal {
   @@map("horse_feeding_meals")
 }
 
+// FEEDING-VISIBILITY Stage 1 - manager/admin-only override deciding whether a
+// horse appears on the feeding board. It exists as its OWN table, not as a flag
+// on HorseFeedingMeal, because the feeding list is a union computed at read
+// time - "horses claimed by an active student" PLUS "horses with feeding rows"
+// (see buildHorseFeedingOverview) - so a horse can legitimately appear on the
+// board with NO HorseFeedingMeal row at all. A flag on that model could not
+// hide those rows, and deleting meal rows would not hide a horse still claimed
+// by an active student.
+//
+// A MISSING ROW MEANS VISIBLE. This is the load-bearing invariant: absence is
+// never read as hidden, so a failed/partial read can only ever show too much,
+// never silently empty the operational board. Restoring a horse sets isHidden
+// back to false rather than deleting the row, so "who hid/restored this, and
+// when" survives (updatedByName is always server-derived - an admin's
+// name/email or a session instructor's fullName - never a client value).
+//
+// Writing this row is ADMIN-ONLY (the "manager"); there is deliberately no
+// instructor path, and canEditHorseFeeding does NOT grant it. There is no hard
+// delete anywhere in this feature: hiding NEVER deletes feeding instructions
+// (HorseFeedingMeal), riding/teaching-practice history, or the horse-name
+// autocomplete sources - a hidden horse still appears in getKnownHorseNames and
+// therefore in riding-note suggestions, by design.
+//
+// horseName is the SAME free-text natural key already used by
+// HorseFeedingMeal.horseName, RidingSlotHorseListItem.horseName,
+// RidingLessonNote.sessionHorseName and every other horse reference here: there
+// is NO Horse model in this schema and none is introduced. As with those, a
+// later rename of the underlying name string orphans this row rather than
+// cascading (no FK exists to cascade through).
+model HorseFeedingVisibility {
+  horseName     String   @id
+  isHidden      Boolean  @default(true)
+  updatedByName String?
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+
+  @@map("horse_feeding_visibility")
+}
+
+// Progress of the CURRENT feeding round for one horse. Deliberately a single
+// enum rather than independent hay/concentrate booleans, so the incoherent
+// "concentrate done but hay not" state is unrepresentable. The UI derives which
+// steps a given horse actually needs from its HorseFeedingMeal content, but
+// that derivation is presentation-only - the stored machine is always these
+// three states.
+enum HorseFeedingProgressState {
+  PENDING
+  HAY_DONE
+  COMPLETE
+}
+
+// FEEDING-ROUND Stage 1 - SHARED, VOLATILE state for the feeding round
+// currently in progress. This is emphatically NOT history: there is no
+// FeedingRound model, no round id, no date scoping, and no retained past-round
+// data anywhere in this schema. "נקה את כל הסימונים" (a later stage, available
+// to admins and to instructors holding canEditHorseFeeding) will DELETE EVERY
+// ROW of this table inside a single transaction to prepare the next round; if
+// per-round history is ever required it must be added as a new model, never by
+// repurposing these rows.
+//
+// A MISSING ROW MEANS PENDING - "not yet marked", never inferred as fed. Same
+// convention StudentAttendance already documents for an absent row, and it
+// means reset-by-delete and never-marked share one single representation of
+// PENDING rather than two divergent ones.
+//
+// The *MarkedByName values are ALWAYS server-derived (an admin's name/email or
+// the session instructor's fullName, exactly like HorseFeedingMeal.updatedByName
+// and StudentAttendance.updatedByName) - never accepted from client input. The
+// per-step timestamps + names are the whole audit trail for a round; once the
+// board is cleared they are gone with the rows.
+//
+// State lives here rather than on HorseFeedingMeal for the same reason as
+// HorseFeedingVisibility above (horses on the board may have no meal row), plus
+// one more: mixing volatile round state into that model would corrupt its
+// updatedAt/updatedByName, which mean "who last edited the feeding
+// INSTRUCTIONS". horseName is the same free-text natural key, no Horse model.
+model HorseFeedingProgress {
+  horseName               String                    @id
+  state                   HorseFeedingProgressState
+  hayMarkedAt             DateTime?
+  hayMarkedByName         String?
+  concentrateMarkedAt     DateTime?
+  concentrateMarkedByName String?
+  updatedAt               DateTime                  @updatedAt
+
+  @@map("horse_feeding_progress")
+}
+
 model StudentAvailability {
   id          String   @id @default(cuid())
   studentId   String
