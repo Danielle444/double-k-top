@@ -1,10 +1,16 @@
 /**
  * Pure tests for the student riding-session presentation decision
  * (resolveStudentRidingPresentation in app/student/student-riding-presentation.ts).
- * These pin down Fix 1: a complex-mode riding slot is shown to trainees as
- * "תרגול הדרכה" and never with the generic assignment coach/arena box;
- * ordinary (non-complex) riding is unchanged; complexity is taken only from
- * the typed isComplex flag, never from the title text or publication state.
+ * These pin down Fix 1: a complex-mode riding slot is never shown with the
+ * generic assignment coach/arena box; ordinary (non-complex) riding is
+ * unchanged; complexity is taken only from the typed isComplex flag, never from
+ * the title text.
+ *
+ * RCP-1a narrowed the TITLE half of that rule to the publication boundary: the
+ * "תרגול הדרכה" override (and any published custom title) applies only once a
+ * publication exists. An unpublished complex draft shows the ordinary schedule
+ * title, so draft work never changes what trainees see. The generic-info
+ * suppression above is unchanged and still keyed on isComplex (RCP-2 deferred).
  *
  * Uses the existing `tsx` runner with Node built-ins `node:test` and
  * `node:assert/strict`. No test framework is installed. Run with:
@@ -69,9 +75,10 @@ test("complex + published: title תרגול הדרכה, generic riding info hidd
   assert.equal(p.showComplexPlan, true);
 });
 
-// 2. complex + unpublished: still complex title, generic info suppressed, and
-// nothing complex exposed (no publication).
-test("complex + unpublished: title תרגול הדרכה, generic riding info hidden, no complex details exposed", () => {
+// 2. complex + unpublished: RCP-1a - the ORDINARY schedule title (the complex
+// override is PUBLISHED-only), generic info still suppressed, and nothing
+// complex exposed (no publication).
+test("complex + unpublished: ordinary title, generic riding info hidden, no complex details exposed", () => {
   const item: PresentationInput = {
     isComplex: true,
     title: "רכיבה",
@@ -79,7 +86,8 @@ test("complex + unpublished: title תרגול הדרכה, generic riding info hi
     publishedComplexRidingPlan: null,
   };
   const p = resolveStudentRidingPresentation(item);
-  assert.equal(p.title, COMPLEX_RIDING_TITLE);
+  assert.equal(p.title, "רכיבה");
+  assert.notEqual(p.title, COMPLEX_RIDING_TITLE);
   assert.equal(p.showGenericRidingInfo, false);
   assert.equal(p.showComplexPlan, false);
 });
@@ -138,13 +146,18 @@ test("unrelated non-riding item: existing title behavior, no riding info, no com
   assert.equal(p.showComplexPlan, false);
 });
 
-// Complexity comes only from the flag, never the Hebrew title text.
-test("complexity comes only from the isComplex flag, never the title text", () => {
+// Complexity comes only from the flag, never the Hebrew title text. RCP-1a -
+// re-fixtured onto a PUBLISHED plan (the override is now PUBLISHED-only), with
+// BOTH items holding the same publication so that isComplex is the ONLY
+// difference between them. A non-complex item never carries a publication in
+// practice; it is used here purely as a structural control to prove the flag -
+// not the publication and not the title text - selects the override.
+test("complexity comes only from the isComplex flag, never the title text (published)", () => {
   const complexTitledRikiva: PresentationInput = {
     isComplex: true,
     title: "רכיבה",
     ridingInfo: null,
-    publishedComplexRidingPlan: null,
+    publishedComplexRidingPlan: PUBLISHED_PLAN,
   };
   assert.equal(resolveStudentRidingPresentation(complexTitledRikiva).title, COMPLEX_RIDING_TITLE);
 
@@ -152,7 +165,7 @@ test("complexity comes only from the isComplex flag, never the title text", () =
     isComplex: false,
     title: "רכיבה - ישיבה",
     ridingInfo: null,
-    publishedComplexRidingPlan: null,
+    publishedComplexRidingPlan: PUBLISHED_PLAN,
   };
   assert.notEqual(resolveStudentRidingPresentation(nonComplex).title, COMPLEX_RIDING_TITLE);
   assert.equal(resolveStudentRidingPresentation(nonComplex).title, "רכיבה");
@@ -223,13 +236,15 @@ test("resolver is pure: deterministic output and does not mutate its input", () 
 // getStudentScheduleTitle is NOT modified by this fix.
 // ---------------------------------------------------------------------------
 
-// Level 1 complex item: the flag is false -> legacy fixed override, unchanged.
-test("L2 fix: Level 1 complex (flag false) -> תרגול הדרכה", () => {
+// Level 1 complex item: the flag is false -> legacy fixed override. RCP-1a -
+// re-fixtured onto a PUBLISHED plan with a null snapshot, which is the only
+// state in which the generated fallback is now reachable at all.
+test("L2 fix: published Level 1 complex (flag false) -> תרגול הדרכה", () => {
   const item: PresentationInput = {
     isComplex: true,
     title: "רכיבה - ישיבה יציבה",
     ridingInfo: null,
-    publishedComplexRidingPlan: null,
+    publishedComplexRidingPlan: publishedPlanWithSnapshot(null),
     preserveOriginalComplexTitle: false,
   };
   const p = resolveStudentRidingPresentation(item);
@@ -325,13 +340,14 @@ test("L2 fix: placeholder-shaped item (non-complex, flag false) unchanged", () =
 
 // Missing flag (server field absent) is treated identically to false: a complex
 // slot retains the legacy "תרגול הדרכה" override, never opting into
-// preservation by accident. This is the `!== true` contract.
-test("L2 fix: missing/absent preserve flag on a complex slot retains תרגול הדרכה", () => {
+// preservation by accident. This is the `!== true` contract. RCP-1a - asserted
+// on a PUBLISHED plan, the only surface on which the override now exists.
+test("L2 fix: missing/absent preserve flag on a published complex slot retains תרגול הדרכה", () => {
   const missing: PresentationInput = {
     isComplex: true,
     title: "רכיבה - ישיבה יציבה",
     ridingInfo: null,
-    publishedComplexRidingPlan: null,
+    publishedComplexRidingPlan: publishedPlanWithSnapshot(null),
     // preserveOriginalComplexTitle deliberately omitted (undefined)
   };
   assert.equal(resolveStudentRidingPresentation(missing).title, COMPLEX_RIDING_TITLE);
@@ -417,10 +433,11 @@ test("RC-A4: published null snapshot keeps the Level 2 preserved fallback", () =
   assert.equal(p.title, "רכיבה");
 });
 
-// 5. UNPUBLISHED complex slot never shows a title (publication is null) - the
-//    trainee always sees the generated fallback, never a live title (there is no
-//    live-title field on the presentation input at all - PUBLISHED-only).
-test("RC-A4: an unpublished complex slot shows only the fallback (no live title read)", () => {
+// 5. UNPUBLISHED complex slot never shows a live title (there is no live-title
+//    field on the presentation input at all - PUBLISHED-only). RCP-1a: it now
+//    shows the ORDINARY schedule title rather than the generated complex
+//    fallback, so no draft state is observable to the trainee at all.
+test("RC-A4/RCP-1a: an unpublished complex slot shows the ordinary title (no live title read)", () => {
   const p = resolveStudentRidingPresentation({
     isComplex: true,
     title: "רכיבה",
@@ -428,7 +445,8 @@ test("RC-A4: an unpublished complex slot shows only the fallback (no live title 
     publishedComplexRidingPlan: null,
     preserveOriginalComplexTitle: false,
   });
-  assert.equal(p.title, COMPLEX_RIDING_TITLE);
+  assert.equal(p.title, "רכיבה");
+  assert.notEqual(p.title, COMPLEX_RIDING_TITLE);
 });
 
 // 6. A malformed published snapshot (multiline / overlong) falls back safely.
@@ -461,4 +479,163 @@ test("RC-A4: ordinary riding is unaffected", () => {
     publishedComplexRidingPlan: null,
   });
   assert.equal(p.title, "רכיבה");
+});
+
+// ---------------------------------------------------------------------------
+// RCP-1a - THE PUBLICATION BOUNDARY.
+//
+// A RidingSlotComplexPlan row is created EAGERLY the moment a manager chooses
+// complex mode - before any save and before publication - so isComplex alone
+// must never change what a trainee sees. These tests pin the locked rule:
+//
+//   publication === null -> the ordinary schedule title, in EVERY case
+//   publication !== null -> the existing published behaviour, byte-identical
+//
+// The manager's draft title is not merely gated here, it is structurally
+// unreachable: the presentation input carries no live-title field at all.
+// ---------------------------------------------------------------------------
+
+// 1. THE REGRESSION. Level 1 complex slot with an unpublished draft plan: the
+//    trainee sees the ordinary title, never "תרגול הדרכה".
+test("RCP-1a: Level 1 complex + unpublished draft -> ordinary title, never תרגול הדרכה", () => {
+  const p = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: null,
+    preserveOriginalComplexTitle: false,
+  });
+  assert.equal(p.title, "רכיבה");
+  assert.notEqual(p.title, COMPLEX_RIDING_TITLE);
+});
+
+// 2. The unpublished title is the ordinary trainee title - i.e. shortened by
+//    getStudentScheduleTitle exactly like any other item, never the raw
+//    ScheduleItem.title and never the complex override.
+test("RCP-1a: unpublished draft title is shortened like any ordinary title, never raw", () => {
+  const p = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: null,
+    preserveOriginalComplexTitle: false,
+  });
+  assert.equal(p.title, "רכיבה");
+  assert.notEqual(p.title, "רכיבה - ישיבה יציבה");
+  assert.notEqual(p.title, COMPLEX_RIDING_TITLE);
+});
+
+// 3. Level 2 is unaffected by RCP-1a: it already resolved to the preserved
+//    original title while unpublished, and still does. No regression.
+test("RCP-1a: Level 2 complex + unpublished draft -> ordinary title (unchanged)", () => {
+  const p = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: null,
+    preserveOriginalComplexTitle: true,
+  });
+  assert.equal(p.title, "רכיבה");
+  assert.notEqual(p.title, COMPLEX_RIDING_TITLE);
+});
+
+// 4. THE PUBLISH TRANSITION. One identical item; only the publication appears.
+//    This is the exact moment the complex title is allowed to become visible.
+test("RCP-1a: publishing is the moment the custom title becomes trainee-visible", () => {
+  const base = {
+    isComplex: true as const,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: null,
+    preserveOriginalComplexTitle: false,
+  };
+  const draft = resolveStudentRidingPresentation({ ...base, publishedComplexRidingPlan: null });
+  const published = resolveStudentRidingPresentation({
+    ...base,
+    publishedComplexRidingPlan: publishedPlanWithSnapshot("קפיצות בוקר"),
+  });
+  assert.equal(draft.title, "רכיבה");
+  assert.equal(published.title, "קפיצות בוקר");
+  assert.notEqual(draft.title, published.title);
+});
+
+// 5. Publishing with the title field left empty (null snapshot) is the ONLY way
+//    a trainee ever sees "תרגול הדרכה" - the override is post-publication only.
+test("RCP-1a: published with an empty title -> תרגול הדרכה (override is publication-only)", () => {
+  const published = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: publishedPlanWithSnapshot(null),
+    preserveOriginalComplexTitle: false,
+  });
+  assert.equal(published.title, COMPLEX_RIDING_TITLE);
+
+  const draft = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: null,
+    preserveOriginalComplexTitle: false,
+  });
+  assert.notEqual(draft.title, COMPLEX_RIDING_TITLE);
+});
+
+// 6. UNPUBLISH RESTORE. Unpublishing removes the publication row, so the very
+//    same item resolves back to its original title with no unpublish-specific
+//    logic anywhere - the boundary alone does it.
+test("RCP-1a: unpublishing restores the original schedule title", () => {
+  const base = {
+    isComplex: true as const,
+    title: "רכיבה - ישיבה יציבה",
+    ridingInfo: null,
+    preserveOriginalComplexTitle: false,
+  };
+  const published = resolveStudentRidingPresentation({
+    ...base,
+    publishedComplexRidingPlan: publishedPlanWithSnapshot("קפיצות בוקר"),
+  });
+  const afterUnpublish = resolveStudentRidingPresentation({
+    ...base,
+    publishedComplexRidingPlan: null,
+  });
+  assert.equal(published.title, "קפיצות בוקר");
+  assert.equal(afterUnpublish.title, "רכיבה");
+  assert.notEqual(afterUnpublish.title, COMPLEX_RIDING_TITLE);
+});
+
+// 7. NO WIDENING. RCP-1a changes the title only: an unpublished complex slot
+//    still exposes no complex plan and still shows no generic coach/arena box,
+//    with or without a stale ridingInfo present (RCP-2 is deferred - the
+//    generic-info suppression is deliberately untouched).
+test("RCP-1a: unpublished states expose no complex plan and no generic riding info", () => {
+  const withoutInfo = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה",
+    ridingInfo: null,
+    publishedComplexRidingPlan: null,
+    preserveOriginalComplexTitle: false,
+  });
+  assert.equal(withoutInfo.showComplexPlan, false);
+  assert.equal(withoutInfo.showGenericRidingInfo, false);
+
+  const withStaleInfo = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה",
+    ridingInfo: GENERIC_RIDING_INFO,
+    publishedComplexRidingPlan: null,
+    preserveOriginalComplexTitle: false,
+  });
+  assert.equal(withStaleInfo.showComplexPlan, false);
+  assert.equal(withStaleInfo.showGenericRidingInfo, false);
+
+  // Level 2 unpublished behaves identically on both flags.
+  const level2 = resolveStudentRidingPresentation({
+    isComplex: true,
+    title: "רכיבה",
+    ridingInfo: GENERIC_RIDING_INFO,
+    publishedComplexRidingPlan: null,
+    preserveOriginalComplexTitle: true,
+  });
+  assert.equal(level2.showComplexPlan, false);
+  assert.equal(level2.showGenericRidingInfo, false);
 });
