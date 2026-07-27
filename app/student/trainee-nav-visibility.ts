@@ -1,7 +1,19 @@
 /**
- * TEMPORARY LAUNCH RULE:
+ * TEMPORARY LAUNCH RULE (with one capability-driven exception):
  * Level-2-only navigation is derived from the single eligible option's level.
  * Replace with server-returned effective capabilities after launch.
+ *
+ * THE EXCEPTION - COURSE MATERIALS. The level allow-list below still governs
+ * MOST Level 2 navigation, but it is a guess, and it went stale the moment
+ * COURSE_MATERIALS was enabled for Level 2: a Level-2-only trainee with an ACTIVE
+ * enrollment, an ACTIVE offering, an ENABLED capability and an assigned material
+ * audience still lost the "חומרי קורס" entry, because nothing on this path ever
+ * read a capability. Entries can now be unlocked by the caller through
+ * `serverUnlockedNavIds` - a list the trainee client derives from a REAL
+ * server-side capability decision (lib/actions/trainee-materials-access.ts,
+ * which shares the content reader's own scope resolver). Materials is the first
+ * and currently only such entry; every other Level 2 module stays on the
+ * temporary level rule until it too is migrated to a server decision.
  *
  * PURE by construction: no Prisma, no DB, no clock, no randomness, no auth, no
  * cookie, no env, no React, no runtime imports at all (both imports below are
@@ -25,6 +37,13 @@
  * options set (cardinality + level), never from the currently selected course,
  * so a dual-enrolled trainee who selects a Level 2 course keeps every Level 1
  * module.
+ *
+ * ...AND WHERE THAT STOPPED BEING GOOD ENOUGH: `serverUnlockedNavIds` is the
+ * escape hatch for an entry whose real answer is now known server-side. It still
+ * invents no capability model HERE - this module stays pure and receives an
+ * already-decided list of ids. Only the caller talks to the server. Migrating a
+ * further module off the level guess means passing its id in that list too, not
+ * editing the allow-list.
  */
 import type { MainTabId } from "@/lib/components/BottomTabs";
 import type { TraineeCourseOptionView } from "@/lib/course/trainee-course-selection-core";
@@ -52,6 +71,11 @@ export function isLevel2OnlyTrainee(options: readonly TraineeCourseOptionView[])
  * notifications, and any future module) is hidden for a Level-2-only trainee
  * without needing to be enumerated. For every other trainee the list is ignored
  * and navigation is unchanged.
+ *
+ * Deliberately NOT extended with "materials": the level allow-list must keep
+ * saying only what a LEVEL implies. Materials is unlocked per-trainee through
+ * `serverUnlockedNavIds` on the real capability decision, so a Level 2 offering
+ * that does NOT enable COURSE_MATERIALS still correctly hides the entry.
  */
 const LEVEL2_ONLY_VISIBLE_NAV_IDS: readonly MainTabId[] = [
   "today",
@@ -66,15 +90,24 @@ const LEVEL2_ONLY_VISIBLE_NAV_IDS: readonly MainTabId[] = [
  * Is one nav/menu entry visible for a trainee with these eligible options?
  *
  * Non-Level-2-only trainees (Level-1-only, dual, or still loading) always see
- * every entry - navigation is unchanged for them. A Level-2-only trainee sees an
- * entry only if it is in the allow-list above.
+ * every entry - navigation is unchanged for them, and `serverUnlockedNavIds` is
+ * then irrelevant because nothing is being hidden in the first place. A
+ * Level-2-only trainee sees an entry if it is in the level allow-list above OR
+ * the caller has unlocked it from a server-side capability decision.
+ *
+ * `serverUnlockedNavIds` is ADDITIVE ONLY - it can reveal an entry the level rule
+ * would have hidden, never hide one the level rule allows, and never affect a
+ * Level-1-only or dual trainee. Defaulting it to `[]` keeps every existing caller
+ * byte-for-byte unchanged.
  */
 export function isTraineeNavEntryVisible(
   id: MainTabId,
   options: readonly TraineeCourseOptionView[],
+  serverUnlockedNavIds: readonly MainTabId[] = [],
 ): boolean {
   if (!isLevel2OnlyTrainee(options)) return true;
-  return LEVEL2_ONLY_VISIBLE_NAV_IDS.includes(id);
+  if (LEVEL2_ONLY_VISIBLE_NAV_IDS.includes(id)) return true;
+  return serverUnlockedNavIds.includes(id);
 }
 
 /**
@@ -82,10 +115,15 @@ export function isTraineeNavEntryVisible(
  * quick-action shortcuts) down to the ones visible for a trainee with these
  * eligible options, preserving order. Returns the list unchanged for every
  * non-Level-2-only trainee.
+ *
+ * This FILTERS and never constructs: an unlocked id that is not already in
+ * `entries` cannot appear in the result, so no surface can be made to render an
+ * entry it does not itself define.
  */
 export function filterTraineeNavEntries<T extends { id: MainTabId }>(
   entries: readonly T[],
   options: readonly TraineeCourseOptionView[],
+  serverUnlockedNavIds: readonly MainTabId[] = [],
 ): T[] {
-  return entries.filter((entry) => isTraineeNavEntryVisible(entry.id, options));
+  return entries.filter((entry) => isTraineeNavEntryVisible(entry.id, options, serverUnlockedNavIds));
 }

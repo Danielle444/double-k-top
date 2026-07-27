@@ -20,6 +20,14 @@
  * enrollment fetch, per-offering capability resolution and the final scoped
  * material load, so the whole flow is unit-testable without a database.
  *
+ * THE SCOPE STEP IS SHARED, NOT DUPLICATED. The session -> enrollments ->
+ * per-offering capability -> enabled-offering-ids half is factored out as
+ * `resolveTraineeEnabledMaterialsOfferingIdsWithDeps`, so a caller that only
+ * needs to know WHETHER any offering enables materials (the trainee navigation
+ * entry-point unlock) asks the SAME resolver the content reader asks, rather
+ * than growing a second, drifting capability implementation. There is exactly
+ * one trainee-materials scope decision in this codebase and it lives here.
+ *
  * PURE by construction (the decision function): no Prisma, no DB, no clock, no
  * randomness, no env, no cookies, no next/headers, no React. The DI orchestration
  * imports only the typed denial error class for classification; all IO is
@@ -112,49 +120,58 @@ export interface TraineeEnrollmentScopeRow {
 }
 
 /**
- * The injected boundaries of the trainee scoped-materials read.
+ * The injected boundaries of the trainee materials SCOPE decision - everything
+ * needed to answer "which offerings may this trainee see materials for", with no
+ * material read of any kind.
  *
  * `requireTraineeId` resolves the trainee from the SIGNED SESSION and throws
  * {@link UnauthenticatedActorError} for anonymous / expired / wrong-audience /
  * inactive callers (that error alone is a denial -> `[]`; every other error
  * propagates). `loadEnrollments` returns ALL of the trainee's enrollments.
  * `isMaterialsCapabilityEnabled` resolves the effective COURSE_MATERIALS
- * capability for one offering. `loadMaterials` runs the final audience-scoped
- * material query for the resolved enabled offering ids.
+ * capability for one offering.
  */
-export interface TraineeScopedMaterialsDeps<TRow> {
+export interface TraineeEnabledMaterialsOfferingIdsDeps {
   requireTraineeId: () => Promise<string>;
   loadEnrollments: (traineeId: string) => Promise<readonly TraineeEnrollmentScopeRow[]>;
   isMaterialsCapabilityEnabled: (courseOfferingId: string) => Promise<boolean>;
+}
+
+/**
+ * The injected boundaries of the trainee scoped-materials READ: the scope
+ * dependencies above plus `loadMaterials`, which runs the final audience-scoped
+ * material query for the resolved enabled offering ids.
+ */
+export interface TraineeScopedMaterialsDeps<TRow> extends TraineeEnabledMaterialsOfferingIdsDeps {
   loadMaterials: (enabledOfferingIds: readonly string[]) => Promise<TRow[]>;
 }
 
 /**
  * Resolve the trainee, load every enrollment, resolve COURSE_MATERIALS for each
- * distinct ACTIVE-enrollment + ACTIVE-offering candidate, decide the enabled
- * offering-id union via the pure core, and only THEN load the audience-scoped
- * materials.
+ * distinct ACTIVE-enrollment + ACTIVE-offering candidate, and decide the enabled
+ * offering-id union via the pure core.
  *
  * Order is deliberate and fail-closed:
  *  1. session -> trainee id (UnauthenticatedActorError -> `[]`; else propagate);
  *  2. load all enrollments;
  *  3. per distinct active candidate offering, resolve COURSE_MATERIALS enabled;
- *  4. pure core -> ordered, deduped enabled offering ids;
- *  5. empty -> `[]` WITHOUT touching materials; otherwise load the scoped rows.
+ *  4. pure core -> ordered, deduped enabled offering ids.
  *
- * `loadMaterials` is unreachable unless at least one offering is enabled, so no
- * material row is read (and no storage URL signed) for a trainee with no active
- * enabled offering.
+ * This is the WHOLE scope decision and it reads NO material row: it is shared
+ * verbatim by the content reader below and by the navigation entry-point unlock
+ * (lib/actions/trainee-materials-access.ts), so the two can never disagree about
+ * what "this trainee has materials" means. An empty result is returned frozen and
+ * is indistinguishable between "denied", "no enrollment" and "nothing enabled".
  */
-export async function loadTraineeScopedMaterialsWithDeps<TRow>(
-  deps: TraineeScopedMaterialsDeps<TRow>,
-): Promise<TRow[]> {
+export async function resolveTraineeEnabledMaterialsOfferingIdsWithDeps(
+  deps: TraineeEnabledMaterialsOfferingIdsDeps,
+): Promise<readonly string[]> {
   let traineeId: string;
   try {
     traineeId = await deps.requireTraineeId();
   } catch (error) {
     if (error instanceof UnauthenticatedActorError) {
-      return [];
+      return Object.freeze([]);
     }
     throw error;
   }
@@ -192,7 +209,25 @@ export async function loadTraineeScopedMaterialsWithDeps<TRow>(
     });
   }
 
-  const enabledOfferingIds = resolveTraineeMaterialsOfferingIdsFromRows({ enrollments: scopeRows });
+  return resolveTraineeMaterialsOfferingIdsFromRows({ enrollments: scopeRows });
+}
+
+/**
+ * Resolve the enabled offering-id union (see the shared resolver above) and only
+ * THEN load the audience-scoped materials.
+ *
+ * Order is deliberate and fail-closed:
+ *  1-4. the shared scope decision -> ordered, deduped enabled offering ids;
+ *  5.   empty -> `[]` WITHOUT touching materials; otherwise load the scoped rows.
+ *
+ * `loadMaterials` is unreachable unless at least one offering is enabled, so no
+ * material row is read (and no storage URL signed) for a trainee with no active
+ * enabled offering.
+ */
+export async function loadTraineeScopedMaterialsWithDeps<TRow>(
+  deps: TraineeScopedMaterialsDeps<TRow>,
+): Promise<TRow[]> {
+  const enabledOfferingIds = await resolveTraineeEnabledMaterialsOfferingIdsWithDeps(deps);
   if (enabledOfferingIds.length === 0) {
     return [];
   }

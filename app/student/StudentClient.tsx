@@ -25,6 +25,7 @@ import {
 } from "@/lib/actions/trainee-course-selection";
 import { TraineeCourseSelector } from "@/app/student/TraineeCourseSelector";
 import { filterTraineeNavEntries, isLevel2OnlyTrainee } from "@/app/student/trainee-nav-visibility";
+import { hasAnyActiveEnabledCourseMaterialsOffering } from "@/lib/actions/trainee-materials-access";
 import { updateOwnPrivateHorseName } from "@/lib/actions/horses";
 import { ScheduleSection } from "@/app/student/ScheduleSection";
 import { UnifiedScheduleSection } from "@/app/student/UnifiedScheduleSection";
@@ -100,6 +101,11 @@ const STUDENT_ALL_TABS = [...STUDENT_MAIN_TABS, ...STUDENT_MORE_ITEMS];
 // the visible nav never shrinks when options resolve to Level-2-only; for a
 // Level-1-only/dual trainee it simply expands to the full nav. This is
 // presentation gating only - it unlocks nothing and guards nothing.
+//
+// Server-unlocked ids (currently just "materials", see serverUnlockedNavIds) are
+// unioned onto this subset at the use site rather than being listed here: they
+// are per-trainee facts the server answers, not a constant, and the union keeps
+// the "nav only ever grows" property intact once the answer arrives.
 const LOADING_SAFE_NAV_IDS: readonly MainTabId[] = [
   "today",
   "schedule",
@@ -277,6 +283,19 @@ export function StudentClient() {
   // the unchanged single-course path.
   const [courseOptions, setCourseOptions] = useState<TraineeCourseOptionView[] | null>(null);
   const [selectedCourseOfferingId, setSelectedCourseOfferingId] = useState<string | null>(null);
+  // LEVEL 2 MATERIALS ENTRY POINT - the SERVER's answer to "does this trainee have
+  // any active enrollment into an ACTIVE offering whose COURSE_MATERIALS is
+  // ENABLED?" (hasAnyActiveEnabledCourseMaterialsOffering, which shares the
+  // content reader's own scope resolver). null = not answered yet.
+  //
+  // NAVIGATION ONLY, NEVER AUTHORITY - exactly like courseOptions above. It
+  // decides whether one menu button is offered; getStudentMaterials still
+  // re-derives the whole scope server-side on every read, so a wrong `true` here
+  // can only produce an empty materials screen. Deliberately NOT persisted to
+  // localStorage, a cookie, React context or module state, so it can never
+  // outlive a session or a mount, and a capability change is picked up on the
+  // next load rather than needing a cache to be cleared.
+  const [materialsEntryEnabled, setMaterialsEntryEnabled] = useState<boolean | null>(null);
   // UNIFIED TRAINEE SCHEDULE - SLICE U1: which schedule sub-view is shown -
   // the selected course (Level 1/Level 2, the unchanged default) or the
   // combined "הלו״ז שלי" cross-course view. UX STATE ONLY: rendering the
@@ -530,6 +549,42 @@ export function StudentClient() {
         if (cancelled) return;
         setCourseOptions([]);
         setSelectedCourseOfferingId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id]);
+
+  // LEVEL 2 MATERIALS ENTRY POINT - ask the SERVER whether the "חומרי קורס" entry
+  // should be offered at all, instead of guessing it from the course level.
+  //
+  // Keyed on session?.id exactly like the course-options effect above, so it
+  // restarts on a genuine trainee SWITCH (never on a background profile refresh
+  // of the same trainee) and the previous trainee's answer is cleared BEFORE the
+  // new request goes out - a stale `true` must never survive into another
+  // trainee's navigation. With no session there is nothing to ask, and the state
+  // stays null (= "not answered", entry not unlocked).
+  //
+  // A rejection resolves to `false`: the unlock is purely ADDITIVE, so a `false`
+  // only means "no extra entry" - it can never remove the materials entry from a
+  // Level-1-only or dual trainee, whose navigation does not consult this value at
+  // all. No raw error is surfaced (this is a menu, and a failed menu hint is not
+  // something to alarm a trainee with); the authoritative reader would deny the
+  // read anyway if access were genuinely absent.
+  useEffect(() => {
+    /* eslint-disable-next-line react-hooks/set-state-in-effect */
+    setMaterialsEntryEnabled(null);
+    if (!session) return;
+    let cancelled = false;
+    hasAnyActiveEnabledCourseMaterialsOffering()
+      .then((enabled) => {
+        if (cancelled) return;
+        setMaterialsEntryEnabled(enabled);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setMaterialsEntryEnabled(false);
       });
     return () => {
       cancelled = true;
@@ -951,9 +1006,13 @@ export function StudentClient() {
   //
   // For a Level-2-only trainee (exactly one eligible option, level 2) these lists
   // drop the course modules that Level 2 does not enable (duties, messages,
-  // materials, teaching practice, weekly feedback, notifications) from every nav
-  // surface - the bottom tabs, the "עוד" menu and the home quick-actions - while
-  // keeping schedule, contacts and the utility entries. The rule reads the FULL
+  // teaching practice, weekly feedback, notifications) from every nav surface -
+  // the bottom tabs, the "עוד" menu and the home quick-actions - while keeping
+  // schedule, contacts and the utility entries. Course MATERIALS is the one entry
+  // no longer decided by level: it is unlocked per-trainee by the server
+  // capability answer below (serverUnlockedNavIds), so it appears exactly when
+  // COURSE_MATERIALS is really ENABLED for one of that trainee's active
+  // offerings, and stays hidden when it is not. The rule reads the FULL
   // eligible options set, never the selected course, so a dual trainee is never
   // filtered and never loses a Level 1 module by selecting a Level 2 course. For
   // every non-Level-2-only trainee the three lists are returned unchanged.
@@ -965,19 +1024,40 @@ export function StudentClient() {
   // resolved, the existing filter runs unchanged (Level-2-only filtered,
   // Level-1-only/dual full).
   const courseOptionsLoading = courseOptions === null;
+
+  // LEVEL 2 MATERIALS ENTRY POINT - the nav ids unlocked by a real server-side
+  // capability decision rather than by the temporary level allow-list. Only a
+  // resolved `true` unlocks: while the answer is null (unresolved) and on the
+  // rejection path (false) the list is empty, so a Level-2-only trainee's
+  // navigation is exactly what it was before this fix until the server says
+  // otherwise.
+  //
+  // The list is ADDITIVE at every use site (see trainee-nav-visibility.ts), so it
+  // can only ever ADD the materials entry for a Level-2-only trainee. A
+  // Level-1-only or dual trainee's navigation is not filtered at all and is
+  // therefore untouched by this value, including when the request fails.
+  const serverUnlockedNavIds: readonly MainTabId[] =
+    materialsEntryEnabled === true ? ["materials"] : [];
+
+  // The loading-safe subset is unioned with the SAME unlocked ids, so the nav only
+  // ever GROWS as data resolves: materials cannot appear before the server answers
+  // `true`, and once it has, no later resolution (options arriving, and turning out
+  // to be Level-2-only) can take the entry away again.
   const restrictToLoadingSafe = <T extends { id: MainTabId }>(entries: readonly T[]): T[] =>
-    entries.filter((entry) => LOADING_SAFE_NAV_IDS.includes(entry.id));
+    entries.filter(
+      (entry) => LOADING_SAFE_NAV_IDS.includes(entry.id) || serverUnlockedNavIds.includes(entry.id),
+    );
 
   const visibleMainTabs = courseOptionsLoading
     ? restrictToLoadingSafe(STUDENT_MAIN_TABS)
-    : filterTraineeNavEntries(STUDENT_MAIN_TABS, eligibleCourseOptions);
+    : filterTraineeNavEntries(STUDENT_MAIN_TABS, eligibleCourseOptions, serverUnlockedNavIds);
   const moreMenuSource = STUDENT_ALL_TABS.filter((item) => item.id !== "more");
   const visibleMoreMenuItems = courseOptionsLoading
     ? restrictToLoadingSafe(moreMenuSource)
-    : filterTraineeNavEntries(moreMenuSource, eligibleCourseOptions);
+    : filterTraineeNavEntries(moreMenuSource, eligibleCourseOptions, serverUnlockedNavIds);
   const visibleQuickActions = courseOptionsLoading
     ? restrictToLoadingSafe(STUDENT_QUICK_ACTIONS)
-    : filterTraineeNavEntries(STUDENT_QUICK_ACTIONS, eligibleCourseOptions);
+    : filterTraineeNavEntries(STUDENT_QUICK_ACTIONS, eligibleCourseOptions, serverUnlockedNavIds);
 
   return (
     <div className="flex flex-1 flex-col">

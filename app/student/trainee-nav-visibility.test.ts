@@ -32,6 +32,7 @@ const CONTACTS: MainTabId = "contacts";
 const PROFILE: MainTabId = "profile";
 const HELP: MainTabId = "help";
 const MORE: MainTabId = "more";
+const MATERIALS: MainTabId = "materials";
 const COURSE_MODULE_IDS: MainTabId[] = [
   "duties",
   "messages",
@@ -40,6 +41,11 @@ const COURSE_MODULE_IDS: MainTabId[] = [
   "weeklyFeedback",
   "notifications",
 ];
+// The Level 2 modules still governed ONLY by the temporary level allow-list.
+// "materials" is deliberately excluded: it is no longer decided by level, but by
+// the server capability unlock (serverUnlockedNavIds), so it is asserted
+// separately in both directions below rather than being pinned as always-hidden.
+const LEVEL_RULE_ONLY_MODULE_IDS: MainTabId[] = COURSE_MODULE_IDS.filter((id) => id !== MATERIALS);
 
 // ---------------------------------------------------------------------------
 // isLevel2OnlyTrainee cardinality + level contract
@@ -67,10 +73,13 @@ test("zero options (loading / no course) is not Level-2-only", () => {
 // contacts + profile/help/more utilities.
 // ---------------------------------------------------------------------------
 
-test("Level-2-only hides every unavailable course module", () => {
+test("Level-2-only hides every unavailable course module (no server unlock)", () => {
   const opts = [option("a", 2)];
+  // With no unlock supplied, the rule is EXACTLY what it was before: every course
+  // module - materials included - is hidden for a Level-2-only trainee.
   for (const id of COURSE_MODULE_IDS) {
     assert.equal(isTraineeNavEntryVisible(id, opts), false, `${id} must be hidden`);
+    assert.equal(isTraineeNavEntryVisible(id, opts, []), false, `${id} must be hidden with an empty unlock`);
   }
 });
 
@@ -89,8 +98,128 @@ test("Level-2-only keeps profile, help and the 'more' container visible", () => 
 });
 
 // ---------------------------------------------------------------------------
+// SERVER CAPABILITY UNLOCK (serverUnlockedNavIds) - the Level 2 Course Materials
+// entry point. The unlock is ADDITIVE: it may reveal an entry the level rule
+// would hide, and may do nothing else.
+// ---------------------------------------------------------------------------
+
+test("Level-2-only + materials unlocked -> the materials entry becomes visible", () => {
+  const opts = [option("a", 2)];
+  assert.equal(isTraineeNavEntryVisible(MATERIALS, opts, [MATERIALS]), true);
+});
+
+test("unlocking materials reveals ONLY materials - every other module stays hidden", () => {
+  const opts = [option("a", 2)];
+  for (const id of LEVEL_RULE_ONLY_MODULE_IDS) {
+    assert.equal(
+      isTraineeNavEntryVisible(id, opts, [MATERIALS]),
+      false,
+      `${id} must stay hidden when only materials is unlocked`,
+    );
+  }
+});
+
+test("an empty unlock list leaves the materials entry hidden for a Level-2-only trainee", () => {
+  const opts = [option("a", 2)];
+  assert.equal(isTraineeNavEntryVisible(MATERIALS, opts, []), false);
+  assert.equal(isTraineeNavEntryVisible(MATERIALS, opts), false, "omitted argument behaves as empty");
+});
+
+test("the unlock never HIDES an entry the level allow-list already allows", () => {
+  const opts = [option("a", 2)];
+  for (const id of [HOME, SCHEDULE, CONTACTS, PROFILE, HELP, MORE]) {
+    assert.equal(isTraineeNavEntryVisible(id, opts, [MATERIALS]), true, `${id} must stay visible`);
+    assert.equal(isTraineeNavEntryVisible(id, opts, []), true, `${id} must stay visible with no unlock`);
+  }
+});
+
+test("the unlock cannot INJECT an entry the surface does not define", () => {
+  const opts = [option("a", 2)];
+  // "materials" is unlocked but absent from this surface's own entry list.
+  const entries = [{ id: HOME }, { id: SCHEDULE }];
+  const kept = filterTraineeNavEntries(entries, opts, [MATERIALS]);
+  assert.deepEqual(
+    kept.map((k) => k.id),
+    [HOME, SCHEDULE],
+    "filtering may only remove entries, never manufacture one",
+  );
+  assert.equal(kept.length, entries.length);
+});
+
+test("filter keeps the materials entry in place (order preserved) when unlocked", () => {
+  const moreItems: { id: MainTabId; label: string }[] = [
+    { id: "profile", label: "פרופיל" },
+    { id: "contacts", label: "אנשי קשר" },
+    { id: "materials", label: "חומרי קורס" },
+    { id: "teachingPractice", label: "התנסויות מתחילים" },
+    { id: "notifications", label: "עדכונים" },
+    { id: "weeklyFeedback", label: "משוב שבועי" },
+    { id: "help", label: "עזרה" },
+  ];
+  assert.deepEqual(
+    filterTraineeNavEntries(moreItems, [option("a", 2)], [MATERIALS]).map((i) => i.id),
+    ["profile", "contacts", "materials", "help"],
+    "materials appears between contacts and help, exactly where the menu defines it",
+  );
+  assert.deepEqual(
+    filterTraineeNavEntries(moreItems, [option("a", 2)], []).map((i) => i.id),
+    ["profile", "contacts", "help"],
+    "and disappears again with no unlock",
+  );
+});
+
+test("an unlock id that is not a Level 2 module is still only additive", () => {
+  // Defensive: unlocking several ids at once reveals exactly those ids.
+  const opts = [option("a", 2)];
+  const unlocked: MainTabId[] = [MATERIALS, "duties"];
+  assert.equal(isTraineeNavEntryVisible(MATERIALS, opts, unlocked), true);
+  assert.equal(isTraineeNavEntryVisible("duties", opts, unlocked), true);
+  assert.equal(isTraineeNavEntryVisible("messages", opts, unlocked), false);
+});
+
+// ---------------------------------------------------------------------------
 // (2)(3)(4) Level-1-only, dual, and dual-selecting-Level-2 are all unchanged.
 // ---------------------------------------------------------------------------
+
+test("a Level-1-only trainee is unaffected by the unlock in either direction", () => {
+  const opts = [option("a", 1)];
+  for (const id of [HOME, SCHEDULE, CONTACTS, PROFILE, HELP, MORE, ...COURSE_MODULE_IDS]) {
+    assert.equal(isTraineeNavEntryVisible(id, opts, []), true, `${id} visible with an empty unlock`);
+    assert.equal(isTraineeNavEntryVisible(id, opts, [MATERIALS]), true, `${id} visible with an unlock`);
+  }
+});
+
+test("a dual trainee is unaffected by the unlock in either direction", () => {
+  const opts = [option("l1", 1), option("l2", 2)];
+  for (const id of [HOME, SCHEDULE, CONTACTS, PROFILE, HELP, MORE, ...COURSE_MODULE_IDS]) {
+    assert.equal(isTraineeNavEntryVisible(id, opts, []), true, `${id} visible with an empty unlock`);
+    assert.equal(isTraineeNavEntryVisible(id, opts, [MATERIALS]), true, `${id} visible with an unlock`);
+  }
+});
+
+test("omitting the new argument is byte-for-byte the previous behaviour", () => {
+  const cases: readonly TraineeCourseOptionView[][] = [
+    [],
+    [option("a", 1)],
+    [option("a", 2)],
+    [option("a", 1), option("b", 2)],
+    [option("a", 2), option("b", 2)],
+  ];
+  const allIds: MainTabId[] = [HOME, SCHEDULE, CONTACTS, PROFILE, HELP, MORE, ...COURSE_MODULE_IDS];
+  for (const opts of cases) {
+    for (const id of allIds) {
+      assert.equal(
+        isTraineeNavEntryVisible(id, opts),
+        isTraineeNavEntryVisible(id, opts, []),
+        `${id} must behave identically with an omitted and an empty unlock`,
+      );
+    }
+    assert.deepEqual(
+      filterTraineeNavEntries(allIds.map((id) => ({ id })), opts),
+      filterTraineeNavEntries(allIds.map((id) => ({ id })), opts, []),
+    );
+  }
+});
 
 test("a single Level 1 option leaves every entry visible (unchanged)", () => {
   const opts = [option("a", 1)];

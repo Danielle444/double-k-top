@@ -1,22 +1,31 @@
 /**
  * P-MATERIALS M2C - focused tests for the trainee materials offering-scope core.
  *
- * Two halves, both DB-free and storage-free:
+ * Three parts, all DB-free and storage-free:
  *  1. PURE - resolveTraineeMaterialsOfferingIdsFromRows: the union/dedup/order
  *     and fail-closed rules over already-read enrollment+capability rows.
  *  2. ORCHESTRATION - loadTraineeScopedMaterialsWithDeps against plain fakes:
  *     session denial, "load all enrollments", bounded per-offering capability
  *     resolution, the empty->[] short-circuit (no material read), infra-error
  *     propagation, and that loadMaterials receives exactly the enabled union.
+ *  3. SHARED SCOPE RESOLVER - resolveTraineeEnabledMaterialsOfferingIdsWithDeps:
+ *     the extracted session -> enrollments -> capability -> enabled-ids half that
+ *     BOTH the content reader and the navigation entry-point unlock consume. Its
+ *     rules are asserted directly (not only through the reader), plus the
+ *     structural guarantee that the reader delegates to it rather than keeping a
+ *     second copy of the decision.
  *
  * Uses the existing `tsx` + node:test approach. Run with:
  *   npx tsx --test lib/course/trainee-materials-offering-scope-core.test.ts
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import {
   resolveTraineeMaterialsOfferingIdsFromRows,
+  resolveTraineeEnabledMaterialsOfferingIdsWithDeps,
   loadTraineeScopedMaterialsWithDeps,
   type TraineeMaterialsScopeRow,
   type TraineeEnrollmentScopeRow,
@@ -311,5 +320,139 @@ test("infrastructure errors propagate (never become [])", async () => {
   await assert.rejects(
     () => loadTraineeScopedMaterialsWithDeps(makeDeps({ traineeIdError: new Error("session store unreachable") }).deps),
     /session store unreachable/,
+  );
+});
+
+// ===========================================================================
+// PART 3 - resolveTraineeEnabledMaterialsOfferingIdsWithDeps (the SHARED half)
+//
+// The content reader is one consumer; the navigation entry-point unlock
+// (lib/actions/trainee-materials-access.ts) is the other. These assert the
+// resolver's own contract directly, so the shared decision is pinned
+// independently of either caller.
+// ===========================================================================
+
+test("shared resolver: L1-only active + enabled -> [L1]", async () => {
+  const { deps } = makeDeps({ enrollments: [enroll(L1)], enabledOfferingIds: [L1] });
+  assert.deepEqual([...(await resolveTraineeEnabledMaterialsOfferingIdsWithDeps(deps))], [L1]);
+});
+
+test("shared resolver: L2-only active + enabled -> [L2] (no Level 1 fallback, no collapse)", async () => {
+  const { deps } = makeDeps({ enrollments: [enroll(L2)], enabledOfferingIds: [L2] });
+  assert.deepEqual(
+    [...(await resolveTraineeEnabledMaterialsOfferingIdsWithDeps(deps))],
+    [L2],
+    "a Level-2-only trainee resolves to their OWN offering, never to a Level 1 default",
+  );
+});
+
+test("shared resolver: dual-enrolled with only L2 enabled -> [L2]", async () => {
+  const { deps } = makeDeps({ enrollments: [enroll(L1), enroll(L2)], enabledOfferingIds: [L2] });
+  assert.deepEqual([...(await resolveTraineeEnabledMaterialsOfferingIdsWithDeps(deps))], [L2]);
+});
+
+test("shared resolver: dedupes distinct candidates in first-seen order", async () => {
+  const { deps, spy } = makeDeps({
+    enrollments: [enroll(L2), enroll(L1), enroll(L2)],
+    enabledOfferingIds: [L1, L2],
+  });
+  assert.deepEqual([...(await resolveTraineeEnabledMaterialsOfferingIdsWithDeps(deps))], [L2, L1]);
+  assert.deepEqual(
+    spy.calls.filter((c) => c.startsWith("capability:")),
+    [`capability:${L2}`, `capability:${L1}`],
+    "capability is resolved once per DISTINCT candidate, not per raw enrollment row",
+  );
+});
+
+test("shared resolver: capability absent/disabled -> [] (capability row absence stays DISABLED)", async () => {
+  const { deps } = makeDeps({ enrollments: [enroll(L2)], enabledOfferingIds: [] });
+  assert.deepEqual([...(await resolveTraineeEnabledMaterialsOfferingIdsWithDeps(deps))], []);
+});
+
+test("shared resolver: INACTIVE enrollment / PLANNED / ARCHIVED offering are never candidates", async () => {
+  const { deps, spy } = makeDeps({
+    enrollments: [enroll(L1, "INACTIVE"), enroll(L2, "ACTIVE", "PLANNED"), enroll("o3", "ACTIVE", "ARCHIVED")],
+    enabledOfferingIds: [L1, L2, "o3"],
+  });
+  assert.deepEqual([...(await resolveTraineeEnabledMaterialsOfferingIdsWithDeps(deps))], []);
+  assert.deepEqual(
+    spy.calls.filter((c) => c.startsWith("capability:")),
+    [],
+    "capability is never resolved for an ineligible enrollment/offering",
+  );
+});
+
+test("shared resolver: malformed enrollment rows fail closed without throwing", async () => {
+  const { deps } = makeDeps({
+    enrollments: [
+      { courseOfferingId: "   ", enrollmentStatus: "ACTIVE", offeringStatus: "ACTIVE" },
+      { courseOfferingId: 7 as unknown as string, enrollmentStatus: "ACTIVE", offeringStatus: "ACTIVE" },
+      null as unknown as TraineeEnrollmentScopeRow,
+    ],
+    enabledOfferingIds: ["   "],
+  });
+  assert.deepEqual([...(await resolveTraineeEnabledMaterialsOfferingIdsWithDeps(deps))], []);
+});
+
+test("shared resolver: anonymous / inactive trainee -> [] and NO enrollment read", async () => {
+  const { deps, spy } = makeDeps({
+    traineeIdError: new UnauthenticatedActorError("No authenticated trainee"),
+  });
+  assert.deepEqual([...(await resolveTraineeEnabledMaterialsOfferingIdsWithDeps(deps))], []);
+  assert.deepEqual(spy.calls, ["actor"], "stops at the actor gate");
+});
+
+test("shared resolver: infrastructure errors propagate (never become [])", async () => {
+  await assert.rejects(
+    () =>
+      resolveTraineeEnabledMaterialsOfferingIdsWithDeps(
+        makeDeps({ traineeIdError: new Error("session store unreachable") }).deps,
+      ),
+    /session store unreachable/,
+  );
+  await assert.rejects(
+    () => resolveTraineeEnabledMaterialsOfferingIdsWithDeps(makeDeps({ enrollmentsError: new Error("db down") }).deps),
+    /db down/,
+  );
+  await assert.rejects(
+    () =>
+      resolveTraineeEnabledMaterialsOfferingIdsWithDeps(
+        makeDeps({ enrollments: [enroll(L1)], capabilityError: new Error("cap read failed") }).deps,
+      ),
+    /cap read failed/,
+  );
+});
+
+test("shared resolver: the result is frozen on every path", async () => {
+  const enabled = await resolveTraineeEnabledMaterialsOfferingIdsWithDeps(
+    makeDeps({ enrollments: [enroll(L1)], enabledOfferingIds: [L1] }).deps,
+  );
+  assert.ok(Object.isFrozen(enabled));
+  const denied = await resolveTraineeEnabledMaterialsOfferingIdsWithDeps(
+    makeDeps({ traineeIdError: new UnauthenticatedActorError("no trainee") }).deps,
+  );
+  assert.ok(Object.isFrozen(denied));
+});
+
+test("the content reader DELEGATES to the shared resolver (no second scope decision)", () => {
+  const src = readFileSync(
+    fileURLToPath(new URL("./trainee-materials-offering-scope-core.ts", import.meta.url)),
+    "utf8",
+  );
+  const start = src.indexOf("export async function loadTraineeScopedMaterialsWithDeps");
+  assert.ok(start >= 0, "the reader orchestration must still exist");
+  const body = src.slice(start);
+  assert.ok(
+    body.includes("await resolveTraineeEnabledMaterialsOfferingIdsWithDeps(deps)"),
+    "the reader must call the shared resolver",
+  );
+  // The candidate/capability loop must live in the shared resolver ONLY.
+  assert.ok(
+    !body.includes("isMaterialsCapabilityEnabled("),
+    "the reader must not re-implement per-offering capability resolution",
+  );
+  assert.ok(
+    !body.includes("resolveTraineeMaterialsOfferingIdsFromRows("),
+    "the reader must not re-run the pure scope decision itself",
   );
 });
