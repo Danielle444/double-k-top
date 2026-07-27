@@ -1085,6 +1085,248 @@ test("85. a post-restore refresh can never be swallowed by the duplicate-load gu
   assert.ok(!refresh.includes("setModalRow"), "a refresh must not disturb an open edit modal");
 });
 
+// ===========================================================================
+// 90-98. THE WHOLE CARD FOLLOWS THE DISPLAYED FEEDING PROGRESS STATE
+//
+// One pure lookup table over `displayProgressState` decides the card's
+// background/border, and exactly one render site consumes it. Everything below
+// locks that single source of truth, the neutral PENDING case, and the fact that
+// colour was added WITHOUT removing any text, glyph, aria state or affordance.
+// ===========================================================================
+
+/** The pure mapping, isolated from the component that consumes it. */
+const CARD_STATE_HELPER = SECTION.slice(
+  SECTION.indexOf("const CARD_STATE_CLASS"),
+  SECTION.indexOf("interface MealFormState")
+);
+
+/** The opening tag of ONE active-board horse card, up to its first child. */
+const ACTIVE_CARD_TAG = SECTION.slice(
+  SECTION.indexOf("{filteredRows.map((row) => ("),
+  SECTION.indexOf('<p className="text-base font-bold text-card-foreground">{row.horseName}</p>')
+);
+
+test("90. the card state is ONE exhaustive table: neutral / amber / green", () => {
+  assert.ok(CARD_STATE_HELPER.length > 0, "expected the card-state table");
+  assert.match(
+    CARD_STATE_HELPER,
+    /const CARD_STATE_CLASS: Readonly<Record<FeedingProgressState, string>> = \{/,
+    "the table must be total over FeedingProgressState, so no state can be unmapped"
+  );
+  // PENDING is TRULY NEUTRAL: the repository's default card surface and border,
+  // with no other colour blended in, so amber/green can only ever mean the round
+  // actually progressed.
+  assert.match(CARD_STATE_HELPER, /^ {2}PENDING: "border-border bg-card",$/m);
+  assert.match(CARD_STATE_HELPER, /^ {2}HAY_DONE: "border-warning bg-warning-muted",$/m);
+  assert.match(CARD_STATE_HELPER, /^ {2}COMPLETE: "border-success bg-success-muted",$/m);
+  // Exactly three entries - no fourth, undeclared card appearance.
+  assert.equal((CARD_STATE_HELPER.match(/^ {2}(PENDING|HAY_DONE|COMPLETE): /gm) ?? []).length, 3);
+
+  assert.match(
+    CARD_STATE_HELPER,
+    /export function resolveHorseFeedingCardStateClass\(\s*displayProgressState: FeedingProgressState\s*\): string \{\s*return CARD_STATE_CLASS\[displayProgressState\];\s*\}/,
+    "the helper must be a pure total lookup, nothing more"
+  );
+});
+
+test("91. the card reuses the SAME repository tokens as the status control", () => {
+  // Not a new palette: HAY_DONE/COMPLETE reuse the exact warning/success tokens
+  // the selected status buttons already use, so card and button agree visually.
+  assert.match(CONTROL, /HAY_DONE: "border-warning bg-warning-muted text-warning"/);
+  assert.match(CONTROL, /COMPLETE: "border-success bg-success-muted text-success"/);
+  // No hard-coded colour anywhere in the feeding UI.
+  for (const [path, fileCode] of FEEDING_UI_FILES) {
+    assert.ok(!/#[0-9a-fA-F]{3}\b/.test(fileCode), `${path} must not hard-code a hex colour`);
+    assert.ok(!/rgba?\(/.test(fileCode), `${path} must not hard-code an rgb colour`);
+    assert.ok(!/\bstyle=\{\{/.test(fileCode), `${path} must not inline a style object`);
+  }
+});
+
+test("92. the mapping reads displayProgressState and nothing else", () => {
+  // The DTO field the Stage 2 pure core already resolved is the only input.
+  assert.match(ACTIVE_CARD_TAG, /resolveHorseFeedingCardStateClass\(row\.displayProgressState\)/);
+  // No audit timestamp, no actor name, no meal content, no clock, no second
+  // state machine - the card cannot drift from the control below it.
+  for (const forbidden of [
+    "MarkedAt",
+    "MarkedByName",
+    "row.progress",
+    "isDisplayStateNormalized",
+    "statusControlMode",
+    "morning",
+    "evening",
+    "Date",
+    "useState",
+    "useMemo",
+  ]) {
+    assert.ok(
+      !CARD_STATE_HELPER.includes(forbidden),
+      `the card mapping must not inspect ${forbidden}`
+    );
+  }
+});
+
+test("93. exactly one render site decides a card's colour", () => {
+  // Definition + a single call: the mapping is never repeated in a branch.
+  assert.equal(
+    (SECTION.match(/resolveHorseFeedingCardStateClass\(/g) ?? []).length,
+    2,
+    "the helper is defined once and called from exactly one place"
+  );
+  assert.match(
+    ACTIVE_CARD_TAG,
+    /className=\{`rounded-xl border-2 p-3 \$\{resolveHorseFeedingCardStateClass\(row\.displayProgressState\)\}`\}/,
+    "the feeding-state background is derived from displayProgressState ALONE"
+  );
+  // NO FALLBACK, and no other colour source: an unmarked horse is neutral, never
+  // tinted by its group - so the card colour has exactly one meaning.
+  assert.ok(
+    !ACTIVE_CARD_TAG.includes("getScheduleGroupColorClass"),
+    "the active card must not fall back to the group colour"
+  );
+  assert.ok(
+    !SECTION.includes("getScheduleGroupColorClass"),
+    "the group-colour helper must not reach the feeding board at all"
+  );
+  assert.ok(
+    !SECTION.includes("@/lib/schedule-group-colors"),
+    "and its module must no longer be imported"
+  );
+  // The tag itself carries no colour literal - it all comes from the helper.
+  assert.ok(!ACTIVE_CARD_TAG.includes("bg-"), "no background class may be written inline");
+  assert.ok(
+    !/border-(warning|success|danger|muted|border)/.test(ACTIVE_CARD_TAG),
+    "no border colour may be written inline"
+  );
+});
+
+test("93b. group identity is still shown, as text, exactly as before", () => {
+  // Losing the card tint must not lose the information: the responsible-student
+  // line still names the trainee, their group and their subgroup, unchanged.
+  assert.match(SECTION, /חניך\/ה אחראי\/ת: \{row\.responsibleStudent\.fullName\}/);
+  assert.match(
+    SECTION,
+    /\{row\.responsibleStudent\.groupName \? ` · קבוצה \$\{row\.responsibleStudent\.groupName\}` : ""\}/
+  );
+  assert.match(
+    SECTION,
+    /\{row\.responsibleStudent\.subgroupNumber != null\s*\? ` \/ תת-קבוצה \$\{row\.responsibleStudent\.subgroupNumber\}`\s*: ""\}/
+  );
+  // The attendance badges keep their own independent colours and wording.
+  assert.match(SECTION, /STATUS_BADGE_CLASS\.ABSENT/);
+  assert.match(SECTION, /STATUS_BADGE_CLASS\.PARTIAL/);
+  assert.ok(SECTION.includes("נעדר/ת היום"));
+  assert.ok(SECTION.includes("נוכחות חלקית"));
+});
+
+test("94. the optimistic patch drives the card, and rollback restores it", () => {
+  const body = functionBody(SECTION, "handleMarkProgress");
+
+  // The card's ONLY input is a field the existing optimistic patch already
+  // writes, so the background flips on tap with no extra state.
+  assert.match(
+    SECTION,
+    /"progressState" \| "displayProgressState" \| "isDisplayStateNormalized" \| "progress"/,
+    "displayProgressState stays part of the per-row progress patch"
+  );
+  assert.ok(
+    body.indexOf("displayProgressState: targetState") < body.indexOf("await onMarkProgress("),
+    "the display state must be patched optimistically, before the action resolves"
+  );
+  // ...and the existing rollback snapshot carries it, so a denial or a throw
+  // returns the card to the exact colour it had.
+  assert.ok(body.includes("displayProgressState: row.displayProgressState"));
+  assert.ok(
+    body.indexOf("const snapshot = {") < body.indexOf("patchProgress(horseName, {"),
+    "the snapshot precedes the optimistic write"
+  );
+  assert.equal(
+    (body.match(/patchProgress\(horseName, snapshot\);/g) ?? []).length,
+    2,
+    "both failure paths restore the previous background"
+  );
+  // A reset returns every card to neutral through the same single field.
+  assert.match(
+    functionBody(SECTION, "handleClearAllProgress"),
+    /displayProgressState: "PENDING"/
+  );
+  // No parallel colour state was introduced anywhere.
+  assert.ok(!SECTION.includes("cardState"), "the card colour must not become React state");
+  assert.ok(!SECTION.includes("setCard"));
+});
+
+test("95. completeOnly needs no special case: PENDING neutral, COMPLETE green", () => {
+  // The table is keyed by state alone, so a hay-only horse reaches COMPLETE and
+  // gets the same green - and can never reach the amber HAY_DONE entry, because
+  // the control does not offer that option in this mode.
+  assert.ok(!CARD_STATE_HELPER.includes("completeOnly"));
+  assert.ok(!CARD_STATE_HELPER.includes("mode"));
+  assert.match(
+    CONTROL,
+    /const COMPLETE_ONLY_OPTIONS: readonly FeedingStatusControlOption\[\] = Object\.freeze\(\[\s*PENDING_OPTION,\s*COMPLETE_ONLY_OPTION,\s*\]\);/,
+    "completeOnly still offers exactly PENDING and COMPLETE"
+  );
+  assert.match(
+    CONTROL,
+    /return mode === "hayAndConcentrate" \? HAY_AND_CONCENTRATE_OPTIONS : COMPLETE_ONLY_OPTIONS;/
+  );
+});
+
+test("96. hidden-horse manager cards are not coloured as progress cards", () => {
+  assert.ok(
+    MANAGER.includes('<div key={row.horseName} className="rounded-xl border border-border bg-card p-3">'),
+    "the hidden list keeps its own plain card"
+  );
+  assert.ok(!MANAGER.includes("resolveHorseFeedingCardStateClass"));
+  assert.ok(!MANAGER.includes("CARD_STATE_CLASS"));
+  for (const tint of ["bg-warning-muted", "bg-success-muted", "border-warning", "border-success"]) {
+    assert.ok(!MANAGER.includes(tint), `a hidden horse must not be tinted with ${tint}`);
+  }
+});
+
+test("97. colour is supplemental, and the card gained no affordance", () => {
+  // The card is decoration only: no click target, no role, no focus stop.
+  for (const forbidden of ["onClick", "onKeyDown", "role=", "tabIndex", "cursor-pointer", "<button"]) {
+    assert.ok(!ACTIVE_CARD_TAG.includes(forbidden), `the card must not become ${forbidden}`);
+  }
+  // The status is still readable without colour: label, glyph and aria-checked
+  // all survive, and the board still feeds the control the same field.
+  assert.match(CONTROL, /aria-checked=\{isSelected\}/);
+  assert.match(CONTROL, /<span aria-hidden="true">\{option\.glyph\}<\/span>/);
+  assert.match(CONTROL, /<span>\{option\.label\}<\/span>/);
+  assert.match(CONTROL, /aria-label=\{`\$\{option\.label\} - \$\{horseName\}`\}/);
+  assert.match(CONTROL, /role="radiogroup"/);
+  assert.match(SECTION, /displayProgressState=\{row\.displayProgressState\}/);
+  // The audit lines and the read-only notice are untouched.
+  assert.ok(SECTION.includes("<MarkAuditLines"));
+  assert.ok(SECTION.includes("תצוגה בלבד - אין הרשאת עריכת האכלות"));
+});
+
+test("98. the card colour changes nothing outside the board component", () => {
+  // Neither host knows about it, and no new import was needed: the state comes
+  // from the DTO type that was already imported.
+  for (const [path, fileCode] of [
+    [ADMIN_HOST_PATH, ADMIN_HOST],
+    [INSTRUCTOR_HOST_PATH, INSTRUCTOR_HOST],
+  ] as const) {
+    assert.ok(
+      !fileCode.includes("resolveHorseFeedingCardStateClass"),
+      `${path} must not reference the card mapping`
+    );
+  }
+  assert.match(
+    SECTION,
+    /import type \{ FeedingProgressState \} from "@\/lib\/feeding\/feeding-board-core";/,
+    "the state type is still a TYPE-only import - no runtime module was added"
+  );
+  // The card colour needs no runtime dependency at all: the three classes are
+  // repository tokens and the state type is erased at build time.
+  assert.ok(
+    !SECTION.includes('from "@/lib/schedule-group-colors"'),
+    "the group-colour module is no longer a dependency of the feeding board"
+  );
+});
+
 test("86. the hidden-horse mark refusal is surfaced as an ordinary action failure", () => {
   const body = functionBody(SECTION, "handleMarkProgress");
 

@@ -20,7 +20,6 @@ import {
   buildHideConfirmMessage,
   upsertHiddenBoardRow,
 } from "@/lib/components/HorseFeedingVisibilityManager";
-import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { STATUS_BADGE_CLASS } from "@/lib/attendance-ui";
 import { formatHebrewDateTime } from "@/lib/dates";
 import {
@@ -78,6 +77,39 @@ function markSummary(byName: string | null, at: string | null): string | null {
   const time = formatMarkTime(at);
   if (byName && time) return `${byName}, ${time}`;
   return byName ?? time;
+}
+
+/**
+ * THE WHOLE-CARD COLOUR OF ONE HORSE, derived from exactly one input: the
+ * display progress state that the Stage 2 pure core already resolved and the
+ * Stage 4 overview DTO carries. PURE and total.
+ *
+ * NO SECOND STATE MACHINE. It never reads an audit timestamp, an actor name or a
+ * meal field, so the card can never disagree with the status control below it -
+ * both render the same `displayProgressState` value. It is also the single place
+ * the mapping exists, so no render branch can drift from it.
+ *
+ * PENDING IS TRULY NEUTRAL - the repository's default card surface and border,
+ * with no other colour blended in. An unmarked horse therefore looks like every
+ * other unmarked horse, so amber/green can only ever mean "this horse's round
+ * actually progressed". Group identity is carried by the responsible-student
+ * line's own text, not by the card. A completeOnly horse never reaches
+ * HAY_DONE, so it moves straight from neutral to green with no extra branch.
+ *
+ * Repository tokens only - never a hard-coded colour - and colour stays
+ * SUPPLEMENTAL: the state is independently stated by the control's label, glyph
+ * and aria-checked, all of which survive grayscale and colour-blindness.
+ */
+const CARD_STATE_CLASS: Readonly<Record<FeedingProgressState, string>> = {
+  PENDING: "border-border bg-card",
+  HAY_DONE: "border-warning bg-warning-muted",
+  COMPLETE: "border-success bg-success-muted",
+};
+
+export function resolveHorseFeedingCardStateClass(
+  displayProgressState: FeedingProgressState
+): string {
+  return CARD_STATE_CLASS[displayProgressState];
 }
 
 interface MealFormState {
@@ -850,7 +882,11 @@ export function HorseFeedingSection({
           {filteredRows.map((row) => (
             <div
               key={row.horseName}
-              className={`rounded-xl border-2 p-3 ${getScheduleGroupColorClass(row.responsibleStudent?.groupName ?? null)}`}
+              // The card follows the CURRENT round and nothing else: neutral
+              // while nothing is marked, amber once hay is done, green once the
+              // horse is complete. Presentation only - the card gains no click
+              // target and no role.
+              className={`rounded-xl border-2 p-3 ${resolveHorseFeedingCardStateClass(row.displayProgressState)}`}
             >
               <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-base font-bold text-card-foreground">{row.horseName}</p>
