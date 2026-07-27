@@ -7,18 +7,16 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 import { getSupabaseClient, COURSE_MATERIALS_BUCKET } from "@/lib/supabase";
 import { createMaterialAddedNotifications } from "@/lib/actions/notifications";
 import type { ActionResult } from "@/lib/actions/students";
-// SECURITY / LEVEL 2 SLICE L2-M1C - server-derived trainee identity + the
-// COURSE_MATERIALS capability gate for the trainee-facing getStudentMaterials
-// below. getInstructorMaterials and every admin action in this file are
-// deliberately untouched and keep their existing behaviour / requireAdmin gate.
+// SECURITY / LEVEL 2 SLICE L2-M1C + P-MATERIALS M2C - server-derived trainee
+// identity and the COURSE_MATERIALS capability gate for the trainee-facing
+// getStudentMaterials below, now scoped to the UNION of the trainee's active
+// enabled offerings' audiences. getInstructorMaterials and every admin action in
+// this file are deliberately untouched and keep their existing behaviour /
+// requireAdmin gate.
 import { requireCurrentTrainee } from "@/lib/auth/actor";
-import { resolveTraineeCourseOffering } from "@/lib/course/actor-course-offering";
 import { getEffectiveCapabilities } from "@/lib/course/capabilities/offering-capabilities";
 import type { CapabilityKey } from "@/lib/course/capabilities/capability-keys";
-import {
-  loadAuthorizedTraineeModuleRowsWithDeps,
-  type TraineeModuleContextDeps,
-} from "@/lib/course/trainee-module-containment-core";
+import { loadTraineeScopedMaterialsWithDeps } from "@/lib/course/trainee-materials-offering-scope-core";
 // P-MATERIALS M2B - offering-scoped audience persistence. The identifier-shape
 // validation + reconcile diff come from the committed pure M2A core; the
 // offering authorization + Prisma bindings from the shared M2B write module.
@@ -106,57 +104,99 @@ async function getMaterialsForVisibilities(
 
 /**
  * The single capability that authorizes any trainee course-material read
- * (L2-M1C). A DEDICATED canonical key (capability-keys.ts, added by L2-M1A) - no
- * unrelated capability is reused. The CapabilityKey annotation makes a typo a
- * compile error.
+ * (L2-M1A/L2-M1C). A DEDICATED canonical key (capability-keys.ts) - no unrelated
+ * capability is reused. The CapabilityKey annotation makes a typo a compile
+ * error.
  */
 const TRAINEE_COURSE_MATERIALS_CAPABILITY_KEY: CapabilityKey = "COURSE_MATERIALS";
 
-// Real, server-owned dependencies only: the trainee id from the signed session
-// via the canonical Actor DAL (requireCurrentTrainee rejects anonymous,
-// expired, wrong-audience and INACTIVE sessions), the offering from the
-// committed no-argument resolveTraineeCourseOffering(), and that exact
-// offering's capabilities. No courseOfferingId parameter, no legacy singleton
-// offering resolver, no Level 1 fallback, no inference from date, group, level
-// or name.
-const TRAINEE_COURSE_MATERIALS_DEPS: TraineeModuleContextDeps = {
-  requireTraineeId: async () => (await requireCurrentTrainee()).id,
-  resolveTraineeCourseOffering,
-  getEffectiveCapabilities,
-};
+// P-MATERIALS M2C - the audience-scoped trainee material query. Runs ONLY after
+// the scope gate has resolved a non-empty set of enabled offering ids, so no
+// CourseMaterial row is read (and no storage URL signed) for an unauthorized or
+// unscoped caller. A material is returned when it is active, its visibility
+// addresses trainees (STUDENTS/BOTH), AND it has at least one audience row for
+// one of the enabled offering ids. A material shared by two of the
+// trainee's enabled offerings still matches ONCE (a single material row). A
+// material with zero audience rows can never match -> fail-closed / invisible.
+// Order and signed-URL behaviour are unchanged from the previous reader.
+async function getTraineeScopedMaterials(
+  enabledOfferingIds: readonly string[]
+): Promise<RoleMaterialItem[]> {
+  const materials = await prisma.courseMaterial.findMany({
+    where: {
+      isActive: true,
+      visibility: { in: ["STUDENTS", "BOTH"] },
+      audiences: { some: { courseOfferingId: { in: [...enabledOfferingIds] } } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
 
-// SECURITY / LEVEL 2 SLICE L2-M1C - CONTAINED. This reader previously had NO
-// gate at all: any caller, including an anonymous one, received every
-// STUDENTS/BOTH material row together with freshly minted signed storage URLs.
-// The caller is now derived from the signed session and the resolved offering's
-// COURSE_MATERIALS capability must be positively ENABLED before a single
-// CourseMaterial row is fetched - and therefore before any signed URL can be
-// generated, since signing only ever happens over already-loaded rows inside
-// getMaterialsForVisibilities.
-//
-// RESIDUAL, ACCEPTED IN THIS SLICE: CourseMaterial has no courseOfferingId
-// column, so the library is still GLOBAL. The capability is the offering-level
-// containment boundary: an offering without an ENABLED COURSE_MATERIALS row
-// (Level 2) sees nothing, and an offering with one (Level 1) sees the whole
-// global library exactly as before. Per-offering material OWNERSHIP is a later
-// schema slice; no schema field is added here.
-//
-// Every denial - anonymous, expired, wrong audience, inactive trainee, no
-// eligible offering, ambiguous offering, missing capability row, DISABLED,
-// READ_ONLY, malformed capability map - returns the SAME empty array this
-// action already returned when there were no materials, so a Level 2 trainee
-// cannot distinguish "denied" from "nothing published" and no Level 1 material
-// metadata is disclosed. Prisma / storage / programming failures are NOT
-// denials and propagate unchanged.
-export async function getStudentMaterials(): Promise<RoleMaterialItem[]> {
-  return loadAuthorizedTraineeModuleRowsWithDeps(
-    TRAINEE_COURSE_MATERIALS_CAPABILITY_KEY,
-    TRAINEE_COURSE_MATERIALS_DEPS,
-    // Unreachable unless every gate passed. The visibility filter is unchanged,
-    // so an authorized Level 1 trainee receives exactly the previous rows and
-    // signed URLs.
-    async () => getMaterialsForVisibilities(["STUDENTS", "BOTH"])
+  return Promise.all(
+    materials.map(async (m) => {
+      const { viewUrl, downloadUrl } = await signFileUrls(m);
+      return {
+        id: m.id,
+        title: m.title,
+        description: m.description,
+        materialType: m.materialType,
+        externalUrl: m.externalUrl,
+        fileName: m.fileName,
+        viewUrl,
+        downloadUrl,
+        createdAt: m.createdAt.toISOString(),
+      };
+    })
   );
+}
+
+// P-MATERIALS M2C - trainee course materials scoped to the UNION of every
+// CourseOffering the trainee is actively enrolled in, whose offering is ACTIVE,
+// and whose COURSE_MATERIALS capability is effectively ENABLED. The trainee is
+// always derived from the signed session (requireCurrentTrainee rejects
+// anonymous, expired, wrong-audience and INACTIVE sessions); no client studentId
+// or courseOfferingId is accepted. ALL of the trainee's enrollments are loaded
+// and each distinct active offering's COURSE_MATERIALS capability is resolved
+// INDEPENDENTLY - there is deliberately no assumption of "only two offerings", no
+// inference by level/name/date/group, and the single-offering
+// resolveTraineeCourseOffering (which collapses a dual enrollment to Level 1) is
+// NOT used.
+//
+// CURRENT PRODUCTION EFFECT (no capability enabled by this slice): Level 1 has
+// COURSE_MATERIALS ENABLED, so a Level-1 trainee sees the Level-1 materials; a
+// Level-2-only trainee sees [] until COURSE_MATERIALS is enabled for Level 2; a
+// dual-enrolled trainee sees Level-1 materials now and will automatically gain
+// Level-2 materials the moment that capability is enabled - no code change.
+//
+// Every denial - anonymous, expired, wrong audience, inactive trainee, no active
+// enabled offering - returns the SAME empty array this action returned when there
+// were no materials, so "denied" is indistinguishable from "nothing published"
+// and no material metadata leaks. Prisma / storage failures are NOT denials and
+// propagate unchanged; signing stays downstream of the scope gate (it only ever
+// runs inside getTraineeScopedMaterials, over already-loaded rows).
+export async function getStudentMaterials(): Promise<RoleMaterialItem[]> {
+  return loadTraineeScopedMaterialsWithDeps<RoleMaterialItem>({
+    requireTraineeId: async () => (await requireCurrentTrainee()).id,
+    loadEnrollments: async (traineeId) => {
+      const rows = await prisma.courseEnrollment.findMany({
+        where: { studentId: traineeId },
+        select: {
+          courseOfferingId: true,
+          status: true,
+          courseOffering: { select: { status: true } },
+        },
+      });
+      return rows.map((r) => ({
+        courseOfferingId: r.courseOfferingId,
+        enrollmentStatus: r.status,
+        offeringStatus: r.courseOffering.status,
+      }));
+    },
+    isMaterialsCapabilityEnabled: async (courseOfferingId) => {
+      const capabilities = await getEffectiveCapabilities(courseOfferingId);
+      return capabilities[TRAINEE_COURSE_MATERIALS_CAPABILITY_KEY] === "ENABLED";
+    },
+    loadMaterials: (enabledOfferingIds) => getTraineeScopedMaterials(enabledOfferingIds),
+  });
 }
 
 // Read-only, no permission gate - unchanged by L2-M1C, which contains the

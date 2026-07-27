@@ -116,17 +116,20 @@ test("setMaterialActive is unchanged: admin-gated soft hide, no audience wiring"
 // Reader shapes untouched by M2B
 // ===========================================================================
 
-test("the trainee/instructor/admin readers are not modified by M2B", () => {
-  // getStudentMaterials still routes through the L2-M1C containment gate.
+test("the M2B writer helpers do not leak into the trainee/instructor readers", () => {
+  // The M2B invariant this pins is writer/reader ISOLATION - not which reader
+  // shape is in use (that is owned by the M2C union contract in
+  // trainee-course-materials-containment.test.ts). Neither reader may call a
+  // writer/authorization helper.
   const student = functionSource(MATERIALS, "getStudentMaterials");
-  assert.ok(student.includes("loadAuthorizedTraineeModuleRowsWithDeps"), "trainee reader untouched");
-  assert.ok(!student.includes("applyMaterialAudiences"), "reader must not gain a writer helper");
-  // Instructor reader still the direct shared-helper call.
+  assert.ok(!student.includes("applyMaterialAudiences"), "trainee reader must not gain a writer helper");
+  assert.ok(!student.includes("assertOfferingIdsAllowed"), "trainee reader must not authorize writes");
   const instructor = functionSource(MATERIALS, "getInstructorMaterials");
   assert.ok(
     instructor.includes('getMaterialsForVisibilities(["INSTRUCTORS", "BOTH"])'),
     "instructor reader unchanged",
   );
+  assert.ok(!instructor.includes("applyMaterialAudiences"), "instructor reader must not gain a writer helper");
 });
 
 // ===========================================================================
