@@ -53,7 +53,15 @@ export function InstructorTodayScheduleCard({
   // IUS-2B - screen-local mode, exactly like the course selection beside it:
   // not app-wide state, not shared with any other tab, not persisted and not
   // restored across mounts. It lives HERE and never in InstructorClient.
-  const [todayMode, setTodayMode] = useState<TodayScheduleMode>("unified");
+  //
+  // IUS-2C - TEMPORARY DEFAULT. Defaults to "byCourse" only because the unified
+  // view does not yet preserve the Level 1 parallel-group layout: it flattens
+  // simultaneous group א / group ב blocks into one vertical list and omits the
+  // per-day headers on multi-day week views. The unified view remains fully
+  // available one tap away via the toggle below - nothing about it is disabled
+  // or hidden. This default REVERTS TO "unified" once the Level 1
+  // parallel-group layout fix lands (see the IUS-2D plan).
+  const [todayMode, setTodayMode] = useState<TodayScheduleMode>("byCourse");
 
   // Report today's range while something is actually shown, and clear it on
   // unmount (tab switch) or deselection. The shared riding map this feeds is

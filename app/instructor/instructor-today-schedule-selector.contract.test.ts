@@ -66,7 +66,11 @@ test("the Today card adds the unified destination", () => {
   const body = code(TODAY_CARD);
   assert.ok(body.includes('הלו&quot;ז המשולב שלי'), "expected the unified option label");
   assert.ok(body.includes("לפי קורס"), "expected the per-course option label");
-  assert.match(body, /const \[todayMode, setTodayMode\] = useState<TodayScheduleMode>\("unified"\)/);
+  // IUS-2C - the default is TEMPORARILY "byCourse" while the unified view does
+  // not yet preserve the Level 1 parallel-group layout. The unified option
+  // itself is unchanged and still offered (asserted by the labels above); only
+  // the initial value moved. Flip this back to "unified" with the layout fix.
+  assert.match(body, /const \[todayMode, setTodayMode\] = useState<TodayScheduleMode>\("byCourse"\)/);
 });
 
 // ---------------------------------------------------------------------------

@@ -217,7 +217,11 @@ test("the weekly caller and the today caller each declare their mode", () => {
 
 test("the sub-view toggle lives in the schedule screen, not in InstructorClient", () => {
   const outer = code(OUTER);
-  assert.match(outer, /const \[subView, setSubView\] = useState<ScheduleSubView>\("unified"\)/);
+  // IUS-2C - the default is TEMPORARILY "byCourse" while the unified view does
+  // not yet preserve the Level 1 parallel-group layout. The unified sub-view
+  // itself is unchanged and still reachable via the toggle (asserted below);
+  // only the initial value moved. Flip this back to "unified" with the layout fix.
+  assert.match(outer, /const \[subView, setSubView\] = useState<ScheduleSubView>\("byCourse"\)/);
   assert.ok(outer.includes('הלו&quot;ז המשולב שלי'), "expected the unified toggle label");
   assert.ok(outer.includes("לפי קורס"), "expected the per-course toggle label");
 
