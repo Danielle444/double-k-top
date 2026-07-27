@@ -28,7 +28,7 @@
  * Level 1's simultaneous group א / group ב activities SIDE BY SIDE (plus its
  * full-width "שתי הקבוצות" blocks), and the per-day header on a multi-day week.
  * Both are restored by rendering through the EXISTING, untouched
- * ScheduleTimeGrid - but strictly ONE GRID PER (day, source CourseOffering):
+ * ScheduleTimeGrid - but strictly ONE GRID PER (source CourseOffering):
  *
  *   the grid and lib/schedule-grouping beneath it pair/span/coalesce purely by
  *   groupName + cleaned title + adjacent times, with NO offering awareness, and
@@ -37,10 +37,26 @@
  *   sourceCourseOfferingId / sourceCourseLabel / sourceCourseLevel /
  *   combinedParticipation / overlap metadata.
  *
- * The day/offering split is decided by the PURE core
- * (groupUnifiedInstructorItemsByDayAndOffering), which also owns the deterministic
- * day and block order; this file only renders it. Item order inside a block is
- * still the merge core's - nothing is re-sorted here.
+ * IUS-3A - CHRONOLOGICAL SEGMENTS. Splitting a WHOLE DAY into one block per
+ * offering (IUS-2D) forced every item of one course to render before every item
+ * of the other, so a day of Level 1 08:00, Level 2 10:00, Level 2 12:00,
+ * Level 1 14:00 read as 08:00, 14:00, 10:00, 12:00. The merged list handed to
+ * this file is already globally chronological; the order was lost to the BUCKET
+ * GRANULARITY, and no comparator could restore it (with k offerings there are
+ * only k block positions, while an interleaved day needs one per alternation).
+ *
+ * So a day is now split into chronological SEGMENTS first, and each segment into
+ * one block per offering contributing THERE - one offering may therefore appear
+ * several times in a day, and the two courses alternate exactly as the clock
+ * says. The safety rule above is unchanged and in fact stronger: a grid still
+ * receives at most one offering's items, and now at most one segment's as well.
+ *
+ * The whole split - segment boundaries, day/segment/block order and the gap
+ * metadata between segments - is decided by the PURE core
+ * (groupUnifiedInstructorItemsByDaySegmentAndOffering); this file only renders
+ * it. Item order inside a block is still the merge core's - nothing is re-sorted
+ * here. Items that genuinely OVERLAP stay in one segment, stacked, because no
+ * stacked layout can linearize them; the existing overlap badge is what says so.
  *
  * ALL STATE IS COMPONENT-LOCAL. No localStorage, no cookie, no React context,
  * no module-level mutable variable, and nothing is persisted or restored across
@@ -49,7 +65,11 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { WeekDayPicker } from "@/lib/components/WeekDayPicker";
-import { ScheduleTimeGrid } from "@/lib/components/ScheduleTimeGrid";
+import {
+  ScheduleTimeGrid,
+  SCHEDULE_TIME_GRID_SLOT_HEIGHT_CLASS,
+} from "@/lib/components/ScheduleTimeGrid";
+import { formatTimeGridGapDurationLabel } from "@/lib/schedule-timegrid";
 import { getDefaultDayFilter, getLocalDateKey, todayDateKey } from "@/lib/dates";
 import type { WeeklyRidingActivity } from "@/lib/actions/riding-slots";
 import {
@@ -60,7 +80,11 @@ import { getUnifiedScheduleForInstructor } from "@/lib/actions/unified-instructo
 import { getUnifiedTodayScheduleForInstructor } from "@/lib/actions/unified-instructor-today-schedule";
 import type { InstructorScheduleItem } from "@/lib/actions/instructor-schedule-course-scoped";
 import type { UnifiedInstructorScheduleItemView } from "@/lib/course/unified-instructor-schedule-core";
-import { groupUnifiedInstructorItemsByDayAndOffering } from "@/lib/course/unified-instructor-day-grouping-core";
+import {
+  groupUnifiedInstructorItemsByDaySegmentAndOffering,
+  resolveUnifiedInstructorScheduleGapPresentation,
+  type UnifiedInstructorScheduleGap,
+} from "@/lib/course/unified-instructor-day-grouping-core";
 import { resolveActivityForScheduleCardId } from "@/app/instructor/instructor-riding-schedule-map-core";
 import { InstructorScheduleCard, isItemActiveNow } from "./InstructorScheduleSection";
 
@@ -75,24 +99,88 @@ const UNIFIED_SCHEDULE_LOAD_ERROR_MESSAGE = "לא ניתן לטעון כרגע �
 // are addressable - an expected access outcome, distinct from an error.
 const UNIFIED_SCHEDULE_DENIED_MESSAGE = "הלו״ז המשולב אינו זמין עבורך כרגע";
 
-// IUS-2F - long-gap compression, enabled ONLY here. A mine-only merged list is
-// the one schedule surface where two of the same instructor's own assignments
-// are routinely hours apart, and rendering that emptiness fully proportionally
-// (44px per 15 minutes on mobile) pushes the afternoon off the screen. Anything
-// over an hour collapses to a two-row labelled band; up to and including an
-// hour stays fully proportional. The surrounding cards keep their real times,
-// and the band names the real range it stands for, so nothing ever reads as
-// "these are back to back". Module-level so the object identity is stable
-// across the every-60s `now` tick and the grid's layout memo holds.
+// IUS-2F / IUS-3A - long-gap compression, still enabled ONLY here, but now
+// measured BETWEEN chronological segments instead of inside one grid.
 //
-// Deliberately NOT passed by the per-course instructor view, the trainee view
-// or the admin editors: those show a whole course's timetable, where an empty
-// stretch is real shared information rather than one person's idle time.
-const UNIFIED_COMPACT_LONG_GAPS = {
+// A mine-only merged list is the one schedule surface where two of the same
+// instructor's own assignments are routinely hours apart, and rendering that
+// emptiness fully proportionally (44px per 15 minutes on mobile) pushes the
+// afternoon off the screen. Anything over an hour collapses to a two-row
+// labelled band; up to and including an hour stays fully proportional. The
+// surrounding cards keep their real times, and the band names the real range it
+// stands for, so nothing ever reads as "these are back to back".
+//
+// WHY THE GRID CAN NO LONGER OWN THIS. ScheduleTimeGrid sees one offering's
+// items only, so a hole in ITS axis is not necessarily free time: inside a
+// multi-offering segment such a hole is - by the contiguity of that segment -
+// ALWAYS filled by the other course, and a "הפסקה בלו״ז שלי" band there would
+// state the instructor is free while the very next grid shows them teaching. A
+// SEGMENT BOUNDARY is the only place where nothing at all is scheduled in ANY
+// offering, so that is where the band belongs. The rule itself (>60 minutes
+// compresses, to two standard rows) is unchanged, and the per-course, trainee
+// and admin surfaces still deliberately show every gap proportionally.
+//
+// slotMinutes mirrors ScheduleTimeGrid's own default (the view never passes a
+// different one), so a proportional gap is drawn on exactly the same scale as
+// the activities above and below it.
+const UNIFIED_SEGMENT_GAP_CONFIG = {
   thresholdMinutes: 60,
   compressedSlotCount: 2,
-  label: "הפסקה בלו״ז שלי",
+  slotMinutes: 15,
 } as const;
+
+const UNIFIED_SEGMENT_GAP_LABEL = "הפסקה בלו״ז שלי";
+
+// The empty stretch between two chronological segments. NOT a schedule item and
+// deliberately not shaped like one: no title, location, instructor or course, no
+// click, no keyboard, no dialog - purely the vertical truth about the day.
+// A zero-length gap (two segments that touch exactly, i.e. a real hand-over
+// between the two courses) renders NOTHING, so adjacency is never shown as a
+// break. Height comes from the grid's own exported slot-height class, so the
+// spacer is on the same scale at both breakpoints without duplicating it.
+function UnifiedScheduleSegmentGap({ gap }: { gap: UnifiedInstructorScheduleGap }) {
+  const { mode, slotCount } = resolveUnifiedInstructorScheduleGapPresentation(
+    gap,
+    UNIFIED_SEGMENT_GAP_CONFIG,
+  );
+  if (slotCount === 0) return null;
+
+  const height = `calc(var(--slot-px) * ${slotCount})`;
+
+  if (mode === "proportional") {
+    return (
+      <div
+        // Pure vertical truth: a short break keeps its real height and needs no
+        // wording, so it is hidden from assistive tech rather than announced.
+        aria-hidden
+        className={SCHEDULE_TIME_GRID_SLOT_HEIGHT_CLASS}
+        style={{ height }}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={`flex flex-col overflow-hidden p-0.5 ${SCHEDULE_TIME_GRID_SLOT_HEIGHT_CLASS}`}
+      style={{ height }}
+    >
+      <div
+        // aria-label replaces the inner text for assistive tech, so it repeats
+        // the label AND states the real range and duration the band stands for -
+        // the compressed height must never read as "these two are adjacent".
+        role="note"
+        aria-label={`${UNIFIED_SEGMENT_GAP_LABEL}, ${gap.realStartTime} עד ${gap.realEndTime}, ${formatTimeGridGapDurationLabel(gap.realDurationMinutes)}`}
+        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-0.5 overflow-hidden rounded-lg border border-dashed border-border bg-muted px-2 text-center"
+      >
+        {/* Dashed border + explicit wording, not colour alone. */}
+        <span className="text-xs font-semibold text-muted-foreground">{UNIFIED_SEGMENT_GAP_LABEL}</span>
+        <span className="text-xs text-muted-foreground" dir="ltr">
+          {gap.realStartTime}–{gap.realEndTime}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 type WeeksState =
   | { status: "loading" }
@@ -223,16 +311,19 @@ export function UnifiedInstructorScheduleSection({
     [weeks],
   );
 
-  // IUS-2D - the day -> source-offering split, decided entirely by the pure core.
-  // Memoised so a grid's own layout memo keeps a stable `items` identity across
-  // the every-60s `now` tick; the per-block copy exists only because
-  // ScheduleTimeGrid's prop is a mutable T[] while the core (correctly) returns
-  // frozen arrays - the grid itself is untouched by this slice.
+  // IUS-3A - the day -> chronological segment -> source-offering split, decided
+  // entirely by the pure core. Memoised so a grid's own layout memo keeps a
+  // stable `items` identity across the every-60s `now` tick; the per-block copy
+  // exists only because ScheduleTimeGrid's prop is a mutable T[] while the core
+  // (correctly) returns frozen arrays - the grid itself is untouched.
   const days = useMemo(() => {
     if (itemsState.status !== "loaded") return [];
-    return groupUnifiedInstructorItemsByDayAndOffering(itemsState.items).map((day) => ({
+    return groupUnifiedInstructorItemsByDaySegmentAndOffering(itemsState.items).map((day) => ({
       ...day,
-      blocks: day.blocks.map((block) => ({ ...block, items: [...block.items] })),
+      segments: day.segments.map((segment) => ({
+        ...segment,
+        blocks: segment.blocks.map((block) => ({ ...block, items: [...block.items] })),
+      })),
     }));
   }, [itemsState]);
 
@@ -264,67 +355,76 @@ export function UnifiedInstructorScheduleSection({
                 {day.dayLabel} · {day.dateLabel}
                 {day.dateKey === todayMarkerKey && <span className="mr-2 text-sm font-normal">(היום)</span>}
               </div>
-              {day.blocks.map((block) => (
-                <div key={block.sourceCourseOfferingId} className="flex flex-col gap-1.5">
-                  {/* Only when this day genuinely has more than one contributing
-                      course: with a single block the source is already on every
-                      card's badge, and an extra heading would make the merged
-                      view look unlike the per-course one for no gain. */}
-                  {day.blocks.length > 1 && (
-                    <p className="text-sm font-semibold text-muted-foreground">
-                      {block.sourceCourseLabel}
-                    </p>
-                  )}
-                  {/* ONE offering per grid - see this file's header. Level 1
-                      group א / group ב therefore lay out side by side exactly as
-                      in the per-course view, and no card can ever be merged
-                      across courses. */}
-                  <ScheduleTimeGrid
-                    items={block.items}
-                    // IUS-2F - both modes render through this one grid element,
-                    // so weekly and Today compress identically by construction.
-                    compactLongGaps={UNIFIED_COMPACT_LONG_GAPS}
-                    renderCard={(item) => (
-                      <InstructorScheduleCard
-                        item={item}
-                        active={isItemActiveNow(item, now)}
-                        compact
-                        // item.id may be a "+"-joined composite of atomic
-                        // ScheduleItem ids (merged/coalesced cards); the activity
-                        // map is keyed by atomic ids, so resolve through the
-                        // composite-aware helper rather than looking the
-                        // composite up directly.
-                        ridingActivity={resolveActivityForScheduleCardId(resolveRidingActivity, item.id)}
-                        onOpenRidingActivity={onOpenRidingActivity}
-                        // IUS-3 - this item's OWN source offering level, tagged
-                        // by the merge core. Per item, not per view: a merged
-                        // list mixes Level 1 and Level 2 blocks, and only the
-                        // Level 2 ones may carry the "משולב" badge. The shared
-                        // card renders it; this view never duplicates the
-                        // wording or the rule.
-                        courseLevel={item.sourceCourseLevel}
-                        extraBadges={
-                          <>
-                            {/* Always-visible source-course badge - the whole
-                                point of the merged list is knowing which course
-                                an item came from, so it is never hidden behind
-                                the compact-details dialog. */}
-                            <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground">
-                              {item.sourceCourseLabel}
-                            </span>
-                            {/* Minimal cross-offering overlap indicator: a
-                                visible badge only, never conflict resolution and
-                                never a link to the other course. */}
-                            {item.overlappingSourceCourseOfferingIds.length > 0 && (
-                              <span className="rounded-full bg-warning-muted px-2 py-0.5 text-xs font-medium text-warning">
-                                חפיפה בלו&quot;ז
-                              </span>
-                            )}
-                          </>
-                        }
+              {day.segments.map((segment) => (
+                <div key={segment.key} className="flex flex-col gap-1.5">
+                  {/* The empty stretch since the previous segment - the only
+                      place where nothing at all is scheduled in ANY offering.
+                      null on a day's first segment; renders nothing when the
+                      two segments touch. */}
+                  {segment.gapBefore && <UnifiedScheduleSegmentGap gap={segment.gapBefore} />}
+                  {segment.blocks.map((block) => (
+                    <div key={block.key} className="flex flex-col gap-1.5">
+                      {/* IUS-3A - a DAY-level rule on purpose. On an alternating
+                          day most segments hold a single block, so gating on the
+                          segment's own block count would hide the course label
+                          exactly where the reader most needs it; a repeated label
+                          is intentional. A single-course day keeps the per-course
+                          look, with the source already on every card's badge. */}
+                      {day.hasMultipleOfferings && (
+                        <p className="text-sm font-semibold text-muted-foreground">
+                          {block.sourceCourseLabel}
+                        </p>
+                      )}
+                      {/* ONE offering (and now one segment) per grid - see this
+                          file's header. Level 1 group א / group ב therefore lay
+                          out side by side exactly as in the per-course view, and
+                          no card can ever be merged across courses. */}
+                      <ScheduleTimeGrid
+                        items={block.items}
+                        renderCard={(item) => (
+                          <InstructorScheduleCard
+                            item={item}
+                            active={isItemActiveNow(item, now)}
+                            compact
+                            // item.id may be a "+"-joined composite of atomic
+                            // ScheduleItem ids (merged/coalesced cards); the
+                            // activity map is keyed by atomic ids, so resolve
+                            // through the composite-aware helper rather than
+                            // looking the composite up directly.
+                            ridingActivity={resolveActivityForScheduleCardId(resolveRidingActivity, item.id)}
+                            onOpenRidingActivity={onOpenRidingActivity}
+                            // IUS-3 - this item's OWN source offering level,
+                            // tagged by the merge core. Per item, not per view:
+                            // a merged list mixes Level 1 and Level 2 blocks,
+                            // and only the Level 2 ones may carry the "משולב"
+                            // badge. The shared card renders it; this view never
+                            // duplicates the wording or the rule.
+                            courseLevel={item.sourceCourseLevel}
+                            extraBadges={
+                              <>
+                                {/* Always-visible source-course badge - the
+                                    whole point of the merged list is knowing
+                                    which course an item came from, so it is
+                                    never hidden behind the compact-details
+                                    dialog. */}
+                                <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground">
+                                  {item.sourceCourseLabel}
+                                </span>
+                                {/* Minimal cross-offering overlap indicator: a
+                                    visible badge only, never conflict resolution
+                                    and never a link to the other course. */}
+                                {item.overlappingSourceCourseOfferingIds.length > 0 && (
+                                  <span className="rounded-full bg-warning-muted px-2 py-0.5 text-xs font-medium text-warning">
+                                    חפיפה בלו&quot;ז
+                                  </span>
+                                )}
+                              </>
+                            }
+                          />
+                        )}
                       />
-                    )}
-                  />
+                    </div>
+                  ))}
                 </div>
               ))}
             </div>

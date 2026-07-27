@@ -11,10 +11,24 @@
  * lib/schedule-timegrid.test.ts cannot reach:
  *
  *   - the prop exists, is optional, and defaults to OFF;
- *   - exactly ONE consumer opts in - the unified mine-only instructor schedule;
+ *   - NO consumer opts in (see IUS-3A below);
  *   - a compressed gap is rendered from its own list, spanning both columns,
  *     and is never turned into a schedule card;
  *   - the band is inert: no click, no key handler, no button role, no dialog.
+ *
+ * IUS-3A MOVED THE ONLY OPT-IN OUT OF THE GRID
+ * --------------------------------------------
+ * The unified mine-only instructor schedule was the single consumer. Once that
+ * view began splitting a day into chronological segments, a hole inside one
+ * offering's grid stopped meaning "free time": within a multi-offering segment
+ * such a hole is always filled by the OTHER course, so a "הפסקה בלו״ז שלי" band
+ * there would claim the instructor is free while the very next grid shows them
+ * teaching. The band therefore moved to the SEGMENT BOUNDARY, the only place
+ * where nothing is scheduled in ANY offering, and is locked by
+ * app/instructor/unified-instructor-schedule-subview.contract.test.ts plus the
+ * pure helper's own tests. The grid's mode is deliberately KEPT (unchanged and
+ * still tested here) rather than deleted: it is the shared timetable primitive,
+ * and removing a working, contract-covered layout mode is not this slice's job.
  *
  * Run with:
  *   npx tsx --test lib/components/ScheduleTimeGrid.contract.test.ts
@@ -42,8 +56,8 @@ const GRID = "lib/components/ScheduleTimeGrid.tsx";
 const CORE = "lib/schedule-timegrid.ts";
 const UNIFIED = "app/instructor/UnifiedInstructorScheduleSection.tsx";
 
-// Every file that renders the shared grid today. The unified mine-only
-// instructor view is the ONLY one allowed to opt in.
+// Every OTHER file that renders the shared grid today - none of them may opt in
+// to gap compression (and, since IUS-3A, neither may the unified view).
 const OTHER_CONSUMERS = [
   "app/instructor/InstructorScheduleSection.tsx",
   "app/student/ScheduleSection.tsx",
@@ -170,28 +184,60 @@ test("the band is completely non-interactive", () => {
 });
 
 // ---------------------------------------------------------------------------
-// (10)(11) Exactly one opt-in: the unified mine-only instructor schedule.
+// (10)(11) IUS-3A: NO consumer opts in - the band moved to the segment boundary.
 // ---------------------------------------------------------------------------
 
-test("UnifiedInstructorScheduleSection passes the locked 60 / 2 / label config", () => {
+test("the unified view no longer opts in - the band lives at the segment boundary", () => {
   const body = code(UNIFIED);
-  assert.match(body, /const UNIFIED_COMPACT_LONG_GAPS = \{/);
+  assert.equal(/compactLongGaps/.test(body), false,
+    "inside a multi-offering segment the other course fills the hole, so the band would be false");
+  // The threshold, the two-row height and the Hebrew label all survive - they
+  // are simply applied BETWEEN segments now, through the pure helper.
+  assert.match(body, /resolveUnifiedInstructorScheduleGapPresentation/);
   assert.match(body, /thresholdMinutes: 60,/);
   assert.match(body, /compressedSlotCount: 2,/);
-  assert.ok(body.includes(`label: "${GAP_LABEL}",`), "expected the locked Hebrew label");
-  assert.match(body, /\} as const;/, "a module-level constant keeps the prop identity stable");
-  assert.match(body, /compactLongGaps=\{UNIFIED_COMPACT_LONG_GAPS\}/);
-});
-
-test("the prop is passed on the SHARED grid element, so week and today both compress", () => {
-  const body = code(UNIFIED);
+  assert.ok(body.includes(`= "${GAP_LABEL}";`), "expected the locked Hebrew label to survive the move");
+  assert.match(body, /\} as const;/, "a module-level constant keeps the config identity stable");
+  // Still exactly one grid element, and week/today still share it.
   assert.equal(body.match(/<ScheduleTimeGrid/g)?.length, 1,
     "one grid element serves both modes - see the unified subview contract");
-  assert.equal(body.match(/compactLongGaps=/g)?.length, 1);
-  // Nothing branches the config on mode.
-  assert.equal(/isToday \?[^\n]*compactLongGaps|compactLongGaps[^\n]*isToday/.test(body), false,
-    "week and today must not be able to diverge");
   assert.match(body, /mode: "week" \| "today";/);
+});
+
+test("NO file in the app opts in to the grid's compact-gap mode any more", () => {
+  for (const file of [...OTHER_CONSUMERS, UNIFIED]) {
+    assert.equal(/compactLongGaps/.test(code(file)), false, `${file} must not opt in`);
+  }
+  // The mode itself is deliberately KEPT on the shared primitive - removing a
+  // working, contract-covered layout mode is not this slice's job.
+  assert.match(code(GRID), /compactLongGaps\?: \{/);
+  assert.match(code(CORE), /readonly compactLongGaps\?: CompactLongGapsConfig;/);
+});
+
+// ---------------------------------------------------------------------------
+// (18) IUS-3A: the slot height is exported so a caller can match the grid's scale.
+// ---------------------------------------------------------------------------
+
+test("the slot-height class is exported additively and is what the grid itself applies", () => {
+  const body = code(GRID);
+  assert.match(
+    body,
+    /export const SCHEDULE_TIME_GRID_SLOT_HEIGHT_CLASS = "\[--slot-px:44px\] sm:\[--slot-px:32px\]";/,
+    "one source of truth for the per-slot row height at both breakpoints",
+  );
+  assert.match(body, /className=\{`grid \$\{SCHEDULE_TIME_GRID_SLOT_HEIGHT_CLASS\}`\}/,
+    "the grid must apply the exported constant, so a consumer cannot drift from it");
+  assert.equal((body.match(/--slot-px:44px/g) ?? []).length, 1, "the literal must exist exactly once");
+  // The row geometry itself is untouched by the export.
+  assert.match(body, /gridTemplateRows: `repeat\(\$\{totalSlots\}, var\(--slot-px\)\)`/);
+  assert.match(body, /gridTemplateColumns: "1fr 1fr"/);
+});
+
+test("the one consumer of the exported class is the unified view's segment gap", () => {
+  const body = code(UNIFIED);
+  assert.match(body, /SCHEDULE_TIME_GRID_SLOT_HEIGHT_CLASS/);
+  assert.equal(/--slot-px:44px|--slot-px:32px/.test(body), false,
+    "the breakpoint literals must not be duplicated outside the grid");
 });
 
 // ---------------------------------------------------------------------------

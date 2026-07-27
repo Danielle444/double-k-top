@@ -17,10 +17,26 @@ import type { GroupableScheduleItem } from "@/lib/schedule-grouping";
 //
 // IUS-2F - OPTIONAL long-gap compression. compactLongGaps is undefined by
 // default, and while it is undefined this component behaves exactly as before:
-// no caller is required to pass it, and every existing caller (per-course
-// instructor, trainee, admin) deliberately does not. Only the unified mine-only
-// instructor schedule opts in, because only there is a very tall empty stretch
-// between two of the SAME instructor's own assignments the normal case.
+// no caller is required to pass it, and every caller (per-course instructor,
+// trainee, admin) deliberately does not.
+//
+// IUS-3A - the unified mine-only instructor schedule, once the only opt-in, no
+// longer passes it either: that view now splits a day into chronological
+// segments, and a hole inside ONE offering's grid is not necessarily free time
+// (within a multi-offering segment the other course always fills it), so its
+// band moved to the segment boundary. The mode below is deliberately KEPT
+// unchanged and still contract-covered - it is the shared timetable primitive's
+// behaviour, not that one view's.
+//
+// The fixed per-slot row height, as the CSS custom property the grid
+// sizes its rows with. Exported (additively) so a caller that renders its OWN
+// element on the SAME vertical scale - the unified instructor view's
+// inter-segment gap, which sits BETWEEN two grids and therefore cannot inherit
+// this variable from any of them - stays byte-identical to the grid instead of
+// duplicating the literal and silently drifting from it at one breakpoint.
+// Rendering here is unchanged: the grid still applies exactly this string.
+export const SCHEDULE_TIME_GRID_SLOT_HEIGHT_CLASS = "[--slot-px:44px] sm:[--slot-px:32px]";
+
 export function ScheduleTimeGrid<T extends GroupableScheduleItem>({
   items,
   renderCard,
@@ -65,7 +81,7 @@ export function ScheduleTimeGrid<T extends GroupableScheduleItem>({
       // Still a single fixed value at any given width, so every proportional
       // guarantee (rowSpan math, no gap, exact duration ratios) holds at
       // both sizes independently - only the overall scale differs.
-      className="grid [--slot-px:44px] sm:[--slot-px:32px]"
+      className={`grid ${SCHEDULE_TIME_GRID_SLOT_HEIGHT_CLASS}`}
       style={{
         gridTemplateColumns: "1fr 1fr",
         gridTemplateRows: `repeat(${totalSlots}, var(--slot-px))`,

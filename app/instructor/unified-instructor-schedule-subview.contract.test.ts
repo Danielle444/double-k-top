@@ -10,7 +10,8 @@
  * properties a behavioural test cannot easily reach:
  *
  *  1. the unified view renders through ScheduleTimeGrid, ONE grid per
- *     (day, source CourseOffering), with the grouping delegated to a pure core;
+ *     (day, chronological segment, source CourseOffering), with the grouping
+ *     delegated to a pure core;
  *  2. it reuses the EXISTING InstructorScheduleCard and shows source-course +
  *     overlap badges through the new extraBadges slot;
  *  3. it calls ONLY the unified readers, with no identity and no course id;
@@ -30,6 +31,18 @@
  * blocks), and the per-day header of a multi-day week. IUS-2C temporarily
  * defaulted BOTH instructor schedule surfaces away from the unified view for
  * exactly that reason.
+ *
+ * IUS-3A THEN SPLIT THE DAY BY TIME AS WELL
+ * -----------------------------------------
+ * IUS-2D's one-block-per-offering-per-day rule forced every item of one course
+ * to render before every item of the other, so an interleaved day of Level 1
+ * 08:00, Level 2 10:00, Level 2 12:00, Level 1 14:00 read as 08:00, 14:00,
+ * 10:00, 12:00. IUS-3A splits each day into chronological SEGMENTS first and
+ * each segment into one block per offering contributing there, so one offering
+ * may appear several times in a day. The safety property below is unchanged and
+ * in fact stronger - a grid now gets at most one offering AND at most one
+ * segment - and the long-gap band moves from inside the grid to the segment
+ * boundary, the only place where nothing is scheduled in ANY offering.
  *
  * IUS-2D keeps the original safety property and drops only the layout
  * consequence: the view now renders MANY grids, split by day and then by source
@@ -82,8 +95,8 @@ const GROUPING_CORE = "lib/course/unified-instructor-day-grouping-core.ts";
 test("the unified view renders through the EXISTING ScheduleTimeGrid", () => {
   const body = code(UNIFIED);
   assert.match(
-    body,
-    /import \{ ScheduleTimeGrid \} from "@\/lib\/components\/ScheduleTimeGrid";/,
+    body.replace(/\s+/g, " "),
+    /import \{ ScheduleTimeGrid, SCHEDULE_TIME_GRID_SLOT_HEIGHT_CLASS, \} from "@\/lib\/components\/ScheduleTimeGrid";/,
     "Level 1 group א / group ב must lay out side by side, as in the per-course view",
   );
   assert.match(body, /<ScheduleTimeGrid/);
@@ -92,16 +105,21 @@ test("the unified view renders through the EXISTING ScheduleTimeGrid", () => {
     "the unified view must not reimplement the timetable grid");
 });
 
-test("the unified view delegates day/offering grouping to the PURE core", () => {
+test("the unified view delegates day/segment/offering grouping to the PURE core", () => {
   const body = code(UNIFIED);
-  assert.match(
-    body,
-    /import \{ groupUnifiedInstructorItemsByDayAndOffering \} from "@\/lib\/course\/unified-instructor-day-grouping-core";/,
-  );
-  assert.match(body, /groupUnifiedInstructorItemsByDayAndOffering\(itemsState\.items\)/);
+  assert.match(body, /groupUnifiedInstructorItemsByDaySegmentAndOffering,/,
+    "the segment core must be imported from the pure module");
+  assert.match(body, /from "@\/lib\/course\/unified-instructor-day-grouping-core";/);
+  assert.match(body, /groupUnifiedInstructorItemsByDaySegmentAndOffering\(itemsState\.items\)/);
   // Ordering still belongs to the cores, never to this file.
   assert.equal(/\.sort\(/.test(body), false,
-    "day/block order belongs to the grouping core, item order to the merge core");
+    "day/segment/block order belongs to the grouping core, item order to the merge core");
+});
+
+test("the superseded whole-day grouping function is no longer used by this view", () => {
+  const body = code(UNIFIED);
+  assert.equal(/groupUnifiedInstructorItemsByDayAndOffering\b/.test(body), false,
+    "the day-only split is what produced the interleaving bug - it must not remain wired");
 });
 
 test("the grouping core is pure - no React, no DB, no clock, no server action", () => {
@@ -111,27 +129,32 @@ test("the grouping core is pure - no React, no DB, no clock, no server action", 
   assert.equal(/@\/lib\/actions\//.test(body), false, "a pure core must not import a server action");
 });
 
-test("exactly one grid is rendered per day/offering block", () => {
+test("exactly one grid is rendered per day/segment/offering block", () => {
   const body = code(UNIFIED);
-  // days -> blocks -> exactly one grid, and nothing else maps into a grid.
+  // days -> segments -> blocks -> exactly one grid, and nothing else maps into a grid.
   assert.match(body, /\{days\.map\(\(day\) => \(/, "expected an outer per-day map");
-  assert.match(body, /\{day\.blocks\.map\(\(block\) => \(/, "expected an inner per-offering-block map");
+  assert.match(body, /\{day\.segments\.map\(\(segment\) => \(/, "expected a per-segment map");
+  assert.match(body, /\{segment\.blocks\.map\(\(block\) => \(/, "expected an inner per-offering-block map");
   assert.equal(body.match(/<ScheduleTimeGrid/g)?.length, 1,
     "exactly one grid element exists, rendered once per block");
-  const blockMap = body.indexOf("{day.blocks.map((block) => (");
-  assert.ok(blockMap !== -1 && blockMap < body.indexOf("<ScheduleTimeGrid"),
-    "the grid must be rendered INSIDE the per-block map");
+  const segmentMap = body.indexOf("{day.segments.map((segment) => (");
+  const blockMap = body.indexOf("{segment.blocks.map((block) => (");
+  const grid = body.indexOf("<ScheduleTimeGrid");
+  assert.ok(segmentMap !== -1 && segmentMap < blockMap, "blocks must be nested INSIDE segments");
+  assert.ok(blockMap !== -1 && blockMap < grid, "the grid must be rendered INSIDE the per-block map");
 });
 
 test("NO grid can receive items from more than one sourceCourseOfferingId", () => {
   const body = code(UNIFIED);
   // The only value ever handed to the grid is ONE block's items, and a block is
-  // single-offering by construction in the pure core (locked by its own tests).
+  // single-offering AND single-segment by construction in the pure core (locked
+  // by its own tests).
   assert.match(body, /<ScheduleTimeGrid\s*\n\s*items=\{block\.items\}/);
-  assert.equal(/items=\{itemsState\.items\}|items=\{day\./.test(body), false,
-    "a whole day's or a whole week's items must never reach a single grid");
+  assert.equal(body.match(/items=\{/g)?.length, 1, "exactly one items= prop exists");
+  assert.equal(/items=\{itemsState\.items\}|items=\{day\.|items=\{segment\./.test(body), false,
+    "a whole day's, segment's or week's items must never reach a single grid");
   const core = code(GROUPING_CORE);
-  assert.match(core, /byOffering/, "the core splits a day by sourceCourseOfferingId");
+  assert.match(core, /byOffering/, "the core splits a segment by sourceCourseOfferingId");
   assert.match(core, /sourceCourseOfferingId: first\.sourceCourseOfferingId/);
 });
 
@@ -156,62 +179,134 @@ test("the sticky per-day header is restored, with the same Today marker conventi
   assert.match(body, /const todayMarkerKey = todayDateKey\(\);/);
 });
 
-test("the source-course sub-header is conditional on a day having MORE THAN ONE block", () => {
+test("the source-course heading is gated on the DAY having more than one offering", () => {
   const body = code(UNIFIED);
-  assert.match(body, /\{day\.blocks\.length > 1 && \(/,
+  // IUS-3A locked decision: on an alternating day most segments hold a single
+  // block, so a per-segment rule would hide the label exactly where it is needed.
+  assert.match(body, /\{day\.hasMultipleOfferings && \(/,
     "a single-offering day must look like the per-course layout, with no extra heading");
-  const guard = body.indexOf("{day.blocks.length > 1 && (");
+  const guard = body.indexOf("{day.hasMultipleOfferings && (");
   const label = body.indexOf("{block.sourceCourseLabel}");
   assert.notEqual(label, -1, "expected the block's own course label in the sub-header");
-  assert.ok(guard < label, "the label must render inside the multi-block guard");
+  assert.ok(guard < label, "the label must render inside the day-level guard");
+  // Repeated labels across segments are intentional - nothing may suppress them.
+  assert.equal(/segment\.blocks\.length|blocks\.length > 1|previousOffering|lastOffering/.test(body), false,
+    "the heading must not be gated on the segment's block count or on the previous block");
 });
 
-test("days and blocks are keyed so no card key can collide across offerings", () => {
+test("days, segments and blocks are keyed so no key can collide within a day", () => {
   const body = code(UNIFIED);
   assert.match(body, /key=\{day\.dateKey\}/);
-  assert.match(body, /key=\{block\.sourceCourseOfferingId\}/);
+  assert.match(body, /key=\{segment\.key\}/);
+  assert.match(body, /key=\{block\.key\}/);
+  // An offering may now appear in several segments of one day, so its id alone
+  // is no longer unique.
+  assert.equal(/key=\{block\.sourceCourseOfferingId\}/.test(body), false,
+    "an offering id can repeat within a day - the composite block key is required");
 });
 
 // ---------------------------------------------------------------------------
-// IUS-2F Long internal gaps are compressed - HERE ONLY.
+// IUS-2F / IUS-3A Long internal gaps are compressed - HERE ONLY, and now at the
+// SEGMENT BOUNDARY rather than inside a grid.
 //
 // A mine-only merged list is the one schedule surface where two of the SAME
 // instructor's own assignments are routinely hours apart, so the fully
 // proportional empty stretch between them dominates the screen (worst on
-// mobile, at 44px per 15 minutes). The grid gained an OPT-IN compact-gap mode
-// for exactly that; every other consumer deliberately stays on the unchanged
-// proportional layout. The layout maths and the band's own rendering are locked
-// by lib/schedule-timegrid.test.ts and
-// lib/components/ScheduleTimeGrid.contract.test.ts - this file locks only WHO
-// turns it on and WITH WHAT.
+// mobile, at 44px per 15 minutes). Every other consumer deliberately stays on
+// the unchanged proportional layout.
+//
+// WHY THE GRID CAN NO LONGER OWN IT. A ScheduleTimeGrid sees ONE offering's
+// items, so a hole in its axis is not necessarily free time: inside a
+// multi-offering segment such a hole is - by that segment's contiguity - always
+// filled by the OTHER course, and a "הפסקה בלו״ז שלי" band there would claim the
+// instructor is free while the very next grid shows them teaching. A segment
+// boundary is the only place where nothing at all is scheduled in ANY offering.
+// The rule itself is unchanged (over 60 minutes compresses, to two standard
+// rows, with the real range and an accessible duration), and the decision is
+// made by the PURE helper, locked by
+// lib/course/unified-instructor-day-grouping-core.test.ts.
 // ---------------------------------------------------------------------------
 
-test("the unified view opts in to long-gap compression with the locked config", () => {
+test("the unified view no longer passes compactLongGaps to the grid", () => {
   const body = code(UNIFIED);
-  assert.match(body, /const UNIFIED_COMPACT_LONG_GAPS = \{/);
+  assert.equal(/compactLongGaps/.test(body), false,
+    "a band inside a single-offering grid can be false whenever the other course fills the hole");
+  assert.equal(/UNIFIED_COMPACT_LONG_GAPS/.test(body), false, "the old grid-level config must be gone");
+});
+
+test("gap presentation is decided by the PURE helper, with the locked config", () => {
+  const body = code(UNIFIED);
+  assert.match(body, /resolveUnifiedInstructorScheduleGapPresentation,/,
+    "the helper must be imported from the pure core");
+  assert.match(
+    body.replace(/\s+/g, " "),
+    /resolveUnifiedInstructorScheduleGapPresentation\( gap, UNIFIED_SEGMENT_GAP_CONFIG, \)/,
+    "the view must not re-implement the threshold or the band height",
+  );
+  assert.match(body, /const UNIFIED_SEGMENT_GAP_CONFIG = \{/);
   assert.match(body, /thresholdMinutes: 60,/, "up to and including an hour stays proportional");
   assert.match(body, /compressedSlotCount: 2,/, "a long gap collapses to two standard rows");
-  assert.ok(body.includes('label: "הפסקה בלו״ז שלי",'), "expected the locked Hebrew band label");
-  assert.match(body, /compactLongGaps=\{UNIFIED_COMPACT_LONG_GAPS\}/);
-  // A module-level constant, not an inline literal - a fresh object per render
-  // would defeat the grid's own layout memo on the every-60s `now` tick.
-  const decl = body.indexOf("const UNIFIED_COMPACT_LONG_GAPS");
-  const usage = body.indexOf("compactLongGaps={UNIFIED_COMPACT_LONG_GAPS}");
+  assert.match(body, /slotMinutes: 15,/, "the grid's own default scale, so a gap matches the cards");
+  // A module-level constant, not an inline literal per render.
+  const decl = body.indexOf("const UNIFIED_SEGMENT_GAP_CONFIG");
   assert.ok(decl !== -1 && decl < body.indexOf("export function UnifiedInstructorScheduleSection"),
     "the config must be module-level");
-  assert.ok(usage > decl);
-  assert.equal(/compactLongGaps=\{\{/.test(body), false, "no inline object literal");
 });
 
-test("compression is on the ONE shared grid, so week and today behave identically", () => {
+test("a gap is rendered from segment.gapBefore only, and never becomes a card", () => {
   const body = code(UNIFIED);
-  assert.equal(body.match(/compactLongGaps=/g)?.length, 1,
-    "exactly one grid element exists (asserted above), so it is passed exactly once");
-  assert.equal(/isToday[^\n]*compactLongGaps|compactLongGaps[^\n]*isToday/.test(body), false,
-    "the two modes must not be able to diverge");
+  assert.match(body, /\{segment\.gapBefore && <UnifiedScheduleSegmentGap gap=\{segment\.gapBefore\} \/>\}/,
+    "the band belongs to the segment boundary, before that segment's blocks");
+  assert.match(body, /if \(slotCount === 0\) return null;/,
+    "touching segments (a zero-length gap) must render nothing at all");
+  assert.equal(/renderCard[\s\S]{0,400}UnifiedScheduleSegmentGap/.test(body), false,
+    "a gap band must never be routed through the schedule card");
+  assert.equal(/gapBefore[\s\S]{0,200}InstructorScheduleCard/.test(body), false);
 });
 
-test("compression changes NOTHING about what data the unified view asks for", () => {
+test("the compressed band keeps the locked wording, real range and accessible duration", () => {
+  const body = code(UNIFIED);
+  assert.ok(body.includes('const UNIFIED_SEGMENT_GAP_LABEL = "הפסקה בלו״ז שלי";'),
+    "expected the locked Hebrew band label");
+  assert.match(body, /\{gap\.realStartTime\}–\{gap\.realEndTime\}/,
+    "the real range must stay visible - the compressed height is not the real height");
+  assert.match(body, /role="note"/);
+  assert.match(
+    body.replace(/\s+/g, " "),
+    /aria-label=\{`\$\{UNIFIED_SEGMENT_GAP_LABEL\}, \$\{gap\.realStartTime\} עד \$\{gap\.realEndTime\}, \$\{formatTimeGridGapDurationLabel\(gap\.realDurationMinutes\)\}`\}/,
+    "the accessible name must carry the label, both real times and the real duration",
+  );
+  // The duration wording is the EXISTING exported helper, never re-implemented.
+  assert.match(body, /import \{ formatTimeGridGapDurationLabel \} from "@\/lib\/schedule-timegrid";/);
+  assert.equal(/שעות"|שעתיים/.test(body), false, "the Hebrew duration wording must not be cloned here");
+  // Not colour alone.
+  assert.match(body, /border border-dashed border-border/);
+});
+
+test("the gap element is completely non-interactive", () => {
+  const body = code(UNIFIED);
+  const start = body.indexOf("function UnifiedScheduleSegmentGap");
+  const end = body.indexOf("type WeeksState", start) === -1 ? body.length : body.indexOf("type WeeksState", start);
+  const gapBlock = body.slice(start, end);
+  assert.notEqual(start, -1, "expected the dedicated gap component");
+  assert.equal(/onClick|onKeyDown|onKeyUp|onKeyPress|tabIndex|role="button"|<button/.test(gapBlock), false,
+    "a gap is informational only - no click, no keyboard, no button");
+  assert.equal(/hover:|cursor-pointer|Modal|Dialog/.test(gapBlock), false,
+    "no hover affordance and no details modal");
+  assert.equal(/InstructorScheduleCard|ScheduleTimeGrid/.test(gapBlock), false,
+    "a gap carries no card, no title, no location, no instructor and no course");
+});
+
+test("the gap reuses the grid's OWN slot-height class instead of duplicating it", () => {
+  const body = code(UNIFIED);
+  assert.match(body, /SCHEDULE_TIME_GRID_SLOT_HEIGHT_CLASS/,
+    "a gap sits BETWEEN two grids, so it cannot inherit --slot-px from either");
+  assert.match(body, /calc\(var\(--slot-px\) \* \$\{slotCount\}\)/);
+  assert.equal(/--slot-px:44px|--slot-px:32px/.test(body), false,
+    "the breakpoint literals must live in ScheduleTimeGrid only");
+});
+
+test("the gap change alters NOTHING about what data the unified view asks for", () => {
   const body = code(UNIFIED);
   // The same two mine-only readers, still with no identity and no filter.
   assert.match(body, /getUnifiedScheduleForInstructor\(rangeStart!, rangeEnd!, dayFilter\)/);
@@ -219,9 +314,6 @@ test("compression changes NOTHING about what data the unified view asks for", ()
   // The grid is still fed ONE block's items and nothing else.
   assert.match(body, /<ScheduleTimeGrid\s*\n\s*items=\{block\.items\}/);
   assert.equal(/scheduleFilter|instructorId|courseOfferingId/.test(body), false);
-  // The band is layout only - it never becomes an item or a card.
-  assert.equal(/הפסקה בלו״ז שלי[\s\S]{0,200}InstructorScheduleCard/.test(body), false,
-    "a gap band must never be routed through the schedule card");
 });
 
 test("the per-course instructor view keeps the unchanged proportional layout", () => {
@@ -232,15 +324,16 @@ test("the per-course instructor view keeps the unchanged proportional layout", (
   assert.equal(/compactLongGaps/.test(code(CLIENT)), false);
 });
 
-test("existing source-course, overlap and combined badges are untouched by IUS-2F", () => {
+test("existing source-course, overlap and combined badges are untouched by IUS-3A", () => {
   const body = code(UNIFIED);
   assert.match(body, /\{item\.sourceCourseLabel\}/);
   assert.match(body, /item\.overlappingSourceCourseOfferingIds\.length > 0 &&/);
   assert.match(body, /courseLevel=\{item\.sourceCourseLevel\}/);
-  // Still one grid per (day, offering) - compression is computed per grid, so
-  // no gap is ever measured across two CourseOfferings.
+  // Still one grid per (day, segment, offering) - overlapping items stay in ONE
+  // segment and are stacked, with the overlap badge saying so; nothing here
+  // claims they were linearized.
   assert.equal(body.match(/<ScheduleTimeGrid/g)?.length, 1);
-  assert.match(body, /\{day\.blocks\.map\(\(block\) => \(/);
+  assert.match(body, /\{segment\.blocks\.map\(\(block\) => \(/);
 });
 
 // ---------------------------------------------------------------------------
