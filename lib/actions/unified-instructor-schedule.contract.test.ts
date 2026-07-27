@@ -112,13 +112,68 @@ test("getUnifiedInstructorWeekOptions takes NO parameters at all", () => {
   assert.deepEqual(parameterList(WEEK_OPTIONS, "getUnifiedInstructorWeekOptions"), []);
 });
 
-test("getUnifiedScheduleForInstructor takes exactly a range, a day key and the existing filter", () => {
+test("getUnifiedScheduleForInstructor takes exactly a range and a day key - and NO filter", () => {
   const params = parameterList(SCHEDULE, "getUnifiedScheduleForInstructor");
-  assert.equal(params.length, 4, `expected exactly 4 parameters, got: ${JSON.stringify(params)}`);
+  assert.equal(params.length, 3, `expected exactly 3 parameters, got: ${JSON.stringify(params)}`);
   assert.match(params[0], /^rangeStart:\s*string$/);
   assert.match(params[1], /^rangeEnd:\s*string$/);
   assert.match(params[2], /^dayKey:\s*string \| "all"$/);
-  assert.match(params[3], /^filter:\s*InstructorScheduleFilter$/);
+});
+
+// ---------------------------------------------------------------------------
+// IUS-2B: the unified view is MINE-ONLY, and "all" is not requestable.
+// ---------------------------------------------------------------------------
+
+test("no unified reader accepts a caller-controlled filter", () => {
+  for (const { label, src, fn } of READERS) {
+    for (const param of parameterList(src, fn)) {
+      assert.ok(
+        !/filter/i.test(param),
+        `${label}: parameter \`${param}\` must not let a client choose the filter`,
+      );
+    }
+  }
+});
+
+test("the unified filter is fixed server-side to the existing \"mine\" value", () => {
+  assert.match(
+    code(SCHEDULE),
+    /const UNIFIED_INSTRUCTOR_SCHEDULE_FILTER: InstructorScheduleFilter = "mine";/,
+    "the filter must be a typed server-side constant, not a parameter",
+  );
+});
+
+test("the unified reader never requests the \"all\" filter anywhere", () => {
+  const body = code(SCHEDULE);
+  assert.equal(/"all"(?!\s*\))/.test(body.replace(/string \| "all"/g, "")), false,
+    "the only permitted \"all\" is the dayKey union type, never a filter value");
+});
+
+test("every per-offering item read passes the fixed mine-only filter constant", () => {
+  const body = code(functionSource(SCHEDULE, "getUnifiedScheduleForInstructor"));
+  assert.ok(
+    body.includes("UNIFIED_INSTRUCTOR_SCHEDULE_FILTER,"),
+    "the scoped reader must be called with the server-side constant",
+  );
+  // No other filter literal reaches the scoped reader. `[^)]` already spans
+  // newlines, so no dotAll flag is needed (and the repo's tsconfig target
+  // rejects one).
+  assert.equal(
+    /getCourseScopedScheduleForInstructor\([^)]*"(all|mine)"/.test(body),
+    false,
+    "the filter must arrive via the constant, never as an inline literal",
+  );
+});
+
+test("the instructor-matching helper is reused, never duplicated into the unified reader", () => {
+  for (const { label, src } of READERS) {
+    const body = code(src);
+    assert.equal(
+      /isInstructorMatch|normalizeHebrewName|isMealItem/.test(body),
+      false,
+      `${label} must reuse the scoped reader's own "mine" semantics, not re-implement matching`,
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -183,7 +238,8 @@ test("every per-offering week list comes from the EXISTING getInstructorWeekSele
 
 test("every per-offering item read goes through the EXISTING getCourseScopedScheduleForInstructor", () => {
   const body = code(functionSource(SCHEDULE, "getUnifiedScheduleForInstructor"));
-  assert.ok(body.includes("getCourseScopedScheduleForInstructor(option.id, week.id, dayKey, filter)"));
+  assert.ok(body.includes("getCourseScopedScheduleForInstructor("));
+  assert.ok(body.includes("option.id,") && body.includes("week.id,") && body.includes("dayKey,"));
   // The week id passed is one of THIS offering's own resolved weeks - never the
   // merged picker's id, which can belong to the other offering.
   const resolve = requiredIndex(body, "findUnifiedInstructorWeeksForRange(selection.weeks,", "range->weeks resolve");

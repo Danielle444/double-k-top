@@ -21,11 +21,23 @@
  * the single-course path.
  *
  * TAKES NO IDENTITY AND NO COURSE CONTEXT FROM THE CLIENT. No instructorId, no
- * courseOfferingId, no eligibility flag. The only parameters are a selected
- * date range, a day narrowing and the existing mine/all filter - none of which
+ * courseOfferingId, no eligibility flag, and (since IUS-2B) no filter. The only
+ * parameters are a selected date range and a day narrowing - neither of which
  * can widen scope: which offerings are read comes ONLY from the server's own
  * session-derived, allow-listed menu, and every per-offering read
  * independently re-authorizes that offering.
+ *
+ * MINE-ONLY BY DEFINITION (IUS-2B)
+ * --------------------------------
+ * "הלו״ז המשולב שלי" means THIS instructor's own items, unioned across every
+ * permitted offering - it is not "the whole timetable of every instructor,
+ * merged". The filter is therefore fixed SERVER-SIDE to the existing "mine"
+ * value and is deliberately NOT a parameter: a client cannot request "all"
+ * through this action at all, because there is no argument to carry it.
+ * "mine" keeps its established meaning verbatim - the committed
+ * isInstructorMatch/isMealItem semantics inside the existing course-scoped
+ * reader, driven by the SESSION-derived instructor's own name columns. No
+ * matching helper is duplicated here.
  *
  * WHY A RANGE PLUS A DAY. The merged week picker keeps exactly ONE real
  * WeeklySchedule id per date range, so it cannot name the OTHER offering's
@@ -56,6 +68,14 @@ import {
   type UnifiedInstructorScheduleSource,
 } from "@/lib/course/unified-instructor-schedule-core";
 
+/**
+ * The ONE filter every unified instructor read uses, fixed here and never
+ * accepted from a caller. `InstructorScheduleFilter` typing makes a typo a
+ * compile error, and the value's behaviour is the committed one inside
+ * getCourseScopedScheduleForInstructor - never re-implemented.
+ */
+const UNIFIED_INSTRUCTOR_SCHEDULE_FILTER: InstructorScheduleFilter = "mine";
+
 export interface UnifiedInstructorScheduleResult {
   /** false when fewer than two offerings are addressable - the client must not render the unified list. */
   eligible: boolean;
@@ -68,18 +88,20 @@ function emptyUnifiedInstructorScheduleResult(): UnifiedInstructorScheduleResult
 }
 
 /**
- * The instructor's combined, chronological schedule for one selected inclusive
- * date range, across every course offering they may address.
+ * The instructor's OWN combined, chronological schedule for one selected
+ * inclusive date range, across every course offering they may address.
  *
  * `dayKey` is either a plain date key inside the range or "all" for the whole
  * range - the same two values the per-course browser's day picker already
  * produces, passed straight through to the existing reader.
+ *
+ * There is deliberately NO filter parameter: this view is mine-only by
+ * definition (see the module header).
  */
 export async function getUnifiedScheduleForInstructor(
   rangeStart: string,
   rangeEnd: string,
   dayKey: string | "all",
-  filter: InstructorScheduleFilter,
 ): Promise<UnifiedInstructorScheduleResult> {
   // Session-derived and allow-listed server-side. It THROWS for an anonymous,
   // wrong-audience or INACTIVE caller rather than returning [] - a fail-closed
@@ -116,7 +138,12 @@ export async function getUnifiedScheduleForInstructor(
         // request would, and applies the same "mine"/meal and day filtering.
         const perWeek = await Promise.all(
           weeks.map((week) =>
-            getCourseScopedScheduleForInstructor(option.id, week.id, dayKey, filter),
+            getCourseScopedScheduleForInstructor(
+              option.id,
+              week.id,
+              dayKey,
+              UNIFIED_INSTRUCTOR_SCHEDULE_FILTER,
+            ),
           ),
         );
         // A matched week merely OVERLAPS the range, so it can carry items on

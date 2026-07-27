@@ -44,6 +44,7 @@ const OUTER = "app/instructor/InstructorCourseScopedScheduleSection.tsx";
 const SECTION = "app/instructor/InstructorScheduleSection.tsx";
 const CLIENT = "app/instructor/InstructorClient.tsx";
 const WEEK_BROWSER = "app/instructor/InstructorScheduleWeekBrowser.tsx";
+const TODAY_CARD = "app/instructor/InstructorTodayScheduleCard.tsx";
 
 // ---------------------------------------------------------------------------
 // (13) Stacked list, never ScheduleTimeGrid.
@@ -126,7 +127,8 @@ test("the per-course path still renders through the same card and is untouched",
 test("the unified view calls only the two unified readers", () => {
   const body = code(UNIFIED);
   assert.match(body, /getUnifiedInstructorWeekOptions\(\)/);
-  assert.match(body, /getUnifiedScheduleForInstructor\(rangeStart, rangeEnd, dayFilter, scheduleFilter\)/);
+  assert.match(body, /getUnifiedScheduleForInstructor\(rangeStart!, rangeEnd!, dayFilter\)/);
+  assert.match(body, /getUnifiedTodayScheduleForInstructor\(\)/);
   assert.equal(
     /getInstructorWeekSelection\(|getCourseScopedScheduleForInstructor\(|getTodayScheduleForInstructor\(/.test(body),
     false,
@@ -149,12 +151,64 @@ test("the unified view has all four load states", () => {
   assert.ok(body.includes("if (!result.eligible)"), "an ineligible server result must render the denied state");
 });
 
-test("the unified view preserves the mine/all filter", () => {
+// ---------------------------------------------------------------------------
+// IUS-2B: the unified view is MINE-ONLY - the mine/all toggle is GONE.
+// ---------------------------------------------------------------------------
+
+test("the unified view has NO mine/all toggle and never sends a filter", () => {
   const body = code(UNIFIED);
+  assert.equal(body.includes('כל הלו&quot;ז'), false, 'the "כל הלו״ז" toggle must be gone');
+  assert.equal(body.includes("השיעורים שלי"), false, "the mine/all pair must be gone entirely");
+  assert.equal(/scheduleFilter|setScheduleFilter/.test(body), false, "no filter state may remain");
+  assert.equal(
+    /InstructorScheduleFilter/.test(body),
+    false,
+    "the unified view must not even name the filter type - both actions fix it server-side",
+  );
+});
+
+test("the per-course weekly view KEEPS its own mine/all filter, unchanged", () => {
+  const body = code(SECTION);
   assert.ok(body.includes('setScheduleFilter("mine")'));
   assert.ok(body.includes('setScheduleFilter("all")'));
   assert.ok(body.includes("השיעורים שלי"));
   assert.ok(body.includes('כל הלו&quot;ז'));
+});
+
+// ---------------------------------------------------------------------------
+// IUS-2B: the two modes of the unified section.
+// ---------------------------------------------------------------------------
+
+test("the unified section takes an explicit week/today mode", () => {
+  const body = code(UNIFIED);
+  assert.match(body, /mode: "week" \| "today";/);
+  assert.match(body, /const isToday = mode === "today";/);
+});
+
+test("today mode issues NO week-options request and renders no week picker", () => {
+  const body = code(UNIFIED);
+  // The week-options effect returns early in today mode...
+  assert.match(body, /if \(isToday\) return;\s*\n\s*let cancelled = false;\s*\n\s*getUnifiedInstructorWeekOptions\(\)/);
+  // ...and today mode returns before the WeekDayPicker branch is reached.
+  const earlyReturn = body.indexOf("if (isToday) {");
+  const picker = body.indexOf("<WeekDayPicker");
+  assert.notEqual(earlyReturn, -1, "expected a today-mode early return");
+  assert.ok(earlyReturn < picker, "today mode must return before the week picker renders");
+});
+
+test("today mode sends no date to the server - todayKey is range-reporting only", () => {
+  const body = code(UNIFIED);
+  assert.match(body, /getUnifiedTodayScheduleForInstructor\(\)/, "the today reader takes no arguments");
+  assert.equal(
+    /getUnifiedTodayScheduleForInstructor\([^)]+\)/.test(body),
+    false,
+    "no value may be passed to the today reader",
+  );
+});
+
+test("the weekly caller and the today caller each declare their mode", () => {
+  assert.match(code(OUTER), /<UnifiedInstructorScheduleSection\s+mode="week"/);
+  assert.match(code(TODAY_CARD), /<UnifiedInstructorScheduleSection\s+mode="today"/);
 });
 
 // ---------------------------------------------------------------------------

@@ -87,6 +87,7 @@ export function InstructorCourseScopedScheduleSection({
           unmounts the unified view and its own requests likewise stop. */}
       {subView === "unified" ? (
         <UnifiedInstructorScheduleSection
+          mode="week"
           onScheduleRangeChange={onScheduleRangeChange}
           resolveRidingActivity={resolveRidingActivity}
           onOpenRidingActivity={onOpenRidingActivity}
