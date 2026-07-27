@@ -7,8 +7,10 @@ import { HorseFeedingSection } from "@/lib/components/HorseFeedingSection";
 import { updateStudentHorseInfo, type HorseAssignmentRow } from "@/lib/actions/horses";
 import {
   clearAllHorseFeedingProgressAsAdmin,
+  getHiddenHorseFeedingRowsForAdmin,
   getHorseFeedingOverviewForAdmin,
   markHorseFeedingProgressAsAdmin,
+  setHorseFeedingVisibilityAsAdmin,
   upsertHorseFeedingMealsAsAdmin,
 } from "@/lib/actions/horse-feeding";
 import { getHorseDisplayInfo, type HorseBadgeType } from "@/lib/horse-info";
@@ -123,14 +125,21 @@ export function HorsesClient({ students }: { students: HorseAssignmentRow[] }) {
         // FEEDING-BOARD Stage 5A: a manager may mark and reset the round. Both
         // actions run requireAdmin() server-side as their first statement, so
         // these two flags only decide what this screen offers.
+        // FEEDING-BOARD Stage 5B: hide/restore is MANAGER-ONLY and exists on
+        // this screen alone. Both wired actions run requireAdmin() server-side
+        // as their first statement, and there is no instructor counterpart to
+        // reach, so this flag only decides what this screen offers.
         <HorseFeedingSection
           canEdit
           canMarkProgress
           canClearProgress
+          canManageVisibility
           fetchOverview={getHorseFeedingOverviewForAdmin}
+          fetchHiddenOverview={getHiddenHorseFeedingRowsForAdmin}
           onSave={upsertHorseFeedingMealsAsAdmin}
           onMarkProgress={markHorseFeedingProgressAsAdmin}
           onClearAllProgress={clearAllHorseFeedingProgressAsAdmin}
+          onSetVisibility={setHorseFeedingVisibilityAsAdmin}
         />
       ) : (
         <>

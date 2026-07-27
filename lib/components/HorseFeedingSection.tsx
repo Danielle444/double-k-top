@@ -9,6 +9,17 @@ import {
   HorseFeedingStatusControl,
   shouldApplyFeedingMarkResult,
 } from "@/lib/components/HorseFeedingStatusControl";
+import {
+  HIDE_ACTION_LABEL,
+  HIDE_CONFIRM_BUTTON,
+  HIDE_CONFIRM_TITLE,
+  HorseFeedingVisibilityManager,
+  RESTORE_CONFIRM_BODY,
+  RESTORE_CONFIRM_BUTTON,
+  RESTORE_CONFIRM_TITLE,
+  buildHideConfirmMessage,
+  upsertHiddenBoardRow,
+} from "@/lib/components/HorseFeedingVisibilityManager";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { STATUS_BADGE_CLASS } from "@/lib/attendance-ui";
 import { formatHebrewDateTime } from "@/lib/dates";
@@ -20,6 +31,7 @@ import {
   type HorseFeedingOverviewRow,
   type HorseFeedingProgressActionResult,
   type HorseFeedingUpsertInput,
+  type HorseFeedingVisibilityActionResult,
 } from "@/lib/actions/horse-feeding";
 import type { FeedingProgressState } from "@/lib/feeding/feeding-board-core";
 import type { ActionResult } from "@/lib/actions/students";
@@ -42,6 +54,14 @@ const CLEAR_ALL_LABEL = "נקה את כל הסימונים";
 // Advisory only - the generation guard below is what actually keeps the board
 // correct, because a mark can begin between this check and the reset landing.
 const CLEAR_BLOCKED_BY_MARK_ERROR = "יש להמתין לסיום עדכון ההאכלות לפני ניקוי הסימונים.";
+
+// FEEDING-BOARD Stage 5B - manager visibility. Same rule as above: fixed Hebrew
+// text only, never a caught exception's own wording.
+const HIDE_FAILED_ERROR = "לא הצלחנו להסתיר את הסוס. נסו שוב.";
+const RESTORE_FAILED_ERROR = "לא הצלחנו להחזיר את הסוס לרשימה. נסו שוב.";
+const HIDDEN_LOAD_FAILED_ERROR = "לא הצלחנו לטעון את רשימת הסוסים המוסתרים.";
+const HIDE_BLOCKED_BY_MARK_ERROR = "יש להמתין לסיום עדכון ההאכלה של הסוס לפני הסתרתו.";
+const HIDE_BLOCKED_BY_CLEAR_ERROR = "יש להמתין לסיום ניקוי הסימונים לפני הסתרת סוס.";
 
 // Time-only, device-local. The audit line is a glance ("who did the hay, when"),
 // so a full date would be noise - and a raw ISO string is never shown.
@@ -113,21 +133,35 @@ export function HorseFeedingSection({
   canEdit,
   canMarkProgress = false,
   canClearProgress = false,
+  canManageVisibility = false,
   fetchOverview,
+  fetchHiddenOverview,
   onSave,
   onMarkProgress,
   onClearAllProgress,
+  onSetVisibility,
 }: {
   canEdit: boolean;
   canMarkProgress?: boolean;
   canClearProgress?: boolean;
+  /**
+   * Stage 5B: may this screen OFFER hide/restore. Manager surface only; the
+   * admin-gated Server Actions decide whether it actually happens.
+   */
+  canManageVisibility?: boolean;
   fetchOverview: () => Promise<HorseFeedingOverviewRow[]>;
+  /** Manager-only reader. Absent for the instructor host, so no hidden row is ever fetched there. */
+  fetchHiddenOverview?: () => Promise<readonly HorseFeedingOverviewRow[]>;
   onSave: (input: HorseFeedingUpsertInput) => Promise<ActionResult>;
   onMarkProgress?: (input: {
     horseName: string;
     targetState: FeedingProgressState;
   }) => Promise<HorseFeedingProgressActionResult>;
   onClearAllProgress?: () => Promise<HorseFeedingClearActionResult>;
+  onSetVisibility?: (input: {
+    horseName: string;
+    isHidden: boolean;
+  }) => Promise<HorseFeedingVisibilityActionResult>;
 }) {
   const [rows, setRows] = useState<HorseFeedingOverviewRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -171,9 +205,54 @@ export function HorseFeedingSection({
   // patch a horse back to a pre-clear state. A ref, not state: it must be exact
   // at the moment an async result lands, not at the last render.
   const clearGenerationRef = useRef(0);
+  // PER-HORSE EPOCH, the same idea scoped to one horse: bumped whenever a horse
+  // LEAVES or RE-ENTERS the active board (hide/restore), because hiding clears
+  // that horse's progress server-side and a restore refetches it. A mark that was
+  // already in flight describes a round the horse is no longer in, so its result
+  // must not be applied even after a refetch puts the row back.
+  const horseGenerationRef = useRef<Record<string, number>>({});
+
+  // --- Stage 5B: manager visibility ---------------------------------------
+  // Hidden rows live in their OWN list. They are never merged into `rows` and
+  // never filtered out of it, so there is no code path on which a host without
+  // the manager props could render one.
+  const [hiddenRows, setHiddenRows] = useState<HorseFeedingOverviewRow[] | null>(null);
+  const [hiddenOpen, setHiddenOpen] = useState(false);
+  const [hiddenLoading, setHiddenLoading] = useState(false);
+  const [hiddenError, setHiddenError] = useState<string | null>(null);
+  const [hiddenSearch, setHiddenSearch] = useState("");
+  const hiddenLoadingRef = useRef(false);
+  const hiddenLoadedRef = useRef(false);
+  const [visibilityBusyHorse, setVisibilityBusyHorse] = useState<string | null>(null);
+  const visibilityBusyRef = useRef<string | null>(null);
+  const [hideTarget, setHideTarget] = useState<HorseFeedingOverviewRow | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<HorseFeedingOverviewRow | null>(null);
+  const [visibilityError, setVisibilityError] = useState<string | null>(null);
+  const [visibilityMessage, setVisibilityMessage] = useState<string | null>(null);
+
+  // Every manager affordance requires its own prop to be present - a flag alone
+  // never reveals a control whose action was not wired.
+  const canHideHorses = canManageVisibility && Boolean(onSetVisibility);
+  const canBrowseHiddenHorses = canHideHorses && Boolean(fetchHiddenOverview);
+
+  function horseMarkGeneration(horseName: string): number {
+    return horseGenerationRef.current[horseName] ?? 0;
+  }
+
+  function invalidateHorseMarks(horseName: string) {
+    horseGenerationRef.current = {
+      ...horseGenerationRef.current,
+      [horseName]: horseMarkGeneration(horseName) + 1,
+    };
+  }
   // Guards a background refresh: never while a load is already running, never
   // while the instruction modal holds unsaved edits, never mid-mark.
   const loadingRef = useRef(false);
+  // Exactly one follow-up refresh may be queued behind an in-flight load, so a
+  // refresh requested by a write is never silently dropped by the duplicate-load
+  // guard. See requestAuthoritativeRefresh.
+  const queuedLoadRef = useRef(false);
+  const queuedHiddenLoadRef = useRef(false);
   const modalOpenRef = useRef(false);
 
   function beginSaving(horseName: string) {
@@ -201,7 +280,69 @@ export function HorseFeedingSection({
       })
       .finally(() => {
         loadingRef.current = false;
+        // A refresh requested WHILE this one was running could not be served by
+        // it (that request may have started before the write), so exactly one
+        // follow-up runs now. The duplicate-load guard above is untouched.
+        if (queuedLoadRef.current) {
+          queuedLoadRef.current = false;
+          load();
+        }
       });
+  }
+
+  // MANAGER-ONLY, and gated on the props themselves: an instructor host supplies
+  // no reader, so this can never issue a request there. A silent refresh only
+  // refreshes a list that was already opened once - it never fetches hidden rows
+  // on its own initiative.
+  function loadHidden(options?: { silent?: boolean }) {
+    if (!canManageVisibility || !fetchHiddenOverview) return;
+    if (options?.silent && !hiddenLoadedRef.current) return;
+    if (hiddenLoadingRef.current) return;
+    hiddenLoadingRef.current = true;
+    if (!options?.silent) {
+      setHiddenError(null);
+      setHiddenLoading(true);
+    }
+    fetchHiddenOverview()
+      .then((rows) => {
+        hiddenLoadedRef.current = true;
+        setHiddenRows([...rows]);
+      })
+      .catch(() => {
+        if (options?.silent) return;
+        setHiddenError(HIDDEN_LOAD_FAILED_ERROR);
+      })
+      .finally(() => {
+        hiddenLoadingRef.current = false;
+        setHiddenLoading(false);
+        if (queuedHiddenLoadRef.current) {
+          queuedHiddenLoadRef.current = false;
+          loadHidden();
+        }
+      });
+  }
+
+  /**
+   * An authoritative refresh of BOTH lists after a write that changed which list
+   * a horse belongs to. A load that is already in flight may have been issued
+   * before that write, so its response cannot be trusted to include it: in that
+   * case one follow-up is queued and runs as soon as the current one settles.
+   * The board is never blanked and no page reload is involved.
+   */
+  function requestAuthoritativeRefresh() {
+    if (loadingRef.current) queuedLoadRef.current = true;
+    else load();
+
+    if (!canManageVisibility || !fetchHiddenOverview) return;
+    if (hiddenLoadingRef.current) queuedHiddenLoadRef.current = true;
+    else loadHidden();
+  }
+
+  function toggleHiddenSection() {
+    const next = !hiddenOpen;
+    setHiddenOpen(next);
+    // Lazy: nothing is fetched until a manager actually asks to see the list.
+    if (next && hiddenRows === null) loadHidden();
   }
 
   function loadKnownValues() {
@@ -212,7 +353,6 @@ export function HorseFeedingSection({
   }
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -237,7 +377,12 @@ export function HorseFeedingSection({
       if (document.visibilityState !== "visible") return;
       if (modalOpenRef.current) return;
       if (savingRef.current.length > 0) return;
+      // Stage 5B: a reset or a hide/restore in flight owns the lists until it
+      // settles - a refetch here could land either side of it.
+      if (clearingRef.current) return;
+      if (visibilityBusyRef.current !== null) return;
       load({ silent: true });
+      loadHidden({ silent: true });
     }
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
@@ -270,6 +415,7 @@ export function HorseFeedingSection({
     // Captured BEFORE dispatch, so a clear that succeeds while this request is
     // in flight makes every branch below stale.
     const startedGeneration = clearGenerationRef.current;
+    const startedHorseGeneration = horseMarkGeneration(row.horseName);
     const snapshot = {
       progressState: row.progressState,
       displayProgressState: row.displayProgressState,
@@ -311,6 +457,17 @@ export function HorseFeedingSection({
         ) {
           return;
         }
+        // Same rule, scoped to this horse: it was hidden (progress cleared
+        // server-side) or restored while the request was in flight, so this
+        // result describes a round it is no longer part of. Discarded silently.
+        if (
+          !shouldApplyFeedingMarkResult({
+            startedGeneration: startedHorseGeneration,
+            currentGeneration: horseMarkGeneration(horseName),
+          })
+        ) {
+          return;
+        }
         if (!result.success) {
           patchProgress(horseName, snapshot);
           setProgressError(result.error ?? MARK_FAILED_ERROR);
@@ -340,6 +497,17 @@ export function HorseFeedingSection({
           !shouldApplyFeedingMarkResult({
             startedGeneration,
             currentGeneration: clearGenerationRef.current,
+          })
+        ) {
+          return;
+        }
+        // Same rule, scoped to this horse: it was hidden (progress cleared
+        // server-side) or restored while the request was in flight, so this
+        // result describes a round it is no longer part of. Discarded silently.
+        if (
+          !shouldApplyFeedingMarkResult({
+            startedGeneration: startedHorseGeneration,
+            currentGeneration: horseMarkGeneration(horseName),
           })
         ) {
           return;
@@ -409,6 +577,116 @@ export function HorseFeedingSection({
         clearingRef.current = false;
         setIsClearing(false);
         setClearOpen(false);
+      }
+    })();
+  }
+
+  // --- Stage 5B: hide / restore -------------------------------------------
+  // Both flows stage a target row and confirm through the shared ConfirmModal;
+  // opening a dialog writes nothing, and cancelling writes nothing.
+
+  function requestHideHorse(row: HorseFeedingOverviewRow) {
+    if (!canHideHorses) return;
+    setVisibilityError(null);
+    setVisibilityMessage(null);
+    setHideTarget(row);
+  }
+
+  function requestRestoreHorse(row: HorseFeedingOverviewRow) {
+    if (!canHideHorses) return;
+    setVisibilityError(null);
+    setVisibilityMessage(null);
+    setRestoreTarget(row);
+  }
+
+  function handleConfirmHideHorse() {
+    if (!canManageVisibility || !onSetVisibility) return;
+    const target = hideTarget;
+    if (!target) return;
+    // ONE visibility write at a time, synchronously guarded: a second confirm in
+    // the same tick cannot queue a duplicate, and hide/restore cannot interleave.
+    if (visibilityBusyRef.current !== null) return;
+    // Never hide a horse whose mark is still being saved, and never during a
+    // reset - both would settle against a board this write is about to change.
+    if (savingRef.current.includes(target.horseName)) {
+      setHideTarget(null);
+      setVisibilityError(HIDE_BLOCKED_BY_MARK_ERROR);
+      return;
+    }
+    if (clearingRef.current) {
+      setHideTarget(null);
+      setVisibilityError(HIDE_BLOCKED_BY_CLEAR_ERROR);
+      return;
+    }
+
+    const horseName = target.horseName;
+    visibilityBusyRef.current = horseName;
+    setVisibilityBusyHorse(horseName);
+    setVisibilityError(null);
+    setVisibilityMessage(null);
+
+    void (async () => {
+      try {
+        const result = await onSetVisibility({ horseName, isHidden: true });
+        if (!result.success) {
+          // Neither list is touched on a denial.
+          setVisibilityError(result.error ?? HIDE_FAILED_ERROR);
+          return;
+        }
+        // The server removed this horse's round progress in the same
+        // transaction, so any mark still in flight for it is now stale.
+        invalidateHorseMarks(horseName);
+        setRows((prev) => (prev ? prev.filter((row) => row.horseName !== horseName) : prev));
+        // Only when the hidden list has actually been loaded - otherwise the
+        // first real fetch is the authoritative source and nothing is guessed.
+        setHiddenRows((prev) => (prev === null ? prev : upsertHiddenBoardRow(prev, target)));
+        setVisibilityMessage(`${horseName} הוסתר מרשימת ההאכלה. הוראות ההאכלה נשמרו.`);
+      } catch {
+        setVisibilityError(HIDE_FAILED_ERROR);
+      } finally {
+        visibilityBusyRef.current = null;
+        setVisibilityBusyHorse(null);
+        setHideTarget(null);
+      }
+    })();
+  }
+
+  function handleConfirmRestoreHorse() {
+    if (!canManageVisibility || !onSetVisibility) return;
+    const target = restoreTarget;
+    if (!target) return;
+    if (visibilityBusyRef.current !== null) return;
+
+    const horseName = target.horseName;
+    visibilityBusyRef.current = horseName;
+    setVisibilityBusyHorse(horseName);
+    setVisibilityError(null);
+    setVisibilityMessage(null);
+
+    void (async () => {
+      try {
+        const result = await onSetVisibility({ horseName, isHidden: false });
+        if (!result.success) {
+          setVisibilityError(result.error ?? RESTORE_FAILED_ERROR);
+          return;
+        }
+        invalidateHorseMarks(horseName);
+        setHiddenRows((prev) =>
+          prev === null ? prev : prev.filter((row) => row.horseName !== horseName)
+        );
+        // AUTHORITATIVE REFETCH of both lists rather than reconstruction: the
+        // attendance, responsible-student and ordering fields belong to the
+        // reader, and a restored horse must come back exactly as the server
+        // composes it (with no progress row, hence PENDING). Queued if a load is
+        // already running, so it can never be dropped.
+        requestAuthoritativeRefresh();
+        setVisibilityMessage(`${horseName} הוחזר לרשימת ההאכלה.`);
+      } catch {
+        setVisibilityError(RESTORE_FAILED_ERROR);
+      } finally {
+        visibilityBusyRef.current = null;
+        setVisibilityBusyHorse(null);
+        setRestoreTarget(null);
       }
     })();
   }
@@ -554,6 +832,12 @@ export function HorseFeedingSection({
       {clearMessage && (
         <p className="rounded-lg bg-success-muted p-3 text-sm text-success">{clearMessage}</p>
       )}
+      {visibilityError && (
+        <p className="rounded-lg bg-danger-muted p-3 text-sm text-danger">{visibilityError}</p>
+      )}
+      {visibilityMessage && (
+        <p className="rounded-lg bg-success-muted p-3 text-sm text-success">{visibilityMessage}</p>
+      )}
 
       {rows === null ? (
         <p className="text-sm text-muted-foreground">טוען...</p>
@@ -570,15 +854,31 @@ export function HorseFeedingSection({
             >
               <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-base font-bold text-card-foreground">{row.horseName}</p>
-                {canEdit && (
-                  <Button
-                    variant="ghost"
-                    className="!px-2 !py-1 !text-xs"
-                    onClick={() => openEdit(row)}
-                  >
-                    עריכה
-                  </Button>
-                )}
+                <div className="flex flex-wrap items-center gap-1">
+                  {canEdit && (
+                    <Button
+                      variant="ghost"
+                      className="!px-2 !py-1 !text-xs"
+                      onClick={() => openEdit(row)}
+                    >
+                      עריכה
+                    </Button>
+                  )}
+                  {canHideHorses && (
+                    // Manager-only, worded as REMOVAL FROM A LIST and never as
+                    // deletion: no trash glyph, no icon-only affordance, and the
+                    // full sentence is the accessible name.
+                    <Button
+                      variant="secondary"
+                      className="min-h-11 !px-3 !py-2 !text-xs"
+                      aria-label={`${HIDE_ACTION_LABEL} - ${row.horseName}`}
+                      disabled={visibilityBusyHorse !== null}
+                      onClick={() => requestHideHorse(row)}
+                    >
+                      {HIDE_ACTION_LABEL}
+                    </Button>
+                  )}
+                </div>
               </div>
 
               {row.responsibleStudent && (
@@ -628,7 +928,7 @@ export function HorseFeedingSection({
                   horseName={row.horseName}
                   statusControlMode={row.statusControlMode}
                   displayProgressState={row.displayProgressState}
-                  disabled={!canMarkProgress || !onMarkProgress}
+                  disabled={!canMarkProgress || !onMarkProgress || visibilityBusyHorse === row.horseName}
                   isSaving={savingHorses.includes(row.horseName)}
                   onChange={(targetState) => handleMarkProgress(row, targetState)}
                 />
@@ -653,6 +953,22 @@ export function HorseFeedingSection({
             </div>
           ))}
         </div>
+      )}
+
+      {canBrowseHiddenHorses && (
+        // A separate manager tool BELOW the operational board - never merged
+        // into it, and rendered only when both manager props were supplied.
+        <HorseFeedingVisibilityManager
+          isOpen={hiddenOpen}
+          onToggle={toggleHiddenSection}
+          rows={hiddenRows}
+          isLoading={hiddenLoading}
+          loadError={hiddenError}
+          search={hiddenSearch}
+          onSearchChange={setHiddenSearch}
+          restoringHorseName={visibilityBusyHorse}
+          onRestore={requestRestoreHorse}
+        />
       )}
 
       {canEdit && (
@@ -790,6 +1106,47 @@ export function HorseFeedingSection({
           onCancel={() => {
             if (isClearing) return;
             setClearOpen(false);
+          }}
+        />
+      )}
+
+      {canHideHorses && (
+        // HIDE confirmation. The body states that instructions are kept and that
+        // the horse can be brought back, and a horse a trainee is responsible for
+        // adds a warning line naming them.
+        <ConfirmModal
+          open={hideTarget !== null}
+          title={HIDE_CONFIRM_TITLE}
+          message={hideTarget ? buildHideConfirmMessage(hideTarget) : ""}
+          confirmLabel={HIDE_CONFIRM_BUTTON}
+          cancelLabel="ביטול"
+          isPending={visibilityBusyHorse !== null}
+          onConfirm={handleConfirmHideHorse}
+          onCancel={() => {
+            if (visibilityBusyHorse !== null) return;
+            setHideTarget(null);
+          }}
+        />
+      )}
+
+      {canHideHorses && (
+        // RESTORE confirmation - lighter wording, but still an explicit,
+        // deliberate second action rather than a one-tap change.
+        <ConfirmModal
+          open={restoreTarget !== null}
+          title={RESTORE_CONFIRM_TITLE}
+          message={
+            restoreTarget
+              ? `${RESTORE_CONFIRM_BODY}\n\n${restoreTarget.horseName}`
+              : RESTORE_CONFIRM_BODY
+          }
+          confirmLabel={RESTORE_CONFIRM_BUTTON}
+          cancelLabel="ביטול"
+          isPending={visibilityBusyHorse !== null}
+          onConfirm={handleConfirmRestoreHorse}
+          onCancel={() => {
+            if (visibilityBusyHorse !== null) return;
+            setRestoreTarget(null);
           }}
         />
       )}

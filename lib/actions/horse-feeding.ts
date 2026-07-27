@@ -514,24 +514,52 @@ function toVisibilityStateView(row: FeedingVisibilityRow | null): HorseFeedingVi
 
 // --- module-private Prisma ports (never exported: not Server Actions) -------
 
+// PER-HORSE SERIALIZATION. Marking and hiding the same horse must not interleave
+// (a mark begun before a hide could otherwise commit after it and re-create the
+// progress row the hide deleted, leaving a hidden horse carrying progress). Both
+// transactions below take this one lock, on the same key, as their FIRST
+// statement. The mechanism is the repository's existing convention -
+// pg_advisory_xact_lock(hashtext(<key>)) - which is TRANSACTION-SCOPED (released
+// automatically on commit or rollback, so nothing can leak on a pooled
+// connection) and takes the key as a BOUND PARAMETER: no horse name is ever
+// interpolated into SQL text. The key is namespaced and derived purely from the
+// normalized horse name by feedingHorseLockKey, so different horses take
+// different locks and stay fully concurrent.
+function acquireHorseLockIn(tx: Prisma.TransactionClient) {
+  return async (lockKey: string): Promise<void> => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+  };
+}
+
 const markProgressIo: MarkFeedingProgressDeps = {
   now: () => new Date(),
-  findMealContent: (horseName) =>
-    prisma.horseFeedingMeal.findMany({
-      where: { horseName },
-      select: { hayType: true, concentrateType: true, concentrateAmount: true, notes: true },
-    }),
-  findProgress: (horseName) => prisma.horseFeedingProgress.findUnique({ where: { horseName } }),
-  upsertProgress: (horseName, data) =>
-    prisma.horseFeedingProgress.upsert({
-      where: { horseName },
-      create: { horseName, ...data },
-      update: data,
-    }),
-  // deleteMany, not delete: clearing a horse that was never marked is a no-op
-  // success rather than a P2025 error, keeping PENDING writes idempotent.
-  deleteProgress: async (horseName) =>
-    (await prisma.horseFeedingProgress.deleteMany({ where: { horseName } })).count,
+  runInTransaction: (run) =>
+    prisma.$transaction((tx) =>
+      run({
+        acquireHorseLock: acquireHorseLockIn(tx),
+        findVisibility: (horseName) =>
+          tx.horseFeedingVisibility.findUnique({
+            where: { horseName },
+            select: { isHidden: true },
+          }),
+        findMealContent: (horseName) =>
+          tx.horseFeedingMeal.findMany({
+            where: { horseName },
+            select: { hayType: true, concentrateType: true, concentrateAmount: true, notes: true },
+          }),
+        findProgress: (horseName) => tx.horseFeedingProgress.findUnique({ where: { horseName } }),
+        upsertProgress: (horseName, data) =>
+          tx.horseFeedingProgress.upsert({
+            where: { horseName },
+            create: { horseName, ...data },
+            update: data,
+          }),
+        // deleteMany, not delete: clearing a horse that was never marked is a
+        // no-op success rather than a P2025 error, keeping PENDING idempotent.
+        deleteProgress: async (horseName) =>
+          (await tx.horseFeedingProgress.deleteMany({ where: { horseName } })).count,
+      })
+    ),
 };
 
 const clearProgressIo: ClearFeedingProgressDeps = {
@@ -541,31 +569,27 @@ const clearProgressIo: ClearFeedingProgressDeps = {
   },
 };
 
+// HIDE: the advisory lock, the visibility row and the removal of that horse's
+// round progress all commit together, so a restored horse can never reappear
+// still wearing a mark from the round during which it was hidden - and a mark
+// racing this transaction is serialized by the lock rather than lost or applied
+// afterwards. HorseFeedingMeal is not referenced here at all: hiding never
+// deletes feeding instructions.
 const visibilityIo: SetHorseFeedingVisibilityDeps = {
-  applyVisibilityInTransaction: async ({ horseName, isHidden, updatedByName, clearProgress }) => {
-    const upsertVisibility = prisma.horseFeedingVisibility.upsert({
-      where: { horseName },
-      create: { horseName, isHidden, updatedByName },
-      update: { isHidden, updatedByName },
-    });
-
-    // HIDE: the visibility row and the removal of that horse's round progress
-    // commit together, so a restored horse can never reappear still wearing a
-    // mark from the round during which it was hidden. HorseFeedingMeal is not
-    // referenced in either branch - hiding never deletes feeding instructions.
-    if (clearProgress) {
-      const [visibility] = await prisma.$transaction([
-        upsertVisibility,
-        prisma.horseFeedingProgress.deleteMany({ where: { horseName } }),
-      ]);
-      return visibility;
-    }
-
-    // RESTORE: only the visibility row changes. No progress row is created -
-    // absence already means PENDING.
-    const [visibility] = await prisma.$transaction([upsertVisibility]);
-    return visibility;
-  },
+  runInTransaction: (run) =>
+    prisma.$transaction((tx) =>
+      run({
+        acquireHorseLock: acquireHorseLockIn(tx),
+        upsertVisibility: ({ horseName, isHidden, updatedByName }) =>
+          tx.horseFeedingVisibility.upsert({
+            where: { horseName },
+            create: { horseName, isHidden, updatedByName },
+            update: { isHidden, updatedByName },
+          }),
+        deleteProgress: async (horseName) =>
+          (await tx.horseFeedingProgress.deleteMany({ where: { horseName } })).count,
+      })
+    ),
 };
 
 // --- mark progress ----------------------------------------------------------

@@ -45,19 +45,32 @@ function code(relativePath: string): string {
 
 const SECTION_PATH = "lib/components/HorseFeedingSection.tsx";
 const CONTROL_PATH = "lib/components/HorseFeedingStatusControl.tsx";
+const MANAGER_PATH = "lib/components/HorseFeedingVisibilityManager.tsx";
 const ADMIN_HOST_PATH = "app/admin/horses/HorsesClient.tsx";
 const INSTRUCTOR_HOST_PATH = "app/instructor/InstructorHorsesSection.tsx";
 
 const SECTION = code(SECTION_PATH);
 const CONTROL = code(CONTROL_PATH);
+const MANAGER = code(MANAGER_PATH);
 const ADMIN_HOST = code(ADMIN_HOST_PATH);
 const INSTRUCTOR_HOST = code(INSTRUCTOR_HOST_PATH);
 
-const STAGE_5A_FILES: readonly (readonly [string, string])[] = [
+const FEEDING_UI_FILES: readonly (readonly [string, string])[] = [
   [SECTION_PATH, SECTION],
   [CONTROL_PATH, CONTROL],
+  [MANAGER_PATH, MANAGER],
   [ADMIN_HOST_PATH, ADMIN_HOST],
   [INSTRUCTOR_HOST_PATH, INSTRUCTOR_HOST],
+];
+
+/**
+ * Stage 5B moved hide/restore from "forbidden everywhere" to "manager surface
+ * only". These are the files that must still contain NO trace of it: the
+ * instructor host (which must never reach it) and the leaf status control.
+ */
+const NO_VISIBILITY_FILES: readonly (readonly [string, string])[] = [
+  [INSTRUCTOR_HOST_PATH, INSTRUCTOR_HOST],
+  [CONTROL_PATH, CONTROL],
 ];
 
 /** The body of a named top-level function, up to its column-0 closing brace. */
@@ -128,8 +141,8 @@ test("12. instructor permission comes from canEditFeeding, never from role/name/
 test("13. a read-only user's status control is rendered but disabled", () => {
   assert.match(
     SECTION,
-    /disabled=\{!canMarkProgress \|\| !onMarkProgress\}/,
-    "the control must be shown (status is still information) but inert"
+    /disabled=\{!canMarkProgress \|\| !onMarkProgress \|\| visibilityBusyHorse === row\.horseName\}/,
+    "the control must be shown (status is still information) but inert - for a read-only viewer, and also while this horse is being hidden or restored"
   );
   // ...and the handler refuses regardless of what the UI rendered.
   assert.match(
@@ -159,11 +172,15 @@ test("13b. the existing read-only wording is unchanged", () => {
 });
 
 // ===========================================================================
-// 15-16. STAGE 5A ADDS NO HIDE/RESTORE SURFACE
+// 15-16. HIDE/RESTORE IS A MANAGER SURFACE - AND REACHES NOWHERE ELSE
+//
+// Stage 5A forbade these identifiers everywhere. Stage 5B introduces them, so
+// the prohibition now applies exactly where it still must hold: the instructor
+// host and the leaf status control. The admin-only assertions moved to 70-73.
 // ===========================================================================
 
-test("15. no hide/restore UI is introduced anywhere in Stage 5A", () => {
-  for (const [path, fileCode] of STAGE_5A_FILES) {
+test("15. the instructor surface has no hide/restore anything", () => {
+  for (const [path, fileCode] of NO_VISIBILITY_FILES) {
     // Horse-visibility identifiers ONLY. Two deliberate near-misses are NOT
     // matched here because they are unrelated to hiding a horse: the Page
     // Visibility API used by the refresh (document.visibilityState /
@@ -176,33 +193,37 @@ test("15. no hide/restore UI is introduced anywhere in Stage 5A", () => {
       "isHidden",
       "hiddenRows",
       "HorseFeedingVisibilityRequest",
+      "canManageVisibility",
+      "fetchHiddenOverview",
+      "onSetVisibility",
+      "הסתר",
+      "החזר",
     ]) {
       assert.ok(!fileCode.includes(forbidden), `${path} must not reference ${forbidden}`);
     }
   }
-  assert.ok(!SECTION.includes("הסתרת סוס"));
-  assert.ok(!SECTION.includes("שחזור סוס"));
-  // The only horse-feeding actions either host imports are the four wired ones.
-  for (const [path, fileCode] of [
-    [ADMIN_HOST_PATH, ADMIN_HOST],
-    [INSTRUCTOR_HOST_PATH, INSTRUCTOR_HOST],
-  ] as const) {
-    const importBlock = fileCode.slice(
-      fileCode.indexOf('from "@/lib/actions/horses"'),
-      fileCode.indexOf('} from "@/lib/actions/horse-feeding";')
-    );
-    assert.ok(!importBlock.includes("Visibility"), `${path} must not import a visibility action`);
-    assert.ok(!importBlock.includes("Hidden"), `${path} must not import the hidden-row reader`);
-  }
+  // The instructor host still imports exactly its own four feeding actions.
+  const importBlock = INSTRUCTOR_HOST.slice(
+    INSTRUCTOR_HOST.indexOf('from "@/lib/actions/horses"'),
+    INSTRUCTOR_HOST.indexOf('} from "@/lib/actions/horse-feeding";')
+  );
+  assert.ok(!importBlock.includes("Visibility"), "no visibility action may be imported there");
+  assert.ok(!importBlock.includes("Hidden"), "nor the hidden-row reader");
 });
 
-test("16. the admin-only hidden-row reader is never called", () => {
-  for (const [path, fileCode] of STAGE_5A_FILES) {
+test("16. the admin-only hidden-row reader is unreachable from the instructor screen", () => {
+  for (const [path, fileCode] of NO_VISIBILITY_FILES) {
     assert.ok(
       !fileCode.includes("getHiddenHorseFeedingRowsForAdmin"),
       `${path} must not call the hidden-row reader`
     );
   }
+  // ...and the board only ever reaches it through the injected prop, never by
+  // importing the action itself.
+  assert.ok(!SECTION.includes("getHiddenHorseFeedingRowsForAdmin"));
+  assert.ok(!SECTION.includes("setHorseFeedingVisibilityAsAdmin"));
+  assert.ok(!MANAGER.includes("getHiddenHorseFeedingRowsForAdmin"));
+  assert.ok(!MANAGER.includes("setHorseFeedingVisibilityAsAdmin"));
 });
 
 // ===========================================================================
@@ -291,7 +312,7 @@ test("21. a duplicate tap while this horse is saving produces no second call", (
 test("22+40. no raw exception text can ever be rendered", () => {
   // A binding-less `catch {}` cannot even name the thrown value. (`.catch(` on a
   // promise is a different construct and is deliberately not matched here.)
-  for (const [path, fileCode] of STAGE_5A_FILES) {
+  for (const [path, fileCode] of FEEDING_UI_FILES) {
     assert.ok(
       !/(^|[^.\w])catch\s*\(/.test(fileCode),
       `${path} must use a binding-less catch so the exception value is unreachable`
@@ -446,7 +467,7 @@ test("33. the visibility listener is removed on unmount", () => {
 });
 
 test("34. no polling, no interval, no Realtime, no reload was introduced", () => {
-  for (const [path, fileCode] of STAGE_5A_FILES) {
+  for (const [path, fileCode] of FEEDING_UI_FILES) {
     for (const forbidden of [
       "setInterval",
       "setTimeout",
@@ -516,7 +537,7 @@ test("37. every pre-existing overview field is still consumed", () => {
 });
 
 test("29b+38. no status-mode or display-state derivation is duplicated on the client", () => {
-  for (const [path, fileCode] of STAGE_5A_FILES) {
+  for (const [path, fileCode] of FEEDING_UI_FILES) {
     for (const forbidden of [
       "hasConcentrateContent",
       "hasHayContent",
@@ -524,14 +545,19 @@ test("29b+38. no status-mode or display-state derivation is duplicated on the cl
       "buildFeedingBoard",
       "concentrateType",
     ]) {
-      if (path === SECTION_PATH && forbidden === "concentrateType") continue; // the edit form legitimately owns this input
+      // Rendering a meal FIELD is not deriving a control MODE: the edit form
+      // owns this input, and the hidden list shows it read-only to identify a
+      // horse. The four real derivation entry points stay forbidden everywhere.
+      if (forbidden === "concentrateType" && (path === SECTION_PATH || path === MANAGER_PATH)) {
+        continue;
+      }
       assert.ok(!fileCode.includes(forbidden), `${path} must not re-derive ${forbidden}`);
     }
   }
 });
 
 test("38b. Stage 5A changes no Server Action, no Prisma access and no auth module", () => {
-  for (const [path, fileCode] of STAGE_5A_FILES) {
+  for (const [path, fileCode] of FEEDING_UI_FILES) {
     assert.ok(!/["']use server["']/.test(fileCode), `${path} must not declare a Server Action module`);
     assert.ok(!fileCode.includes("@/lib/prisma"), `${path} must not reach Prisma`);
     assert.ok(!fileCode.includes("prisma."), `${path} must not query the database`);
@@ -540,7 +566,7 @@ test("38b. Stage 5A changes no Server Action, no Prisma access and no auth modul
     assert.ok(!fileCode.includes("getCurrentInstructor"), `${path} must not resolve an actor client-side`);
   }
   // Every Stage 5A file is a client component - none can become an endpoint.
-  for (const [path, fileCode] of STAGE_5A_FILES) {
+  for (const [path, fileCode] of FEEDING_UI_FILES) {
     assert.match(fileCode, /^"use client";/, `${path} must stay a client component`);
   }
 });
@@ -686,4 +712,392 @@ test("39. the audit line shows local times only - never a raw ISO string or an i
   // Nothing is fabricated when a stamp or an actor is missing.
   assert.match(functionBody(SECTION, "markSummary"), /return byName \?\? time;/);
   assert.ok(!SECTION.includes("toISOString"), "no ISO string is ever rendered");
+});
+
+// ===========================================================================
+// 70-84. FEEDING-BOARD Stage 5B - MANAGER HIDE / RESTORE
+//
+// The rendered hidden-list behaviour (collapsed by default, aria-expanded, the
+// four list states, no progress control, tap targets) and the pure list algebra
+// (PENDING reset, replace-don't-duplicate, Hebrew ordering, confirm wording) are
+// proven for real in ./HorseFeedingVisibilityManager.test.tsx. What is locked
+// here is the WIRING and the GUARDS that only exist inside the board.
+// ===========================================================================
+
+test("70. the admin host wires the hidden reader and the visibility action", () => {
+  assert.match(ADMIN_HOST, /fetchHiddenOverview=\{getHiddenHorseFeedingRowsForAdmin\}/);
+  assert.match(ADMIN_HOST, /onSetVisibility=\{setHorseFeedingVisibilityAsAdmin\}/);
+  assert.match(ADMIN_HOST, /getHiddenHorseFeedingRowsForAdmin,/, "imported, not constructed");
+  assert.match(ADMIN_HOST, /setHorseFeedingVisibilityAsAdmin,/);
+  // A manager may always manage visibility; the flag is a literal.
+  assert.match(ADMIN_HOST, /^\s*canManageVisibility$/m);
+  assert.ok(!ADMIN_HOST.includes("canManageVisibility={true}"));
+});
+
+test("71. the instructor host gains nothing at all from Stage 5B", () => {
+  for (const forbidden of [
+    "canManageVisibility",
+    "fetchHiddenOverview",
+    "onSetVisibility",
+    "getHiddenHorseFeedingRowsForAdmin",
+    "setHorseFeedingVisibilityAsAdmin",
+    "HorseFeedingVisibilityManager",
+  ]) {
+    assert.ok(
+      !INSTRUCTOR_HOST.includes(forbidden),
+      `the instructor host must not reference ${forbidden}`
+    );
+  }
+  // Its feeding props are exactly the Stage 5A set - no manager prop was added.
+  const props =
+    INSTRUCTOR_HOST.match(
+      /^\s+(canEdit|canMarkProgress|canClearProgress|fetchOverview|onSave|onMarkProgress|onClearAllProgress)=/gm
+    ) ?? [];
+  assert.equal(props.length, 7);
+});
+
+test("72. every manager affordance requires BOTH its flag and its action", () => {
+  // The flag alone never reveals a control whose action was not wired.
+  assert.match(SECTION, /const canHideHorses = canManageVisibility && Boolean\(onSetVisibility\);/);
+  assert.match(
+    SECTION,
+    /const canBrowseHiddenHorses = canHideHorses && Boolean\(fetchHiddenOverview\);/
+  );
+  // Default OFF, so an un-wired host renders exactly the pre-5B board.
+  assert.match(SECTION, /canManageVisibility = false/);
+  // The hide button and both confirm dialogs are gated, as is the hidden list.
+  assert.ok((SECTION.match(/\{canHideHorses && \(/g) ?? []).length >= 3);
+  assert.match(SECTION, /\{canBrowseHiddenHorses && \(/);
+  // Both handlers re-check, whatever the UI rendered.
+  assert.match(
+    functionBody(SECTION, "handleConfirmHideHorse"),
+    /if \(!canManageVisibility \|\| !onSetVisibility\) return;/
+  );
+  assert.match(
+    functionBody(SECTION, "handleConfirmRestoreHorse"),
+    /if \(!canManageVisibility \|\| !onSetVisibility\) return;/
+  );
+});
+
+test("73. manager permission is never inferred on the client", () => {
+  for (const [path, fileCode] of FEEDING_UI_FILES) {
+    for (const forbidden of [
+      "isAdmin",
+      "session?.user",
+      "window.location",
+      "usePathname",
+      "useSearchParams",
+      "document.cookie",
+    ]) {
+      assert.ok(!fileCode.includes(forbidden), `${path} must not infer a manager from ${forbidden}`);
+    }
+  }
+});
+
+test("74. hide asks for an explicit isHidden: true, and only after a confirmation", () => {
+  assert.match(SECTION, /onSetVisibility\(\{ horseName, isHidden: true \}\)/);
+  // Opening the dialog only stages a target - it writes nothing.
+  const request = functionBody(SECTION, "requestHideHorse");
+  assert.match(request, /setHideTarget\(row\);/);
+  assert.ok(!request.includes("onSetVisibility"), "opening the dialog must not write");
+  // The confirmation is the shared ConfirmModal, with the approved wording.
+  assert.match(SECTION, /open=\{hideTarget !== null\}/);
+  assert.match(SECTION, /title=\{HIDE_CONFIRM_TITLE\}/);
+  assert.match(SECTION, /message=\{hideTarget \? buildHideConfirmMessage\(hideTarget\) : ""\}/);
+  assert.match(SECTION, /confirmLabel=\{HIDE_CONFIRM_BUTTON\}/);
+  assert.match(SECTION, /onConfirm=\{handleConfirmHideHorse\}/);
+  assert.ok(!SECTION.includes("window.confirm"));
+});
+
+test("75. a successful hide moves exactly one horse and resets its progress", () => {
+  const body = functionBody(SECTION, "handleConfirmHideHorse");
+  const success = body.slice(body.indexOf("invalidateHorseMarks(horseName);"));
+
+  // Only the matching active row is dropped; every other row is kept by identity.
+  assert.match(
+    success,
+    /setRows\(\(prev\) => \(prev \? prev\.filter\(\(row\) => row\.horseName !== horseName\) : prev\)\);/
+  );
+  // The hidden list gets its row through the pure helper, which is what forces
+  // PENDING with no audit - no progress state is reconstructed here.
+  assert.match(
+    success,
+    /setHiddenRows\(\(prev\) => \(prev === null \? prev : upsertHiddenBoardRow\(prev, target\)\)\);/
+  );
+  // Nothing else about the row is rewritten by hiding.
+  for (const untouched of ["morning", "evening", "lunch", "attendanceStatus", "responsibleStudent"]) {
+    assert.ok(!success.includes(untouched), `hiding must not rewrite ${untouched}`);
+  }
+});
+
+test("76. a failed hide changes neither list", () => {
+  const body = functionBody(SECTION, "handleConfirmHideHorse");
+  const failure = body.slice(
+    body.indexOf("if (!result.success)"),
+    body.indexOf("invalidateHorseMarks")
+  );
+
+  assert.match(failure, /setVisibilityError\(result\.error \?\? HIDE_FAILED_ERROR\)/);
+  assert.match(failure, /return;/);
+  for (const forbidden of ["setRows", "setHiddenRows"]) {
+    assert.ok(!failure.includes(forbidden), `a denial must not touch ${forbidden}`);
+  }
+});
+
+test("77. hide is refused while that horse is marking, while clearing, and twice over", () => {
+  const body = functionBody(SECTION, "handleConfirmHideHorse");
+
+  assert.match(body, /if \(visibilityBusyRef\.current !== null\) return;/, "re-entry guard");
+  assert.match(body, /if \(savingRef\.current\.includes\(target\.horseName\)\) \{/);
+  assert.match(body, /setVisibilityError\(HIDE_BLOCKED_BY_MARK_ERROR\)/);
+  assert.match(body, /if \(clearingRef\.current\) \{/);
+  assert.match(body, /setVisibilityError\(HIDE_BLOCKED_BY_CLEAR_ERROR\)/);
+  for (const guard of [
+    "visibilityBusyRef.current !== null",
+    "savingRef.current.includes(target.horseName)",
+    "clearingRef.current",
+  ]) {
+    assert.ok(
+      body.indexOf(guard) < body.indexOf("onSetVisibility("),
+      `${guard} must precede the write`
+    );
+  }
+  // The trigger is inert while any visibility write is in flight.
+  assert.match(SECTION, /disabled=\{visibilityBusyHorse !== null\}/);
+  assert.match(body, /finally \{[\s\S]*?visibilityBusyRef\.current = null;/, "lock always released");
+});
+
+test("78. hidden rows are fetched only for a wired manager, lazily, into their own list", () => {
+  const load = functionBody(SECTION, "loadHidden");
+
+  assert.match(load, /if \(!canManageVisibility \|\| !fetchHiddenOverview\) return;/);
+  assert.match(load, /if \(hiddenLoadingRef\.current\) return;/, "no duplicate simultaneous loads");
+  assert.match(load, /if \(options\?\.silent && !hiddenLoadedRef\.current\) return;/);
+  assert.match(load, /setHiddenError\(HIDDEN_LOAD_FAILED_ERROR\)/);
+  assert.match(load, /if \(options\?\.silent\) return;/, "a silent failure must not raise a banner");
+
+  // Lazy: nothing is fetched until the section is actually opened.
+  const toggle = functionBody(SECTION, "toggleHiddenSection");
+  assert.match(toggle, /if \(next && hiddenRows === null\) loadHidden\(\);/);
+  assert.match(
+    SECTION,
+    /const \[hiddenOpen, setHiddenOpen\] = useState\(false\);/,
+    "collapsed by default"
+  );
+
+  // TWO SEPARATE LISTS. The active list is never filtered by isHidden, and the
+  // hidden list is never merged into it.
+  assert.match(
+    SECTION,
+    /const \[hiddenRows, setHiddenRows\] = useState<HorseFeedingOverviewRow\[\] \| null>\(null\);/
+  );
+  assert.ok(!SECTION.includes("row.isHidden"), "the board must not filter one list by isHidden");
+  assert.ok(!SECTION.includes("...hiddenRows"), "the two lists are never concatenated");
+});
+
+test("79. the hidden list is a separate surface with its own search and no progress UI", () => {
+  // Exactly one status control, rendered in the ACTIVE list only.
+  assert.equal(
+    (SECTION.match(/<HorseFeedingStatusControl/g) ?? []).length,
+    1,
+    "a hidden horse must never get a mark control"
+  );
+  assert.ok(
+    SECTION.indexOf("<HorseFeedingStatusControl") <
+      SECTION.indexOf("<HorseFeedingVisibilityManager"),
+    "the status control belongs to the active board above the manager tool"
+  );
+  // Its own independent search state, which the active filter never sees.
+  assert.match(SECTION, /const \[hiddenSearch, setHiddenSearch\] = useState\(""\);/);
+  assert.match(SECTION, /search=\{hiddenSearch\}/);
+  assert.match(SECTION, /onSearchChange=\{setHiddenSearch\}/);
+  const activeFilter = SECTION.slice(
+    SECTION.indexOf("const filteredRows"),
+    SECTION.indexOf("function openEdit")
+  );
+  assert.ok(activeFilter.includes("search"), "the active board still filters on its own search");
+  assert.ok(
+    !activeFilter.includes("hiddenSearch"),
+    "the hidden search must not narrow the operational board"
+  );
+  // Loading / error / rows / in-flight state are all handed to the manager.
+  for (const wired of [
+    "isOpen={hiddenOpen}",
+    "onToggle={toggleHiddenSection}",
+    "rows={hiddenRows}",
+    "isLoading={hiddenLoading}",
+    "loadError={hiddenError}",
+    "restoringHorseName={visibilityBusyHorse}",
+    "onRestore={requestRestoreHorse}",
+  ]) {
+    assert.ok(SECTION.includes(wired), `the hidden section is missing ${wired}`);
+  }
+});
+
+test("80. restore asks for an explicit isHidden: false and refetches both lists", () => {
+  assert.match(SECTION, /onSetVisibility\(\{ horseName, isHidden: false \}\)/);
+  // Still an explicit second action, not a one-tap change.
+  const request = functionBody(SECTION, "requestRestoreHorse");
+  assert.match(request, /setRestoreTarget\(row\);/);
+  assert.ok(!request.includes("onSetVisibility"), "opening the dialog must not write");
+  assert.match(SECTION, /open=\{restoreTarget !== null\}/);
+  assert.match(SECTION, /onConfirm=\{handleConfirmRestoreHorse\}/);
+
+  const body = functionBody(SECTION, "handleConfirmRestoreHorse");
+  const success = body.slice(body.indexOf("invalidateHorseMarks(horseName);"));
+  // AUTHORITATIVE: both lists are refetched, never reconstructed - so a restored
+  // horse returns with the reader's own ordering, attendance and (absent)
+  // progress rather than a locally invented row.
+  assert.match(success, /requestAuthoritativeRefresh\(\);/);
+  for (const forbidden of [
+    "progressState:",
+    "displayProgressState:",
+    "progress:",
+    "toHiddenBoardRow",
+  ]) {
+    assert.ok(!success.includes(forbidden), `restore must not reconstruct ${forbidden}`);
+  }
+});
+
+test("81. restore is refused twice over and leaves both lists alone on failure", () => {
+  const body = functionBody(SECTION, "handleConfirmRestoreHorse");
+
+  assert.match(body, /if \(visibilityBusyRef\.current !== null\) return;/);
+  assert.ok(
+    body.indexOf("visibilityBusyRef.current !== null") < body.indexOf("onSetVisibility("),
+    "the guard must precede the write"
+  );
+  const failure = body.slice(
+    body.indexOf("if (!result.success)"),
+    body.indexOf("invalidateHorseMarks")
+  );
+  assert.match(failure, /setVisibilityError\(result\.error \?\? RESTORE_FAILED_ERROR\)/);
+  for (const forbidden of ["setRows", "setHiddenRows", "load()"]) {
+    assert.ok(!failure.includes(forbidden), `a denial must not touch ${forbidden}`);
+  }
+  assert.match(body, /finally \{[\s\S]*?visibilityBusyRef\.current = null;/);
+});
+
+test("82. a hide or restore invalidates that horse's in-flight mark, per horse", () => {
+  const mark = functionBody(SECTION, "handleMarkProgress");
+
+  // The mark records the horse's epoch before dispatch...
+  assert.match(mark, /const startedHorseGeneration = horseMarkGeneration\(row\.horseName\);/);
+  assert.ok(
+    mark.indexOf("const startedHorseGeneration") < mark.indexOf("await onMarkProgress("),
+    "the horse epoch must be captured before dispatch"
+  );
+  // ...and both async result paths check it, exactly like the clear epoch.
+  const perHorseGuard =
+    /!shouldApplyFeedingMarkResult\(\{\s*startedGeneration: startedHorseGeneration,\s*currentGeneration: horseMarkGeneration\(horseName\),\s*\}\)\s*\)\s*\{\s*return;\s*\}/g;
+  assert.equal((mark.match(perHorseGuard) ?? []).length, 2, "resolved path AND catch path");
+  const firstGuard = mark.search(perHorseGuard);
+  assert.ok(firstGuard < mark.indexOf("if (!result.success)"));
+  assert.ok(firstGuard < mark.indexOf("const saved = result.progress"));
+
+  // Both visibility flows bump it - hide because the server cleared that horse's
+  // progress, restore because the row comes back from a refetch.
+  assert.match(functionBody(SECTION, "handleConfirmHideHorse"), /invalidateHorseMarks\(horseName\);/);
+  assert.match(
+    functionBody(SECTION, "handleConfirmRestoreHorse"),
+    /invalidateHorseMarks\(horseName\);/
+  );
+  assert.match(
+    functionBody(SECTION, "invalidateHorseMarks"),
+    /\[horseName\]: horseMarkGeneration\(horseName\) \+ 1,/
+  );
+  // The board-wide clear epoch is untouched by Stage 5B.
+  assert.match(SECTION, /const clearGenerationRef = useRef\(0\);/);
+  assert.match(functionBody(SECTION, "handleClearAllProgress"), /clearGenerationRef\.current \+= 1;/);
+});
+
+test("83. the background refresh stands aside for every kind of write", () => {
+  const handler = functionBody(SECTION, "handleVisibilityChange");
+
+  assert.match(handler, /if \(document\.visibilityState !== "visible"\) return;/);
+  assert.match(handler, /if \(modalOpenRef\.current\) return;/);
+  assert.match(handler, /if \(savingRef\.current\.length > 0\) return;/);
+  assert.match(handler, /if \(clearingRef\.current\) return;/);
+  assert.match(handler, /if \(visibilityBusyRef\.current !== null\) return;/);
+  // Both lists refresh, silently, and only then.
+  assert.match(handler, /load\(\{ silent: true \}\);/);
+  assert.match(handler, /loadHidden\(\{ silent: true \}\);/);
+  for (const guard of ["visibilityBusyRef.current", "clearingRef.current", "savingRef.current"]) {
+    assert.ok(handler.indexOf(guard) < handler.indexOf("load({ silent: true })"));
+  }
+});
+
+test("84. Stage 5B adds no raw-error path and no deletion vocabulary", () => {
+  // Fixed Hebrew fallbacks only.
+  assert.match(SECTION, /const HIDE_FAILED_ERROR = "לא הצלחנו להסתיר את הסוס\. נסו שוב\.";/);
+  assert.match(SECTION, /const RESTORE_FAILED_ERROR = "לא הצלחנו להחזיר את הסוס לרשימה\. נסו שוב\.";/);
+  assert.match(
+    SECTION,
+    /const HIDDEN_LOAD_FAILED_ERROR = "לא הצלחנו לטעון את רשימת הסוסים המוסתרים\.";/
+  );
+
+  // HIDING IS NOT DELETION - no delete wording, no trash glyph, in any feeding UI
+  // file. ("יימחקו" in the clear-all copy is about progress marks, so only
+  // horse-deletion stems are matched here.)
+  for (const [path, fileCode] of FEEDING_UI_FILES) {
+    for (const forbidden of ["🗑", "מחיקת סוס", "למחוק את הסוס", "deleteHorse", "removeHorse"]) {
+      assert.ok(!fileCode.includes(forbidden), `${path} must not read as deletion (${forbidden})`);
+    }
+    // Hiding must not touch the known-horse-name suggestion set either.
+    assert.ok(!fileCode.includes("getKnownHorseNames"), `${path} must not filter horse suggestions`);
+  }
+});
+
+test("85. a post-restore refresh can never be swallowed by the duplicate-load guard", () => {
+  const refresh = functionBody(SECTION, "requestAuthoritativeRefresh");
+
+  // If a load is already running it may predate the write, so a follow-up is
+  // QUEUED rather than dropped; otherwise it runs immediately.
+  assert.match(refresh, /if \(loadingRef\.current\) queuedLoadRef\.current = true;\s*else load\(\);/);
+  assert.match(
+    refresh,
+    /if \(hiddenLoadingRef\.current\) queuedHiddenLoadRef\.current = true;\s*else loadHidden\(\);/
+  );
+  // The hidden half stays manager-gated.
+  assert.match(refresh, /if \(!canManageVisibility \|\| !fetchHiddenOverview\) return;/);
+
+  // The queue drains in each loader's finally - and the duplicate-load guard
+  // itself is untouched, so ordinary concurrent loads are still collapsed.
+  const load = functionBody(SECTION, "load");
+  assert.match(load, /if \(loadingRef\.current\) return;/, "the guard must NOT be removed");
+  assert.match(
+    load,
+    /loadingRef\.current = false;\s*if \(queuedLoadRef\.current\) \{\s*queuedLoadRef\.current = false;\s*load\(\);/
+  );
+  const loadHidden = functionBody(SECTION, "loadHidden");
+  assert.match(loadHidden, /if \(hiddenLoadingRef\.current\) return;/);
+  assert.match(
+    loadHidden,
+    /hiddenLoadingRef\.current = false;\s*setHiddenLoading\(false\);\s*if \(queuedHiddenLoadRef\.current\) \{\s*queuedHiddenLoadRef\.current = false;\s*loadHidden\(\);/
+  );
+  // Exactly one queued follow-up per loader - the flag is cleared before the
+  // re-run, so this cannot become a loop.
+  assert.equal((SECTION.match(/queuedLoadRef\.current = false;/g) ?? []).length, 1);
+  assert.equal((SECTION.match(/queuedHiddenLoadRef\.current = false;/g) ?? []).length, 1);
+  // Still no page reload and no unsaved-edit hazard.
+  assert.ok(!SECTION.includes("location.reload"));
+  assert.ok(!SECTION.includes("router.refresh"));
+  assert.ok(!refresh.includes("setModalRow"), "a refresh must not disturb an open edit modal");
+});
+
+test("86. the hidden-horse mark refusal is surfaced as an ordinary action failure", () => {
+  const body = functionBody(SECTION, "handleMarkProgress");
+
+  // The server's own stable Hebrew reason is shown as-is; the board neither
+  // re-words it nor treats it as an auth failure, and the optimistic patch is
+  // rolled back like any other denial.
+  assert.match(body, /setProgressError\(result\.error \?\? MARK_FAILED_ERROR\)/);
+  assert.ok(
+    !SECTION.includes("מוסתר מרשימת ההאכלה") || SECTION.includes("CLEAR_BLOCKED_BY_MARK_ERROR"),
+    "the board must not hard-code the server's hidden-horse wording"
+  );
+  assert.ok(
+    !SECTION.includes("HIDDEN_HORSE_MARK_ERROR"),
+    "the denial text belongs to the server layer, not to the client"
+  );
 });

@@ -29,9 +29,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
+  FEEDING_HORSE_LOCK_NAMESPACE,
+  HIDDEN_HORSE_MARK_ERROR,
   INVALID_HORSE_NAME_ERROR,
   INVALID_TARGET_STATE_ERROR,
   clearAllFeedingProgressWithDeps,
+  feedingHorseLockKey,
   markFeedingProgressWithDeps,
   planFeedingProgressWrite,
   setHorseFeedingVisibilityWithDeps,
@@ -40,6 +43,7 @@ import {
   type FeedingProgressWriteData,
   type FeedingVisibilityRow,
   type MarkFeedingProgressDeps,
+  type SetHorseFeedingVisibilityDeps,
 } from "./horse-feeding-progress-io";
 import {
   ADMIN_REQUIRED_ERROR,
@@ -72,33 +76,64 @@ interface MarkFake {
   upserts: { horseName: string; data: FeedingProgressWriteData }[];
   deletes: string[];
   mealLookups: string[];
+  /** Every lock key this fake was asked to take, in order. */
+  lockKeys: string[];
+  /** Ordered trace of the transaction's statements, for ordering assertions. */
+  trace: string[];
+  transactions: () => number;
 }
 
 function markFake(options: {
   meals?: FeedingMealContentRow[];
   existing?: FeedingProgressRow | null;
+  /** undefined = no visibility row at all (the normal, visible case). */
+  hidden?: boolean;
+  failUpsert?: boolean;
 } = {}): MarkFake {
   const upserts: MarkFake["upserts"] = [];
   const deletes: string[] = [];
   const mealLookups: string[] = [];
+  const lockKeys: string[] = [];
+  const trace: string[] = [];
+  let transactions = 0;
   return {
     upserts,
     deletes,
     mealLookups,
+    lockKeys,
+    trace,
+    transactions: () => transactions,
     deps: {
       now: () => NOW,
-      findMealContent: async (horseName) => {
-        mealLookups.push(horseName);
-        return options.meals ?? HAY_AND_CONCENTRATE;
-      },
-      findProgress: async () => options.existing ?? null,
-      upsertProgress: async (horseName, data) => {
-        upserts.push({ horseName, data });
-        return { horseName, ...data };
-      },
-      deleteProgress: async (horseName) => {
-        deletes.push(horseName);
-        return 1;
+      runInTransaction: async (run) => {
+        transactions++;
+        return run({
+          acquireHorseLock: async (lockKey) => {
+            lockKeys.push(lockKey);
+            trace.push("lock");
+          },
+          findVisibility: async () => {
+            trace.push("visibility");
+            return options.hidden === undefined ? null : { isHidden: options.hidden };
+          },
+          findMealContent: async (horseName) => {
+            mealLookups.push(horseName);
+            trace.push("meals");
+            return options.meals ?? HAY_AND_CONCENTRATE;
+          },
+          findProgress: async () => options.existing ?? null,
+          upsertProgress: async (horseName, data) => {
+            if (options.failUpsert) throw new Error("transaction failed");
+            upserts.push({ horseName, data });
+            trace.push("upsert");
+            return { horseName, ...data };
+          },
+          deleteProgress: async (horseName) => {
+            deletes.push(horseName);
+            trace.push("delete");
+            return 1;
+          },
+        });
       },
     },
   };
@@ -362,13 +397,7 @@ test("16. a successful mark returns the authoritative saved row", async () => {
 });
 
 test("17. a write-layer failure propagates and is NOT converted into an auth denial", async () => {
-  const fake = markFake();
-  const failing: MarkFeedingProgressDeps = {
-    ...fake.deps,
-    upsertProgress: async () => {
-      throw new Error("transaction failed");
-    },
-  };
+  const failing: MarkFeedingProgressDeps = markFake({ failUpsert: true }).deps;
 
   await assert.rejects(
     () =>
@@ -510,29 +539,58 @@ test("21+22. instructor clear is allowed only with canEditHorseFeeding", async (
 // ===========================================================================
 
 interface VisibilityFake {
-  calls: {
-    horseName: string;
-    isHidden: boolean;
-    updatedByName: string;
-    clearProgress: boolean;
-  }[];
+  calls: { horseName: string; isHidden: boolean; updatedByName: string }[];
+  /** Horses whose progress the visibility transaction deleted. */
+  deletes: string[];
+  lockKeys: string[];
+  trace: string[];
+  /** The transaction op names this fake was handed - nothing meal-related. */
+  ops: string[];
   deps: Parameters<typeof setHorseFeedingVisibilityWithDeps>[0];
 }
 
 function visibilityFake(): VisibilityFake {
   const calls: VisibilityFake["calls"] = [];
+  const deletes: string[] = [];
+  const lockKeys: string[] = [];
+  const trace: string[] = [];
+  const ops: string[] = [];
   return {
     calls,
+    deletes,
+    lockKeys,
+    trace,
+    ops,
     deps: {
-      applyVisibilityInTransaction: async (input) => {
-        calls.push(input);
-        const row: FeedingVisibilityRow = {
-          horseName: input.horseName,
-          isHidden: input.isHidden,
-          updatedByName: input.updatedByName,
-          updatedAt: NOW,
+      runInTransaction: async (run) => {
+        const tx = {
+          acquireHorseLock: async (lockKey: string) => {
+            lockKeys.push(lockKey);
+            trace.push("lock");
+          },
+          upsertVisibility: async (input: {
+            horseName: string;
+            isHidden: boolean;
+            updatedByName: string;
+          }) => {
+            calls.push(input);
+            trace.push("upsertVisibility");
+            const row: FeedingVisibilityRow = {
+              horseName: input.horseName,
+              isHidden: input.isHidden,
+              updatedByName: input.updatedByName,
+              updatedAt: NOW,
+            };
+            return row;
+          },
+          deleteProgress: async (horseName: string) => {
+            deletes.push(horseName);
+            trace.push("deleteProgress");
+            return 1;
+          },
         };
-        return row;
+        ops.push(...Object.keys(tx));
+        return run(tx);
       },
     },
   };
@@ -547,9 +605,10 @@ test("23+24. hiding sets isHidden true AND clears that horse's progress in one t
   });
 
   assert.deepEqual(outcome.result, { success: true });
-  assert.deepEqual(fake.calls, [
-    { horseName: "רקיע", isHidden: true, updatedByName: "מנהלת", clearProgress: true },
-  ]);
+  assert.deepEqual(fake.calls, [{ horseName: "רקיע", isHidden: true, updatedByName: "מנהלת" }]);
+  // Both effects happen inside the one transaction, after the one lock.
+  assert.deepEqual(fake.deletes, ["רקיע"], "hiding clears that horse's round progress");
+  assert.deepEqual(fake.trace, ["lock", "upsertVisibility", "deleteProgress"]);
   assert.equal(outcome.visibility?.isHidden, true);
 });
 
@@ -561,9 +620,9 @@ test("25+26. restoring sets isHidden false and creates NO progress row", async (
     updatedByName: "מנהלת",
   });
 
-  assert.deepEqual(fake.calls, [
-    { horseName: "רקיע", isHidden: false, updatedByName: "מנהלת", clearProgress: false },
-  ]);
+  assert.deepEqual(fake.calls, [{ horseName: "רקיע", isHidden: false, updatedByName: "מנהלת" }]);
+  assert.deepEqual(fake.deletes, [], "restoring deletes nothing...");
+  assert.deepEqual(fake.trace, ["lock", "upsertVisibility"], "...and creates no progress row");
   assert.equal(outcome.visibility?.isHidden, false);
   assert.equal(outcome.visibility?.updatedByName, "מנהלת");
 });
@@ -582,10 +641,17 @@ test("26b. a blank horse name or non-boolean flag never changes visibility", asy
   }
 });
 
-test("27. the visibility path has no meal dependency at all, so it cannot delete instructions", () => {
+test("27. the visibility path has no meal dependency at all, so it cannot delete instructions", async () => {
   const fake = visibilityFake();
+  await setHorseFeedingVisibilityWithDeps(fake.deps, {
+    horseName: "רקיע",
+    isHidden: true,
+    updatedByName: "מנהלת",
+  });
 
-  assert.deepEqual(Object.keys(fake.deps), ["applyVisibilityInTransaction"]);
+  assert.deepEqual(Object.keys(fake.deps), ["runInTransaction"]);
+  // The transaction is handed exactly three effects - none of them meal-related.
+  assert.deepEqual(fake.ops, ["acquireHorseLock", "upsertVisibility", "deleteProgress"]);
   for (const forbidden of ["horseFeedingMeal", "deleteMeal", "meal"]) {
     assert.ok(
       !IO_CODE.slice(IO_CODE.indexOf("setHorseFeedingVisibilityWithDeps")).includes(forbidden),
@@ -785,10 +851,16 @@ test("18c+24b. the Prisma ports implement their transactional contracts", () => 
     ACTIONS_CODE.indexOf("const visibilityIo"),
     ACTIONS_CODE.indexOf("export async function markHorseFeedingProgressAsAdmin"),
   );
-  // Hide: BOTH the visibility upsert and the progress delete inside one call.
-  assert.match(
-    visibilityPort,
-    /\$transaction\(\[\s*upsertVisibility,\s*prisma\.horseFeedingProgress\.deleteMany\(\{ where: \{ horseName \} \}\),?\s*\]\)/,
+  // Hide: ONE interactive transaction supplying the lock, the visibility upsert
+  // and the progress delete - every statement issued on the transaction client,
+  // so nothing escapes to the global client and outside the lock.
+  assert.match(visibilityPort, /prisma\.\$transaction\(\(tx\) =>/);
+  assert.match(visibilityPort, /acquireHorseLock: acquireHorseLockIn\(tx\)/);
+  assert.match(visibilityPort, /tx\.horseFeedingVisibility\.upsert/);
+  assert.match(visibilityPort, /tx\.horseFeedingProgress\.deleteMany\(\{ where: \{ horseName \} \}\)/);
+  assert.ok(
+    !/\bprisma\.horseFeeding/.test(visibilityPort),
+    "no global-client statement may run inside the visibility transaction",
   );
   // 27: no meal table is touched by either branch.
   assert.ok(
@@ -907,4 +979,679 @@ test("io module is not a Server Action module and holds no Prisma import", () =>
   assert.ok(!/^\s*["']use server["']\s*;?\s*$/m.test(IO_SOURCE));
   assert.ok(!/from ["']@\/lib\/prisma["']/.test(IO_CODE));
   assert.ok(!/\bprisma\./.test(IO_CODE), "the io module must receive effects, not perform them");
+});
+
+// ===========================================================================
+// 41-59. FEEDING-BOARD Stage 5B FIX - MARK vs HIDE ARE SERIALIZED PER HORSE
+//
+// The invariant: no completed sequence of these actions may leave a horse with
+// isHidden = true AND a HorseFeedingProgress row, because a later restore would
+// then surface a stale mark instead of PENDING.
+//
+// These are BEHAVIOURAL tests. The fake below is a real keyed mutex plus a real
+// in-memory store, so the two operations genuinely contend: the second one to
+// ask for the lock does not proceed until the first transaction has ended. Both
+// commit orders are exercised and the final state is asserted from the store,
+// not from call counts.
+// ===========================================================================
+
+/** Transaction-scoped mutual exclusion, keyed exactly like the database lock. */
+class KeyedMutex {
+  private readonly tails = new Map<string, Promise<void>>();
+  readonly acquisitions: string[] = [];
+
+  async acquire(key: string): Promise<() => void> {
+    this.acquisitions.push(key);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const previous = this.tails.get(key) ?? Promise.resolve();
+    this.tails.set(
+      key,
+      previous.then(() => held),
+    );
+    await previous;
+    return release;
+  }
+}
+
+interface FeedingStore {
+  hidden: Map<string, boolean>;
+  progress: Map<string, FeedingProgressRow>;
+  meals: FeedingMealContentRow[];
+}
+
+function emptyStore(): FeedingStore {
+  return { hidden: new Map(), progress: new Map(), meals: HAY_AND_CONCENTRATE };
+}
+
+/**
+ * One shared world: both mutators run against the same store and the same lock,
+ * exactly as they do against one database.
+ *
+ * `pause` lets a test hold a transaction open after it has taken the lock, so
+ * the other operation is provably made to wait rather than merely being called
+ * second.
+ */
+function sharedWorld(store: FeedingStore) {
+  const mutex = new KeyedMutex();
+  const trace: string[] = [];
+  let markPause: Promise<void> | null = null;
+  let markMealPause: Promise<void> | null = null;
+  let visibilityPause: Promise<void> | null = null;
+
+  const markDeps: MarkFeedingProgressDeps = {
+    now: () => NOW,
+    runInTransaction: async (run) => {
+      let release: (() => void) | null = null;
+      try {
+        return await run({
+          acquireHorseLock: async (lockKey) => {
+            release = await mutex.acquire(lockKey);
+            trace.push("mark:lock");
+            if (markPause) await markPause;
+          },
+          findVisibility: async (horseName) => {
+            trace.push("mark:visibility");
+            const isHidden = store.hidden.get(horseName);
+            return isHidden === undefined ? null : { isHidden };
+          },
+          findMealContent: async () => {
+            // The exact historical race point: the mark has already decided the
+            // horse is visible and is about to write.
+            if (markMealPause) await markMealPause;
+            return store.meals;
+          },
+          findProgress: async (horseName) => store.progress.get(horseName) ?? null,
+          upsertProgress: async (horseName, data) => {
+            trace.push("mark:upsert");
+            const row: FeedingProgressRow = { horseName, ...data };
+            store.progress.set(horseName, row);
+            return row;
+          },
+          deleteProgress: async (horseName) => {
+            trace.push("mark:delete");
+            return store.progress.delete(horseName) ? 1 : 0;
+          },
+        });
+      } finally {
+        // Transaction-scoped: the lock is released when the transaction ends,
+        // never before, and never left held on the failure path either.
+        if (release) (release as () => void)();
+      }
+    },
+  };
+
+  const visibilityDeps: SetHorseFeedingVisibilityDeps = {
+    runInTransaction: async (run) => {
+      let release: (() => void) | null = null;
+      try {
+        return await run({
+          acquireHorseLock: async (lockKey) => {
+            release = await mutex.acquire(lockKey);
+            trace.push("visibility:lock");
+            if (visibilityPause) await visibilityPause;
+          },
+          upsertVisibility: async ({ horseName, isHidden, updatedByName }) => {
+            trace.push("visibility:upsert");
+            store.hidden.set(horseName, isHidden);
+            return { horseName, isHidden, updatedByName, updatedAt: NOW };
+          },
+          deleteProgress: async (horseName) => {
+            trace.push("visibility:delete");
+            return store.progress.delete(horseName) ? 1 : 0;
+          },
+        });
+      } finally {
+        if (release) (release as () => void)();
+      }
+    },
+  };
+
+  return {
+    markDeps,
+    visibilityDeps,
+    trace,
+    lockAcquisitions: mutex.acquisitions,
+    holdMark: () => {
+      let open!: () => void;
+      markPause = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      return () => {
+        markPause = null;
+        open();
+      };
+    },
+    holdMarkAfterVisibilityRead: () => {
+      let open!: () => void;
+      markMealPause = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      return () => {
+        markMealPause = null;
+        open();
+      };
+    },
+    holdVisibility: () => {
+      let open!: () => void;
+      visibilityPause = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      return () => {
+        visibilityPause = null;
+        open();
+      };
+    },
+  };
+}
+
+const HIDDEN_INVARIANT = (store: FeedingStore, horseName: string) => {
+  const hidden = store.hidden.get(horseName) === true;
+  const hasProgress = store.progress.has(horseName);
+  assert.ok(!(hidden && hasProgress), "a hidden horse must never carry progress");
+  return { hidden, hasProgress };
+};
+
+test("41. mark and hide contend on the SAME key for the same normalized horse", async () => {
+  const mark = markFake();
+  const hide = visibilityFake();
+
+  await markFeedingProgressWithDeps(mark.deps, {
+    horseName: "  רקיע  ",
+    targetState: "COMPLETE",
+    markedByName: "דנה",
+  });
+  await setHorseFeedingVisibilityWithDeps(hide.deps, {
+    horseName: "רקיע",
+    isHidden: true,
+    updatedByName: "מנהלת",
+  });
+
+  assert.deepEqual(mark.lockKeys, [feedingHorseLockKey("רקיע")]);
+  assert.deepEqual(hide.lockKeys, [feedingHorseLockKey("רקיע")]);
+  assert.equal(mark.lockKeys[0], hide.lockKeys[0], "one horse, one lock key");
+  // The key is derived from the TRIMMED name, so "  רקיע  " and "רקיע" are the
+  // same horse to the lock as well as to the writes.
+  assert.equal(feedingHorseLockKey("רקיע"), `${FEEDING_HORSE_LOCK_NAMESPACE}רקיע`);
+});
+
+test("42. unrelated horses take DIFFERENT keys, so they are never serialized together", () => {
+  assert.notEqual(feedingHorseLockKey("רקיע"), feedingHorseLockKey("סופה"));
+  assert.notEqual(feedingHorseLockKey("Luna"), feedingHorseLockKey("luna"));
+  // The namespace keeps a horse name from colliding with the riding-slot locks
+  // that already share PostgreSQL's single advisory-lock space.
+  assert.ok(feedingHorseLockKey("x").startsWith(FEEDING_HORSE_LOCK_NAMESPACE));
+  assert.notEqual(feedingHorseLockKey("x"), "x");
+});
+
+test("43. the lock is taken BEFORE visibility is read, and before any other statement", async () => {
+  const fake = markFake();
+  await markFeedingProgressWithDeps(fake.deps, {
+    horseName: "רקיע",
+    targetState: "COMPLETE",
+    markedByName: "דנה",
+  });
+
+  assert.equal(fake.trace[0], "lock", "the lock is the first statement in the transaction");
+  assert.equal(fake.trace[1], "visibility", "and the visibility read follows it");
+  assert.equal(fake.transactions(), 1, "exactly one transaction per mark");
+
+  const hide = visibilityFake();
+  await setHorseFeedingVisibilityWithDeps(hide.deps, {
+    horseName: "רקיע",
+    isHidden: true,
+    updatedByName: "מנהלת",
+  });
+  assert.equal(hide.trace[0], "lock");
+});
+
+test("44. a visible horse may still be marked exactly as before", async () => {
+  for (const hidden of [undefined, false]) {
+    const fake = markFake({ hidden });
+    const outcome = await markFeedingProgressWithDeps(fake.deps, {
+      horseName: "רקיע",
+      targetState: "COMPLETE",
+      markedByName: "דנה",
+    });
+
+    assert.deepEqual(outcome.result, { success: true });
+    assert.equal(fake.upserts.length, 1);
+    assert.equal(outcome.progress?.state, "COMPLETE");
+  }
+});
+
+test("45+46. marking a hidden horse writes NOTHING and returns the fixed safe error", async () => {
+  for (const targetState of ["PENDING", "HAY_DONE", "COMPLETE"] as const) {
+    const fake = markFake({ hidden: true });
+    const outcome = await markFeedingProgressWithDeps(fake.deps, {
+      horseName: "רקיע",
+      targetState,
+      markedByName: "דנה",
+    });
+
+    assert.deepEqual(outcome.result, { success: false, error: HIDDEN_HORSE_MARK_ERROR });
+    assert.equal(outcome.progress, null);
+    assert.equal(fake.upserts.length, 0, `${targetState} must not write on a hidden horse`);
+    assert.equal(fake.deletes.length, 0, `${targetState} must not delete on a hidden horse`);
+    assert.equal(fake.mealLookups.length, 0, "and must not even read the meals");
+    assert.deepEqual(fake.trace, ["lock", "visibility"], "it stops right after the check");
+  }
+
+  // The refusal is a BUSINESS failure with a stable, PII-free Hebrew message -
+  // never an authorization error and never a leaked internal detail.
+  assert.equal(HIDDEN_HORSE_MARK_ERROR, "לא ניתן לסמן סוס שמוסתר מרשימת ההאכלה");
+  assert.notEqual(HIDDEN_HORSE_MARK_ERROR, ADMIN_REQUIRED_ERROR);
+  assert.notEqual(HIDDEN_HORSE_MARK_ERROR, INSTRUCTOR_REQUIRED_ERROR);
+  assert.notEqual(HIDDEN_HORSE_MARK_ERROR, NO_FEEDING_PERMISSION_ERROR);
+  assert.ok(!/@|prisma|sql|select |insert |stack|רקיע/i.test(HIDDEN_HORSE_MARK_ERROR));
+});
+
+test("47. MARK FIRST, hide second: hide waits for the lock, final state is hidden + no progress", async () => {
+  const store = emptyStore();
+  const world = sharedWorld(store);
+  const release = world.holdMark();
+
+  // The mark takes the lock and is held mid-transaction.
+  const markDone = markFeedingProgressWithDeps(world.markDeps, {
+    horseName: "רקיע",
+    targetState: "COMPLETE",
+    markedByName: "דנה",
+  });
+  await Promise.resolve();
+
+  // The hide now asks for the SAME lock and must not proceed.
+  let hideEntered = false;
+  const hideDone = setHorseFeedingVisibilityWithDeps(world.visibilityDeps, {
+    horseName: "רקיע",
+    isHidden: true,
+    updatedByName: "מנהלת",
+  }).then((outcome) => {
+    hideEntered = true;
+    return outcome;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(hideEntered, false, "hide must be blocked while the mark holds the lock");
+  assert.ok(
+    !world.trace.includes("visibility:upsert"),
+    "no visibility statement may run inside the mark's lock window",
+  );
+
+  release();
+  const [markOutcome] = await Promise.all([markDone, hideDone]);
+
+  assert.equal(markOutcome.result.success, true, "the mark itself succeeded");
+  // ...and the hide that followed removed the row it had written.
+  const state = HIDDEN_INVARIANT(store, "רקיע");
+  assert.deepEqual(state, { hidden: true, hasProgress: false });
+  assert.deepEqual(world.trace, [
+    "mark:lock",
+    "mark:visibility",
+    "mark:upsert",
+    "visibility:lock",
+    "visibility:upsert",
+    "visibility:delete",
+  ]);
+});
+
+test("47b. THE ORIGINAL BLOCKER: a mark past its visibility check still blocks the hide", async () => {
+  // Without the lock this is the exact sequence that broke the invariant: the
+  // mark reads "visible", the hide commits and deletes, and the mark then
+  // re-creates the row - leaving a hidden horse carrying progress. (Verified: the
+  // same interleaving against a no-op lock does reproduce hidden + progress.)
+  const store = emptyStore();
+  const world = sharedWorld(store);
+  const release = world.holdMarkAfterVisibilityRead();
+
+  const markDone = markFeedingProgressWithDeps(world.markDeps, {
+    horseName: "רקיע",
+    targetState: "COMPLETE",
+    markedByName: "דנה",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(
+    world.trace,
+    ["mark:lock", "mark:visibility"],
+    "the mark is past its visibility read and still holds the lock",
+  );
+
+  let hideEntered = false;
+  const hideDone = setHorseFeedingVisibilityWithDeps(world.visibilityDeps, {
+    horseName: "רקיע",
+    isHidden: true,
+    updatedByName: "מנהלת",
+  }).then((outcome) => {
+    hideEntered = true;
+    return outcome;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(hideEntered, false, "the hide cannot commit inside the mark's window");
+
+  release();
+  await Promise.all([markDone, hideDone]);
+
+  // The mark's write happened FIRST and the hide then removed it, which is the
+  // only safe resolution of this order.
+  assert.deepEqual(HIDDEN_INVARIANT(store, "רקיע"), { hidden: true, hasProgress: false });
+  assert.ok(
+    world.trace.indexOf("mark:upsert") < world.trace.indexOf("visibility:delete"),
+    "the delete must come after the write it has to clean up",
+  );
+});
+
+test("48. HIDE FIRST, mark second: the mark waits, then refuses - hidden + no progress", async () => {
+  const store = emptyStore();
+  const world = sharedWorld(store);
+  const release = world.holdVisibility();
+
+  const hideDone = setHorseFeedingVisibilityWithDeps(world.visibilityDeps, {
+    horseName: "רקיע",
+    isHidden: true,
+    updatedByName: "מנהלת",
+  });
+  await Promise.resolve();
+
+  let markEntered = false;
+  const markDone = markFeedingProgressWithDeps(world.markDeps, {
+    horseName: "רקיע",
+    targetState: "COMPLETE",
+    markedByName: "דנה",
+  }).then((outcome) => {
+    markEntered = true;
+    return outcome;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(markEntered, false, "the mark must be blocked while the hide holds the lock");
+  assert.ok(!world.trace.includes("mark:visibility"), "and must not have read visibility yet");
+
+  release();
+  const [, markOutcome] = await Promise.all([hideDone, markDone]);
+
+  assert.deepEqual(markOutcome.result, { success: false, error: HIDDEN_HORSE_MARK_ERROR });
+  assert.equal(markOutcome.progress, null);
+  const state = HIDDEN_INVARIANT(store, "רקיע");
+  assert.deepEqual(state, { hidden: true, hasProgress: false });
+  assert.ok(!world.trace.includes("mark:upsert"), "the late mark wrote nothing at all");
+});
+
+test("49. NO interleaving of these two actions can end at hidden + progress", async () => {
+  // Every order, including a pre-existing mark from an earlier round.
+  const scenarios: { name: string; run: (w: ReturnType<typeof sharedWorld>) => Promise<unknown> }[] = [
+    {
+      name: "mark then hide",
+      run: async (w) => {
+        await markFeedingProgressWithDeps(w.markDeps, {
+          horseName: "רקיע",
+          targetState: "COMPLETE",
+          markedByName: "דנה",
+        });
+        await setHorseFeedingVisibilityWithDeps(w.visibilityDeps, {
+          horseName: "רקיע",
+          isHidden: true,
+          updatedByName: "מנהלת",
+        });
+      },
+    },
+    {
+      name: "hide then mark",
+      run: async (w) => {
+        await setHorseFeedingVisibilityWithDeps(w.visibilityDeps, {
+          horseName: "רקיע",
+          isHidden: true,
+          updatedByName: "מנהלת",
+        });
+        await markFeedingProgressWithDeps(w.markDeps, {
+          horseName: "רקיע",
+          targetState: "HAY_DONE",
+          markedByName: "דנה",
+        });
+      },
+    },
+    {
+      name: "concurrent, mark dispatched first",
+      run: (w) =>
+        Promise.all([
+          markFeedingProgressWithDeps(w.markDeps, {
+            horseName: "רקיע",
+            targetState: "COMPLETE",
+            markedByName: "דנה",
+          }),
+          setHorseFeedingVisibilityWithDeps(w.visibilityDeps, {
+            horseName: "רקיע",
+            isHidden: true,
+            updatedByName: "מנהלת",
+          }),
+        ]),
+    },
+    {
+      name: "concurrent, hide dispatched first",
+      run: (w) =>
+        Promise.all([
+          setHorseFeedingVisibilityWithDeps(w.visibilityDeps, {
+            horseName: "רקיע",
+            isHidden: true,
+            updatedByName: "מנהלת",
+          }),
+          markFeedingProgressWithDeps(w.markDeps, {
+            horseName: "רקיע",
+            targetState: "COMPLETE",
+            markedByName: "דנה",
+          }),
+        ]),
+    },
+    {
+      name: "hide while an older round's progress row exists",
+      run: async (w) => {
+        await markFeedingProgressWithDeps(w.markDeps, {
+          horseName: "רקיע",
+          targetState: "HAY_DONE",
+          markedByName: "יעל",
+        });
+        await Promise.all([
+          setHorseFeedingVisibilityWithDeps(w.visibilityDeps, {
+            horseName: "רקיע",
+            isHidden: true,
+            updatedByName: "מנהלת",
+          }),
+          markFeedingProgressWithDeps(w.markDeps, {
+            horseName: "רקיע",
+            targetState: "COMPLETE",
+            markedByName: "דנה",
+          }),
+        ]);
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const store = emptyStore();
+    await scenario.run(sharedWorld(store));
+    const state = HIDDEN_INVARIANT(store, "רקיע");
+    assert.equal(state.hidden, true, `${scenario.name}: the horse ends hidden`);
+    assert.equal(state.hasProgress, false, `${scenario.name}: with no progress row`);
+  }
+});
+
+test("50+51. restore creates no progress, and a mark after it succeeds again", async () => {
+  const store = emptyStore();
+  const world = sharedWorld(store);
+
+  await markFeedingProgressWithDeps(world.markDeps, {
+    horseName: "רקיע",
+    targetState: "COMPLETE",
+    markedByName: "דנה",
+  });
+  await setHorseFeedingVisibilityWithDeps(world.visibilityDeps, {
+    horseName: "רקיע",
+    isHidden: true,
+    updatedByName: "מנהלת",
+  });
+  await setHorseFeedingVisibilityWithDeps(world.visibilityDeps, {
+    horseName: "רקיע",
+    isHidden: false,
+    updatedByName: "מנהלת",
+  });
+
+  // A restored horse starts at PENDING: absence of a row IS pending.
+  assert.equal(store.hidden.get("רקיע"), false);
+  assert.equal(store.progress.has("רקיע"), false, "restore must not resurrect a progress row");
+
+  const outcome = await markFeedingProgressWithDeps(world.markDeps, {
+    horseName: "רקיע",
+    targetState: "HAY_DONE",
+    markedByName: "דנה",
+  });
+  assert.deepEqual(outcome.result, { success: true });
+  assert.equal(store.progress.get("רקיע")?.state, "HAY_DONE");
+});
+
+test("52. different horses are NOT serialized against each other", async () => {
+  const store = emptyStore();
+  const world = sharedWorld(store);
+  const release = world.holdMark();
+
+  // רקיע holds its own lock...
+  const held = markFeedingProgressWithDeps(world.markDeps, {
+    horseName: "רקיע",
+    targetState: "COMPLETE",
+    markedByName: "דנה",
+  });
+  await Promise.resolve();
+
+  // ...while hiding a DIFFERENT horse completes immediately.
+  const other = await setHorseFeedingVisibilityWithDeps(world.visibilityDeps, {
+    horseName: "סופה",
+    isHidden: true,
+    updatedByName: "מנהלת",
+  });
+  assert.deepEqual(other.result, { success: true }, "an unrelated horse must not wait");
+  assert.equal(store.hidden.get("סופה"), true);
+
+  release();
+  await held;
+  assert.equal(store.progress.get("רקיע")?.state, "COMPLETE");
+  assert.deepEqual(world.lockAcquisitions, [
+    feedingHorseLockKey("רקיע"),
+    feedingHorseLockKey("סופה"),
+  ]);
+});
+
+test("53. an invalid request takes no lock and opens no transaction", async () => {
+  for (const command of [
+    { horseName: "   ", targetState: "COMPLETE" as const },
+    { horseName: "רקיע", targetState: "COMPLETED" as unknown as FeedingProgressState },
+  ]) {
+    const fake = markFake();
+    const outcome = await markFeedingProgressWithDeps(fake.deps, {
+      ...command,
+      markedByName: "דנה",
+    });
+
+    assert.equal(outcome.result.success, false);
+    assert.equal(fake.transactions(), 0, "validation precedes the transaction entirely");
+    assert.deepEqual(fake.lockKeys, []);
+  }
+
+  const hide = visibilityFake();
+  await setHorseFeedingVisibilityWithDeps(hide.deps, {
+    horseName: "  ",
+    isHidden: true,
+    updatedByName: "מנהלת",
+  });
+  assert.deepEqual(hide.lockKeys, [], "a rejected visibility request takes no lock either");
+});
+
+// ===========================================================================
+// 54-59. SOURCE CONTRACT for the real Prisma implementation of the lock
+// ===========================================================================
+
+test("54+55. the real lock is transaction-scoped and PARAMETERIZED, never interpolated", () => {
+  const helper = ACTIONS_CODE.slice(
+    ACTIONS_CODE.indexOf("function acquireHorseLockIn"),
+    ACTIONS_CODE.indexOf("const markProgressIo"),
+  );
+
+  // pg_advisory_xact_lock is released automatically at commit/rollback - there is
+  // no session-scoped variant anywhere that could leak on a pooled connection.
+  assert.match(helper, /tx\.\$executeRaw`SELECT pg_advisory_xact_lock\(hashtext\(\$\{lockKey\}\)\)`/);
+  for (const forbidden of [
+    "pg_advisory_lock(",
+    "pg_advisory_unlock",
+    "$executeRawUnsafe",
+    "$queryRawUnsafe",
+  ]) {
+    assert.ok(!ACTIONS_CODE.includes(forbidden), `${forbidden} must not be used`);
+  }
+  // The only value in the SQL is the derived key, bound by the tagged template;
+  // no horse name is ever concatenated into the statement.
+  assert.ok(!/pg_advisory_xact_lock\([^`]*horseName/.test(ACTIONS_CODE));
+  assert.ok(!/hashtext\('/.test(ACTIONS_CODE), "no literal is spliced into the lock key");
+});
+
+test("56. both ports take the lock, through the one shared helper", () => {
+  const markPort = ACTIONS_CODE.slice(
+    ACTIONS_CODE.indexOf("const markProgressIo"),
+    ACTIONS_CODE.indexOf("const clearProgressIo"),
+  );
+  const visibilityPort = ACTIONS_CODE.slice(
+    ACTIONS_CODE.indexOf("const visibilityIo"),
+    ACTIONS_CODE.indexOf("export async function markHorseFeedingProgressAsAdmin"),
+  );
+
+  for (const port of [markPort, visibilityPort]) {
+    assert.match(port, /acquireHorseLock: acquireHorseLockIn\(tx\)/);
+    assert.match(port, /prisma\.\$transaction\(\(tx\) =>/);
+  }
+  // Exactly one place issues the lock statement.
+  assert.equal(
+    (ACTIONS_CODE.match(/pg_advisory_xact_lock/g) ?? []).length,
+    1,
+    "only the shared helper takes the lock",
+  );
+  // Every mark statement runs on the transaction client, never the global one.
+  assert.ok(!/\bprisma\.horseFeeding/.test(markPort), "no global-client read/write inside the tx");
+  assert.match(markPort, /tx\.horseFeedingVisibility\.findUnique/);
+});
+
+test("57. the lock key derivation is shared and is not re-implemented in the action module", () => {
+  assert.ok(
+    !ACTIONS_CODE.includes("FEEDING_HORSE_LOCK_NAMESPACE"),
+    "the action module receives the derived key; it does not build one",
+  );
+  assert.ok(
+    IO_CODE.includes("export function feedingHorseLockKey"),
+    "the single derivation lives in the DB-free module",
+  );
+  // ...and both mutators call it, so they cannot drift apart.
+  assert.equal(
+    (IO_CODE.match(/feedingHorseLockKey\(horseName\)/g) ?? []).length,
+    2,
+    "the mark path and the visibility path derive the key identically",
+  );
+});
+
+test("58. no new Server Action or exported helper appeared on the public surface", () => {
+  const exportedFunctions = [...ACTIONS_CODE.matchAll(/export (async )?function (\w+)/g)];
+
+  for (const [, isAsync, name] of exportedFunctions) {
+    assert.ok(isAsync, `exported function ${name} must be async`);
+  }
+  assert.ok(
+    !ACTIONS_CODE.includes("export function acquireHorseLockIn"),
+    "the lock helper must stay module-private",
+  );
+  assert.ok(!/^export const /m.test(ACTIONS_CODE));
+});
+
+test("59. the authorization order is unchanged - the gate still precedes the lock", () => {
+  for (const name of ["markHorseFeedingProgressAsAdmin", "setHorseFeedingVisibilityAsAdmin"]) {
+    const body = functionBody(ACTIONS_CODE, name);
+    const gate = body.indexOf("requireAdmin()");
+    const delegation = body.indexOf("WithDeps(");
+    assert.ok(gate !== -1 && gate < delegation, `${name}: requireAdmin still runs first`);
+  }
+  const instructorMark = functionBody(ACTIONS_CODE, "markHorseFeedingProgressAsInstructor");
+  assert.match(instructorMark, /getCurrentInstructor,/);
+  assert.ok(!instructorMark.includes("prisma."), "no direct query in the action body");
 });

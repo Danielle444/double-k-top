@@ -41,6 +41,37 @@ import type { ActionResult } from "./students";
 export const INVALID_HORSE_NAME_ERROR = "שם סוס לא תקין";
 export const INVALID_TARGET_STATE_ERROR = "סטטוס האכלה לא תקין";
 
+/**
+ * A mark was refused because the horse is hidden from the feeding board. This is
+ * a BUSINESS refusal, never an authorization one: the actor was already
+ * authorized, so it must not be worded or handled as a permission failure. It
+ * names no horse, no actor and no table.
+ */
+export const HIDDEN_HORSE_MARK_ERROR = "לא ניתן לסמן סוס שמוסתר מרשימת ההאכלה";
+
+// --- per-horse serialization ------------------------------------------------
+
+/**
+ * Namespace for the per-horse advisory lock. The repository already serializes
+ * riding-slot complex plans with `pg_advisory_xact_lock(hashtext(<id>))`, which
+ * shares one global lock space, so this prefix keeps a horse name from colliding
+ * with a riding-slot id that happens to hash the same.
+ */
+export const FEEDING_HORSE_LOCK_NAMESPACE = "horse-feeding:";
+
+/**
+ * The serialization key for one horse. PURE and derived ONLY from the already
+ * NORMALIZED horse name, so the mark path and the visibility path provably
+ * contend on the same key for the same horse - and on different keys for
+ * different horses, which is what keeps unrelated horses concurrent.
+ *
+ * The caller passes this value to the database as a BOUND PARAMETER; a horse
+ * name is never interpolated into SQL text.
+ */
+export function feedingHorseLockKey(normalizedHorseName: string): string {
+  return `${FEEDING_HORSE_LOCK_NAMESPACE}${normalizedHorseName}`;
+}
+
 // --- row shapes -------------------------------------------------------------
 
 /** The meal fields needed to decide whether a horse has concentrate content. */
@@ -176,11 +207,18 @@ export function planFeedingProgressWrite(input: {
 // --- mark progress ----------------------------------------------------------
 
 /**
- * Narrow database effects for one mark. No Prisma type is referenced: each is a
- * plain function ./horse-feeding implements with a single bounded query.
+ * Narrow database effects for one mark, all scoped to ONE transaction. No Prisma
+ * type is referenced: each is a plain function ./horse-feeding implements with a
+ * single bounded query on the transaction client.
  */
-export interface MarkFeedingProgressDeps {
-  readonly now: () => Date;
+export interface MarkFeedingProgressTransaction {
+  /**
+   * MUST take a transaction-scoped, per-key exclusive lock that is released only
+   * when the surrounding transaction commits or rolls back, and MUST be the
+   * first statement the transaction issues.
+   */
+  readonly acquireHorseLock: (lockKey: string) => Promise<void>;
+  readonly findVisibility: (horseName: string) => Promise<{ readonly isHidden: boolean } | null>;
   readonly findMealContent: (horseName: string) => Promise<readonly FeedingMealContentRow[]>;
   readonly findProgress: (horseName: string) => Promise<FeedingProgressRow | null>;
   readonly upsertProgress: (
@@ -188,6 +226,14 @@ export interface MarkFeedingProgressDeps {
     data: FeedingProgressWriteData,
   ) => Promise<FeedingProgressRow>;
   readonly deleteProgress: (horseName: string) => Promise<number>;
+}
+
+export interface MarkFeedingProgressDeps {
+  readonly now: () => Date;
+  /** MUST run `run` inside one database transaction and return its value. */
+  readonly runInTransaction: <T>(
+    run: (tx: MarkFeedingProgressTransaction) => Promise<T>,
+  ) => Promise<T>;
 }
 
 /** What the caller learns: the action result plus the authoritative saved row. */
@@ -207,7 +253,22 @@ export interface MarkFeedingProgressOutcome {
  * exactly one row per horse.
  *
  * Validation failures return BEFORE any database call, so a rejected name or
- * state performs no read and no write.
+ * state performs no read, no lock and no write.
+ *
+ * SERIALIZED AGAINST HIDE/RESTORE. Everything from the visibility read to the
+ * write happens inside ONE transaction that first takes this horse's lock - the
+ * same lock the visibility mutator takes. That closes the cross-device race in
+ * which a mark begun before a hide committed afterwards and re-created the
+ * progress row the hide had just deleted, leaving a hidden horse carrying
+ * progress that a later restore would surface instead of PENDING. With the lock,
+ * only two orders exist and both end at "hidden, no progress":
+ *
+ *   MARK FIRST  - the mark commits, then hide takes the lock and deletes it;
+ *   HIDE FIRST  - the mark waits, then reads isHidden === true and writes
+ *                 NOTHING, returning HIDDEN_HORSE_MARK_ERROR.
+ *
+ * The refusal covers PENDING too: a hidden horse's progress was already removed
+ * by the hide, so there is nothing a mark could legitimately do to it.
  */
 export async function markFeedingProgressWithDeps(
   deps: MarkFeedingProgressDeps,
@@ -224,35 +285,49 @@ export async function markFeedingProgressWithDeps(
   if (!isFeedingProgressState(command.targetState)) {
     return { result: { success: false, error: INVALID_TARGET_STATE_ERROR }, progress: null };
   }
+  const targetState = command.targetState;
 
-  if (command.targetState === "PENDING") {
-    // deleteMany semantics, not delete: a horse that was never marked is not an
-    // error, so clearing one horse is idempotent.
-    await deps.deleteProgress(horseName);
-    return { result: { success: true }, progress: null };
-  }
+  return deps.runInTransaction(async (tx) => {
+    // (1) The lock FIRST - before any read, so the visibility this decision is
+    // based on cannot change underneath it.
+    await tx.acquireHorseLock(feedingHorseLockKey(horseName));
 
-  const [meals, existing] = await Promise.all([
-    deps.findMealContent(horseName),
-    deps.findProgress(horseName),
-  ]);
+    // (2) Only now is the visibility authoritative for the rest of this
+    // transaction.
+    const visibility = await tx.findVisibility(horseName);
+    if (visibility?.isHidden === true) {
+      return { result: { success: false, error: HIDDEN_HORSE_MARK_ERROR }, progress: null };
+    }
 
-  const plan = planFeedingProgressWrite({
-    targetState: command.targetState,
-    hasConcentrate: hasConcentrateContent(meals),
-    existing,
-    actorName: command.markedByName,
-    now: deps.now(),
+    if (targetState === "PENDING") {
+      // deleteMany semantics, not delete: a horse that was never marked is not
+      // an error, so clearing one horse is idempotent.
+      await tx.deleteProgress(horseName);
+      return { result: { success: true }, progress: null };
+    }
+
+    const [meals, existing] = await Promise.all([
+      tx.findMealContent(horseName),
+      tx.findProgress(horseName),
+    ]);
+
+    const plan = planFeedingProgressWrite({
+      targetState,
+      hasConcentrate: hasConcentrateContent(meals),
+      existing,
+      actorName: command.markedByName,
+      now: deps.now(),
+    });
+
+    // Unreachable for HAY_DONE/COMPLETE - narrowing only.
+    if (plan.kind === "delete") {
+      await tx.deleteProgress(horseName);
+      return { result: { success: true }, progress: null };
+    }
+
+    const saved = await tx.upsertProgress(horseName, plan.data);
+    return { result: { success: true }, progress: saved };
   });
-
-  // Unreachable for HAY_DONE/COMPLETE - narrowing only.
-  if (plan.kind === "delete") {
-    await deps.deleteProgress(horseName);
-    return { result: { success: true }, progress: null };
-  }
-
-  const saved = await deps.upsertProgress(horseName, plan.data);
-  return { result: { success: true }, progress: saved };
 }
 
 // --- clear the whole board --------------------------------------------------
@@ -286,18 +361,27 @@ export async function clearAllFeedingProgressWithDeps(
 
 // --- hide / restore ---------------------------------------------------------
 
-export interface SetHorseFeedingVisibilityDeps {
-  /**
-   * MUST apply both effects in ONE transaction: upsert the visibility row and,
-   * when `clearProgress` is true, delete that horse's progress row. It must
-   * NEVER touch HorseFeedingMeal rows or any student horse assignment.
-   */
-  readonly applyVisibilityInTransaction: (input: {
+/**
+ * The visibility transaction's effects. There is deliberately NO meal-touching
+ * dependency here, so no code path through this module can remove a feeding
+ * instruction or a student horse assignment.
+ */
+export interface SetHorseFeedingVisibilityTransaction {
+  /** The SAME per-horse lock the mark path takes. See markFeedingProgressWithDeps. */
+  readonly acquireHorseLock: (lockKey: string) => Promise<void>;
+  readonly upsertVisibility: (input: {
     readonly horseName: string;
     readonly isHidden: boolean;
     readonly updatedByName: string;
-    readonly clearProgress: boolean;
   }) => Promise<FeedingVisibilityRow>;
+  readonly deleteProgress: (horseName: string) => Promise<number>;
+}
+
+export interface SetHorseFeedingVisibilityDeps {
+  /** MUST run `run` inside ONE database transaction and return its value. */
+  readonly runInTransaction: <T>(
+    run: (tx: SetHorseFeedingVisibilityTransaction) => Promise<T>,
+  ) => Promise<T>;
 }
 
 export interface SetHorseFeedingVisibilityOutcome {
@@ -335,12 +419,26 @@ export async function setHorseFeedingVisibilityWithDeps(
     return { result: { success: false, error: INVALID_TARGET_STATE_ERROR }, visibility: null };
   }
 
-  const visibility = await deps.applyVisibilityInTransaction({
-    horseName,
-    isHidden: command.isHidden,
-    updatedByName: command.updatedByName,
-    clearProgress: command.isHidden,
-  });
+  const isHidden = command.isHidden;
+  return deps.runInTransaction(async (tx) => {
+    // The SAME lock, taken FIRST, as the mark path - that is the whole point:
+    // a mark for this horse either commits entirely before this transaction or
+    // waits and then observes the hidden state it establishes.
+    await tx.acquireHorseLock(feedingHorseLockKey(horseName));
 
-  return { result: { success: true }, visibility };
+    const visibility = await tx.upsertVisibility({
+      horseName,
+      isHidden,
+      updatedByName: command.updatedByName,
+    });
+
+    // HIDE: the visibility row and the removal of that horse's round progress
+    // commit together. RESTORE: nothing is deleted and NO progress row is
+    // created - absence already means PENDING.
+    if (isHidden) {
+      await tx.deleteProgress(horseName);
+    }
+
+    return { result: { success: true }, visibility };
+  });
 }
