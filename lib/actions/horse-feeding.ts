@@ -14,6 +14,34 @@ import {
   loadInstructorHorseFeedingOverviewWithDeps,
   upsertInstructorHorseFeedingMealsWithDeps,
 } from "@/lib/actions/horse-feeding-auth";
+import {
+  buildFeedingBoard,
+  type FeedingBoardProgressView,
+  type FeedingBoardRow,
+  type FeedingBoardStatusOption,
+  type FeedingProgressState,
+  type FeedingStatusControlMode,
+} from "@/lib/feeding/feeding-board-core";
+import {
+  clearAllHorseFeedingProgressAsAdminWithDeps,
+  clearAllHorseFeedingProgressAsInstructorWithDeps,
+  markHorseFeedingProgressAsAdminWithDeps,
+  markHorseFeedingProgressAsInstructorWithDeps,
+  setHorseFeedingVisibilityAsAdminWithDeps,
+  type FeedingAdminActor,
+  type FeedingProgressMarkRequest,
+  type HorseFeedingVisibilityRequest,
+} from "@/lib/actions/horse-feeding-progress-auth";
+import {
+  clearAllFeedingProgressWithDeps,
+  markFeedingProgressWithDeps,
+  setHorseFeedingVisibilityWithDeps,
+  type ClearFeedingProgressDeps,
+  type FeedingProgressRow,
+  type FeedingVisibilityRow,
+  type MarkFeedingProgressDeps,
+  type SetHorseFeedingVisibilityDeps,
+} from "@/lib/actions/horse-feeding-progress-io";
 
 // Still no separate Horse table (see HorseFeedingMeal's own schema comment) -
 // horseName is the natural key everywhere here too, matched against whatever
@@ -52,28 +80,44 @@ export interface HorseFeedingOverviewRow {
   attendanceArrivalTime: string | null;
   attendanceDepartureTime: string | null;
   attendanceNotes: string | null;
-}
 
-function toMealView(meal: {
-  hayType: string | null;
-  concentrateType: string | null;
-  concentrateAmount: string | null;
-  notes: string | null;
-} | null): HorseFeedingMealView | null {
-  if (!meal) return null;
-  return {
-    hayType: meal.hayType,
-    concentrateType: meal.concentrateType,
-    concentrateAmount: meal.concentrateAmount,
-    notes: meal.notes,
-  };
+  // FEEDING-BOARD Stage 4 - ADDITIVE fields composed by the pure Stage 2 core
+  // (lib/feeding/feeding-board-core). Every field above is unchanged, so the
+  // current HorseFeedingSection keeps working untouched; these are extra data
+  // the future board UI consumes. Both readers below return ACTIVE rows only,
+  // so isHidden is false on every row they yield - it is carried anyway so the
+  // admin-only hidden-row reader shares one single row type.
+  isHidden: boolean;
+  hasHayContent: boolean;
+  hasConcentrateContent: boolean;
+  statusControlMode: FeedingStatusControlMode;
+  // Audit stamps of the current round for this horse, or null when unmarked.
+  progress: FeedingBoardProgressView | null;
+  // The STORED state ("PENDING" when there is no row at all).
+  progressState: FeedingProgressState;
+  // What a control should show as selected - differs from progressState only
+  // for a stale HAY_DONE on a horse with no concentrate content, which displays
+  // as PENDING rather than being over-claimed as COMPLETE.
+  displayProgressState: FeedingProgressState;
+  isDisplayStateNormalized: boolean;
+  statusOptions: readonly FeedingBoardStatusOption[];
 }
 
 // Shared by the admin and instructor read actions - view is unrestricted for
 // both (matches the same "any instructor can view" convention already used
 // by horse assignments, riding slots, etc.); only writing is gated.
-async function buildHorseFeedingOverview(): Promise<HorseFeedingOverviewRow[]> {
-  const [students, meals] = await Promise.all([
+//
+// FEEDING-BOARD Stage 4: the union, the visibility split, the progress default,
+// the content/control-mode derivation and the Hebrew ordering all live in the
+// PURE core (lib/feeding/feeding-board-core) and are deliberately NOT
+// reimplemented here - this function only issues the bounded queries, hands the
+// four sources over, and re-attaches the attendance-derived operational fields
+// the core has no business knowing about.
+async function buildHorseFeedingBoardView(): Promise<{
+  active: HorseFeedingOverviewRow[];
+  hidden: HorseFeedingOverviewRow[];
+}> {
+  const [students, meals, visibility, progress] = await Promise.all([
     prisma.student.findMany({
       where: { isActive: true },
       select: {
@@ -87,27 +131,60 @@ async function buildHorseFeedingOverview(): Promise<HorseFeedingOverviewRow[]> {
       },
     }),
     prisma.horseFeedingMeal.findMany(),
+    prisma.horseFeedingVisibility.findMany(),
+    prisma.horseFeedingProgress.findMany(),
   ]);
 
-  const studentByHorseName = new Map<string, (typeof students)[number]>();
-  for (const s of students) {
-    const name = getHorseDisplayInfo(s).horseName;
-    if (!name) continue;
-    if (!studentByHorseName.has(name)) studentByHorseName.set(name, s);
-  }
+  // Horse-name resolution stays exactly as before (getHorseDisplayInfo); the
+  // core owns de-duplication from here, and resolves a name claimed by more than
+  // one active student deterministically rather than by query order (not
+  // expected in current data - every assignedHorseName is unique today).
+  const studentHorses = students.flatMap((s) => {
+    const horseName = getHorseDisplayInfo(s).horseName;
+    if (!horseName) return [];
+    return [
+      {
+        horseName,
+        responsibleStudent: {
+          id: s.id,
+          fullName: s.fullName,
+          groupName: s.groupName,
+          subgroupNumber: s.subgroupNumber,
+        },
+      },
+    ];
+  });
 
-  const mealsByHorseName = new Map<string, typeof meals>();
-  for (const m of meals) {
-    if (!mealsByHorseName.has(m.horseName)) mealsByHorseName.set(m.horseName, []);
-    mealsByHorseName.get(m.horseName)!.push(m);
-  }
+  const board = buildFeedingBoard({
+    studentHorses,
+    meals: meals.map((m) => ({
+      horseName: m.horseName,
+      mealType: m.mealType,
+      hayType: m.hayType,
+      concentrateType: m.concentrateType,
+      concentrateAmount: m.concentrateAmount,
+      notes: m.notes,
+      updatedByName: m.updatedByName,
+      updatedAt: m.updatedAt.toISOString(),
+    })),
+    visibility: visibility.map((v) => ({ horseName: v.horseName, isHidden: v.isHidden })),
+    progress: progress.map((p) => ({
+      horseName: p.horseName,
+      state: p.state,
+      hayMarkedAt: p.hayMarkedAt ? p.hayMarkedAt.toISOString() : null,
+      hayMarkedByName: p.hayMarkedByName,
+      concentrateMarkedAt: p.concentrateMarkedAt ? p.concentrateMarkedAt.toISOString() : null,
+      concentrateMarkedByName: p.concentrateMarkedByName,
+    })),
+  });
 
-  // Union of "horses currently claimed by an active student" and "horses
-  // with feeding data already entered" - a horse's feeding instructions
-  // never disappear just because no student currently claims that name.
-  const allHorseNames = new Set<string>([...studentByHorseName.keys(), ...mealsByHorseName.keys()]);
-
-  const linkedStudentIds = Array.from(studentByHorseName.values()).map((s) => s.id);
+  const linkedStudentIds = Array.from(
+    new Set(
+      [...board.activeRows, ...board.hiddenRows]
+        .map((row) => row.responsibleStudent?.id)
+        .filter((id): id is string => Boolean(id))
+    )
+  );
   const attendanceRecords =
     linkedStudentIds.length > 0
       ? await prisma.studentAttendance.findMany({
@@ -116,50 +193,50 @@ async function buildHorseFeedingOverview(): Promise<HorseFeedingOverviewRow[]> {
       : [];
   const attendanceByStudentId = new Map(attendanceRecords.map((a) => [a.studentId, a]));
 
-  const rows: HorseFeedingOverviewRow[] = [];
-  for (const horseName of allHorseNames) {
-    const mealsForHorse = mealsByHorseName.get(horseName) ?? [];
-    const morning = mealsForHorse.find((m) => m.mealType === "MORNING") ?? null;
-    const evening = mealsForHorse.find((m) => m.mealType === "EVENING") ?? null;
-    const lunch = mealsForHorse.find((m) => m.mealType === "LUNCH") ?? null;
-
-    const latestUpdated = mealsForHorse.reduce<(typeof mealsForHorse)[number] | null>(
-      (latest, m) => (!latest || m.updatedAt > latest.updatedAt ? m : latest),
-      null
-    );
-
-    const student = studentByHorseName.get(horseName) ?? null;
-    const attendance = student ? attendanceByStudentId.get(student.id) : undefined;
-
-    rows.push({
-      horseName,
-      morning: toMealView(morning),
-      evening: toMealView(evening),
-      lunch: toMealView(lunch),
-      updatedByName: latestUpdated?.updatedByName ?? null,
-      updatedAt: latestUpdated ? latestUpdated.updatedAt.toISOString() : null,
-      responsibleStudent: student
-        ? {
-            id: student.id,
-            fullName: student.fullName,
-            groupName: student.groupName,
-            subgroupNumber: student.subgroupNumber,
-          }
+  // The core's rows are frozen; spreading produces the mutable DTO the existing
+  // clients already consume, with the attendance fields re-attached unchanged.
+  const toOverviewRow = (row: FeedingBoardRow): HorseFeedingOverviewRow => {
+    const attendance = row.responsibleStudent
+      ? attendanceByStudentId.get(row.responsibleStudent.id)
+      : undefined;
+    return {
+      ...row,
+      responsibleStudent: row.responsibleStudent
+        ? { ...row.responsibleStudent }
         : null,
       attendanceStatus: attendance?.status ?? null,
       attendanceArrivalTime: attendance?.arrivalTime ?? null,
       attendanceDepartureTime: attendance?.departureTime ?? null,
       attendanceNotes: attendance?.notes ?? null,
-    });
-  }
+    };
+  };
 
-  rows.sort((a, b) => a.horseName.localeCompare(b.horseName, "he"));
-  return rows;
+  return {
+    active: board.activeRows.map(toOverviewRow),
+    hidden: board.hiddenRows.map(toOverviewRow),
+  };
+}
+
+// Active rows only - the shape both existing readers have always returned. With
+// the visibility table empty (its state at migration time) this is the exact
+// same set of horses as before, so nothing changes for either screen until a
+// manager actually hides a horse.
+async function buildHorseFeedingOverview(): Promise<HorseFeedingOverviewRow[]> {
+  return (await buildHorseFeedingBoardView()).active;
 }
 
 export async function getHorseFeedingOverviewForAdmin(): Promise<HorseFeedingOverviewRow[]> {
   await requireAdmin();
   return buildHorseFeedingOverview();
+}
+
+// MANAGER-ONLY. Hidden horses are not part of the operational board and are
+// never exposed to the instructor reader - this separate admin-gated action is
+// the only way to see them, so a manager can find and restore one. Same row
+// shape as the active reader (isHidden is true on every row here).
+export async function getHiddenHorseFeedingRowsForAdmin(): Promise<HorseFeedingOverviewRow[]> {
+  await requireAdmin();
+  return (await buildHorseFeedingBoardView()).hidden;
 }
 
 // HF-SEC-1RW: the instructor overview read is now gated on a trustworthy
@@ -350,4 +427,245 @@ export async function upsertHorseFeedingMealsAsInstructor(
     },
     input
   );
+}
+
+// ===========================================================================
+// FEEDING-BOARD Stage 4 - round progress + manager visibility.
+//
+// SERVER ACTION BOUNDARY: everything exported from this "use server" file is a
+// public endpoint, so the raw Prisma mutators below are NOT exported - they are
+// module-private constants, and the reusable persistence semantics they satisfy
+// live in the non-"use server" ./horse-feeding-progress-io. The only exported
+// runtime functions in this section are the six authorized async actions.
+//
+// ADMIN GATE: every admin action calls `await requireAdmin()` as its FIRST
+// statement, so no Prisma call can precede it and the normal login redirect is
+// preserved. requireAdmin is deliberately NOT passed into the Stage 3
+// orchestration as its resolver: it signals failure by throwing a Next.js
+// redirect, and the orchestration maps a thrown resolver to a denial message,
+// which would swallow that redirect. Instead the already-authorized admin is
+// wrapped in a resolver that only returns it and cannot throw or redirect.
+//
+// INSTRUCTOR GATE: the canonical actor DAL (getCurrentInstructor) is passed
+// straight through - it returns null for every unauthenticated / invalid /
+// inactive / wrong-audience session and never redirects. The Stage 3
+// orchestration enforces canEditHorseFeeding and derives authorship from the
+// actor's own fullName. No action accepts an instructor id, name, email or
+// permission value.
+//
+// No revalidatePath here on purpose: both feeding screens fetch this data
+// client-side through these actions, so a per-mark path revalidation would
+// remount the whole board on every tap without refreshing anything the client
+// does not already receive in the action's own result.
+// ===========================================================================
+
+/** Serializable progress view returned to the client after a mark. */
+export interface HorseFeedingProgressStateView {
+  horseName: string;
+  state: FeedingProgressState;
+  hayMarkedAt: string | null;
+  hayMarkedByName: string | null;
+  concentrateMarkedAt: string | null;
+  concentrateMarkedByName: string | null;
+}
+
+/** Mark result: the standard ActionResult plus the authoritative saved row. */
+export interface HorseFeedingProgressActionResult extends ActionResult {
+  /** The stored row after the write, or null when the horse is now PENDING. */
+  progress?: HorseFeedingProgressStateView | null;
+}
+
+export interface HorseFeedingClearActionResult extends ActionResult {
+  clearedCount?: number;
+}
+
+export interface HorseFeedingVisibilityStateView {
+  horseName: string;
+  isHidden: boolean;
+  updatedByName: string | null;
+  updatedAt: string;
+}
+
+export interface HorseFeedingVisibilityActionResult extends ActionResult {
+  visibility?: HorseFeedingVisibilityStateView | null;
+}
+
+function toProgressStateView(row: FeedingProgressRow | null): HorseFeedingProgressStateView | null {
+  if (!row) return null;
+  return {
+    horseName: row.horseName,
+    state: row.state,
+    hayMarkedAt: row.hayMarkedAt ? row.hayMarkedAt.toISOString() : null,
+    hayMarkedByName: row.hayMarkedByName,
+    concentrateMarkedAt: row.concentrateMarkedAt ? row.concentrateMarkedAt.toISOString() : null,
+    concentrateMarkedByName: row.concentrateMarkedByName,
+  };
+}
+
+function toVisibilityStateView(row: FeedingVisibilityRow | null): HorseFeedingVisibilityStateView | null {
+  if (!row) return null;
+  return {
+    horseName: row.horseName,
+    isHidden: row.isHidden,
+    updatedByName: row.updatedByName,
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+// --- module-private Prisma ports (never exported: not Server Actions) -------
+
+const markProgressIo: MarkFeedingProgressDeps = {
+  now: () => new Date(),
+  findMealContent: (horseName) =>
+    prisma.horseFeedingMeal.findMany({
+      where: { horseName },
+      select: { hayType: true, concentrateType: true, concentrateAmount: true, notes: true },
+    }),
+  findProgress: (horseName) => prisma.horseFeedingProgress.findUnique({ where: { horseName } }),
+  upsertProgress: (horseName, data) =>
+    prisma.horseFeedingProgress.upsert({
+      where: { horseName },
+      create: { horseName, ...data },
+      update: data,
+    }),
+  // deleteMany, not delete: clearing a horse that was never marked is a no-op
+  // success rather than a P2025 error, keeping PENDING writes idempotent.
+  deleteProgress: async (horseName) =>
+    (await prisma.horseFeedingProgress.deleteMany({ where: { horseName } })).count,
+};
+
+const clearProgressIo: ClearFeedingProgressDeps = {
+  deleteAllProgressInTransaction: async () => {
+    const [deleted] = await prisma.$transaction([prisma.horseFeedingProgress.deleteMany({})]);
+    return deleted.count;
+  },
+};
+
+const visibilityIo: SetHorseFeedingVisibilityDeps = {
+  applyVisibilityInTransaction: async ({ horseName, isHidden, updatedByName, clearProgress }) => {
+    const upsertVisibility = prisma.horseFeedingVisibility.upsert({
+      where: { horseName },
+      create: { horseName, isHidden, updatedByName },
+      update: { isHidden, updatedByName },
+    });
+
+    // HIDE: the visibility row and the removal of that horse's round progress
+    // commit together, so a restored horse can never reappear still wearing a
+    // mark from the round during which it was hidden. HorseFeedingMeal is not
+    // referenced in either branch - hiding never deletes feeding instructions.
+    if (clearProgress) {
+      const [visibility] = await prisma.$transaction([
+        upsertVisibility,
+        prisma.horseFeedingProgress.deleteMany({ where: { horseName } }),
+      ]);
+      return visibility;
+    }
+
+    // RESTORE: only the visibility row changes. No progress row is created -
+    // absence already means PENDING.
+    const [visibility] = await prisma.$transaction([upsertVisibility]);
+    return visibility;
+  },
+};
+
+// --- mark progress ----------------------------------------------------------
+
+export async function markHorseFeedingProgressAsAdmin(
+  request: FeedingProgressMarkRequest
+): Promise<HorseFeedingProgressActionResult> {
+  const admin = await requireAdmin();
+  const actor: FeedingAdminActor = { name: admin.name, email: admin.email };
+  const saved: { row: FeedingProgressRow | null } = { row: null };
+
+  const result = await markHorseFeedingProgressAsAdminWithDeps(
+    {
+      resolveCurrentAdmin: async () => actor,
+      markProgress: async (command) => {
+        const outcome = await markFeedingProgressWithDeps(markProgressIo, command);
+        saved.row = outcome.progress;
+        return outcome.result;
+      },
+    },
+    request
+  );
+
+  return result.success ? { ...result, progress: toProgressStateView(saved.row) } : result;
+}
+
+export async function markHorseFeedingProgressAsInstructor(
+  request: FeedingProgressMarkRequest
+): Promise<HorseFeedingProgressActionResult> {
+  const saved: { row: FeedingProgressRow | null } = { row: null };
+
+  const result = await markHorseFeedingProgressAsInstructorWithDeps(
+    {
+      getCurrentInstructor,
+      markProgress: async (command) => {
+        const outcome = await markFeedingProgressWithDeps(markProgressIo, command);
+        saved.row = outcome.progress;
+        return outcome.result;
+      },
+    },
+    request
+  );
+
+  return result.success ? { ...result, progress: toProgressStateView(saved.row) } : result;
+}
+
+// --- clear the whole board --------------------------------------------------
+
+export async function clearAllHorseFeedingProgressAsAdmin(): Promise<HorseFeedingClearActionResult> {
+  const admin = await requireAdmin();
+  const actor: FeedingAdminActor = { name: admin.name, email: admin.email };
+  const cleared: { count: number } = { count: 0 };
+
+  const result = await clearAllHorseFeedingProgressAsAdminWithDeps({
+    resolveCurrentAdmin: async () => actor,
+    clearAllProgress: async () => {
+      const outcome = await clearAllFeedingProgressWithDeps(clearProgressIo);
+      cleared.count = outcome.deletedCount;
+      return outcome.result;
+    },
+  });
+
+  return result.success ? { ...result, clearedCount: cleared.count } : result;
+}
+
+export async function clearAllHorseFeedingProgressAsInstructor(): Promise<HorseFeedingClearActionResult> {
+  const cleared: { count: number } = { count: 0 };
+
+  const result = await clearAllHorseFeedingProgressAsInstructorWithDeps({
+    getCurrentInstructor,
+    clearAllProgress: async () => {
+      const outcome = await clearAllFeedingProgressWithDeps(clearProgressIo);
+      cleared.count = outcome.deletedCount;
+      return outcome.result;
+    },
+  });
+
+  return result.success ? { ...result, clearedCount: cleared.count } : result;
+}
+
+// --- hide / restore (ADMIN ONLY - there is no instructor counterpart) -------
+
+export async function setHorseFeedingVisibilityAsAdmin(
+  request: HorseFeedingVisibilityRequest
+): Promise<HorseFeedingVisibilityActionResult> {
+  const admin = await requireAdmin();
+  const actor: FeedingAdminActor = { name: admin.name, email: admin.email };
+  const saved: { row: FeedingVisibilityRow | null } = { row: null };
+
+  const result = await setHorseFeedingVisibilityAsAdminWithDeps(
+    {
+      resolveCurrentAdmin: async () => actor,
+      setVisibility: async (command) => {
+        const outcome = await setHorseFeedingVisibilityWithDeps(visibilityIo, command);
+        saved.row = outcome.visibility;
+        return outcome.result;
+      },
+    },
+    request
+  );
+
+  return result.success ? { ...result, visibility: toVisibilityStateView(saved.row) } : result;
 }
