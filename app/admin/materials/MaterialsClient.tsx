@@ -13,6 +13,7 @@ import {
   type CourseMaterialTypeValue,
   type CourseMaterialVisibilityValue,
   type CreateLinkMaterialInput,
+  type MaterialOfferingOption,
 } from "@/lib/actions/materials";
 // LAUNCH-WARNING - this is an accidental-send warning only, not course-scoped
 // containment. Remove after message and material notification fanout are wired
@@ -36,6 +37,60 @@ const VISIBILITY_LABELS: Record<CourseMaterialVisibilityValue, string> = {
   BOTH: "כולם",
 };
 
+// P-MATERIALS M2D - the exact multipart field name the M2B upload route reads via
+// formData.getAll(...), and the runtime-mandatory create/edit input key. Kept as
+// one constant so the FILE FormData append and the LINK/update payload can never
+// drift from what the writer expects.
+const OFFERING_IDS_FIELD = "courseOfferingIds";
+const NO_OFFERING_SELECTED_ERROR = "יש לבחור לפחות קורס אחד";
+const NO_AUDIENCE_LABEL = "לא משויך לאף קורס";
+const CAPABILITY_DISABLED_NOTE = "חניכים לא יראו את החומר עד שהיכולת תופעל";
+
+// P-MATERIALS M2D - the shared "קורסים" multi-select. A full-width, stacked
+// checkbox list (no horizontal overflow on mobile/tablet); each not-yet-enabled
+// offering shows the capability note so the admin knows trainees won't see the
+// material until COURSE_MATERIALS is enabled for it. Selection is by
+// CourseOffering.id only - the label is display-only.
+function OfferingChecklist({
+  options,
+  selectedIds,
+  onToggle,
+  showError,
+}: {
+  options: MaterialOfferingOption[];
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+  showError: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <p className="font-medium text-card-foreground">קורסים</p>
+      {options.length === 0 ? (
+        <p className="text-sm text-muted-foreground">אין קורסים זמינים לשיוך בשנת הפעילות הנוכחית</p>
+      ) : (
+        <div className="flex w-full flex-col gap-2">
+          {options.map((option) => (
+            <label key={option.id} className="flex w-full flex-col gap-0.5">
+              <span className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.includes(option.id)}
+                  onChange={() => onToggle(option.id)}
+                />
+                {option.label}
+              </span>
+              {!option.materialsCapabilityEnabled && (
+                <span className="ps-6 text-xs text-warning">{CAPABILITY_DISABLED_NOTE}</span>
+              )}
+            </label>
+          ))}
+        </div>
+      )}
+      {showError && <p className="text-sm text-danger">{NO_OFFERING_SELECTED_ERROR}</p>}
+    </div>
+  );
+}
+
 // LAUNCH-WARNING - exactly the two visibilities for which
 // createMaterialAddedNotifications fans a MATERIAL_ADDED notification out to
 // students. INSTRUCTORS-only creates no student notification at all, so that
@@ -53,7 +108,13 @@ type StagedMaterialCreate =
   | { kind: "LINK"; input: CreateLinkMaterialInput }
   | { kind: "FILE" };
 
-export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }) {
+export function MaterialsClient({
+  materials,
+  offeringOptions,
+}: {
+  materials: AdminMaterialRow[];
+  offeringOptions: MaterialOfferingOption[];
+}) {
   const [items, setItems] = useState(materials);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -64,6 +125,9 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
   const [description, setDescription] = useState("");
   const [visibility, setVisibility] = useState<CourseMaterialVisibilityValue>("BOTH");
   const [externalUrl, setExternalUrl] = useState("");
+  // P-MATERIALS M2D - the CourseOffering audience selection for a NEW material.
+  const [selectedOfferingIds, setSelectedOfferingIds] = useState<string[]>([]);
+  const [createOfferingError, setCreateOfferingError] = useState(false);
 
   const [editTarget, setEditTarget] = useState<AdminMaterialRow | null>(null);
   const [editTitle, setEditTitle] = useState("");
@@ -71,8 +135,17 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
   const [editVisibility, setEditVisibility] = useState<CourseMaterialVisibilityValue>("BOTH");
   const [editExternalUrl, setEditExternalUrl] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
+  // P-MATERIALS M2D - the desired CourseOffering audience set for the edited material.
+  const [editSelectedOfferingIds, setEditSelectedOfferingIds] = useState<string[]>([]);
+  const [editOfferingError, setEditOfferingError] = useState(false);
   const [isEditPending, startEditTransition] = useTransition();
   const editFileInputRef = useRef<HTMLInputElement>(null);
+
+  // P-MATERIALS M2D - toggle a CourseOffering id in a selection (dedup guaranteed
+  // by set semantics: an id is present at most once).
+  function toggleOfferingId(current: string[], id: string): string[] {
+    return current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+  }
 
   // LAUNCH-WARNING - staged NEW-material creation awaiting confirmation. Non-null
   // means the warning is on screen and nothing has been created yet.
@@ -96,6 +169,10 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
     setVisibility("BOTH");
     setExternalUrl("");
     setError(null);
+    // P-MATERIALS M2D - a fresh composer starts with NO course selected; the
+    // manager must choose (never defaults to all).
+    setSelectedOfferingIds([]);
+    setCreateOfferingError(false);
     // LAUNCH-WARNING - a fresh composer never inherits a previously staged
     // creation, so the warning is always shown again. Nothing is persisted.
     setPendingCreate(null);
@@ -110,6 +187,10 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
     setEditVisibility(material.visibility);
     setEditExternalUrl(material.externalUrl ?? "");
     setEditError(null);
+    // P-MATERIALS M2D - pre-select the material's existing audience (the 11 legacy
+    // Level-1 materials open with Level 1 already checked).
+    setEditSelectedOfferingIds([...material.audienceOfferingIds]);
+    setEditOfferingError(false);
   }
 
   // The actual LINK creation - unchanged behaviour, extracted so it can run
@@ -158,6 +239,16 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
     e.preventDefault();
     setError(null);
 
+    // P-MATERIALS M2D - at least one course is required (client-side, in addition
+    // to the server's runtime enforcement). Dedup defensively (toggle already
+    // keeps the selection unique).
+    const offeringIds = [...new Set(selectedOfferingIds)];
+    if (offeringIds.length === 0) {
+      setCreateOfferingError(true);
+      return;
+    }
+    setCreateOfferingError(false);
+
     const notifiesStudents = materialCreateNotifiesStudents(visibility);
 
     if (createType === "LINK") {
@@ -166,6 +257,7 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
         description: description || undefined,
         visibility,
         externalUrl,
+        courseOfferingIds: offeringIds,
       };
       if (!notifiesStudents) {
         performLinkCreate(input);
@@ -175,8 +267,14 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
       return;
     }
 
-    // FILE - capture the multipart body NOW, from the live form element.
+    // FILE - capture the multipart body NOW, from the live form element, then
+    // append each selected CourseOffering id as a repeated `courseOfferingIds`
+    // field (the exact name the M2B upload route reads via getAll). Never a name,
+    // never a duplicate.
     const formData = new FormData(e.currentTarget);
+    for (const id of offeringIds) {
+      formData.append(OFFERING_IDS_FIELD, id);
+    }
     if (!notifiesStudents) {
       performFileCreate(formData);
       return;
@@ -225,6 +323,14 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
     setEditError(null);
     const materialId = editTarget.id;
 
+    // P-MATERIALS M2D - the desired audience set is mandatory on edit too.
+    const offeringIds = [...new Set(editSelectedOfferingIds)];
+    if (offeringIds.length === 0) {
+      setEditOfferingError(true);
+      return;
+    }
+    setEditOfferingError(false);
+
     if (editTarget.materialType === "FILE" && editFileInputRef.current?.files?.length) {
       const formData = new FormData();
       formData.set("materialId", materialId);
@@ -232,6 +338,10 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
       formData.set("description", editDescription);
       formData.set("visibility", editVisibility);
       formData.set("file", editFileInputRef.current.files[0]);
+      // Repeated `courseOfferingIds` fields - same contract as create.
+      for (const id of offeringIds) {
+        formData.append(OFFERING_IDS_FIELD, id);
+      }
       startEditTransition(async () => {
         try {
           const response = await fetch("/api/admin/materials/upload", {
@@ -258,6 +368,8 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
         description: editDescription || undefined,
         visibility: editVisibility,
         externalUrl: editTarget.materialType === "LINK" ? editExternalUrl : undefined,
+        // The COMPLETE desired audience set - reconciled server-side (M2B).
+        courseOfferingIds: offeringIds,
       });
       if (!result.success) {
         setEditError(result.error ?? "אירעה שגיאה");
@@ -311,6 +423,23 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
             {m.description && (
               <p className="mb-2 whitespace-pre-wrap text-sm text-muted-foreground">{m.description}</p>
             )}
+            {/* P-MATERIALS M2D - assigned course labels; zero rows -> admin warning. */}
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              {m.audienceOfferings.length === 0 ? (
+                <span className="rounded-full bg-warning-muted px-2.5 py-1 text-xs font-medium text-warning">
+                  {NO_AUDIENCE_LABEL}
+                </span>
+              ) : (
+                m.audienceOfferings.map((offering) => (
+                  <span
+                    key={offering.id}
+                    className="rounded-full bg-accent/10 px-2.5 py-1 text-xs font-medium text-accent"
+                  >
+                    {offering.label}
+                  </span>
+                ))
+              )}
+            </div>
             <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
               <div className="text-muted-foreground">
                 {m.materialType === "LINK" ? (
@@ -444,6 +573,16 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
             ))}
           </div>
 
+          <OfferingChecklist
+            options={offeringOptions}
+            selectedIds={selectedOfferingIds}
+            onToggle={(id) => {
+              setSelectedOfferingIds((prev) => toggleOfferingId(prev, id));
+              setCreateOfferingError(false);
+            }}
+            showError={createOfferingError}
+          />
+
           {error && <p className="text-sm text-danger">{error}</p>}
           <div className="mt-2 flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={() => setIsCreateOpen(false)}>
@@ -520,6 +659,16 @@ export function MaterialsClient({ materials }: { materials: AdminMaterialRow[] }
               </label>
             ))}
           </div>
+
+          <OfferingChecklist
+            options={offeringOptions}
+            selectedIds={editSelectedOfferingIds}
+            onToggle={(id) => {
+              setEditSelectedOfferingIds((prev) => toggleOfferingId(prev, id));
+              setEditOfferingError(false);
+            }}
+            showError={editOfferingError}
+          />
 
           {editError && <p className="text-sm text-danger">{editError}</p>}
           <div className="mt-2 flex justify-end gap-2">

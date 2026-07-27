@@ -69,12 +69,16 @@ const LEVEL_2_OFFERING_ID = "cmrxk58vc0000lscnfm54bpze";
 // The action inventory is unchanged by M2C
 // ===========================================================================
 
-test("the materials action inventory is exactly the same six exports", () => {
+test("the materials action inventory is exactly the expected exports", () => {
   const src = readSource(MATERIALS_FILE);
   const exported = [...src.matchAll(/^export async function (\w+)\(/gm)].map((m) => m[1]).sort();
+  // getMaterialOfferingOptions is the admin picker reader added in M2D (admin-gated);
+  // it is not a trainee surface. Any OTHER new export must be reviewed and, if
+  // trainee-facing, contained.
   assert.deepEqual(exported, [
     "createLinkMaterial",
     "getInstructorMaterials",
+    "getMaterialOfferingOptions",
     "getMaterialsForAdmin",
     "getStudentMaterials",
     "setMaterialActive",

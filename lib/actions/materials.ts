@@ -27,9 +27,17 @@ import {
 import {
   assertOfferingIdsAllowed,
   applyMaterialAudiences,
+  resolveCurrentActivityYearIdFromRows,
   NoCurrentActivityYearError,
   OfferingNotAllowedError,
 } from "@/lib/course/material-audience-write";
+// P-MATERIALS M2D - admin offering picker. The current-year derivation is REUSED
+// from the M2B write module above so the picker and the writer authorize exactly
+// the same offering set (agreement is cross-checked in the picker-core test).
+import {
+  buildMaterialOfferingPickerOptions,
+  type MaterialOfferingOption,
+} from "@/lib/course/material-offering-picker-core";
 
 const SIGNED_URL_TTL_SECONDS = 60 * 60; // 1 hour, matches the booklet's TTL
 
@@ -217,6 +225,12 @@ export interface AdminMaterialRow {
   isActive: boolean;
   createdAt: string;
   viewUrl: string | null;
+  // P-MATERIALS M2D - the material's assigned CourseOffering audience, from the
+  // SAME audience join the trainee reader uses (no second source). Ids drive the
+  // edit form's pre-selection; the {id,label} pairs are directly renderable chips.
+  // An empty array = zero audience rows = the admin "לא משויך לאף קורס" warning.
+  audienceOfferingIds: readonly string[];
+  audienceOfferings: readonly { id: string; label: string }[];
 }
 
 export async function getMaterialsForAdmin(): Promise<AdminMaterialRow[]> {
@@ -224,6 +238,11 @@ export async function getMaterialsForAdmin(): Promise<AdminMaterialRow[]> {
 
   const materials = await prisma.courseMaterial.findMany({
     orderBy: { createdAt: "desc" },
+    include: {
+      audiences: {
+        select: { courseOfferingId: true, courseOffering: { select: { name: true } } },
+      },
+    },
   });
 
   return Promise.all(
@@ -240,9 +259,59 @@ export async function getMaterialsForAdmin(): Promise<AdminMaterialRow[]> {
         isActive: m.isActive,
         createdAt: m.createdAt.toISOString(),
         viewUrl,
+        audienceOfferingIds: m.audiences.map((a) => a.courseOfferingId),
+        audienceOfferings: m.audiences.map((a) => ({
+          id: a.courseOfferingId,
+          label: a.courseOffering.name,
+        })),
       };
     })
   );
+}
+
+// P-MATERIALS M2D - the admin CourseOffering picker options for assigning a
+// material's audience. Admin-gated. The current ActivityYear is derived by the
+// SAME function the M2B writer uses (resolveCurrentActivityYearIdFromRows), so
+// the picker offers exactly the set the writer will accept; the status filter
+// (ACTIVE/PLANNED, no ARCHIVED, current year only) and its agreement with the
+// writer are pinned by the picker-core test. Each option carries the effective
+// COURSE_MATERIALS enabled flag so the UI can warn that trainees won't see a
+// material assigned to a not-yet-enabled offering. An unresolvable current year
+// (0 or >1 ACTIVE-offering years) fails closed to no options - the writer would
+// reject any selection anyway. This slice enables NO capability.
+export type { MaterialOfferingOption } from "@/lib/course/material-offering-picker-core";
+
+export async function getMaterialOfferingOptions(): Promise<MaterialOfferingOption[]> {
+  await requireAdmin();
+
+  const activeYearRows = await prisma.courseOffering.findMany({
+    where: { status: "ACTIVE" },
+    select: { activityYearId: true },
+  });
+
+  let currentActivityYearId: string;
+  try {
+    currentActivityYearId = resolveCurrentActivityYearIdFromRows(activeYearRows);
+  } catch (error) {
+    if (error instanceof NoCurrentActivityYearError) return [];
+    throw error;
+  }
+
+  const rows = await prisma.courseOffering.findMany({
+    where: { activityYearId: currentActivityYearId, status: { in: ["ACTIVE", "PLANNED"] } },
+    select: { id: true, name: true, level: true, status: true, activityYearId: true },
+  });
+
+  const capabilityEnabledById = new Map<string, boolean>();
+  for (const row of rows) {
+    const capabilities = await getEffectiveCapabilities(row.id);
+    capabilityEnabledById.set(
+      row.id,
+      capabilities[TRAINEE_COURSE_MATERIALS_CAPABILITY_KEY] === "ENABLED"
+    );
+  }
+
+  return [...buildMaterialOfferingPickerOptions(rows, currentActivityYearId, capabilityEnabledById)];
 }
 
 const createLinkSchema = z.object({
