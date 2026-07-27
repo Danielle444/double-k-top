@@ -6,7 +6,9 @@ import { Modal } from "@/lib/components/Modal";
 import { HorseFeedingSection } from "@/lib/components/HorseFeedingSection";
 import { updateStudentHorseInfo, type HorseAssignmentRow } from "@/lib/actions/horses";
 import {
+  clearAllHorseFeedingProgressAsAdmin,
   getHorseFeedingOverviewForAdmin,
+  markHorseFeedingProgressAsAdmin,
   upsertHorseFeedingMealsAsAdmin,
 } from "@/lib/actions/horse-feeding";
 import { getHorseDisplayInfo, type HorseBadgeType } from "@/lib/horse-info";
@@ -118,10 +120,17 @@ export function HorsesClient({ students }: { students: HorseAssignmentRow[] }) {
       </div>
 
       {viewMode === "feeding" ? (
+        // FEEDING-BOARD Stage 5A: a manager may mark and reset the round. Both
+        // actions run requireAdmin() server-side as their first statement, so
+        // these two flags only decide what this screen offers.
         <HorseFeedingSection
           canEdit
+          canMarkProgress
+          canClearProgress
           fetchOverview={getHorseFeedingOverviewForAdmin}
           onSave={upsertHorseFeedingMealsAsAdmin}
+          onMarkProgress={markHorseFeedingProgressAsAdmin}
+          onClearAllProgress={clearAllHorseFeedingProgressAsAdmin}
         />
       ) : (
         <>

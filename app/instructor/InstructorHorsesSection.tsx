@@ -10,7 +10,9 @@ import {
   type HorseAssignmentRow,
 } from "@/lib/actions/horses";
 import {
+  clearAllHorseFeedingProgressAsInstructor,
   getHorseFeedingOverviewForInstructor,
+  markHorseFeedingProgressAsInstructor,
   upsertHorseFeedingMealsAsInstructor,
   type HorseFeedingUpsertInput,
 } from "@/lib/actions/horse-feeding";
@@ -223,10 +225,19 @@ export function InstructorHorsesSection({
       </div>
 
       {viewMode === "feeding" ? (
+        // FEEDING-BOARD Stage 5A: marking and resetting the round sit at the
+        // SAME trust tier as editing feeding instructions, so both flags come
+        // from canEditFeeding - never from the role, the name or any other
+        // client state. A read-only instructor still sees every status, disabled.
+        // The actions re-check canEditHorseFeeding against the signed session.
         <HorseFeedingSection
           canEdit={canEditFeeding}
+          canMarkProgress={canEditFeeding}
+          canClearProgress={canEditFeeding}
           fetchOverview={getHorseFeedingOverviewForInstructor}
           onSave={saveFeeding}
+          onMarkProgress={markHorseFeedingProgressAsInstructor}
+          onClearAllProgress={clearAllHorseFeedingProgressAsInstructor}
         />
       ) : (
         <>

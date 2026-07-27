@@ -1,9 +1,14 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState, useTransition } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Button } from "@/lib/components/Button";
 import { Modal } from "@/lib/components/Modal";
+import { ConfirmModal } from "@/lib/components/ConfirmModal";
 import { SuggestInput } from "@/lib/components/SuggestInput";
+import {
+  HorseFeedingStatusControl,
+  shouldApplyFeedingMarkResult,
+} from "@/lib/components/HorseFeedingStatusControl";
 import { getScheduleGroupColorClass } from "@/lib/schedule-group-colors";
 import { STATUS_BADGE_CLASS } from "@/lib/attendance-ui";
 import { formatHebrewDateTime } from "@/lib/dates";
@@ -11,10 +16,49 @@ import {
   getKnownHayTypes,
   getKnownConcentrateTypes,
   getKnownConcentrateAmounts,
+  type HorseFeedingClearActionResult,
   type HorseFeedingOverviewRow,
+  type HorseFeedingProgressActionResult,
   type HorseFeedingUpsertInput,
 } from "@/lib/actions/horse-feeding";
+import type { FeedingProgressState } from "@/lib/feeding/feeding-board-core";
 import type { ActionResult } from "@/lib/actions/students";
+
+// STABLE, SAFE failure text. A caught exception's message is NEVER rendered: a
+// Prisma/Next internal string (SQL, a digest, a redirect marker, an id) must not
+// reach a tablet on the yard. A Server Action's own ActionResult.error IS shown,
+// because those are the fixed, PII-free Hebrew constants Stage 3/4 designed as
+// user-facing.
+const MARK_FAILED_ERROR = "לא הצלחנו לעדכן את סימון ההאכלה. נסו שוב.";
+const CLEAR_FAILED_ERROR = "לא הצלחנו לנקות את הסימונים. נסו שוב.";
+
+const CLEAR_CONFIRM_TITLE = "ניקוי כל הסימונים";
+const CLEAR_CONFIRM_BODY =
+  "פעולה זו תאפס את סימוני ההאכלה של כל הסוסים ותכין את הלוח לסבב ההאכלה הבא.\n" +
+  "הוראות ההאכלה עצמן לא יימחקו.\n" +
+  "לא ניתן לשחזר את הסימונים שיימחקו.";
+const CLEAR_ALL_LABEL = "נקה את כל הסימונים";
+// Shown when a reset is attempted while a per-horse mark is still being saved.
+// Advisory only - the generation guard below is what actually keeps the board
+// correct, because a mark can begin between this check and the reset landing.
+const CLEAR_BLOCKED_BY_MARK_ERROR = "יש להמתין לסיום עדכון ההאכלות לפני ניקוי הסימונים.";
+
+// Time-only, device-local. The audit line is a glance ("who did the hay, when"),
+// so a full date would be noise - and a raw ISO string is never shown.
+function formatMarkTime(iso: string | null): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("he-IL", { hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+// Never fabricates: renders only the parts that actually exist, and nothing at
+// all when neither an actor nor a time was recorded.
+function markSummary(byName: string | null, at: string | null): string | null {
+  const time = formatMarkTime(at);
+  if (byName && time) return `${byName}, ${time}`;
+  return byName ?? time;
+}
 
 interface MealFormState {
   hayType: string;
@@ -56,14 +100,34 @@ function MealSummaryLine({ label, meal }: { label: string; meal: { hayType: stri
   );
 }
 
+/**
+ * FEEDING-BOARD Stage 5A: the four progress props are OPTIONAL and default to
+ * off, so a host that has not been wired yet renders exactly the pre-Stage-5A
+ * board (status controls disabled, no clear button). Each permission arrives as
+ * an explicit boolean from its host - it is never inferred from a role, a name,
+ * a URL or any other client state - and it only decides what the UI OFFERS. The
+ * injected Server Actions re-derive the actor from the signed session and remain
+ * the true authorization boundary.
+ */
 export function HorseFeedingSection({
   canEdit,
+  canMarkProgress = false,
+  canClearProgress = false,
   fetchOverview,
   onSave,
+  onMarkProgress,
+  onClearAllProgress,
 }: {
   canEdit: boolean;
+  canMarkProgress?: boolean;
+  canClearProgress?: boolean;
   fetchOverview: () => Promise<HorseFeedingOverviewRow[]>;
   onSave: (input: HorseFeedingUpsertInput) => Promise<ActionResult>;
+  onMarkProgress?: (input: {
+    horseName: string;
+    targetState: FeedingProgressState;
+  }) => Promise<HorseFeedingProgressActionResult>;
+  onClearAllProgress?: () => Promise<HorseFeedingClearActionResult>;
 }) {
   const [rows, setRows] = useState<HorseFeedingOverviewRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -90,13 +154,53 @@ export function HorseFeedingSection({
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  function load() {
-    setLoadError(null);
+  // --- Stage 5A: round progress -------------------------------------------
+  // Horses with a mark currently in flight. Kept in a ref as well as in state so
+  // the guard is synchronous (a second tap in the same tick still sees it) and so
+  // the visibility listener can read it without re-subscribing.
+  const [savingHorses, setSavingHorses] = useState<string[]>([]);
+  const savingRef = useRef<string[]>([]);
+  const [progressError, setProgressError] = useState<string | null>(null);
+  const [clearMessage, setClearMessage] = useState<string | null>(null);
+  const [clearOpen, setClearOpen] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+  const clearingRef = useRef(false);
+  // CLEAR EPOCH. Incremented on every successful reset. A mark records the
+  // generation it started in and its late result is discarded when they differ,
+  // so a request that was already in flight when the board was cleared can never
+  // patch a horse back to a pre-clear state. A ref, not state: it must be exact
+  // at the moment an async result lands, not at the last render.
+  const clearGenerationRef = useRef(0);
+  // Guards a background refresh: never while a load is already running, never
+  // while the instruction modal holds unsaved edits, never mid-mark.
+  const loadingRef = useRef(false);
+  const modalOpenRef = useRef(false);
+
+  function beginSaving(horseName: string) {
+    savingRef.current = [...savingRef.current, horseName];
+    setSavingHorses(savingRef.current);
+  }
+
+  function endSaving(horseName: string) {
+    savingRef.current = savingRef.current.filter((name) => name !== horseName);
+    setSavingHorses(savingRef.current);
+  }
+
+  // `silent` is the background (visibility) refresh: it must never blank the
+  // board or raise a banner just because the tab woke up on a bad connection.
+  function load(options?: { silent?: boolean }) {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    if (!options?.silent) setLoadError(null);
     fetchOverview()
       .then(setRows)
       .catch(() => {
+        if (options?.silent) return;
         setRows([]);
         setLoadError("שגיאה בטעינת רשימת ההאכלות. נסו לרענן.");
+      })
+      .finally(() => {
+        loadingRef.current = false;
       });
   }
 
@@ -117,6 +221,197 @@ export function HorseFeedingSection({
     loadKnownValues();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canEdit]);
+
+  useEffect(() => {
+    modalOpenRef.current = modalRow !== null;
+  }, [modalRow]);
+
+  // MULTI-DEVICE: the board is shared, so a tablet that was asleep while someone
+  // else marked a horse would otherwise show a stale round. This refreshes ONCE
+  // when the tab becomes visible again - no polling, no interval, no Realtime, no
+  // page reload. It is skipped while the instruction modal is open (unsaved edits
+  // must survive) and while a mark is in flight (a refetch would race it), and
+  // the listener is removed on unmount.
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState !== "visible") return;
+      if (modalOpenRef.current) return;
+      if (savingRef.current.length > 0) return;
+      load({ silent: true });
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Applies a progress change to exactly one row; every other row is returned
+  // untouched, and no meal/attendance/student field is ever rewritten here.
+  function patchProgress(
+    horseName: string,
+    patch: Pick<
+      HorseFeedingOverviewRow,
+      "progressState" | "displayProgressState" | "isDisplayStateNormalized" | "progress"
+    >
+  ) {
+    setRows((prev) =>
+      prev
+        ? prev.map((row) => (row.horseName === horseName ? { ...row, ...patch } : row))
+        : prev
+    );
+  }
+
+  function handleMarkProgress(row: HorseFeedingOverviewRow, targetState: FeedingProgressState) {
+    if (!canMarkProgress || !onMarkProgress) return;
+    // One write per horse at a time. Another horse may still be marked in
+    // parallel - a feeding round is worked through quickly on a tablet.
+    if (savingRef.current.includes(row.horseName)) return;
+
+    const horseName = row.horseName;
+    // Captured BEFORE dispatch, so a clear that succeeds while this request is
+    // in flight makes every branch below stale.
+    const startedGeneration = clearGenerationRef.current;
+    const snapshot = {
+      progressState: row.progressState,
+      displayProgressState: row.displayProgressState,
+      isDisplayStateNormalized: row.isDisplayStateNormalized,
+      progress: row.progress,
+    };
+
+    setProgressError(null);
+    setClearMessage(null);
+    beginSaving(horseName);
+    // OPTIMISTIC. The control only ever offers states that are valid for THIS
+    // row's mode, so the target is directly displayable and no display-state
+    // normalisation is re-derived here (that rule stays in the pure core).
+    patchProgress(horseName, {
+      progressState: targetState,
+      displayProgressState: targetState,
+      isDisplayStateNormalized: false,
+      // Resetting one horse drops its audit immediately, so "לא סומן" is never
+      // shown above a line still claiming who fed it. Any other target keeps the
+      // existing stamps until the server's authoritative ones arrive - guessing
+      // an actor or a time here would be fabricating audit data.
+      progress: targetState === "PENDING" ? null : snapshot.progress,
+    });
+
+    void (async () => {
+      try {
+        const result = await onMarkProgress({ horseName, targetState });
+        // STALE-RESULT GUARD (success AND denial). The board was cleared while
+        // this request was in flight, so neither the authoritative row nor the
+        // rollback snapshot describes the current round any more: both would
+        // re-display a pre-clear mark. Discard SILENTLY - no patch, no banner -
+        // and leave the post-clear PENDING the board already shows. The write
+        // itself is not undone; only its outdated local effect is dropped.
+        if (
+          !shouldApplyFeedingMarkResult({
+            startedGeneration,
+            currentGeneration: clearGenerationRef.current,
+          })
+        ) {
+          return;
+        }
+        if (!result.success) {
+          patchProgress(horseName, snapshot);
+          setProgressError(result.error ?? MARK_FAILED_ERROR);
+          return;
+        }
+        // AUTHORITATIVE: the saved row replaces the optimistic guess, including
+        // the audit stamps the server derived. `progress: null` means PENDING.
+        const saved = result.progress ?? null;
+        patchProgress(horseName, {
+          progressState: saved ? saved.state : "PENDING",
+          displayProgressState: saved ? saved.state : "PENDING",
+          isDisplayStateNormalized: false,
+          progress: saved
+            ? {
+                hayMarkedAt: saved.hayMarkedAt,
+                hayMarkedByName: saved.hayMarkedByName,
+                concentrateMarkedAt: saved.concentrateMarkedAt,
+                concentrateMarkedByName: saved.concentrateMarkedByName,
+              }
+            : null,
+        });
+      } catch {
+        // Same guard on the thrown path: rolling back to the snapshot after a
+        // clear would restore a pre-clear mark, and a failure banner for a
+        // request the board has already superseded is noise.
+        if (
+          !shouldApplyFeedingMarkResult({
+            startedGeneration,
+            currentGeneration: clearGenerationRef.current,
+          })
+        ) {
+          return;
+        }
+        // Deliberately swallows the exception VALUE - only the stable text.
+        patchProgress(horseName, snapshot);
+        setProgressError(MARK_FAILED_ERROR);
+      } finally {
+        // ALWAYS released, including on a discarded stale result, so the
+        // per-horse lock can never outlive its request.
+        endSaving(horseName);
+      }
+    })();
+  }
+
+  function handleClearAllProgress() {
+    if (!canClearProgress || !onClearAllProgress) return;
+    if (clearingRef.current) return;
+    // HARDENING (not the safety net): refuse to start a reset while a mark is
+    // still saving, so the common case never even creates a stale request. The
+    // dialog closes so the notice is actually visible behind it.
+    if (savingRef.current.length > 0) {
+      setClearOpen(false);
+      setProgressError(CLEAR_BLOCKED_BY_MARK_ERROR);
+      return;
+    }
+    clearingRef.current = true;
+    setIsClearing(true);
+    setProgressError(null);
+    setClearMessage(null);
+
+    void (async () => {
+      try {
+        const result = await onClearAllProgress();
+        if (!result.success) {
+          setProgressError(result.error ?? CLEAR_FAILED_ERROR);
+          return;
+        }
+        // EPOCH BUMP FIRST, in the same synchronous step as the reset: every
+        // mark that started before this point is now stale and will be
+        // discarded when it resolves. A mark started after it carries the new
+        // generation and behaves normally.
+        clearGenerationRef.current += 1;
+        // Only the four progress fields are reset - meal instructions, the
+        // responsible student and the attendance fields are carried through.
+        setRows((prev) =>
+          prev
+            ? prev.map(
+                (row): HorseFeedingOverviewRow => ({
+                  ...row,
+                  progressState: "PENDING",
+                  displayProgressState: "PENDING",
+                  isDisplayStateNormalized: false,
+                  progress: null,
+                })
+              )
+            : prev
+        );
+        setClearMessage(
+          typeof result.clearedCount === "number"
+            ? `הסימונים נוקו (${result.clearedCount} סוסים). הלוח מוכן לסבב ההאכלה הבא.`
+            : "הסימונים נוקו. הלוח מוכן לסבב ההאכלה הבא."
+        );
+      } catch {
+        setProgressError(CLEAR_FAILED_ERROR);
+      } finally {
+        clearingRef.current = false;
+        setIsClearing(false);
+        setClearOpen(false);
+      }
+    })();
+  }
 
   const filteredRows = useMemo(() => {
     if (!rows) return [];
@@ -227,9 +522,38 @@ export function HorseFeedingSection({
             + הוספת סוס
           </Button>
         )}
+        {canClearProgress && onClearAllProgress && (
+          // Secondary and last on the row: resetting the whole board is a
+          // deliberate end-of-round action, never the default one. It is also
+          // unavailable while a mark is saving - with the reason stated, so a
+          // disabled button is never unexplained.
+          <>
+            <Button
+              variant="secondary"
+              className="!px-3 !py-2 !text-sm"
+              disabled={isClearing || savingHorses.length > 0}
+              onClick={() => {
+                setProgressError(null);
+                setClearMessage(null);
+                setClearOpen(true);
+              }}
+            >
+              {CLEAR_ALL_LABEL}
+            </Button>
+            {savingHorses.length > 0 && (
+              <span className="text-xs text-muted-foreground">{CLEAR_BLOCKED_BY_MARK_ERROR}</span>
+            )}
+          </>
+        )}
       </div>
 
       {loadError && <p className="rounded-lg bg-danger-muted p-3 text-sm text-danger">{loadError}</p>}
+      {progressError && (
+        <p className="rounded-lg bg-danger-muted p-3 text-sm text-danger">{progressError}</p>
+      )}
+      {clearMessage && (
+        <p className="rounded-lg bg-success-muted p-3 text-sm text-success">{clearMessage}</p>
+      )}
 
       {rows === null ? (
         <p className="text-sm text-muted-foreground">טוען...</p>
@@ -297,6 +621,26 @@ export function HorseFeedingSection({
                 <MealSummaryLine label="בוקר" meal={row.morning} />
                 {row.lunch && <MealSummaryLine label="צהריים" meal={row.lunch} />}
                 <MealSummaryLine label="ערב" meal={row.evening} />
+              </div>
+
+              <div className="mt-2 flex flex-col gap-1">
+                <HorseFeedingStatusControl
+                  horseName={row.horseName}
+                  statusControlMode={row.statusControlMode}
+                  displayProgressState={row.displayProgressState}
+                  disabled={!canMarkProgress || !onMarkProgress}
+                  isSaving={savingHorses.includes(row.horseName)}
+                  onChange={(targetState) => handleMarkProgress(row, targetState)}
+                />
+                {row.progress && (
+                  <MarkAuditLines
+                    hay={markSummary(row.progress.hayMarkedByName, row.progress.hayMarkedAt)}
+                    concentrate={markSummary(
+                      row.progress.concentrateMarkedByName,
+                      row.progress.concentrateMarkedAt
+                    )}
+                  />
+                )}
               </div>
 
               {(row.updatedByName || row.updatedAt) && (
@@ -430,6 +774,38 @@ export function HorseFeedingSection({
           </form>
         </Modal>
       )}
+
+      {canClearProgress && onClearAllProgress && (
+        // A real modal, never window.confirm: cancel is the secondary action and
+        // is also what the ✕ and the backdrop resolve to, and `isPending`
+        // disables confirming while the reset is in flight.
+        <ConfirmModal
+          open={clearOpen}
+          title={CLEAR_CONFIRM_TITLE}
+          message={CLEAR_CONFIRM_BODY}
+          confirmLabel={CLEAR_ALL_LABEL}
+          cancelLabel="ביטול"
+          isPending={isClearing}
+          onConfirm={handleClearAllProgress}
+          onCancel={() => {
+            if (isClearing) return;
+            setClearOpen(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// The per-step audit of the CURRENT round, shown only when something was
+// actually recorded. Times are device-local and short; no ISO string, no id, no
+// invented value.
+function MarkAuditLines({ hay, concentrate }: { hay: string | null; concentrate: string | null }) {
+  if (!hay && !concentrate) return null;
+  return (
+    <div className="text-[11px] text-muted-foreground">
+      {hay && <p>חציר: {hay}</p>}
+      {concentrate && <p>מזון מרוכז: {concentrate}</p>}
     </div>
   );
 }
