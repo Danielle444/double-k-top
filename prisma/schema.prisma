@@ -83,6 +83,15 @@ model Student {
   // uses this relation in this stage (decision 13).
   courseEnrollments CourseEnrollment[]
 
+  // EXAM EX-C1 - additive back-relation for ExamAssignment.student (nullable
+  // FK, onDelete: Restrict). A Student is never duplicated into the exam tree;
+  // exam participation is a plain assignment row pointing back here. The FK is
+  // Restrict so exam history can never be erased by deleting a Student, and it
+  // is nullable on the assignment side from day one so a later external-
+  // candidate slice stays purely additive. Nothing reads this relation in
+  // EX-C1.
+  examAssignments ExamAssignment[]
+
   @@map("students")
 }
 
@@ -472,6 +481,14 @@ model Instructor {
   // comment).
   ridingSlotComplexPublicationUpdates            RidingSlotComplexPublication[]        @relation("ComplexPublicationUpdatedByInstructor")
   ridingSlotComplexPublicationStationAssignments RidingSlotComplexPublicationStation[] @relation("ComplexPublicationStationInstructor")
+
+  // EXAM EX-C1 - additive back-relation for ExamSessionSupervisor.instructor
+  // (required FK, onDelete: Restrict). Supervising an exam session is a
+  // per-session relationship row, deliberately NOT a new Instructor permission
+  // column: the locked design gates exam parent/contact visibility on being an
+  // ExamSessionSupervisor for that exact session, so no boolean flag is added
+  // here or anywhere else. Nothing reads this relation in EX-C1.
+  examSessionSupervisions ExamSessionSupervisor[]
 
   @@map("instructors")
 }
@@ -1855,6 +1872,15 @@ model TeachingPracticeLesson {
   participants          TeachingPracticeParticipant[]
   childAssignments      TeachingPracticeChildAssignment[]
 
+  // EXAM EX-C1 - additive back-relation for ExamSession.sourceLesson. Teaching
+  // Practice is READ-ONLY INPUT to the exam copy: an ExamSession is an
+  // INDEPENDENT SNAPSHOT of this lesson, never a live reference to it, so this
+  // relation exists purely for provenance/idempotency and is onDelete: SetNull
+  // on the exam side - deleting a lesson must never block or corrupt an exam
+  // that was already copied from it. No exam write path ever writes back to
+  // this model or any Teaching Practice model.
+  examSessionsCopiedFrom ExamSession[]
+
   @@index([date])
   @@map("teaching_practice_lessons")
 }
@@ -1904,6 +1930,14 @@ model TeachingPracticeChild {
   trackDefaults TeachingPracticeTrackChild[]
   assignments   TeachingPracticeChildAssignment[]
   signedForms   TeachingPracticeSignedForm[]
+
+  // EXAM EX-C1 - additive back-relation for ExamBeginnerChild.sourceChild.
+  // The exam side stores an INDEPENDENT SNAPSHOT of this child's operational
+  // detail (name/age/gender/parent contact/horse/equipment) taken at copy time;
+  // later edits here never propagate there. onDelete: SetNull on the exam side
+  // for the same reason as the lesson provenance above. Signed forms are
+  // deliberately NOT copied into the exam snapshot.
+  examBeginnerChildSnapshots ExamBeginnerChild[]
 
   @@map("teaching_practice_children")
 }
@@ -2290,6 +2324,13 @@ model CourseOffering {
   // Restrict). Sparse: rows written before S2 carry NULL. Nothing reads this
   // relation at this stage.
   ridingProgressFeedback StudentRidingProgressFeedback[]
+  // EXAM EX-C1 - inverse of ExamPlan.courseOffering. Singular (ExamPlan?, not a
+  // list) because ExamPlan.courseOfferingId is @unique: the locked design is
+  // exactly ONE exam plan per CourseOffering, enforced at the database level
+  // rather than only by the pure validateExamPlanUniqueness() core. onDelete:
+  // Restrict on that side, matching every other CourseOffering child FK.
+  // Nothing reads this relation at this stage.
+  examPlan               ExamPlan?
 
   @@unique([activityYearId, name])
   @@index([activityYearId])
@@ -2559,4 +2600,279 @@ model CourseOfferingCapability {
   @@unique([courseOfferingId, capabilityKey])
   @@index([capabilityKey])
   @@map("course_offering_capabilities")
+}
+
+// ===========================================================================
+// EXAM MODULE (EX-C1) - the dedicated, SCHEDULE-ONLY exam plan tree.
+//
+// SCHEDULE-ONLY: there is deliberately NO representation of scores, pass/fail,
+// results, or examiner feedback anywhere in this tree. Do not add them.
+//
+// NEVER coupled to WeeklySchedule / ScheduleItem. The textual "מבחנים" /
+// "מבחן עיוני" schedule items are unrelated rows and are never converted into
+// exam records. The theory exam is OUTSIDE this module - there is no THEORY
+// ExamKind and there must never be one.
+//
+// SNAPSHOT / COPY SEMANTICS (supersedes the older reference/derive design):
+// a BEGINNER_INSTRUCTION ExamSession is an INDEPENDENT COPY of one
+// TeachingPracticeLesson, not a live reference to it. Teaching Practice is
+// strictly READ-ONLY INPUT: no exam write path ever writes back to any
+// teaching_practice_* table. After the copy, editing either side never
+// mutates the other; the source ids below are provenance and idempotency
+// only, which is exactly why they are onDelete: SetNull rather than Restrict.
+//
+// There is deliberately NO parent Exam/ExamDefinition entity between ExamPlan
+// and ExamSession: the three connected admin views (general schedule / by date
+// / by exam type) are all projections over these same ExamSession rows,
+// grouped by ExamSession.kind. No view-specific table, cached row, aggregate
+// column, or materialized view may ever be added - that would be a second
+// source of truth.
+//
+// No EXAMS capability exists in this phase (CAPABILITY_KEYS has no EXAMS key).
+// Nothing reads any model below in EX-C1: this slice is schema + pure cores.
+// ===========================================================================
+
+/// The four exam kinds. Mirrors the ExamKind string-literal union in
+/// lib/exam/exam-domain-core.ts. Schedule-only; carries no result semantics.
+/// All four values are created in the FIRST exam migration on purpose: adding
+/// a Postgres enum value later (ALTER TYPE ... ADD VALUE) is non-transactional
+/// and not rollback-safe. There is no THEORY value.
+enum ExamKind {
+  INTERFACE_RIDING
+  LUNGE_NO_RIDER
+  ADVANCED_INSTRUCTION
+  BEGINNER_INSTRUCTION
+}
+
+/// The two exam phases. ONLY an INTERFACE_RIDING session is phased; every
+/// other kind must leave ExamSession.phase NULL.
+enum ExamPhase {
+  INTERFACE
+  RIDING
+}
+
+/// The format of a copied beginner-instruction exam session, denormalized from
+/// TeachingPracticeLesson.practiceType at COPY TIME (materialize-at-creation,
+/// the same principle TeachingPracticeLesson.practiceType itself uses against
+/// its track). Editing the source lesson later never retroactively changes an
+/// already-copied exam session. Only a BEGINNER_INSTRUCTION session carries it.
+enum ExamBeginnerFormat {
+  LUNGE
+  BEGINNER_PRIVATE
+  BEGINNER_GROUP
+}
+
+/// The participant role within one exam session. Exactly two values, matching
+/// the committed ExamAssignmentRole union in lib/exam/exam-domain-core.ts.
+/// "Rides for the examinee" and "is instructed by the examinee" are the SAME
+/// operational role (INSTRUCTED_TRAINEE, "חניך מודרך") - there is deliberately
+/// no third instruction-specific role such as DEMO_RIDER.
+enum ExamAssignmentRole {
+  EXAMINEE
+  INSTRUCTED_TRAINEE
+}
+
+// Exactly ONE exam plan per CourseOffering - enforced here by the @unique on
+// courseOfferingId, so the pure validateExamPlanUniqueness() core is
+// defence-in-depth rather than the only guard. publishedAt is the GENERAL
+// publication timestamp; individual publication lives per session on
+// ExamSession.individualPublishedAt. Live rows + timestamps only: there is no
+// snapshot/version history in this phase.
+model ExamPlan {
+  id               String    @id @default(cuid())
+  courseOfferingId String    @unique
+  publishedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  courseOffering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Restrict)
+  sessions       ExamSession[]
+
+  @@map("exam_plans")
+}
+
+// The single authoritative exam record. All three admin views (general
+// schedule, by date, by exam type) are read-only projections over these rows,
+// and the shared session editor mutates exactly this row - never a per-view
+// copy.
+//
+// Field applicability is enforced by the pure domain core, not by the database
+// (a nullable column cannot express "required for exactly one kind"):
+//   - phase           : REQUIRED for INTERFACE_RIDING, FORBIDDEN otherwise;
+//   - beginnerFormat  : REQUIRED for BEGINNER_INSTRUCTION, FORBIDDEN otherwise;
+//   - interfaceSessionId : only an INTERFACE_RIDING session in the RIDING
+//     phase may carry it, pointing at its INTERFACE partner. This self-FK IS
+//     the interface/riding link - the two phases are two separate rows with
+//     their own date/time/arena/participants/publication, independent after
+//     the optional one-time seed (divergence is intentional; there is NO
+//     permanent synchronisation);
+//   - sourceTeachingPracticeLessonId / copiedAt / roleLabelOverrides : copy
+//     provenance, only on a BEGINNER_INSTRUCTION session.
+//
+// orderIndex is load-bearing, not cosmetic: on the real copy-source dates every
+// start time is shared by 2-4 lessons, so (startTime, orderIndex, id) is what
+// makes the by-date and by-exam-type orderings deterministic.
+//
+// arena is the ONE place field (free text, matching RidingSlotAssignment.arena
+// and RidingSlotComplexStation.arena - no Arena model exists in this app).
+// There is deliberately no second `location` column: two overlapping free-text
+// place fields would diverge and leave the EX-WRN-04 arena-overlap warning
+// reading the wrong one.
+model ExamSession {
+  id                             String              @id @default(cuid())
+  planId                         String
+  kind                           ExamKind
+  phase                          ExamPhase?
+  beginnerFormat                 ExamBeginnerFormat?
+  date                           DateTime            @db.Date
+  startTime                      String
+  endTime                        String
+  orderIndex                     Int
+  arena                          String?
+  title                          String?
+  notes                          String?
+  capacity                       Int?
+  interfaceSessionId             String?
+  sourceTeachingPracticeLessonId String?
+  copiedAt                       DateTime?
+  roleLabelOverrides             Json?
+  individualPublishedAt          DateTime?
+  createdAt                      DateTime            @default(now())
+  updatedAt                      DateTime            @updatedAt
+
+  plan             ExamPlan                @relation(fields: [planId], references: [id], onDelete: Restrict)
+  interfaceSession ExamSession?            @relation("ExamInterfaceRiding", fields: [interfaceSessionId], references: [id], onDelete: Restrict)
+  ridingSessions   ExamSession[]           @relation("ExamInterfaceRiding")
+  sourceLesson     TeachingPracticeLesson? @relation(fields: [sourceTeachingPracticeLessonId], references: [id], onDelete: SetNull)
+  assignments      ExamAssignment[]
+  supervisors      ExamSessionSupervisor[]
+  beginnerChildren ExamBeginnerChild[]
+
+  // The copy idempotency key: re-running the beginner copy for a date can
+  // never create a second session from the same source lesson. Postgres treats
+  // each NULL as distinct, so this constrains copied sessions only and leaves
+  // manually-created sessions unaffected - which is the intended behaviour.
+  @@unique([planId, sourceTeachingPracticeLessonId])
+  // Serves the "by date" view: WHERE planId AND date ORDER BY startTime,
+  // orderIndex, id.
+  @@index([planId, date, orderIndex])
+  // Serves the "by exam type" view (WHERE planId AND kind ORDER BY date,
+  // startTime, orderIndex, id) and the general schedule's GROUP BY kind.
+  @@index([planId, kind, date, orderIndex])
+  @@index([date])
+  @@map("exam_sessions")
+}
+
+// One participant assignment within one exam session.
+//
+// studentId is a real Student FK - the instructed trainee is NEVER free text -
+// and is onDelete: Restrict so exam history cannot be erased by deleting a
+// Student. It is NULLABLE from day one purely so a later external-candidate
+// slice is additive (a new nullable externalCandidateId + the already-tested
+// participant XOR rule) with zero ALTER COLUMN on this table.
+//
+// horseName is per-ASSIGNMENT, not per-session, so an instruction exam stores
+// the examinee's horse and the instructed trainee's horse independently
+// (free text - there is no Horse model in this app).
+//
+// Kind-specific fields, enforced by the pure domain core:
+//   - instructionTopic   : ADVANCED_INSTRUCTION only, carried on the EXAMINEE
+//     assignment (a session may hold several examinees, each examined on their
+//     own topic, so this cannot live on the session);
+//   - pairingIndex       : ADVANCED_INSTRUCTION only; assignments sharing an
+//     index form one teaching pair/group, which is what makes "who teaches
+//     whom" answerable when a session holds more than one examinee;
+//   - sourcePracticeRole : BEGINNER_INSTRUCTION only. EVERY trainee copied
+//     from Teaching Practice becomes role = EXAMINEE (including the
+//     participant currently carrying the TP EVALUATOR role), and this column
+//     preserves the EXACT original TP role token. It is deliberately a String,
+//     NOT the live TeachingPracticeRole enum: this is a snapshot, and typing it
+//     to the live enum would drag future Teaching-Practice role evolution into
+//     rows that were already copied.
+model ExamAssignment {
+  id                 String             @id @default(cuid())
+  sessionId          String
+  studentId          String?
+  role               ExamAssignmentRole
+  horseName          String?
+  instructionTopic   String?
+  pairingIndex       Int?
+  sourcePracticeRole String?
+  notes              String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  student Student?    @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  // Encodes the EX-BLK-03 conflict rule ("the examinee and the instructed
+  // trainee cannot be the same person within one session") at the database
+  // level. The pure conflict core still reports it first with a Hebrew
+  // message; this is the last line of defence.
+  @@unique([sessionId, studentId])
+  @@index([studentId])
+  @@map("exam_assignments")
+}
+
+// The INDEPENDENT per-session snapshot of one child taking part in a copied
+// beginner-instruction exam, materialised from one
+// TeachingPracticeChildAssignment (plus its TeachingPracticeChild) at copy
+// time. Editing the live Teaching-Practice child or assignment afterwards
+// never changes these values, and editing these values never writes back.
+//
+// PII WARNING: parentName / parentPhone duplicate minor-child contact details
+// into a SECOND surface. The locked visibility rule is enforced at runtime in
+// a later slice, not here: admins may see them; an instructor may see them
+// ONLY when they are an ExamSessionSupervisor for that EXACT session; trainees
+// must NEVER receive either field in any view or payload. No new Instructor
+// permission column exists or may be added for this.
+//
+// Signed forms (TeachingPracticeSignedForm) are deliberately NOT copied.
+model ExamBeginnerChild {
+  id                      String   @id @default(cuid())
+  sessionId               String
+  fullName                String
+  age                     Int?
+  gender                  String?
+  notes                   String?
+  parentName              String?
+  parentPhone             String?
+  horseName               String?
+  equipmentNotes          String?
+  isAbsent                Boolean  @default(false)
+  sourceChildId           String?
+  sourceChildAssignmentId String?
+  orderIndex              Int
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  session     ExamSession            @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sourceChild TeachingPracticeChild? @relation(fields: [sourceChildId], references: [id], onDelete: SetNull)
+
+  // Copy idempotency at child level, mirroring the session-level key above.
+  // Postgres treats each NULL as distinct, so manually-added children are
+  // unconstrained by design.
+  @@unique([sessionId, sourceChildAssignmentId])
+  @@index([sessionId])
+  @@map("exam_beginner_children")
+}
+
+// A supervising instructor / examiner on one exam session. For a copied
+// beginner session this is seeded from TeachingPracticeLesson.
+// responsibleInstructorId. Presence of a row here is ALSO the authorization
+// relationship that will later gate exam parent/contact visibility for
+// instructors - which is precisely why the locked design adds no new
+// Instructor permission column.
+model ExamSessionSupervisor {
+  id           String   @id @default(cuid())
+  sessionId    String
+  instructorId String
+  createdAt    DateTime @default(now())
+
+  session    ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  instructor Instructor  @relation(fields: [instructorId], references: [id], onDelete: Restrict)
+
+  @@unique([sessionId, instructorId])
+  @@index([instructorId])
+  @@map("exam_session_supervisors")
 }

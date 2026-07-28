@@ -18,8 +18,10 @@ import {
   isExamKind,
   isExamPhase,
   isExamAssignmentRole,
+  isExamBeginnerFormat,
   EXAM_KINDS,
   EXAM_PHASES,
+  EXAM_BEGINNER_FORMATS,
   EXAM_DOMAIN_MESSAGES,
   resolveParticipant,
   participantKey,
@@ -177,23 +179,141 @@ test("an out-of-domain phase value is flagged EX-DOM-INVALID-PHASE", () => {
 
 // --- beginner / native normalized-shape ------------------------------------
 
-test("normalized beginner session (overlay-only, no embedded participants) is valid", () => {
+// EX-C1 INVERSION: snapshot/copy semantics replaced reference/derive. A copied
+// beginner session MUST embed its copied participants and MUST carry a format.
+test("a copied beginner session with format + embedded participants is valid", () => {
   const r = validateBeginnerSessionShape({
     phase: null,
     interfaceSessionId: null,
-    embeddedAssignmentCount: 0,
+    embeddedAssignmentCount: 3,
+    beginnerFormat: "BEGINNER_GROUP",
+    copyProvenancePresent: true,
+    beginnerChildCount: 2,
+    examineeCount: 3,
   });
   assert.equal(r.ok, true, JSON.stringify(r.issues));
 });
 
-test("a beginner session embedding participants is invalid (derives from TP)", () => {
+test("a beginner session embedding NO participants is invalid (EX-C1 inversion)", () => {
   const r = validateBeginnerSessionShape({
+    phase: null,
+    interfaceSessionId: null,
+    embeddedAssignmentCount: 0,
+    beginnerFormat: "LUNGE",
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.issues.some((i) => i.code === "EX-DOM-BEGINNER-HAS-PARTICIPANTS"));
+});
+
+test("a beginner session without a format is invalid (EX-DOM-FORMAT-REQUIRED)", () => {
+  const missing = validateBeginnerSessionShape({
     phase: null,
     interfaceSessionId: null,
     embeddedAssignmentCount: 2,
   });
+  assert.ok(missing.issues.some((i) => i.code === "EX-DOM-FORMAT-REQUIRED"));
+
+  // An out-of-domain format value fails closed the same way.
+  const invalid = validateBeginnerSessionShape({
+    phase: null,
+    interfaceSessionId: null,
+    embeddedAssignmentCount: 2,
+    beginnerFormat: "SOMETHING" as never,
+  });
+  assert.ok(invalid.issues.some((i) => i.code === "EX-DOM-FORMAT-REQUIRED"));
+});
+
+test("a non-beginner kind may not carry a format (EX-DOM-FORMAT-FORBIDDEN)", () => {
+  const r = validateExamSessionShape(
+    shape({ kind: "LUNGE_NO_RIDER", beginnerFormat: "LUNGE" }),
+  );
   assert.equal(r.ok, false);
-  assert.ok(r.issues.some((i) => i.code === "EX-DOM-BEGINNER-HAS-PARTICIPANTS"));
+  assert.ok(r.issues.some((i) => i.code === "EX-DOM-FORMAT-FORBIDDEN"));
+});
+
+test("copy provenance is beginner-only (EX-DOM-COPY-SOURCE-FORBIDDEN)", () => {
+  const r = validateExamSessionShape(
+    shape({ kind: "ADVANCED_INSTRUCTION", copyProvenancePresent: true }),
+  );
+  assert.ok(r.issues.some((i) => i.code === "EX-DOM-COPY-SOURCE-FORBIDDEN"));
+
+  // The same provenance on a beginner session is fine.
+  const beginner = validateBeginnerSessionShape({
+    phase: null,
+    interfaceSessionId: null,
+    embeddedAssignmentCount: 1,
+    beginnerFormat: "LUNGE",
+    copyProvenancePresent: true,
+  });
+  assert.equal(beginner.ok, true, JSON.stringify(beginner.issues));
+});
+
+test("embedded children are beginner-only (EX-DOM-CHILDREN-FORBIDDEN)", () => {
+  const r = validateExamSessionShape(
+    shape({ kind: "INTERFACE_RIDING", phase: "INTERFACE", beginnerChildCount: 1 }),
+  );
+  assert.ok(r.issues.some((i) => i.code === "EX-DOM-CHILDREN-FORBIDDEN"));
+});
+
+test("instructed trainees are advanced-instruction-only (EX-DOM-INSTRUCTED-FORBIDDEN)", () => {
+  const lunge = validateExamSessionShape(
+    shape({ kind: "LUNGE_NO_RIDER", embeddedAssignmentCount: 2, instructedTraineeCount: 1 }),
+  );
+  assert.ok(lunge.issues.some((i) => i.code === "EX-DOM-INSTRUCTED-FORBIDDEN"));
+
+  // A copied beginner session never carries an instructed trainee either.
+  const beginner = validateBeginnerSessionShape({
+    phase: null,
+    interfaceSessionId: null,
+    embeddedAssignmentCount: 2,
+    beginnerFormat: "BEGINNER_GROUP",
+    instructedTraineeCount: 1,
+  });
+  assert.ok(beginner.issues.some((i) => i.code === "EX-DOM-INSTRUCTED-FORBIDDEN"));
+});
+
+test("instruction topics are advanced-instruction-only (EX-DOM-TOPIC-FORBIDDEN)", () => {
+  const r = validateExamSessionShape(
+    shape({ kind: "LUNGE_NO_RIDER", embeddedAssignmentCount: 1, instructionTopicCount: 1 }),
+  );
+  assert.ok(r.issues.some((i) => i.code === "EX-DOM-TOPIC-FORBIDDEN"));
+});
+
+test("EX-DOM-PAIRING-REQUIRED fires only for >1 examinee on an instruction exam", () => {
+  // One examinee: no pairing needed.
+  const single = validateExamSessionShape(
+    shape({ kind: "ADVANCED_INSTRUCTION", embeddedAssignmentCount: 2, examineeCount: 1 }),
+  );
+  assert.equal(single.ok, true, JSON.stringify(single.issues));
+
+  // Two examinees with nothing paired: required.
+  const unpaired = validateExamSessionShape(
+    shape({ kind: "ADVANCED_INSTRUCTION", embeddedAssignmentCount: 4, examineeCount: 2 }),
+  );
+  assert.ok(unpaired.issues.some((i) => i.code === "EX-DOM-PAIRING-REQUIRED"));
+
+  // Two examinees with every assignment paired: fine.
+  const paired = validateExamSessionShape(
+    shape({
+      kind: "ADVANCED_INSTRUCTION",
+      embeddedAssignmentCount: 4,
+      examineeCount: 2,
+      pairedAssignmentCount: 4,
+    }),
+  );
+  assert.equal(paired.ok, true, JSON.stringify(paired.issues));
+});
+
+test("pairing is NOT required on a copied beginner session with many examinees", () => {
+  // A real copied BEGINNER_GROUP lesson holds 3 examinees and no pairingIndex.
+  const r = validateBeginnerSessionShape({
+    phase: null,
+    interfaceSessionId: null,
+    embeddedAssignmentCount: 3,
+    beginnerFormat: "BEGINNER_GROUP",
+    examineeCount: 3,
+  });
+  assert.equal(r.ok, true, JSON.stringify(r.issues));
 });
 
 test("a native session (e.g. ADVANCED_INSTRUCTION) may embed participants", () => {
@@ -201,6 +321,31 @@ test("a native session (e.g. ADVANCED_INSTRUCTION) may embed participants", () =
     shape({ kind: "ADVANCED_INSTRUCTION", embeddedAssignmentCount: 3 }),
   );
   assert.equal(r.ok, true, JSON.stringify(r.issues));
+});
+
+test("every EX-DOM issue code carries a Hebrew message", () => {
+  const codes = Object.keys(EXAM_DOMAIN_MESSAGES);
+  assert.ok(codes.length >= 16, `expected the amended code set, got ${codes.length}`);
+  for (const code of codes) {
+    const message = EXAM_DOMAIN_MESSAGES[code as keyof typeof EXAM_DOMAIN_MESSAGES];
+    assert.equal(typeof message, "string");
+    assert.ok(message.trim().length > 0, `${code} has an empty message`);
+    // Hebrew letters only - never a raw English code leaking into the UI.
+    assert.ok(/[֐-׿]/.test(message), `${code} is not Hebrew`);
+  }
+});
+
+test("beginner formats are guarded and fail closed on proto keys", () => {
+  assert.deepEqual([...EXAM_BEGINNER_FORMATS].sort(), [
+    "BEGINNER_GROUP",
+    "BEGINNER_PRIVATE",
+    "LUNGE",
+  ]);
+  for (const f of EXAM_BEGINNER_FORMATS) assert.equal(isExamBeginnerFormat(f), true);
+  assert.equal(isExamBeginnerFormat("__proto__"), false);
+  assert.equal(isExamBeginnerFormat("toString"), false);
+  assert.equal(isExamBeginnerFormat("THEORY"), false);
+  assert.equal(isExamBeginnerFormat(null), false);
 });
 
 // --- one ExamPlan per CourseOffering ---------------------------------------
