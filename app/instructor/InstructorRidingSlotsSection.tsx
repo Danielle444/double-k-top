@@ -25,6 +25,9 @@ import {
   type StudentRidingHistoryResult,
 } from "@/lib/actions/riding-slots";
 import { getRidingSlotHorseListForInstructor } from "@/lib/actions/riding-slot-horses";
+// PERF-1 / P3A - the pure, DB-free mode rule shared with InstructorClient. Seeds
+// modeByRidingSlotId from the riding payload; issues no request of its own.
+import { buildRidingSlotModeMap } from "@/lib/actions/riding-slot-mode-core";
 import {
   getRidingSlotComplexPlanForInstructor,
   createRidingSlotComplexPlanAsInstructor,
@@ -47,15 +50,25 @@ function isAssignedToInstructor(activity: WeeklyRidingActivity, instructorId: st
 }
 
 // "loading" is represented by absence from the modeByRidingSlotId map, not a
-// fourth enum value here - see the batch-detection effect below. The
-// server/database is the sole source of truth for mode, same convention as
-// the admin RidingSlotModal's own detectRidingSlotMode - never a client-side
-// flag. Checks the complex plan first (cheap - a single read, returns null
-// fast when no plan exists) and only falls back to the simple horse-list
-// read when no complex plan exists, since the two modes are mutually
-// exclusive by construction (P2's server-side guard). Both underlying reads
-// already return null for an inactive instructor (isActive re-checked
-// server-side on every call) - no extra handling needed here for that case.
+// fourth enum value here - see the seeding effect below. The server/database is
+// the sole source of truth for mode, same convention as the admin
+// RidingSlotModal's own detectRidingSlotMode - never a client-side flag. Checks
+// the complex plan first (cheap - a single read, returns null fast when no plan
+// exists) and only falls back to the simple horse-list read when no complex
+// plan exists, since the two modes are mutually exclusive by construction (P2's
+// server-side guard). Both underlying reads already return null for an inactive
+// instructor (isActive re-checked server-side on every call) - no extra handling
+// needed here for that case.
+//
+// PERF-1 / P3A - THIS IS NO LONGER THE LOAD-TIME PATH. Seeding every visible
+// slot now happens from the riding payload's own presence booleans, with no
+// request at all (see the seeding effect below, and
+// lib/actions/riding-slot-mode-core.ts for the shared rule). This helper is kept
+// for exactly one job: refreshModeFor, the USER-INITIATED re-derivation after a
+// save that can itself change the mode - one call, for one slot, at a moment the
+// instructor is waiting on that specific write. Its "error" outcome is likewise
+// refresh-only; a seeded mode has no per-slot failure channel, because a failed
+// riding read produces no cards to label.
 async function detectInstructorRidingSlotMode(ridingSlotId: string): Promise<InstructorSlotMode> {
   const complexPlan = await getRidingSlotComplexPlanForInstructor(ridingSlotId);
   if (complexPlan) return "complex";
@@ -220,39 +233,27 @@ export function InstructorRidingSlotsSection({
     // this effect; it is present only to satisfy exhaustive-deps.
   }, [rangeStart, rangeEnd, setModeByRidingSlotId]);
 
-  // Batch-detects mode for every visible RidingSlot once `days` loads -
-  // keyed on the full (unfiltered) days list rather than the scopeMode-
-  // filtered visibleDays below, so toggling "הרכיבות שלי"/"כל הרכיבות" never
-  // re-triggers a fetch for data already retrieved. Each result writes to
-  // its own map key, so a stale response landing after a later range switch
-  // is harmless on its own (the map was already reset above) - `cancelled`
-  // still guards against writing into a map that belongs to an even later
-  // range switch.
+  // PERF-1 / P3A - SEEDS mode for every visible RidingSlot straight from the
+  // `days` payload, which now carries the two presence booleans the rule needs.
+  // This used to be a per-slot detection loop: one (often two) full editing
+  // reads per slot, each a Server Action, and Next.js dispatches those ONE AT A
+  // TIME per client - so a week of riding serialized fifteen-to-thirty round
+  // trips, purely to label cards. It is now zero requests and the mode is known
+  // in the same commit that renders the cards.
+  //
+  // Still keyed on the full (unfiltered) days list rather than the scopeMode-
+  // filtered visibleDays below, so toggling "הרכיבות שלי"/"כל הרכיבות" changes
+  // nothing here. Still MERGED into the shared map rather than replacing it, so
+  // a mode refreshed after a save (refreshModeFor below) survives a re-seed of
+  // the same range. No `cancelled` guard is needed any more: this is synchronous,
+  // so there is no in-flight response that could land after a range switch.
   useEffect(() => {
-    const ridingSlotIds = Array.from(
-      new Set(
-        (days ?? [])
-          .flatMap((day) => day.activities)
-          .map((a) => a.ridingSlot?.id)
-          .filter((id): id is string => Boolean(id))
-      )
-    );
-    if (ridingSlotIds.length === 0) return;
-    let cancelled = false;
-    for (const ridingSlotId of ridingSlotIds) {
-      detectInstructorRidingSlotMode(ridingSlotId)
-        .then((detected) => {
-          if (cancelled) return;
-          setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: detected }));
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: "error" }));
-        });
-    }
-    return () => {
-      cancelled = true;
-    };
+    const slots = (days ?? [])
+      .flatMap((day) => day.activities)
+      .map((a) => a.ridingSlot)
+      .filter((slot): slot is NonNullable<typeof slot> => slot !== null);
+    if (slots.length === 0) return;
+    setModeByRidingSlotId((prev) => ({ ...prev, ...buildRidingSlotModeMap(slots) }));
     // setModeByRidingSlotId: stable dispatcher lifted to InstructorClient (see
     // the range-reset effect above) - listed only to satisfy exhaustive-deps.
   }, [days, setModeByRidingSlotId]);

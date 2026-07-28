@@ -69,6 +69,17 @@ export interface RidingSlotRow {
   showArenaToStudents: boolean;
   showSubgroupToStudents: boolean;
   assignments: RidingSlotAssignmentRow[];
+  // PERF-1 / P3A - PRESENCE ONLY, additive. Each is simply "a row of that kind
+  // exists for this slot" (RidingSlotComplexPlan / RidingSlotHorseList, both
+  // 1:1 via a UNIQUE ridingSlotId), which is the entire input the mode rule
+  // needs - see lib/actions/riding-slot-mode-core.ts.
+  //
+  // They carry NO content: not the plan tree, not the horse list items, not the
+  // candidate roster, not the version, publication state or timestamps. Reading
+  // any of that still requires the existing editing readers, which are unchanged
+  // and still gated exactly as before. Every field above is untouched.
+  hasComplexPlan: boolean;
+  hasHorseList: boolean;
 }
 
 export interface RidingSlotActionResult extends ActionResult {
@@ -119,6 +130,12 @@ function toRidingSlotRow(slot: {
   showSubgroupToStudents: boolean;
   assignments: AssignmentWithInstructor[];
   scheduleItems: { scheduleItemId: string }[];
+  // PERF-1 / P3A - the two presence relations. Optional in the PARAMETER type
+  // (not in RidingSlotRow) so this mapper still accepts a slot fetched by some
+  // future narrower select; an absent relation maps to `false`, i.e. the
+  // least-capable mode, never to an assumed plan.
+  complexPlan?: { id: string } | null;
+  horseList?: { id: string } | null;
 }): RidingSlotRow {
   return {
     id: slot.id,
@@ -128,15 +145,30 @@ function toRidingSlotRow(slot: {
     showArenaToStudents: slot.showArenaToStudents,
     showSubgroupToStudents: slot.showSubgroupToStudents,
     assignments: slot.assignments.map(toAssignmentRow),
+    // Presence, never content: `id` is the only column selected for either.
+    hasComplexPlan: slot.complexPlan != null,
+    hasHorseList: slot.horseList != null,
   };
 }
 
+// PERF-1 / P3A - `complexPlan` and `horseList` are ADDITIVE and PRESENCE-ONLY.
+// `assignments` and `scheduleItems` are untouched, in shape and in ordering.
+//
+// Both new relations are 1:1 (RidingSlotComplexPlan.ridingSlotId and
+// RidingSlotHorseList.ridingSlotId are UNIQUE), and each selects nothing but
+// `id`, so this answers "does such a row exist" and cannot carry plan, list,
+// roster or publication data. Prisma resolves a relation once per findMany, not
+// once per row, so this costs two extra queries per riding-slot read - replacing
+// the ~12 queries and 1-2 serialized Server Action round trips that per-slot
+// mode detection used to pay FOR EVERY SLOT ON SCREEN.
 const RIDING_SLOT_INCLUDE = {
   assignments: {
     include: ASSIGNMENT_WITH_INSTRUCTORS_INCLUDE,
     orderBy: [{ groupName: "asc" as const }, { subgroupNumber: "asc" as const }],
   },
   scheduleItems: { select: { scheduleItemId: true } },
+  complexPlan: { select: { id: true } },
+  horseList: { select: { id: true } },
 };
 
 // Shared by getRidingSlotForScheduleItem and getWeeklyRidingOverview - no

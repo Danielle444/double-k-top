@@ -53,8 +53,9 @@ import {
   getInstructorRidingSlots,
   type WeeklyRidingActivity,
 } from "@/lib/actions/riding-slots";
-import { getRidingSlotComplexPlanForInstructor } from "@/lib/actions/riding-slot-complex";
-import { getRidingSlotHorseListForInstructor } from "@/lib/actions/riding-slot-horses";
+// PERF-1 / P3A - the pure, DB-free mode rule. Seeds modeByRidingSlotId from the
+// riding-slot payload this shell already fetches; issues no request of its own.
+import { buildRidingSlotModeMap } from "@/lib/actions/riding-slot-mode-core";
 import { buildScheduleItemActivityMap } from "@/app/instructor/instructor-riding-schedule-map-core";
 import {
   formatHebrewDate,
@@ -171,25 +172,19 @@ interface InstructorOption {
   fullName: string;
 }
 
-// Per-RidingSlot mode detection for slots surfaced by the schedule cards.
-// Intentionally identical in behavior to InstructorRidingSlotsSection's own
-// private detectInstructorRidingSlotMode: it is NOT exported there and that
-// file is out of scope for this change, so rather than widen its surface the
-// same two existing reads are composed here (complex plan first - a single
-// cheap read that returns null fast when absent - then the simple horse list),
-// so a schedule-opened riding session picks its initial "צפייה בחניכים" tab
-// exactly as a riding-tab-opened one does. No new server action, no new read,
-// no broadened authorization: both reads already back the instructor riding
-// surface and re-check the caller is a real, active instructor server-side.
-async function detectScheduleRidingSlotMode(
-  ridingSlotId: string
-): Promise<InstructorSlotMode> {
-  const complexPlan = await getRidingSlotComplexPlanForInstructor(ridingSlotId);
-  if (complexPlan) return "complex";
-  const horseList = await getRidingSlotHorseListForInstructor(ridingSlotId);
-  if (horseList?.listId) return "simple";
-  return "none";
-}
+// PERF-1 / P3A - the per-RidingSlot mode DETECTION helper that used to live here
+// is gone. It composed getRidingSlotComplexPlanForInstructor and, on a miss,
+// getRidingSlotHorseListForInstructor - two full EDITING reads (plan tree, horse
+// list, candidate roster, known horse names; ~12 queries) issued once PER SLOT
+// ON SCREEN, over a transport that dispatches Server Actions one at a time - to
+// produce a four-character string. The schedule payload now carries the two
+// presence booleans the rule needs, so the mode is seeded directly from it (see
+// the riding-activities effect below) with no request at all.
+//
+// This file therefore no longer imports either reader. They are UNCHANGED and
+// still in use where a fresh read is genuinely required: InstructorRidingSlots-
+// Section's refreshModeFor, after a user-initiated save that can itself change
+// the mode.
 
 export function InstructorClient({
   authenticated,
@@ -421,28 +416,27 @@ export function InstructorClient({
         if (cancelled) return;
         const activities = days.flatMap((d) => d.activities);
         setScheduleActivityMap(buildScheduleItemActivityMap(activities));
-        // Detect mode per real riding slot (same behavior as the riding tab),
-        // merging into the shared modeByRidingSlotId the cards/controller
-        // already read. A slot's mode is a stable property, so merging rather
-        // than resetting never fights the riding section's own detection.
-        const ridingSlotIds = Array.from(
-          new Set(
+        // PERF-1 / P3A - mode is SEEDED from the payload just fetched, not
+        // discovered by a request per slot. Each RidingSlotRow now carries the
+        // two presence booleans the rule needs, so this costs zero extra reads
+        // and zero extra Server Action round trips (which Next.js dispatches one
+        // at a time, so the previous per-slot loop serialized the whole screen).
+        // The mode is consequently known at first paint instead of settling
+        // asynchronously card by card.
+        //
+        // Still MERGED into the shared modeByRidingSlotId the cards/controller
+        // already read, exactly as before: a slot's mode is a stable property, so
+        // merging rather than resetting never fights the riding section's own
+        // seeding, and a value refreshed after a save (refreshModeFor, unchanged)
+        // is never clobbered by a stale re-seed of the same range.
+        setModeByRidingSlotId((prev) => ({
+          ...prev,
+          ...buildRidingSlotModeMap(
             activities
-              .map((a) => a.ridingSlot?.id)
-              .filter((id): id is string => Boolean(id))
-          )
-        );
-        for (const ridingSlotId of ridingSlotIds) {
-          detectScheduleRidingSlotMode(ridingSlotId)
-            .then((detected) => {
-              if (cancelled) return;
-              setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: detected }));
-            })
-            .catch(() => {
-              if (cancelled) return;
-              setModeByRidingSlotId((prev) => ({ ...prev, [ridingSlotId]: "error" }));
-            });
-        }
+              .map((a) => a.ridingSlot)
+              .filter((slot): slot is NonNullable<typeof slot> => slot !== null)
+          ),
+        }));
       })
       .catch(() => {
         if (!cancelled) setScheduleActivityMap(new Map());

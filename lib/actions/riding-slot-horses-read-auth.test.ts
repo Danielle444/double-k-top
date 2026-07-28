@@ -286,7 +286,21 @@ test("wiring: reader delegates to the session-bound orchestration, no actor id, 
   );
 });
 
-test("structural: all three runtime call sites pass only ridingSlotId", () => {
+// PERF-1 / P3A narrowed this census from THREE runtime call sites to TWO.
+// InstructorClient.tsx no longer calls this reader at all: its load-time
+// per-slot mode detection (which called this reader once per riding slot on
+// screen, purely to learn whether a horse list existed) was replaced by a
+// presence boolean already carried on the riding-slot payload - see
+// lib/actions/riding-slot-mode-core.ts.
+//
+// THE SECURITY PROPERTY IS STRENGTHENED, NOT RELAXED. The contract this test
+// exists to defend is "wherever this reader is called, it is called with ONLY a
+// ridingSlotId, so no client-supplied instructor identity can reach it". Removing
+// a call site cannot weaken that, and the assertion below still holds every
+// REMAINING call to it. The InstructorClient entry is therefore inverted rather
+// than deleted: it is now asserted to make NO call, so a future re-introduction
+// of a per-slot read there fails this test instead of passing silently.
+test("structural: both remaining runtime call sites pass only ridingSlotId", () => {
   const editorSrc = readFileSync(
     fileURLToPath(new URL("../components/RidingHorseListEditor.tsx", import.meta.url)),
     "utf8"
@@ -295,14 +309,9 @@ test("structural: all three runtime call sites pass only ridingSlotId", () => {
     fileURLToPath(new URL("../../app/instructor/InstructorRidingSlotsSection.tsx", import.meta.url)),
     "utf8"
   );
-  const clientSrc = readFileSync(
-    fileURLToPath(new URL("../../app/instructor/InstructorClient.tsx", import.meta.url)),
-    "utf8"
-  );
   for (const [name, src] of [
     ["RidingHorseListEditor.tsx", editorSrc],
     ["InstructorRidingSlotsSection.tsx", sectionSrc],
-    ["InstructorClient.tsx", clientSrc],
   ] as const) {
     const calls = src.match(/getRidingSlotHorseListForInstructor\([^)]*\)/g) ?? [];
     assert.ok(calls.length > 0, `${name} should still call the reader`);
@@ -310,6 +319,18 @@ test("structural: all three runtime call sites pass only ridingSlotId", () => {
       assert.match(call, /getRidingSlotHorseListForInstructor\(\s*ridingSlotId\s*\)/, `${name}: ${call} must pass only ridingSlotId`);
     }
   }
+});
+
+test("structural: InstructorClient no longer reads the horse list per slot (PERF-1 / P3A)", () => {
+  const clientSrc = readFileSync(
+    fileURLToPath(new URL("../../app/instructor/InstructorClient.tsx", import.meta.url)),
+    "utf8"
+  );
+  const code = clientSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  assert.ok(
+    !code.includes("getRidingSlotHorseListForInstructor"),
+    "InstructorClient must not call this reader - mode comes from the riding-slot payload"
+  );
 });
 
 test("structural: excluded adjacent surfaces remain unchanged (out of this stage's scope)", () => {
