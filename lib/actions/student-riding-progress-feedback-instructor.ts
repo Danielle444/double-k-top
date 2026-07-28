@@ -1,14 +1,24 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { dateKey } from "@/lib/dates";
 import type { ActionResult } from "@/lib/actions/students";
-import type {
-  StudentRidingProgressFeedbackInput,
-  StudentRidingProgressFeedbackRow,
-} from "@/lib/actions/student-riding-progress-feedback";
+import {
+  RIDING_PROGRESS_COURSE_SELECT,
+  toRidingProgressRow,
+  type StudentRidingProgressFeedbackCreateInput,
+  type StudentRidingProgressFeedbackInput,
+  type StudentRidingProgressFeedbackRow,
+} from "@/lib/actions/riding-progress-row-mapper";
 import { getCurrentInstructor } from "@/lib/auth/actor";
 import { canAccessTraineeProgress } from "@/lib/trainee-progress-permissions";
+import {
+  getRidingProgressCourseChoiceForSubject,
+  resolveRidingProgressCourseForCreate,
+} from "@/lib/course/riding-progress-course-scope";
+import {
+  ridingProgressCourseRefusalMessage,
+  type RidingProgressCourseChoice,
+} from "@/lib/course/riding-progress-course-scope-core";
 
 // Instructor/coach read/create/update/delete surface for
 // StudentRidingProgressFeedback - the trainee-progress-journal counterpart
@@ -108,35 +118,11 @@ function hasMeaningfulContent(ratingHalfPoints: number | null, feedback: string 
   return ratingHalfPoints !== null || (feedback?.trim() ?? "") !== "";
 }
 
-function toRow(row: {
-  id: string;
-  studentId: string;
-  date: Date;
-  ratingHalfPoints: number | null;
-  feedback: string | null;
-  horseName: string | null;
-  topic: string | null;
-  createdByName: string | null;
-  updatedByName: string | null;
-  createdByInstructorId: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}): StudentRidingProgressFeedbackRow {
-  return {
-    id: row.id,
-    studentId: row.studentId,
-    date: dateKey(row.date),
-    ratingHalfPoints: row.ratingHalfPoints,
-    feedback: row.feedback,
-    horseName: row.horseName,
-    topic: row.topic,
-    createdByName: row.createdByName,
-    updatedByName: row.updatedByName,
-    createdByInstructorId: row.createdByInstructorId,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  };
-}
+// S4 - the row mapper is now SHARED with the admin reader rather than duplicated
+// here, so both audiences project the course identity identically and cannot
+// drift (a projection that differed by audience would be a correctness bug, not
+// a style one). The previously duplicated body is gone.
+const toRow = toRidingProgressRow;
 
 // Own rows only - never another instructor's or an admin's row. studentId
 // is optional: omit it to list every trainee this instructor has ever
@@ -154,6 +140,7 @@ export async function listStudentRidingProgressFeedbackForInstructor(
   const rows = await prisma.studentRidingProgressFeedback.findMany({
     where: { createdByInstructorId: instructor.id, ...(studentId ? { studentId } : {}) },
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+    include: RIDING_PROGRESS_COURSE_SELECT,
   });
 
   return rows.map(toRow);
@@ -185,14 +172,35 @@ export async function listStudentRidingProgressFeedbackForInstructorView(
   const rows = await prisma.studentRidingProgressFeedback.findMany({
     where: { studentId },
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+    include: RIDING_PROGRESS_COURSE_SELECT,
   });
 
   return rows.map(toRow);
 }
 
+/**
+ * S4 - the course options the instructor's create form must offer for this
+ * trainee. Gated by the same WRITE permission as create itself (an instructor
+ * who may not write has no use for a picker), and scoped to the SUBJECT
+ * trainee - never to the acting instructor's own courses.
+ *
+ * A menu, not an authorization: create re-resolves independently.
+ */
+export async function getRidingProgressCourseChoiceForInstructor(
+  studentId: string
+): Promise<RidingProgressCourseChoice | null> {
+  const instructor = await requireActingInstructorForRidingProgressWrite();
+  if (!instructor) return null;
+
+  const student = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!student) return null;
+
+  return getRidingProgressCourseChoiceForSubject(studentId);
+}
+
 export async function createStudentRidingProgressFeedbackAsInstructor(
   studentId: string,
-  input: StudentRidingProgressFeedbackInput
+  input: StudentRidingProgressFeedbackCreateInput
 ): Promise<ActionResult> {
   const instructor = await requireActingInstructorForRidingProgressWrite();
   if (!instructor) return { success: false, error: "אין הרשאה להזין משוב רכיבה" };
@@ -218,6 +226,16 @@ export async function createStudentRidingProgressFeedbackAsInstructor(
   const horseName = input.horseName?.trim() || null;
   const topic = input.topic?.trim() || null;
 
+  // S4 - resolved from the SUBJECT trainee's own ACTIVE enrollments into ACTIVE
+  // offerings. Note the deliberate asymmetry with AUTH-RPF-1: the ACTOR comes
+  // from the session, but the COURSE comes from the SUBJECT - an instructor's
+  // own course context never widens (or narrows) which courses a trainee's
+  // feedback may be filed under.
+  const course = await resolveRidingProgressCourseForCreate(studentId, input.courseOfferingId);
+  if (!course.ok) {
+    return { success: false, error: ridingProgressCourseRefusalMessage(course.reason) };
+  }
+
   await prisma.studentRidingProgressFeedback.create({
     data: {
       studentId,
@@ -226,6 +244,7 @@ export async function createStudentRidingProgressFeedbackAsInstructor(
       feedback,
       horseName,
       topic,
+      courseOfferingId: course.courseOfferingId,
       createdByName: instructor.fullName,
       updatedByName: instructor.fullName,
       createdByInstructorId: instructor.id,
@@ -272,6 +291,10 @@ export async function updateStudentRidingProgressFeedbackAsInstructor(
 
   // createdByInstructorId/createdByName are intentionally never touched
   // here - same "preserve original author" convention as the admin action.
+  //
+  // S4 - courseOfferingId is likewise ABSENT: the course is immutable after
+  // creation, so a scoped row keeps its offering and a legacy NULL row stays
+  // NULL. The update input type carries no course field, so this cannot regress.
   await prisma.studentRidingProgressFeedback.update({
     where: { id },
     data: {

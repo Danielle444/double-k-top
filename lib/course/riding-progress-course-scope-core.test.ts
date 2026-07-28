@@ -394,7 +394,7 @@ test("COURSE IMMUTABILITY - the core exposes a create resolver and no update/re-
   }
 });
 
-test("S1 is unwired - no production module imports the core yet", () => {
+test("S4 - the core is consumed ONLY by the approved server binding", () => {
   const files: string[] = [];
   const walk = (dir: string) => {
     let entries: string[];
@@ -422,9 +422,23 @@ test("S1 is unwired - no production module imports the core yet", () => {
       rel: path.relative(REPO_ROOT, file).replace(/\\/g, "/"),
       src: readFileSync(file, "utf8"),
     }))
-    .filter((f) => f.rel !== `${CORE_REL}.ts` && f.rel !== `${CORE_REL}.test.ts`)
+    // Structural exclusions, NOT convenience: the core cannot be its own
+    // consumer, and a test file is not a production call site. No production
+    // module is filtered out to make the allow-list below pass.
+    .filter((f) => f.rel !== `${CORE_REL}.ts` && !f.rel.endsWith(".test.ts"))
     .filter((f) => /(?:from|import|require\()\s*["'][^"']*riding-progress-course-scope-core["']/.test(f.src))
     .map((f) => f.rel);
 
-  assert.deepEqual(importers, [], "S1 adds no runtime wiring - writers/readers/UI land in S4");
+  // S4 UPDATE: this was "no importer at all" while S1 was unwired. Now it is an
+  // exact ALLOW-LIST, which is the stronger guarantee: the decision core may be
+  // reached only through the single server binding that owns the subject-scoped
+  // enrollment query, plus the two action modules that consume its types. A new
+  // consumer must come back through review and be added here explicitly.
+  assert.deepEqual(importers.sort(), [
+    "lib/actions/student-riding-progress-feedback-instructor.ts",
+    "lib/actions/student-riding-progress-feedback.ts",
+    "lib/components/RidingProgressFeedbackSection.tsx",
+    "lib/components/TraineeProgressDetail.tsx",
+    "lib/course/riding-progress-course-scope.ts",
+  ]);
 });

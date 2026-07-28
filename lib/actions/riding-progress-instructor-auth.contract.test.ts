@@ -210,9 +210,14 @@ test("the instructorId prop still legitimately serves the OUT-OF-SCOPE actions",
 // Scope containment
 // ---------------------------------------------------------------------------
 
-test("NO course-scoping is wired by this slice", () => {
-  assert.equal(/courseOfferingId/.test(CODE), false, "S4 owns course scoping, not this slice");
-  assert.equal(/riding-progress-course-scope-core/.test(ACTIONS), false);
+test("S4 course-scoping never reintroduces actor trust", () => {
+  // S4 UPDATE: this asserted course scoping was absent while S4 was pending.
+  // S4 has landed, so the invariant AUTH-RPF-1 actually owns is narrower and
+  // stronger: the course is resolved from the SUBJECT trainee, and nothing in
+  // that resolution consults - or reintroduces - a client-supplied actor id.
+  assert.match(CODE, /resolveRidingProgressCourseForCreate\(studentId, input\.courseOfferingId\)/);
+  assert.equal(/instructorId/.test(CODE), false, "course wiring must not smuggle an actor id back");
+  // The backfill planner stays out of the runtime path entirely.
   assert.equal(/riding-progress-course-backfill-core/.test(ACTIONS), false);
 });
 

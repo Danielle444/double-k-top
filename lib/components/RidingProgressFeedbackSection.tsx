@@ -1,12 +1,21 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { formatHebrewDate, formatHebrewDateTime, parseDateKey } from "@/lib/dates";
 import type { ActionResult } from "@/lib/actions/students";
 import type {
+  StudentRidingProgressFeedbackCreateInput,
   StudentRidingProgressFeedbackInput,
   StudentRidingProgressFeedbackRow,
 } from "@/lib/actions/student-riding-progress-feedback";
+import type { RidingProgressCourseChoice } from "@/lib/course/riding-progress-course-scope-core";
+import {
+  filterRidingProgressRowsByCourse,
+  ridingProgressCourseChipLabel,
+  RIDING_PROGRESS_COURSE_FILTER_OPTIONS,
+  RIDING_PROGRESS_DEFAULT_COURSE_FILTER,
+  type RidingProgressCourseFilter,
+} from "@/lib/course/riding-progress-journal-view-core";
 
 // Stage I2 - extracted from app/admin/trainee-progress/TraineeProgressClient.tsx
 // (originally RidingProgressEntryForm/RidingProgressFeedbackList, Stage R2)
@@ -38,10 +47,19 @@ interface RidingProgressFormValues {
   feedback: string;
   horseName: string;
   topic: string;
+  /** S4 - the chosen course. "" means "not chosen yet" (create only). */
+  courseOfferingId: string;
 }
 
 function emptyRidingProgressForm(): RidingProgressFormValues {
-  return { date: todayDateInputValue(), ratingHalfPoints: "", feedback: "", horseName: "", topic: "" };
+  return {
+    date: todayDateInputValue(),
+    ratingHalfPoints: "",
+    feedback: "",
+    horseName: "",
+    topic: "",
+    courseOfferingId: "",
+  };
 }
 
 function ridingProgressFormToInput(values: RidingProgressFormValues): StudentRidingProgressFeedbackInput {
@@ -52,6 +70,30 @@ function ridingProgressFormToInput(values: RidingProgressFormValues): StudentRid
     horseName: values.horseName.trim() || null,
     topic: values.topic.trim() || null,
   };
+}
+
+/**
+ * S4 - the CREATE payload. The course is sent only when the form actually holds
+ * one; an empty string becomes undefined so a single-course trainee is resolved
+ * server-side rather than by the client. The server re-validates whatever is
+ * sent against that trainee's own eligible offerings regardless.
+ */
+function ridingProgressFormToCreateInput(
+  values: RidingProgressFormValues
+): StudentRidingProgressFeedbackCreateInput {
+  return {
+    ...ridingProgressFormToInput(values),
+    courseOfferingId: values.courseOfferingId === "" ? undefined : values.courseOfferingId,
+  };
+}
+
+/** The compact course chip shown on every row and on the edit form. */
+function CourseChip({ row }: { row: StudentRidingProgressFeedbackRow }) {
+  return (
+    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+      {ridingProgressCourseChipLabel(row.courseOffering)}
+    </span>
+  );
 }
 
 // Mirrors the server's own "meaningful content" guard (see
@@ -77,6 +119,8 @@ function RidingProgressEntryForm({
   onDelete,
   isDeleting,
   deleteError,
+  courseChoice,
+  editingRow,
 }: {
   initialValues: RidingProgressFormValues;
   submitLabel: string;
@@ -90,11 +134,56 @@ function RidingProgressEntryForm({
   onDelete?: () => void;
   isDeleting?: boolean;
   deleteError?: string | null;
+  // S4 - the server-derived course choice for the SUBJECT trainee. Provided
+  // only on the CREATE form; undefined while editing.
+  courseChoice?: RidingProgressCourseChoice | null;
+  // S4 - the row being edited. Provided only on the EDIT form, and used ONLY to
+  // display the row's existing course read-only. There is deliberately no
+  // editable course control here: the course is immutable after creation.
+  editingRow?: StudentRidingProgressFeedbackRow;
 }) {
   const [values, setValues] = useState(initialValues);
 
+  // S4 - a course must be explicitly picked only when the trainee has two or
+  // more eligible courses. With exactly one the server auto-resolves it, and
+  // with none the caller never renders this form at all.
+  const mustChooseCourse = courseChoice?.kind === "choose";
+  const isCourseMissing = mustChooseCourse && values.courseOfferingId === "";
+
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3">
+      {/* S4 - CREATE: the course context. A picker only when there is a real
+          choice to make; otherwise the resolved course is stated as read-only
+          context so the writer always knows what they are filing under. */}
+      {courseChoice?.kind === "choose" && (
+        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          קורס <span className="text-danger">*</span>
+          <select
+            value={values.courseOfferingId}
+            onChange={(e) => setValues((v) => ({ ...v, courseOfferingId: e.target.value }))}
+            className="rounded-lg border border-border px-2 py-1.5 text-sm"
+          >
+            <option value="">בחר/י קורס</option>
+            {courseChoice.options.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {courseChoice?.kind === "auto" && (
+        <p className="text-xs text-muted-foreground">
+          קורס: <span className="font-medium text-card-foreground">{courseChoice.option.label}</span>
+        </p>
+      )}
+      {/* S4 - EDIT: the row's course, read-only. Never an editable control. */}
+      {editingRow && (
+        <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          קורס: <CourseChip row={editingRow} />
+          <span>(לא ניתן לשנות שיוך קורס)</span>
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
         <label className="flex flex-col gap-1 text-xs text-muted-foreground">
           תאריך
@@ -148,12 +237,13 @@ function RidingProgressEntryForm({
           className="rounded-lg border border-border px-2 py-1.5 text-sm"
         />
       </label>
+      {isCourseMissing && <p className="text-xs text-muted-foreground">יש לבחור קורס לפני השמירה.</p>}
       {error && <p className="text-xs text-danger">{error}</p>}
       {deleteError && <p className="text-xs text-danger">{deleteError}</p>}
       <div className="flex gap-2">
         <button
           type="button"
-          disabled={pending}
+          disabled={pending || isCourseMissing}
           onClick={() => onSubmit(values)}
           className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
         >
@@ -186,7 +276,9 @@ function RidingProgressEntryForm({
 // passes wrappers that also thread instructorId through to the
 // *AsInstructor actions.
 export interface RidingProgressFeedbackActions {
-  create: (studentId: string, input: StudentRidingProgressFeedbackInput) => Promise<ActionResult>;
+  create: (studentId: string, input: StudentRidingProgressFeedbackCreateInput) => Promise<ActionResult>;
+  // S4 - the UPDATE payload deliberately has no course field: the course is
+  // immutable after creation, so this signature cannot carry one.
   update: (id: string, input: StudentRidingProgressFeedbackInput) => Promise<ActionResult>;
   delete: (id: string) => Promise<ActionResult>;
 }
@@ -212,6 +304,7 @@ export function RidingProgressFeedbackList({
   onChanged,
   actions,
   canAdd = true,
+  courseChoice,
   isRowEditable = () => true,
   isRowDeletable = () => true,
 }: {
@@ -220,6 +313,9 @@ export function RidingProgressFeedbackList({
   onChanged: () => void;
   actions: RidingProgressFeedbackActions;
   canAdd?: boolean;
+  // S4 - the SUBJECT trainee's server-derived course choice. null while it is
+  // still loading; "none" blocks adding entirely.
+  courseChoice?: RidingProgressCourseChoice | null;
   isRowEditable?: (row: StudentRidingProgressFeedbackRow) => boolean;
   // Gates delete exposure (display-card button + edit-form onDelete)
   // independently of isRowEditable. Defaults to the unrestricted admin
@@ -241,6 +337,25 @@ export function RidingProgressFeedbackList({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<{ id: string; message: string } | null>(null);
   const [, startDeleteTransition] = useTransition();
+
+  // S4 - VISIBILITY ONLY. This narrows which cards render; it deliberately does
+  // NOT feed the section's combined average, which is computed by the parent
+  // from every loaded row and is labelled as combined (see
+  // RIDING_PROGRESS_COMBINED_AVERAGE_LABEL).
+  const [courseFilter, setCourseFilter] = useState<RidingProgressCourseFilter>(
+    RIDING_PROGRESS_DEFAULT_COURSE_FILTER
+  );
+  const visibleRows = useMemo(
+    () => filterRidingProgressRowsByCourse(rows, courseFilter),
+    [rows, courseFilter]
+  );
+
+  // S4 - a trainee with no ACTIVE enrollment into an ACTIVE offering has no
+  // course to file under, so adding is blocked outright rather than writing an
+  // unattributed row. `undefined`/null means "still loading" - the add control
+  // simply waits rather than flashing a false refusal.
+  const isBlockedByNoCourse = courseChoice?.kind === "none";
+  const canAddNow = canAdd && courseChoice != null && !isBlockedByNoCourse;
 
   // Reachable from either the display card's own "מחיקה" button or the
   // edit form's "מחיקה" button (when deleting the entry currently being
@@ -273,7 +388,7 @@ export function RidingProgressFeedbackList({
     }
     setAddError(null);
     startAddTransition(async () => {
-      const result = await actions.create(studentId, ridingProgressFormToInput(values));
+      const result = await actions.create(studentId, ridingProgressFormToCreateInput(values));
       if (!result.success) {
         setAddError(result.error ?? "אירעה שגיאה");
         return;
@@ -302,13 +417,20 @@ export function RidingProgressFeedbackList({
 
   return (
     <div className="flex flex-col gap-3">
-      {canAdd &&
+      {canAdd && isBlockedByNoCourse && (
+        <p className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+          לא נמצא קורס פעיל לחניך/ה זה/זו - לא ניתן להזין משוב רכיבה.
+        </p>
+      )}
+
+      {canAddNow &&
         (isAdding ? (
           <RidingProgressEntryForm
             initialValues={emptyRidingProgressForm()}
             submitLabel="שמירה"
             pending={isAddPending}
             error={addError}
+            courseChoice={courseChoice}
             onSubmit={handleAdd}
             onCancel={() => {
               setIsAdding(false);
@@ -325,12 +447,35 @@ export function RidingProgressFeedbackList({
           </button>
         ))}
 
+      {/* S4 - local course filter. Affects only which cards are shown. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-muted-foreground">סינון לפי קורס:</span>
+        {RIDING_PROGRESS_COURSE_FILTER_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => setCourseFilter(option.value)}
+            className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+              courseFilter === option.value
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:bg-muted/70"
+            }`}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+
       {rows.length === 0 ? (
         <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
           עדיין לא הוזן משוב רכיבה לחניך/ה זה/זו.
         </p>
+      ) : visibleRows.length === 0 ? (
+        <p className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
+          אין משובי רכיבה בסינון הנוכחי.
+        </p>
       ) : (
-        rows.map((row) =>
+        visibleRows.map((row) =>
           editingId === row.id ? (
             <RidingProgressEntryForm
               key={row.id}
@@ -340,10 +485,14 @@ export function RidingProgressFeedbackList({
                 feedback: row.feedback ?? "",
                 horseName: row.horseName ?? "",
                 topic: row.topic ?? "",
+                // S4 - carried for form-shape completeness only; the edit path
+                // never sends it (the update payload has no course field).
+                courseOfferingId: row.courseOffering?.id ?? "",
               }}
               submitLabel="עדכון"
               pending={isEditPending}
               error={editError}
+              editingRow={row}
               onSubmit={(values) => handleEdit(row.id, values)}
               onCancel={() => {
                 setEditingId(null);
@@ -356,9 +505,14 @@ export function RidingProgressFeedbackList({
           ) : (
             <div key={row.id} className="rounded-xl border border-border bg-card p-4">
               <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold text-card-foreground">
-                  {formatHebrewDate(parseDateKey(row.date))}
-                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {/* S4 - shown on EVERY row, including single-course trainees:
+                      course identity is never hidden. */}
+                  <CourseChip row={row} />
+                  <span className="font-semibold text-card-foreground">
+                    {formatHebrewDate(parseDateKey(row.date))}
+                  </span>
+                </div>
                 <span
                   className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                     row.ratingHalfPoints != null

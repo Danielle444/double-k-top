@@ -5,6 +5,7 @@ import {
   listStudentRidingProgressFeedbackForInstructorView,
   createStudentRidingProgressFeedbackAsInstructor,
   updateStudentRidingProgressFeedbackAsInstructor,
+  getRidingProgressCourseChoiceForInstructor,
 } from "@/lib/actions/student-riding-progress-feedback-instructor";
 import {
   listStudentLungeProgressFeedbackForInstructorView,
@@ -237,6 +238,10 @@ export function InstructorTraineeProgressSection({
       listRidingProgress: listStudentRidingProgressFeedbackForInstructorView,
       createRidingProgress: createStudentRidingProgressFeedbackAsInstructor,
       updateRidingProgress: updateStudentRidingProgressFeedbackAsInstructor,
+      // S4 - the SUBJECT trainee's eligible courses for NEW riding feedback.
+      // Scoped to that trainee, never to the acting instructor's own courses,
+      // and (like the three above) takes no instructor id - AUTH-RPF-1 intact.
+      getRidingProgressCourseChoice: getRidingProgressCourseChoiceForInstructor,
       // No deleteRidingProgress - progress-feedback deletion stays
       // manager-only for this stage (see this stage's implementation report).
 

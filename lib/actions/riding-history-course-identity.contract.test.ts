@@ -233,24 +233,36 @@ test("13. the trainee-progress timeline chips ONLY the lesson-note entries", () 
   assert.match(RIDING_TIMELINE_BUILDER, /courseLabel: formatRidingHistoryCourseLabel\(row\),/);
   assert.match(DETAIL, /\{item\.courseLabel && \(/, "chip renders only when identity exists");
   assert.match(DETAIL, /courseLabel\?: string;/, "optional, so other sources render nothing");
+  // S4 UPDATE: buildRidingProgressTimelineItems is no longer in this list - the
+  // riding-progress JOURNAL now carries its own course identity (see test 14).
+  // The remaining three journals stay course-blind, and the lesson-note
+  // assertions above are unchanged.
   for (const other of [
     "function buildTeachingPracticeTimelineItems",
-    "function buildRidingProgressTimelineItems",
     "function buildLungeProgressTimelineItems",
     "function buildPresentationProgressTimelineItems",
   ]) {
     const body = bodyOf(DETAIL, other, "\n}\n");
-    assert.ok(!body.includes("courseLabel"), `${other} must not set courseLabel in this slice`);
+    assert.ok(!body.includes("courseLabel"), `${other} must not set courseLabel`);
   }
 });
 
-test("14. StudentRidingProgressFeedback (and the other journals) stay course-blind in this slice", () => {
+test("14. S4 - the riding-progress JOURNAL carries its OWN course identity, not the lesson's", () => {
   const journal = bodyOf(DETAIL, "function buildRidingProgressTimelineItems", "\n}\n");
   assert.match(journal, /title: "רכיבה",/, "journal entry title unchanged");
-  assert.ok(!/course/i.test(journal), "no course dimension added to the journal timeline entry");
-  // The component never groups/filters/branches by course in this slice.
-  assert.ok(!/courseOfferingId/.test(DETAIL), "no course id logic in the progress detail");
-  assert.ok(!/filter\([^)]*courseLabel/.test(DETAIL), "no course filtering added");
+  // The journal's chip comes from the row's OWN stored course projection...
+  assert.match(journal, /courseLabel: ridingProgressCourseChipLabel\(row\.courseOffering\)/);
+  // ...never from the lesson-note label helper, which resolves a lesson's course
+  // through its week's offering - an authoritative source that says nothing
+  // about a standalone journal entry.
+  assert.ok(
+    !journal.includes("formatRidingHistoryCourseLabel"),
+    "the journal must not borrow the lesson-note course resolution",
+  );
+  // The two remaining journals still have no course dimension at all.
+  for (const other of ["function buildLungeProgressTimelineItems", "function buildPresentationProgressTimelineItems"]) {
+    assert.ok(!/course/i.test(bodyOf(DETAIL, other, "\n}\n")), `${other} stays course-blind`);
+  }
 });
 
 test("15. averages are untouched", () => {

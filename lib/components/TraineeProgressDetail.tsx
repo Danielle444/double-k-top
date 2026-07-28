@@ -9,9 +9,15 @@ import type {
 } from "@/lib/actions/teaching-practice-feedback-history";
 import type { TeachingPracticeFeedbackInput } from "@/lib/actions/teaching-practice";
 import type {
+  StudentRidingProgressFeedbackCreateInput,
   StudentRidingProgressFeedbackInput,
   StudentRidingProgressFeedbackRow,
 } from "@/lib/actions/student-riding-progress-feedback";
+import type { RidingProgressCourseChoice } from "@/lib/course/riding-progress-course-scope-core";
+import {
+  ridingProgressCourseChipLabel,
+  RIDING_PROGRESS_COMBINED_AVERAGE_LABEL,
+} from "@/lib/course/riding-progress-journal-view-core";
 import type {
   StudentLungeProgressFeedbackInput,
   StudentLungeProgressFeedbackRow,
@@ -649,6 +655,10 @@ function buildRidingProgressTimelineItems(rows: StudentRidingProgressFeedbackRow
     if (row.topic) contextParts.push(`נושא: ${row.topic}`);
     return {
       key: `riding-progress-${row.id}`,
+      // S4 - the journal row's own course identity, straight from the server
+      // projection. A legacy unscoped row renders the neutral label rather than
+      // no chip, so it is visibly unattributed instead of silently ambiguous.
+      courseLabel: ridingProgressCourseChipLabel(row.courseOffering),
       source: "ridingProgress",
       date: row.date,
       time: "",
@@ -827,9 +837,18 @@ export interface TraineeProgressDataSource {
   deleteGeneralNote?: (noteId: string) => Promise<ActionResult>;
 
   listRidingProgress: (studentId: string) => Promise<StudentRidingProgressFeedbackRow[] | null>;
-  createRidingProgress?: (studentId: string, input: StudentRidingProgressFeedbackInput) => Promise<ActionResult>;
+  createRidingProgress?: (
+    studentId: string,
+    input: StudentRidingProgressFeedbackCreateInput
+  ) => Promise<ActionResult>;
   updateRidingProgress?: (id: string, input: StudentRidingProgressFeedbackInput) => Promise<ActionResult>;
   deleteRidingProgress?: (id: string) => Promise<ActionResult>;
+  // S4 - the SUBJECT trainee's server-derived riding-progress course choice.
+  // Present only for callers that can add feedback; the returned value is a
+  // menu, never an authorization (create re-resolves it server-side).
+  getRidingProgressCourseChoice?: (
+    studentId: string
+  ) => Promise<RidingProgressCourseChoice | null>;
 
   getRidingHistory: (studentId: string) => Promise<RidingHistoryRow[] | null>;
 
@@ -897,6 +916,10 @@ export function TraineeProgressDetail({
 
   const [generalNoteRows, setGeneralNoteRows] = useState<StudentGeneralNoteRow[] | null>(null);
   const [ridingProgressRows, setRidingProgressRows] = useState<StudentRidingProgressFeedbackRow[] | null>(null);
+  // S4 - the SUBJECT trainee's course choice for NEW riding-progress entries.
+  // null while loading or when this caller cannot add feedback at all.
+  const [ridingProgressCourseChoice, setRidingProgressCourseChoice] =
+    useState<RidingProgressCourseChoice | null>(null);
   const [ridingRows, setRidingRows] = useState<RidingHistoryRow[] | null>(null);
   const [teachingPracticeRows, setTeachingPracticeRows] = useState<TeachingPracticeFeedbackHistoryRow[] | null>(
     null
@@ -938,6 +961,25 @@ export function TraineeProgressDetail({
     startTransition(async () => {
       const result = await dataSource.listRidingProgress(studentId);
       if (!cancelled) setRidingProgressRows(result ?? []);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studentId]);
+
+  // S4 - load the SUBJECT trainee's course choice for NEW entries. Reloaded
+  // whenever the selected trainee changes, and never derived from the admin's
+  // selected course context, the route or a cookie.
+  useEffect(() => {
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRidingProgressCourseChoice(null);
+    const load = dataSource.getRidingProgressCourseChoice;
+    if (!load) return;
+    startTransition(async () => {
+      const result = await load(studentId);
+      if (!cancelled) setRidingProgressCourseChoice(result);
     });
     return () => {
       cancelled = true;
@@ -1211,8 +1253,12 @@ export function TraineeProgressDetail({
         )}
       </TopicSection>
 
+      {/* S4 - the average pools every course, so it is labelled as combined.
+          The section's course filter narrows only the visible rows; the number
+          below is always computed from every loaded row. */}
       <TopicSection
         title="רכיבה"
+        subtitle={RIDING_PROGRESS_COMBINED_AVERAGE_LABEL}
         average={ridingProgressAverageRating}
         isOpen={isRidingProgressOpen}
         onToggle={() => setIsRidingProgressOpen((v) => !v)}
@@ -1225,6 +1271,7 @@ export function TraineeProgressDetail({
             rows={ridingProgressRows}
             onChanged={refreshRidingProgress}
             canAdd={canAddRidingFeedback}
+            courseChoice={ridingProgressCourseChoice}
             isRowEditable={isOwnRow}
             isRowDeletable={() => capabilities.isAdmin}
             actions={{

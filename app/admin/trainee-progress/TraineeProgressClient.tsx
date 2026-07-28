@@ -7,6 +7,7 @@ import { getStudentTeachingPracticeFeedbackForAdmin } from "@/lib/actions/teachi
 import {
   createStudentRidingProgressFeedbackAsAdmin,
   deleteStudentRidingProgressFeedbackAsAdmin,
+  getRidingProgressCourseChoiceForAdmin,
   listStudentRidingProgressFeedbackForAdmin,
   updateStudentRidingProgressFeedbackAsAdmin,
 } from "@/lib/actions/student-riding-progress-feedback";
@@ -68,6 +69,10 @@ const ADMIN_DATA_SOURCE: TraineeProgressDataSource = {
   createRidingProgress: createStudentRidingProgressFeedbackAsAdmin,
   updateRidingProgress: updateStudentRidingProgressFeedbackAsAdmin,
   deleteRidingProgress: deleteStudentRidingProgressFeedbackAsAdmin,
+  // S4 - the SUBJECT trainee's eligible courses for NEW riding feedback,
+  // resolved server-side from that trainee's own enrollments. Deliberately NOT
+  // the admin's currently-selected course context.
+  getRidingProgressCourseChoice: getRidingProgressCourseChoiceForAdmin,
 
   getRidingHistory: async (studentId) => {
     const result = await getStudentRidingHistoryForAdmin(studentId);
