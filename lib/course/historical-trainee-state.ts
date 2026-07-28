@@ -23,10 +23,12 @@ import { isKnownCurrentOfferingError } from "./create-trainee-enrollment-core";
 import type { RawMembership } from "./enrollment-view";
 import {
   resolveHistoricalGroup,
+  resolveHistoricalGroupInOffering,
   resolveHistoricalHorse,
   type HistoricalGroupResult,
   type HistoricalHorseResult,
   type HorseIntervalRow,
+  type OfferingScopedMembership,
 } from "./historical-trainee-state-core";
 
 /** Resolver over the pre-loaded interval sets; pure lookups, no further IO. */
@@ -130,6 +132,171 @@ export async function loadHistoricalTraineeState(
         return OFFERING_UNRESOLVED;
       }
       return resolveHistoricalGroup(membershipsByStudent.get(studentId) ?? [], date);
+    },
+    horseAt(studentId, date) {
+      return resolveHistoricalHorse(horseByStudent.get(studentId) ?? [], date);
+    },
+  };
+}
+
+// ============================================================================
+// L2-RH1 - OFFERING-AWARE loader (additive; the loader above is UNCHANGED)
+// ============================================================================
+
+/**
+ * L2-RH1 - resolver over pre-loaded intervals where the GROUP lookup takes the
+ * record's OWN CourseOffering as an explicit argument.
+ *
+ * `horseAt` is deliberately IDENTICAL to the loader above: TraineeHorseAssignment
+ * is keyed by the stable studentId (that is its interval key today), so horse
+ * resolution is unchanged by this slice. Enrollment-scoping the horse history is
+ * a separate, later change and is explicitly NOT attempted here.
+ */
+export interface HistoricalTraineeStateByOfferingResolver {
+  /**
+   * Group effective for `studentId` on `date` WITHIN `courseOfferingId`, or a
+   * typed fail-closed result. A null/unknown offering fails closed and is never
+   * coerced to any particular offering.
+   */
+  groupAt(
+    studentId: string,
+    date: Date,
+    courseOfferingId: string | null,
+  ): HistoricalGroupResult;
+  /** Horse effective for `studentId` on `date`, or a typed fail-closed result. */
+  horseAt(studentId: string, date: Date): HistoricalHorseResult;
+}
+
+const NO_MEMBERSHIP_IN_OFFERING: HistoricalGroupResult = {
+  ok: false,
+  kind: "NO_COVERING_MEMBERSHIP",
+};
+
+/**
+ * L2-RH1 - batch-load historical state where group history spans an EXPLICIT SET
+ * of CourseOfferings instead of a single server-resolved "current" one.
+ *
+ * WHY THIS EXISTS SEPARATELY: `loadHistoricalTraineeState` above resolves group
+ * history through `resolveCurrentCourseOffering()`, a singleton resolver that -
+ * with a Level 1 and a Level 2 offering both ACTIVE - answers Level 1. Any reader
+ * whose records span more than one offering (riding history is the first) must
+ * scope each record by the offering that record ACTUALLY belongs to. That loader,
+ * its signature, its behaviour and all of its existing call sites are deliberately
+ * left untouched; this is a strictly additive second path.
+ *
+ * NEVER calls `resolveCurrentCourseOffering()`, imports nothing from the
+ * temporary Level 2 compatibility module, hardcodes no offering id, and infers
+ * nothing from a course level, name, status, date window or group name. The
+ * offering ids are supplied by the caller, read from the records themselves.
+ *
+ * QUERY COST - BOUNDED, NEVER N+1: at most TWO findMany calls in total,
+ * regardless of how many trainees, offerings or records are passed:
+ *   1. one enrollment+membership read filtered by (studentId IN, courseOfferingId IN);
+ *   2. one horse-interval read filtered by (studentId IN).
+ * Both input lists are de-duplicated here, so a caller may pass raw per-record
+ * arrays. `null` offering ids are dropped from the query filter (they can never
+ * match a row) while still failing closed at lookup time.
+ *
+ * Enrollment `status` is deliberately NOT filtered, exactly like the loader
+ * above: a trainee whose enrollment later went INACTIVE must still have their
+ * historical group resolve for records written while it was active.
+ *
+ * Zero unnecessary reads: an empty trainee list issues NO query at all, and an
+ * empty (or all-null) offering list skips the enrollment query specifically.
+ */
+export async function loadHistoricalTraineeStateForOfferings(
+  studentIds: readonly string[],
+  courseOfferingIds: readonly (string | null)[],
+): Promise<HistoricalTraineeStateByOfferingResolver> {
+  const uniqueStudentIds = [...new Set(studentIds)].filter((id) => id.length > 0);
+  if (uniqueStudentIds.length === 0) {
+    return {
+      groupAt: () => NO_MEMBERSHIP_IN_OFFERING,
+      horseAt: () => ({ ok: false, kind: "NO_COVERING_INTERVAL" }),
+    };
+  }
+
+  const uniqueOfferingIds = [...new Set(courseOfferingIds)].filter(
+    (id): id is string => typeof id === "string" && id.length > 0,
+  );
+
+  // Group history, offering-scoped. Each membership carries the offering of its
+  // own enrollment, so the pure resolver can select by exact offering identity.
+  const membershipsByStudent = new Map<string, OfferingScopedMembership[]>();
+  if (uniqueOfferingIds.length > 0) {
+    const enrollments = await prisma.courseEnrollment.findMany({
+      where: {
+        studentId: { in: uniqueStudentIds },
+        courseOfferingId: { in: uniqueOfferingIds },
+      },
+      select: {
+        studentId: true,
+        courseOfferingId: true,
+        memberships: {
+          select: {
+            effectiveFrom: true,
+            effectiveTo: true,
+            courseGroup: {
+              select: {
+                name: true,
+                parentGroupId: true,
+                parentGroup: { select: { name: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    for (const enrollment of enrollments) {
+      const scoped = enrollment.memberships.map((membership) => ({
+        ...membership,
+        courseOfferingId: enrollment.courseOfferingId,
+      }));
+      const existing = membershipsByStudent.get(enrollment.studentId);
+      // A dual-enrolled trainee has one enrollment row per offering, so their
+      // memberships accumulate across rows rather than overwriting.
+      if (existing) existing.push(...scoped);
+      else membershipsByStudent.set(enrollment.studentId, scoped);
+    }
+  }
+
+  // Horse history is keyed by the stable studentId - unchanged from the loader
+  // above, and loaded independently of any offering.
+  const horseByStudent = new Map<string, HorseIntervalRow[]>();
+  const horseRows = await prisma.traineeHorseAssignment.findMany({
+    where: { studentId: { in: uniqueStudentIds } },
+    select: {
+      studentId: true,
+      effectiveFrom: true,
+      effectiveTo: true,
+      hasPrivateHorse: true,
+      privateHorseName: true,
+      assignedHorseName: true,
+    },
+  });
+  for (const row of horseRows) {
+    const list = horseByStudent.get(row.studentId);
+    const interval: HorseIntervalRow = {
+      effectiveFrom: row.effectiveFrom,
+      effectiveTo: row.effectiveTo,
+      hasPrivateHorse: row.hasPrivateHorse,
+      privateHorseName: row.privateHorseName,
+      assignedHorseName: row.assignedHorseName,
+    };
+    if (list) {
+      list.push(interval);
+    } else {
+      horseByStudent.set(row.studentId, [interval]);
+    }
+  }
+
+  return {
+    groupAt(studentId, date, courseOfferingId) {
+      return resolveHistoricalGroupInOffering(
+        membershipsByStudent.get(studentId) ?? [],
+        date,
+        courseOfferingId,
+      );
     },
     horseAt(studentId, date) {
       return resolveHistoricalHorse(horseByStudent.get(studentId) ?? [], date);

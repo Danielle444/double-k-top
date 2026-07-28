@@ -9,7 +9,7 @@ import { getCurrentInstructor } from "@/lib/auth/actor";
 import { dateKey, parseDateKey } from "@/lib/dates";
 import { buildScheduleSlots } from "@/lib/schedule-grouping";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
-import { loadHistoricalTraineeState } from "@/lib/course/historical-trainee-state";
+import { loadHistoricalTraineeStateForOfferings } from "@/lib/course/historical-trainee-state";
 import { getCurrentCourseEnrollmentRoster } from "@/lib/course/current-enrollments";
 import { selectRidingRosterCandidates } from "@/lib/actions/riding-slot-roster-scope";
 import { getKnownHorseNames } from "@/lib/actions/horse-feeding";
@@ -1438,7 +1438,20 @@ async function buildStudentRidingHistory(studentId: string): Promise<StudentRidi
       ridingSlot: {
         include: {
           assignments: { include: ASSIGNMENT_WITH_INSTRUCTORS_INCLUDE },
-          scheduleItems: { include: { scheduleItem: true } },
+          // L2-RH1: `include` (not `select`) on scheduleItem, so every scalar the
+          // loop below already uses (date/startTime/endTime/title) is still
+          // present unchanged; the ONLY addition is the lesson's owning week's
+          // courseOfferingId, needed to scope the historical group lookup to the
+          // lesson's own offering. WeeklySchedule is a required relation, so this
+          // adds no nullability beyond the column's own (legacy weeks may be
+          // NULL-scoped, which fails closed below).
+          scheduleItems: {
+            include: {
+              scheduleItem: {
+                include: { weeklySchedule: { select: { courseOfferingId: true } } },
+              },
+            },
+          },
         },
       },
     },
@@ -1451,7 +1464,28 @@ async function buildStudentRidingHistory(studentId: string): Promise<StudentRidi
   // history; fail closed (no current-mirror fallback) when no single interval
   // covers the date. The sessionHorseName per-session override still wins, and
   // the current-profile header below stays the current mirror by design.
-  const historical = await loadHistoricalTraineeState([studentId]);
+  //
+  // L2-RH1: the group lookup is additionally scoped to the lesson's OWN
+  // CourseOffering. This reader previously used loadHistoricalTraineeState, whose
+  // group history is loaded through the SINGLETON current-offering resolver -
+  // which, while a Level 1 and a Level 2 offering are both ACTIVE, answers
+  // Level 1. A Level 2 lesson was therefore labelled with a dual-enrolled
+  // trainee's LEVEL 1 group, or (for a Level-2-only trainee, who has no Level 1
+  // enrollment at all) with no group. The offering now comes ONLY from each
+  // lesson's linked WeeklySchedule.courseOfferingId - never from the session, the
+  // selected course, the offering level, the group name, the title, a global
+  // active offering, or any temporary Level 2 compatibility helper.
+  //
+  // NOT an N+1: the distinct offering ids referenced by the already-fetched notes
+  // are collected in memory below, and the loader issues a BOUNDED two queries
+  // (one enrollment+membership read, one horse-interval read) for the whole
+  // history regardless of how many lessons or offerings are involved.
+  const historical = await loadHistoricalTraineeStateForOfferings(
+    [studentId],
+    notes.flatMap((n) =>
+      n.ridingSlot.scheduleItems.map((link) => link.scheduleItem.weeklySchedule.courseOfferingId)
+    )
+  );
 
   const rows: RidingHistoryRow[] = [];
   for (const n of notes) {
@@ -1462,7 +1496,15 @@ async function buildStudentRidingHistory(studentId: string): Promise<StudentRidi
     const first = scheduleItems[0];
     const last = scheduleItems[scheduleItems.length - 1];
 
-    const group = historical.groupAt(studentId, first.date);
+    // L2-RH1: scoped to THIS lesson's own offering, taken from the same linked
+    // ScheduleItem (`first`) whose date already keys the lookup. A NULL-scoped
+    // legacy week yields a null offering here, which the resolver fails closed on
+    // rather than coercing to Level 1.
+    const group = historical.groupAt(
+      studentId,
+      first.date,
+      first.weeklySchedule.courseOfferingId
+    );
     const histGroupName = group.ok ? group.value.groupName : null;
     const histSubgroupNumber = group.ok ? group.value.subgroupNumber : null;
 

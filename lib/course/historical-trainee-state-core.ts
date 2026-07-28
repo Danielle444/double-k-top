@@ -79,6 +79,61 @@ export function resolveHistoricalGroup(
   };
 }
 
+/**
+ * L2-RH1 - one GroupMembership interval carrying the CourseOffering it belongs
+ * to. `courseOfferingId` is the offering of the membership's own
+ * CourseEnrollment, read by the caller from the spine - never inferred from a
+ * group name, a course level, a date window, or a session.
+ */
+export interface OfferingScopedMembership extends RawMembership {
+  courseOfferingId: string;
+}
+
+/**
+ * L2-RH1 - resolve the group effective at `asOf` WITHIN ONE EXPLICITLY NAMED
+ * CourseOffering.
+ *
+ * WHY: `resolveHistoricalGroup` above answers "which group covered this date"
+ * across whatever membership set it is handed, so the CALLER decides the
+ * offering scope. The riding-history reader used to be handed a set loaded
+ * through the singleton current-offering resolver, which - while a Level 1 and a
+ * Level 2 offering are both ACTIVE - resolves to Level 1. A Level 2 lesson was
+ * therefore labelled with the trainee's LEVEL 1 group (dual-enrolled trainee) or
+ * with no group at all (Level-2-only trainee). This variant makes the offering an
+ * EXPLICIT ARGUMENT so a lesson is always resolved against its OWN offering.
+ *
+ * SCOPE RULE: a membership participates ONLY when its `courseOfferingId` is
+ * EXACTLY equal to the requested one. Memberships belonging to any other
+ * offering are invisible to this call - they are not a fallback, not a
+ * tie-breaker, and never widen the covering set.
+ *
+ * FAIL CLOSED, identical to `resolveHistoricalGroup`:
+ *  - `courseOfferingId` null (an unscoped/legacy WeeklySchedule) or blank -> the
+ *    offering identity is unknown, so NOTHING is resolved. It is deliberately
+ *    NEVER coerced to Level 1, to "the only offering present", or to the first
+ *    membership found.
+ *  - zero covering memberships in that exact offering -> NO_COVERING_MEMBERSHIP.
+ *  - more than one covering membership in that exact offering -> MULTIPLE_COVERING_MEMBERSHIPS.
+ *  - a covering group that cannot be mapped -> the mapping's own typed failure.
+ * There is no Student-mirror input to this function at all, so a current-mirror
+ * fallback remains structurally impossible.
+ *
+ * The zero/multiple/mapping decision is DELEGATED to `resolveHistoricalGroup`
+ * rather than restated, so there is exactly one covering-interval rule and one
+ * group-mapping rule in the codebase.
+ */
+export function resolveHistoricalGroupInOffering(
+  memberships: readonly OfferingScopedMembership[],
+  asOf: Date,
+  courseOfferingId: string | null,
+): HistoricalGroupResult {
+  if (typeof courseOfferingId !== "string" || courseOfferingId.length === 0) {
+    return { ok: false, kind: "NO_COVERING_MEMBERSHIP" };
+  }
+  const inOffering = memberships.filter((m) => m.courseOfferingId === courseOfferingId);
+  return resolveHistoricalGroup(inOffering, asOf);
+}
+
 // ============================================================================
 // HORSE
 // ============================================================================
