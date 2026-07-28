@@ -1327,6 +1327,361 @@ test("98. the card colour changes nothing outside the board component", () => {
   );
 });
 
+// ===========================================================================
+// 100-112. THE ACTIVE BOARD'S FEEDING-STATUS FILTER
+//
+// A client-side narrowing of rows that are ALREADY loaded. Everything below
+// locks: the single source of truth (row.displayProgressState), the exact
+// four-option mapping, the composition with the existing horse-name search, the
+// fact that membership is DERIVED (so an optimistic mark, a rollback and a
+// clear-all move rows between buckets with no extra state), the untouched hidden
+// list, the dedicated empty sentence, and the accessibility/tap-target rules.
+//
+// SAME HONESTY AS THE REST OF THIS FILE: these prove STRUCTURE, not a rendered
+// click - HorseFeedingSection still cannot be imported into a `tsx --test`
+// process (see the header). The mapping itself is a total one-line pure function
+// whose exact text is asserted below, so its truth table is fixed by inspection
+// rather than by a duplicate implementation in the test.
+// ===========================================================================
+
+/** The pure filter core: the union, the option list, the mapping, the messages. */
+const FILTER_CORE = SECTION.slice(
+  SECTION.indexOf("export type FeedingProgressFilter"),
+  SECTION.indexOf("const CARD_STATE_CLASS")
+);
+
+/** The single derivation of the visible ACTIVE rows (search + status filter). */
+const ACTIVE_ROW_DERIVATION = SECTION.slice(
+  SECTION.indexOf("const filteredRows"),
+  SECTION.indexOf("function openEdit")
+);
+
+/** The rendered filter control, up to the first banner below it. */
+const FILTER_CONTROL = SECTION.slice(
+  SECTION.indexOf('role="group"'),
+  SECTION.indexOf("{loadError &&")
+);
+
+test("100. the filter is ONE local string state, defaulting to הכול (ALL)", () => {
+  assert.ok(FILTER_CORE.length > 0, "expected the filter core");
+  assert.match(
+    FILTER_CORE,
+    /export type FeedingProgressFilter = "ALL" \| "PENDING" \| "HAY_DONE" \| "COMPLETE";/,
+    "a small local string union, not a new enum or a DTO field"
+  );
+  assert.match(
+    SECTION,
+    /const \[progressFilter, setProgressFilter\] = useState<FeedingProgressFilter>\("ALL"\);/,
+    "exactly one piece of local state, defaulting to ALL"
+  );
+  // ALL is also the first option, so the default is the one shown as selected.
+  assert.match(FILTER_CORE, /\{ value: "ALL", label: "הכול" \},/);
+
+  // THE SELECTION SURVIVES A FEEDING ROUND: the only writer is the option
+  // button. No mark, clear, hide, restore, load or refresh resets it.
+  assert.equal(
+    (SECTION.match(/setProgressFilter\(/g) ?? []).length,
+    1,
+    "the filter is set from exactly one place - the option button"
+  );
+  assert.match(FILTER_CONTROL, /onClick=\{\(\) => setProgressFilter\(option\.value\)\}/);
+  for (const handler of [
+    "handleMarkProgress",
+    "handleClearAllProgress",
+    "handleConfirmHideHorse",
+    "handleConfirmRestoreHorse",
+    "load",
+    "loadHidden",
+    "handleSubmit",
+  ]) {
+    assert.ok(
+      !functionBody(SECTION, handler).includes("setProgressFilter"),
+      `${handler} must not reset the selected filter`
+    );
+  }
+});
+
+test("101. exactly four options, in order, with the approved Hebrew labels", () => {
+  const options = FILTER_CORE.slice(
+    FILTER_CORE.indexOf("const FEEDING_PROGRESS_FILTER_OPTIONS"),
+    FILTER_CORE.indexOf("]);")
+  );
+
+  assert.deepEqual(
+    [...options.matchAll(/\{ value: "([A-Z_]+)", label: "([^"]+)" \}/g)].map((m) => [m[1], m[2]]),
+    [
+      ["ALL", "הכול"],
+      ["PENDING", "לא אכלו"],
+      ["HAY_DONE", "אכלו חלקית"],
+      ["COMPLETE", "סיימו לאכול"],
+    ],
+    "the option set, its order and its wording are all fixed"
+  );
+  // A frozen literal, rendered by iteration - so a fifth, undeclared bucket
+  // cannot appear in one branch of the markup.
+  assert.match(FILTER_CORE, /Object\.freeze\(\[/);
+  assert.match(FILTER_CONTROL, /FEEDING_PROGRESS_FILTER_OPTIONS\.map\(\(option\) => \{/);
+  assert.match(FILTER_CONTROL, /\{option\.label\}/);
+});
+
+test("102. the mapping is one total pure rule: ALL keeps everything, else exact equality", () => {
+  // Cases 2-5 of the contract, fixed by the shape of the rule rather than by a
+  // second copy of it: "ALL" short-circuits (every active row), and any other
+  // value admits a row only when its DISPLAYED state is that exact value - so
+  // PENDING/HAY_DONE/COMPLETE each show only their own rows and never overlap.
+  assert.match(
+    FILTER_CORE,
+    /export function matchesFeedingProgressFilter\(\s*displayProgressState: FeedingProgressState,\s*filter: FeedingProgressFilter\s*\): boolean \{\s*return filter === "ALL" \|\| displayProgressState === filter;\s*\}/,
+    "the mapping must stay a single total expression"
+  );
+  // No per-state branch, no lookup table, no inclusion list that could drift out
+  // of step with the option list.
+  const mapping = FILTER_CORE.slice(
+    FILTER_CORE.indexOf("export function matchesFeedingProgressFilter"),
+    FILTER_CORE.indexOf("const EMPTY_BOARD_MESSAGE")
+  );
+  for (const forbidden of ["if (", "switch", "case ", "includes(", "indexOf(", "Set("]) {
+    assert.ok(!mapping.includes(forbidden), `the mapping must not branch on ${forbidden}`);
+  }
+});
+
+test("103. the filter reads displayProgressState and NOTHING else", () => {
+  // The same field the card colour and the status control already render, so a
+  // filtered board can never disagree with what a card shows.
+  assert.match(
+    ACTIVE_ROW_DERIVATION,
+    /matchesFeedingProgressFilter\(r\.displayProgressState, progressFilter\)/
+  );
+  for (const forbidden of [
+    "progressState:",
+    "row.progress",
+    "r.progress",
+    "MarkedAt",
+    "MarkedByName",
+    "isDisplayStateNormalized",
+    "statusControlMode",
+    "morning",
+    "evening",
+    "lunch",
+    "attendanceStatus",
+    "Date",
+  ]) {
+    assert.ok(
+      !FILTER_CORE.includes(forbidden) && !ACTIVE_ROW_DERIVATION.includes(forbidden),
+      `the status filter must not inspect ${forbidden}`
+    );
+  }
+  // ...and no status logic is duplicated: the four derivation entry points the
+  // board already forbids stay forbidden (test 29b+38 covers the whole file).
+  assert.ok(!FILTER_CORE.includes("resolveFeedingStatusControlMode"));
+  assert.ok(!FILTER_CORE.includes("buildFeedingBoard"));
+});
+
+test("104. the horse-name search and the status filter COMPOSE, in one derivation", () => {
+  // Search first, then status, both over the same in-memory rows.
+  assert.match(
+    ACTIVE_ROW_DERIVATION,
+    /const bySearch = q \? rows\.filter\(\(r\) => r\.horseName\.toLowerCase\(\)\.includes\(q\)\) : rows;/,
+    "the pre-existing name search is unchanged"
+  );
+  assert.match(
+    ACTIVE_ROW_DERIVATION,
+    /if \(progressFilter === "ALL"\) return bySearch;\s*return bySearch\.filter\(/,
+    "the status filter narrows the SEARCH result, never the raw list"
+  );
+  // Exactly one visible-rows expression feeds the list, so the two filters can
+  // never be applied on different paths.
+  assert.equal((SECTION.match(/const filteredRows = useMemo\(/g) ?? []).length, 1);
+  assert.match(SECTION, /\{filteredRows\.map\(\(row\) => \(/);
+});
+
+test("105+108. membership is DERIVED, so optimistic marks, rollback and clear-all move rows at once", () => {
+  // No stored copy of the filtered list: it is recomputed from `rows` on every
+  // render, with the filter as an explicit dependency.
+  assert.match(ACTIVE_ROW_DERIVATION, /\}, \[rows, search, progressFilter\]\);/);
+  for (const forbidden of ["useState<HorseFeedingOverviewRow[]>", "setFilteredRows", "setVisibleRows"]) {
+    assert.ok(!SECTION.includes(forbidden), `the visible rows must not be cached in ${forbidden}`);
+  }
+
+  const mark = functionBody(SECTION, "handleMarkProgress");
+  // 8. The optimistic patch writes the very field the filter reads, BEFORE the
+  // action resolves - so a marked horse changes bucket on the same render as its
+  // card recolours.
+  assert.ok(
+    mark.indexOf("displayProgressState: targetState") < mark.indexOf("await onMarkProgress("),
+    "the optimistic patch must precede the await"
+  );
+  // 9. Rollback restores that same field on BOTH failure paths, returning the
+  // horse to the bucket it came from.
+  assert.ok(mark.includes("displayProgressState: row.displayProgressState"));
+  assert.equal((mark.match(/patchProgress\(horseName, snapshot\);/g) ?? []).length, 2);
+  // 10. A reset drops every row into PENDING - the "לא אכלו" bucket.
+  assert.match(
+    functionBody(SECTION, "handleClearAllProgress"),
+    /displayProgressState: "PENDING"/
+  );
+});
+
+test("106. the filter adds no Server Action, no fetch and no database request", () => {
+  for (const region of [FILTER_CORE, ACTIVE_ROW_DERIVATION, FILTER_CONTROL]) {
+    for (const forbidden of [
+      "await",
+      "async",
+      "fetch",
+      "Promise",
+      "useEffect",
+      "onMarkProgress",
+      "onClearAllProgress",
+      "onSetVisibility",
+      "onSave",
+      "load(",
+      "loadHidden(",
+      "requestAuthoritativeRefresh",
+    ]) {
+      assert.ok(!region.includes(forbidden), `the filter must not reach ${forbidden}`);
+    }
+  }
+  // No new module dependency: the board still imports exactly its four
+  // suggestion readers from the feeding action module, and nothing else.
+  assert.equal((SECTION.match(/from "@\/lib\/actions\/horse-feeding"/g) ?? []).length, 1);
+  assert.match(SECTION, /getKnownHayTypes,\s*getKnownConcentrateTypes,\s*getKnownConcentrateAmounts,/);
+  // The prop surface is unchanged - no host had to pass anything new.
+  const propSurface = SECTION.slice(
+    SECTION.indexOf("export function HorseFeedingSection({"),
+    SECTION.indexOf("const [rows, setRows]")
+  );
+  assert.ok(propSurface.length > 0, "expected the component's prop surface");
+  for (const forbidden of ["progressFilter", "FeedingProgressFilter", "filter"]) {
+    assert.ok(!propSurface.includes(forbidden), `the filter is local state, never a prop (${forbidden})`);
+  }
+  for (const [path, fileCode] of [
+    [ADMIN_HOST_PATH, ADMIN_HOST],
+    [INSTRUCTOR_HOST_PATH, INSTRUCTOR_HOST],
+  ] as const) {
+    for (const forbidden of [
+      "FeedingProgressFilter",
+      "progressFilter",
+      "matchesFeedingProgressFilter",
+      "FEEDING_PROGRESS_FILTER_OPTIONS",
+    ]) {
+      assert.ok(!fileCode.includes(forbidden), `${path} must not know about the filter`);
+    }
+  }
+});
+
+test("107. the hidden-horses section is completely unaffected", () => {
+  // The manager list still receives the raw hidden rows and its OWN search.
+  assert.match(SECTION, /rows=\{hiddenRows\}/);
+  assert.match(SECTION, /search=\{hiddenSearch\}/);
+  for (const region of [FILTER_CORE, ACTIVE_ROW_DERIVATION, FILTER_CONTROL]) {
+    for (const forbidden of ["hiddenRows", "hiddenSearch", "HorseFeedingVisibilityManager"]) {
+      assert.ok(!region.includes(forbidden), `the active filter must not touch ${forbidden}`);
+    }
+  }
+  // The manager component knows nothing about it either. (It does write a
+  // literal displayProgressState: "PENDING" when a hidden row is built - that is
+  // the pure reset asserted in test 75, not a filter.)
+  for (const forbidden of [
+    "progressFilter",
+    "FeedingProgressFilter",
+    "matchesFeedingProgressFilter",
+    "FEEDING_PROGRESS_FILTER_OPTIONS",
+  ]) {
+    assert.ok(!MANAGER.includes(forbidden), `the hidden list must not filter by ${forbidden}`);
+  }
+});
+
+test("108b. an empty filtered result has its OWN sentence, distinct from an empty board", () => {
+  assert.ok(FILTER_CORE.includes('const EMPTY_BOARD_MESSAGE = "עדיין לא הוזנו הוראות האכלה";'));
+  assert.ok(FILTER_CORE.includes('const NO_SEARCH_MATCH_MESSAGE = "אין סוסים התואמים את החיפוש";'));
+  assert.ok(FILTER_CORE.includes('const NO_FILTER_MATCH_MESSAGE = "לא נמצאו סוסים התואמים לסינון";'));
+
+  // ONE pure resolver decides between the three, and the empty-board case wins
+  // first - so "nothing was ever entered" can never be reported as a filtering
+  // outcome, nor the reverse.
+  assert.match(
+    FILTER_CORE,
+    /export function resolveHorseFeedingEmptyMessage\(input: \{\s*readonly totalActiveRows: number;\s*readonly progressFilter: FeedingProgressFilter;\s*\}\): string \{\s*if \(input\.totalActiveRows === 0\) return EMPTY_BOARD_MESSAGE;\s*if \(input\.progressFilter !== "ALL"\) return NO_FILTER_MATCH_MESSAGE;\s*return NO_SEARCH_MATCH_MESSAGE;\s*\}/
+  );
+  // Exactly one render site, fed the loaded row count and the selected filter.
+  assert.equal((SECTION.match(/resolveHorseFeedingEmptyMessage\(/g) ?? []).length, 2);
+  assert.match(
+    SECTION,
+    /resolveHorseFeedingEmptyMessage\(\{\s*totalActiveRows: rows\.length,\s*progressFilter,\s*\}\)/
+  );
+  // It is still shown only when the ACTIVE list is empty and loading has finished.
+  assert.match(SECTION, /\) : filteredRows\.length === 0 \? \(/);
+  assert.match(SECTION, /rows === null \? \(/);
+});
+
+test("109. the control is real buttons in a labelled group, with aria-pressed", () => {
+  assert.match(FILTER_CONTROL, /role="group"/);
+  assert.match(FILTER_CONTROL, /aria-label="סינון לפי סטטוס האכלה"/);
+  assert.match(FILTER_CONTROL, /<button/);
+  assert.match(FILTER_CONTROL, /type="button"/, "never a submit button");
+  assert.match(FILTER_CONTROL, /aria-pressed=\{isSelected\}/, "selection is exposed to assistive tech");
+  assert.match(FILTER_CONTROL, /const isSelected = option\.value === progressFilter;/);
+  // Labels stay VISIBLE text, never an icon-only or title-only affordance.
+  assert.ok(!FILTER_CONTROL.includes("sr-only"));
+  assert.ok(!FILTER_CONTROL.includes("aria-hidden"));
+  assert.ok(!FILTER_CONTROL.includes("title="));
+  // Not a <select>: no native picker to open on a tablet mid-round.
+  assert.ok(!FILTER_CONTROL.includes("<select"));
+  assert.ok(!FILTER_CONTROL.includes("<option"));
+});
+
+test("110. selection is never conveyed by colour alone", () => {
+  // The selected option differs in WEIGHT and DECORATION as well as in tone, and
+  // is independently announced through aria-pressed - all of which survive
+  // grayscale and colour-blindness.
+  assert.match(FILTER_CONTROL, /font-bold/);
+  assert.match(FILTER_CONTROL, /underline/);
+  assert.match(FILTER_CONTROL, /font-medium/);
+  // Exactly one branch is bold+underlined - the selected one - so weight and
+  // decoration really do distinguish the two states.
+  assert.equal((FILTER_CONTROL.match(/font-bold/g) ?? []).length, 1);
+  assert.equal((FILTER_CONTROL.match(/underline/g) ?? []).length, 1);
+  assert.equal((FILTER_CONTROL.match(/font-medium/g) ?? []).length, 2);
+  assert.match(
+    FILTER_CONTROL,
+    /isSelected\s*\?\s*"border-muted-foreground bg-muted font-bold text-card-foreground underline"\s*:\s*"border-border bg-card font-medium text-muted-foreground"/
+  );
+  // Repository tokens only (the whole-file hex/rgb ban is test 91).
+  assert.match(FILTER_CONTROL, /border-muted-foreground bg-muted/);
+  assert.match(FILTER_CONTROL, /border-border bg-card/);
+});
+
+test("111. the control stays usable on a tablet: it wraps and every target is finger-sized", () => {
+  assert.match(FILTER_CONTROL, /flex flex-wrap items-center gap-2/, "the row wraps, never overflows");
+  assert.match(FILTER_CONTROL, /min-h-11/, "each option needs a finger-sized target");
+  assert.match(FILTER_CONTROL, /px-3 py-2 text-sm/);
+  // It sits ABOVE the active list, not inside a card.
+  assert.ok(
+    SECTION.indexOf('aria-label="סינון לפי סטטוס האכלה"') <
+      SECTION.indexOf("{filteredRows.map((row) => ("),
+    "the filter must be rendered above the active horse list"
+  );
+  // ...and below the existing search input, which is untouched.
+  assert.ok(
+    SECTION.indexOf('placeholder="חיפוש לפי שם סוס..."') <
+      SECTION.indexOf('aria-label="סינון לפי סטטוס האכלה"')
+  );
+});
+
+test("112. the filter changed no action, schema, auth or host file", () => {
+  // Whole-file invariants re-asserted for the changed file specifically: it is
+  // still a client component with no server surface of any kind.
+  assert.match(SECTION, /^"use client";/);
+  for (const forbidden of ['"use server"', "@/lib/prisma", "prisma.", "@/lib/auth/", "requireAdmin"]) {
+    assert.ok(!SECTION.includes(forbidden), `the board must not gain ${forbidden}`);
+  }
+  // The card colour, the status control and the visibility manager are all
+  // untouched by this change.
+  assert.equal((SECTION.match(/resolveHorseFeedingCardStateClass\(/g) ?? []).length, 2);
+  assert.equal((SECTION.match(/<HorseFeedingStatusControl/g) ?? []).length, 1);
+  assert.match(SECTION, /<HorseFeedingVisibilityManager/);
+});
+
 test("86. the hidden-horse mark refusal is surfaced as an ordinary action failure", () => {
   const body = functionBody(SECTION, "handleMarkProgress");
 

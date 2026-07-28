@@ -80,6 +80,73 @@ function markSummary(byName: string | null, at: string | null): string | null {
 }
 
 /**
+ * THE ACTIVE BOARD'S FEEDING-STATUS FILTER.
+ *
+ * PURELY LOCAL AND PURELY CLIENT-SIDE. It narrows rows that are ALREADY loaded;
+ * it never triggers a Server Action, a refetch or a database request, so a
+ * filtered board is exactly the board that was already on screen.
+ *
+ * ONE SOURCE OF TRUTH: `row.displayProgressState`, the value the Stage 2 pure
+ * core resolved and the Stage 4 DTO carries - the same field the card colour and
+ * the status control render. No timestamp, actor name, statusControlMode or meal
+ * field is inspected, so the filter can never disagree with what a card shows,
+ * and no status logic is duplicated on the client.
+ *
+ * Because it reads that one field, an optimistic mark moves a horse between
+ * buckets on the same render as the card recolours, a rollback moves it back,
+ * and a clear-all drops every row into "לא אכלו" - all with no extra state.
+ */
+export type FeedingProgressFilter = "ALL" | "PENDING" | "HAY_DONE" | "COMPLETE";
+
+interface FeedingProgressFilterOption {
+  readonly value: FeedingProgressFilter;
+  readonly label: string;
+}
+
+// Yard wording, not internal state names: a filter is read at a glance while
+// feeding, so each label says what the horse DID, not which enum it holds.
+const FEEDING_PROGRESS_FILTER_OPTIONS: readonly FeedingProgressFilterOption[] = Object.freeze([
+  { value: "ALL", label: "הכול" },
+  { value: "PENDING", label: "לא אכלו" },
+  { value: "HAY_DONE", label: "אכלו חלקית" },
+  { value: "COMPLETE", label: "סיימו לאכול" },
+]);
+
+/**
+ * Whether one row belongs in the selected bucket. PURE and total: "ALL" keeps
+ * every row, every other value is an exact match on the displayed state.
+ */
+export function matchesFeedingProgressFilter(
+  displayProgressState: FeedingProgressState,
+  filter: FeedingProgressFilter
+): boolean {
+  return filter === "ALL" || displayProgressState === filter;
+}
+
+// The board has no feeding instructions at all - a setup state, not a filtering
+// outcome, and deliberately worded so it can never be mistaken for one.
+const EMPTY_BOARD_MESSAGE = "עדיין לא הוזנו הוראות האכלה";
+// Rows exist, but the horse-name search excluded all of them.
+const NO_SEARCH_MATCH_MESSAGE = "אין סוסים התואמים את החיפוש";
+// Rows exist and a status filter is active, but nothing matches search AND
+// status together. Its own dedicated sentence, never the empty-board one.
+const NO_FILTER_MATCH_MESSAGE = "לא נמצאו סוסים התואמים לסינון";
+
+/**
+ * Which sentence an empty ACTIVE list should show. PURE, and the single place
+ * the three cases are distinguished, so an empty board can never be reported as
+ * a filtering result (or the reverse).
+ */
+export function resolveHorseFeedingEmptyMessage(input: {
+  readonly totalActiveRows: number;
+  readonly progressFilter: FeedingProgressFilter;
+}): string {
+  if (input.totalActiveRows === 0) return EMPTY_BOARD_MESSAGE;
+  if (input.progressFilter !== "ALL") return NO_FILTER_MATCH_MESSAGE;
+  return NO_SEARCH_MATCH_MESSAGE;
+}
+
+/**
  * THE WHOLE-CARD COLOUR OF ONE HORSE, derived from exactly one input: the
  * display progress state that the Stage 2 pure core already resolved and the
  * Stage 4 overview DTO carries. PURE and total.
@@ -198,6 +265,10 @@ export function HorseFeedingSection({
   const [rows, setRows] = useState<HorseFeedingOverviewRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  // The active board's status filter. ONE local string, defaulting to "הכול", and
+  // nothing in the mark/clear/hide flows ever resets it - so the selection
+  // survives a whole feeding round.
+  const [progressFilter, setProgressFilter] = useState<FeedingProgressFilter>("ALL");
   const [knownHayTypes, setKnownHayTypes] = useState<string[]>([]);
   const [knownConcentrateTypes, setKnownConcentrateTypes] = useState<string[]>([]);
   const [knownConcentrateAmounts, setKnownConcentrateAmounts] = useState<string[]>([]);
@@ -723,12 +794,19 @@ export function HorseFeedingSection({
     })();
   }
 
+  // THE VISIBLE ACTIVE ROWS - the horse-name search and the status filter
+  // COMPOSE, in that order, over the rows already in memory. Derived, never
+  // stored: any change to a row (optimistic mark, rollback, authoritative patch,
+  // clear-all, hide/restore refetch) re-runs this on the very next render, so
+  // filter membership can never lag behind what a card displays. The hidden list
+  // is a separate surface and is not touched here.
   const filteredRows = useMemo(() => {
     if (!rows) return [];
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) => r.horseName.toLowerCase().includes(q));
-  }, [rows, search]);
+    const bySearch = q ? rows.filter((r) => r.horseName.toLowerCase().includes(q)) : rows;
+    if (progressFilter === "ALL") return bySearch;
+    return bySearch.filter((r) => matchesFeedingProgressFilter(r.displayProgressState, progressFilter));
+  }, [rows, search, progressFilter]);
 
   function openEdit(row: HorseFeedingOverviewRow) {
     setError(null);
@@ -857,6 +935,37 @@ export function HorseFeedingSection({
         )}
       </div>
 
+      {/* STATUS FILTER, directly above the active list. Real buttons in a labelled
+          group, each announcing its own selection through aria-pressed; the
+          selected one is additionally bold and underlined, so the choice is
+          legible in grayscale and never carried by colour alone. The row wraps
+          and every target is finger-sized for a tablet. */}
+      <div
+        role="group"
+        aria-label="סינון לפי סטטוס האכלה"
+        className="flex flex-wrap items-center gap-2"
+      >
+        <span className="text-xs font-medium text-muted-foreground">סינון לפי סטטוס:</span>
+        {FEEDING_PROGRESS_FILTER_OPTIONS.map((option) => {
+          const isSelected = option.value === progressFilter;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={isSelected}
+              onClick={() => setProgressFilter(option.value)}
+              className={`min-h-11 rounded-lg border-2 px-3 py-2 text-sm transition-colors ${
+                isSelected
+                  ? "border-muted-foreground bg-muted font-bold text-card-foreground underline"
+                  : "border-border bg-card font-medium text-muted-foreground"
+              }`}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+
       {loadError && <p className="rounded-lg bg-danger-muted p-3 text-sm text-danger">{loadError}</p>}
       {progressError && (
         <p className="rounded-lg bg-danger-muted p-3 text-sm text-danger">{progressError}</p>
@@ -875,7 +984,10 @@ export function HorseFeedingSection({
         <p className="text-sm text-muted-foreground">טוען...</p>
       ) : filteredRows.length === 0 ? (
         <p className="rounded-xl border border-border bg-card p-5 text-sm text-muted-foreground">
-          {rows.length === 0 ? "עדיין לא הוזנו הוראות האכלה" : "אין סוסים התואמים את החיפוש"}
+          {resolveHorseFeedingEmptyMessage({
+            totalActiveRows: rows.length,
+            progressFilter,
+          })}
         </p>
       ) : (
         <div className="flex flex-col gap-3">
