@@ -192,6 +192,7 @@ function PresentationProgressEntryForm({
             type="text"
             value={values.topic}
             onChange={(e) => setValues((v) => ({ ...v, topic: e.target.value }))}
+            autoCorrect="off"
             className="rounded-lg border border-border px-2 py-1.5 text-sm"
           />
         </label>
@@ -201,6 +202,7 @@ function PresentationProgressEntryForm({
             type="text"
             value={values.presentationType}
             onChange={(e) => setValues((v) => ({ ...v, presentationType: e.target.value }))}
+            autoCorrect="off"
             className="rounded-lg border border-border px-2 py-1.5 text-sm"
           />
         </label>
@@ -219,10 +221,18 @@ function PresentationProgressEntryForm({
       </div>
       <label className="flex flex-col gap-1 text-xs text-muted-foreground">
         משוב
+        {/*
+          autoCorrect="off" only. Mobile keyboards were silently rewriting
+          professional Hebrew riding terminology as the instructor typed. Nothing
+          else about this field changes - no spellCheck, no autoCapitalize, no
+          inputMode, no autocomplete, and the value/onChange/save path is
+          untouched (see PresentationProgressFeedbackSection.autocorrect.contract.test.ts).
+        */}
         <textarea
           value={values.feedback}
           onChange={(e) => setValues((v) => ({ ...v, feedback: e.target.value }))}
           rows={2}
+          autoCorrect="off"
           className="rounded-lg border border-border px-2 py-1.5 text-sm"
         />
       </label>
