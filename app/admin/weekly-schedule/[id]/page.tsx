@@ -17,7 +17,14 @@ export default async function WeeklyScheduleDetailPage({
   const [week, instructors] = await Promise.all([
     prisma.weeklySchedule.findUnique({
       where: { id },
-      include: { items: { orderBy: [{ date: "asc" }, { startTime: "asc" }] } },
+      include: {
+        items: { orderBy: [{ date: "asc" }, { startTime: "asc" }] },
+        // The week's OWN owning offering - the authoritative source for its
+        // level. Nullable for weeks that predate the offering spine (all Level
+        // 1); a Level 2 week can only be created through the offering-scoped
+        // route, which always writes the FK.
+        courseOffering: { select: { level: true } },
+      },
     }),
     prisma.instructor.findMany({
       where: { isActive: true },
@@ -37,6 +44,7 @@ export default async function WeeklyScheduleDetailPage({
         startDate: dateKey(week.startDate),
         endDate: dateKey(week.endDate),
         uploadedFileName: week.uploadedFileName,
+        courseLevel: week.courseOffering?.level ?? null,
         items: week.items.map((i) => ({
           id: i.id,
           dateKey: dateKey(i.date),

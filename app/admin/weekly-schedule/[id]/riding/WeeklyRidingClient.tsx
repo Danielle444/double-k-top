@@ -140,11 +140,19 @@ function BulkInstructorChecklist({
 export function WeeklyRidingClient({
   weekId,
   weekName,
+  courseLevel,
   initialDays,
   instructors,
 }: {
   weekId: string;
   weekName: string;
+  // Level of the CourseOffering that owns THIS week, resolved server-side from
+  // WeeklySchedule.courseOfferingId -> CourseOffering.level. Forwarded verbatim
+  // to RidingSlotModal, which is the only consumer; null = legacy Level 1 week.
+  // The bulk assignment/visibility forms below are mode-agnostic (they create
+  // RidingSlot/assignment rows, never a horse list or a complex plan), so this
+  // deliberately does not gate them.
+  courseLevel: number | null;
   initialDays: WeeklyRidingDay[];
   instructors: InstructorOption[];
 }) {
@@ -595,6 +603,7 @@ export function WeeklyRidingClient({
           }}
           isMergedDisplay={ridingTarget.scheduleItemIds.length > 1}
           instructors={instructors}
+          courseLevel={courseLevel}
         />
       )}
     </div>

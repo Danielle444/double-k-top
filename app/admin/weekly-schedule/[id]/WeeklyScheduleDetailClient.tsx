@@ -38,6 +38,12 @@ interface WeeklyScheduleView {
   startDate: string;
   endDate: string;
   uploadedFileName: string;
+  // Level of the CourseOffering that OWNS this week (WeeklySchedule
+  // .courseOfferingId -> CourseOffering.level), resolved server-side in
+  // page.tsx. null for the legacy weeks that predate the offering spine - all
+  // of which are Level 1. Consumed only by RidingSlotModal, to decide which
+  // riding modes may be offered.
+  courseLevel: number | null;
   items: ScheduleItemView[];
 }
 
@@ -729,6 +735,9 @@ export function WeeklyScheduleDetailClient({
           }}
           isMergedDisplay={ridingIsMergedDisplay}
           instructors={instructors}
+          // Straight from the week this page is bound to - never from a
+          // globally-selected course or the item's own title/group.
+          courseLevel={week.courseLevel}
         />
       )}
     </div>

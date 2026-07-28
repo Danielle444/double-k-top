@@ -15,7 +15,13 @@ export default async function WeeklyRidingPage({
   const { id } = await params;
 
   const [week, days, instructors] = await Promise.all([
-    prisma.weeklySchedule.findUnique({ where: { id } }),
+    // Includes the week's OWN owning offering - the authoritative source for the
+    // level that decides which riding modes the slot modal may offer. Nullable
+    // for weeks that predate the offering spine (all Level 1).
+    prisma.weeklySchedule.findUnique({
+      where: { id },
+      include: { courseOffering: { select: { level: true } } },
+    }),
     getWeeklyRidingOverview(id),
     prisma.instructor.findMany({
       where: { isActive: true },
@@ -30,6 +36,7 @@ export default async function WeeklyRidingPage({
     <WeeklyRidingClient
       weekId={week.id}
       weekName={week.name}
+      courseLevel={week.courseOffering?.level ?? null}
       initialDays={days}
       instructors={instructors}
     />

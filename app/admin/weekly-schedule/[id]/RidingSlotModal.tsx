@@ -26,6 +26,10 @@ import {
 } from "@/lib/actions/riding-slots";
 import { getRidingSlotHorseListForAdmin } from "@/lib/actions/riding-slot-horses";
 import { getRidingSlotComplexPlanForAdmin, createRidingSlotComplexPlanAsAdmin } from "@/lib/actions/riding-slot-complex";
+import {
+  resolveRidingModeAvailability,
+  isPreservedLegacySimpleMode,
+} from "@/app/admin/weekly-schedule/[id]/riding-mode-availability";
 
 interface ScheduleItemInfo {
   title: string;
@@ -257,6 +261,7 @@ export function RidingSlotModal({
   scheduleItemInfo,
   isMergedDisplay,
   instructors,
+  courseLevel,
 }: {
   open: boolean;
   onClose: () => void;
@@ -264,6 +269,12 @@ export function RidingSlotModal({
   scheduleItemInfo: ScheduleItemInfo;
   isMergedDisplay: boolean;
   instructors: InstructorOption[];
+  // The level of the CourseOffering that owns THIS WEEK, resolved server-side
+  // from WeeklySchedule.courseOfferingId -> CourseOffering.level and passed
+  // straight down - never inferred here from the title, the groupName or any
+  // globally-selected course. null means the week predates the offering spine
+  // (legacy Level 1), and leaves every mode option exactly as it is today.
+  courseLevel: number | null;
 }) {
   const [ridingSlot, setRidingSlot] = useState<RidingSlotRow | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -286,6 +297,12 @@ export function RidingSlotModal({
   const [modeError, setModeError] = useState<string | null>(null);
   const [isChoosingComplex, startChooseComplexTransition] = useTransition();
   const [showComplexEditor, setShowComplexEditor] = useState(false);
+
+  // Which modes this week's course level allows the UI to OFFER. Purely a
+  // rendering decision (see riding-mode-availability.ts): the server actions
+  // behind both modes are untouched, and this never converts, hides or deletes
+  // anything that already exists.
+  const modeAvailability = resolveRidingModeAvailability(courseLevel);
 
   useEffect(() => {
     if (!open) return;
@@ -673,35 +690,66 @@ export function RidingSlotModal({
               {mode === "error" && (
                 <p className="text-sm text-danger">שגיאה בבדיקת מצב הרכיבה. נסו לרענן.</p>
               )}
+              {/* The one place the Level 2 restriction is explained - right next
+                  to the mode-selection controls it affects, never as a global
+                  banner. Rendered only while a mode is still selectable (or a
+                  legacy simple list is on screen); an already-complex slot has
+                  nothing left to explain. */}
+              {modeAvailability.complexOnlyNote && (mode === "none" || mode === "simple") && (
+                <p className="mb-2 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+                  {modeAvailability.complexOnlyNote}
+                </p>
+              )}
               {mode === "none" && (
                 <div className="flex flex-col gap-2">
                   <p className="text-sm text-muted-foreground">
-                    טרם נבחר מצב עבור רכיבה זו - יש לבחור אחד מהבאים:
+                    {modeAvailability.canCreateSimple
+                      ? "טרם נבחר מצב עבור רכיבה זו - יש לבחור אחד מהבאים:"
+                      : "טרם נבחר מצב עבור רכיבה זו:"}
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    <Button variant="secondary" onClick={handleChooseSimple}>
-                      רשימת סוסים רגילה
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      disabled={isChoosingComplex}
-                      onClick={handleChooseComplex}
-                    >
-                      {isChoosingComplex ? "יוצר..." : "תכנון רכיבה מורכבת — בלוקים ושיבוצים"}
-                    </Button>
+                    {/* Simple mode is created LAZILY, by the horse-list editor's
+                        own first save - so not rendering this entry point is
+                        exactly what keeps a RidingSlotHorseList row from ever
+                        being written for a Level 2 slot. */}
+                    {modeAvailability.canCreateSimple && (
+                      <Button variant="secondary" onClick={handleChooseSimple}>
+                        רשימת סוסים רגילה
+                      </Button>
+                    )}
+                    {modeAvailability.canCreateComplex && (
+                      <Button
+                        variant="secondary"
+                        disabled={isChoosingComplex}
+                        onClick={handleChooseComplex}
+                      >
+                        {isChoosingComplex ? "יוצר..." : "תכנון רכיבה מורכבת — בלוקים ושיבוצים"}
+                      </Button>
+                    )}
                   </div>
                 </div>
               )}
               {mode === "simple" && (
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs text-muted-foreground">מצב: רשימת סוסים רגילה</p>
-                  <Button
-                    variant="secondary"
-                    className="!px-2 !py-1 !text-xs"
-                    onClick={() => setShowHorseListEditor(true)}
-                  >
-                    הגדרת סוסים לאיכוף
-                  </Button>
+                <div className="flex flex-col gap-1">
+                  {/* A simple list that ALREADY exists stays fully readable and
+                      editable at every level - the restriction removes the
+                      creation entry point, it never orphans real data. */}
+                  {isPreservedLegacySimpleMode(courseLevel, true) && (
+                    <p className="text-xs text-muted-foreground">
+                      רכיבה זו הוגדרה בעבר כרשימת סוסים רגילה - הרשימה הקיימת נשמרת וניתן להמשיך
+                      לצפות בה ולערוך אותה.
+                    </p>
+                  )}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">מצב: רשימת סוסים רגילה</p>
+                    <Button
+                      variant="secondary"
+                      className="!px-2 !py-1 !text-xs"
+                      onClick={() => setShowHorseListEditor(true)}
+                    >
+                      הגדרת סוסים לאיכוף
+                    </Button>
+                  </div>
                 </div>
               )}
               {mode === "complex" && (
