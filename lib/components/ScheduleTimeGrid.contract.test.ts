@@ -218,6 +218,67 @@ test("NO file in the app opts in to the grid's compact-gap mode any more", () =>
 // (18) IUS-3A: the slot height is exported so a caller can match the grid's scale.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// IUS-3B - a card may span both group columns when the OPPOSITE column is empty
+// across its own row range. Opt-in, default off, and the column TEMPLATE never
+// changes (see the "1fr 1fr" assertion below, which is now also this slice's
+// guard against a dynamically-collapsing grid).
+// ---------------------------------------------------------------------------
+
+test("ScheduleTimeGrid accepts an OPTIONAL full-width opt-in that defaults to OFF", () => {
+  const body = code(GRID);
+  assert.match(body, /expandUnopposedGroupItems\?: boolean;/, "the prop must be optional");
+  assert.match(body, /^\s*expandUnopposedGroupItems,$/m, "destructured with no default");
+  assert.equal(/expandUnopposedGroupItems = /.test(body), false, "a default would silently enable it");
+  // Passed straight through to the pure core, and part of the layout memo key.
+  assert.match(body, /^\s*expandUnopposedGroupItems,$/m);
+  assert.match(
+    body.replace(/\s+/g, " "),
+    /\[items, slotMinutes, thresholdMinutes, compressedSlotCount, expandUnopposedGroupItems\]/,
+    "changing the opt-in must invalidate the layout memo",
+  );
+});
+
+test("the core treats an absent full-width option as the pre-IUS-3B layout", () => {
+  const body = code(CORE);
+  assert.match(body, /readonly expandUnopposedGroupItems\?: boolean;/);
+  assert.match(body, /export function resolveTimeGridFullWidth\(/, "the decision lives in the PURE core");
+  assert.match(
+    body.replace(/\s+/g, " "),
+    /options\.expandUnopposedGroupItems \? resolveTimeGridFullWidth\(cells, totalSlots\) : cells\.map\(\(cell\) => cell\.column === "both"\)/,
+    "with the option off, fullWidth must be exactly the old rule",
+  );
+});
+
+test("the rendered span comes from the core's per-cell decision, not from a column count", () => {
+  const body = code(GRID);
+  assert.match(body, /positions\.map\(\(\{ items: cellItems, column, fullWidth, startSlotIndex, rowSpan \}\)/);
+  assert.match(
+    body.replace(/\s+/g, " "),
+    /gridColumn: fullWidth \? "1 \/ span 2" : column === "a" \? 1 : 2,/,
+  );
+  // Row placement and duration span are untouched by widening.
+  assert.match(body, /gridRow: `\$\{startSlotIndex \+ 1\} \/ span \$\{rowSpan\}`/);
+});
+
+test("the grid NEVER switches between one and two columns", () => {
+  const body = code(GRID);
+  // The single source of the template, and it is a static literal.
+  assert.equal((body.match(/gridTemplateColumns/g) ?? []).length, 1);
+  assert.match(body, /gridTemplateColumns: "1fr 1fr",/);
+  assert.equal(/gridTemplateColumns: (fullWidth|[a-zA-Z]+ \?)/.test(body), false,
+    "collapsing the whole grid would break simultaneous א/ב and both breakpoints");
+});
+
+test("ONLY the unified mine-only instructor view opts in to full width", () => {
+  assert.match(code(UNIFIED), /expandUnopposedGroupItems/,
+    "the mine-only merged list is where an empty group column can never be filled");
+  for (const file of OTHER_CONSUMERS) {
+    assert.equal(/expandUnopposedGroupItems/.test(code(file)), false,
+      `${file} shows a whole course's timetable, where an empty group column is real information`);
+  }
+});
+
 test("the slot-height class is exported additively and is what the grid itself applies", () => {
   const body = code(GRID);
   assert.match(

@@ -381,6 +381,24 @@ export function UnifiedInstructorScheduleSection({
                           no card can ever be merged across courses. */}
                       <ScheduleTimeGrid
                         items={block.items}
+                        // IUS-3B - MINE-ONLY IS WHY THIS IS SAFE HERE. This view
+                        // is this instructor's own items by definition (see the
+                        // header), so a Level 1 block often holds a single
+                        // activity belonging to just group א or just group ב -
+                        // and the other group's column can then NEVER be filled,
+                        // because that item was never this instructor's to begin
+                        // with. Reserving it wasted half the row on nothing.
+                        //
+                        // Passing this lets such a card use the full width. It is
+                        // per card and per row range, so a genuinely simultaneous
+                        // א/ב pair still renders side by side, a "שתי הקבוצות"
+                        // block still spans both columns, and overlap stacking,
+                        // spans, ordering and the chronological segments above are
+                        // all untouched. The per-course, trainee and admin
+                        // surfaces deliberately do NOT pass it: on a whole
+                        // course's timetable an empty group column is real
+                        // information about the other group.
+                        expandUnopposedGroupItems
                         renderCard={(item) => (
                           <InstructorScheduleCard
                             item={item}

@@ -42,6 +42,7 @@ export function ScheduleTimeGrid<T extends GroupableScheduleItem>({
   renderCard,
   slotMinutes = 15,
   compactLongGaps,
+  expandUnopposedGroupItems,
 }: {
   items: T[];
   renderCard: (item: T) => ReactNode;
@@ -51,6 +52,22 @@ export function ScheduleTimeGrid<T extends GroupableScheduleItem>({
     readonly compressedSlotCount: number;
     readonly label: string;
   };
+  // IUS-3B - OPT-IN, undefined by default, and while undefined this component
+  // renders exactly as before: a group א / group ב card keeps its own half of
+  // the row even when the other column is empty.
+  //
+  // When passed, a card may span both group columns - but ONLY where the
+  // opposite column is unoccupied across that card's own exact row range. The
+  // decision is per card and lives entirely in the pure core
+  // (resolveTimeGridFullWidth); this component just reads the flag. The column
+  // TEMPLATE below is untouched either way: the grid never switches between one
+  // and two columns, so row placement, vertical spans, stacking and both
+  // breakpoints stay identical.
+  //
+  // Only a MINE-ONLY / FILTERED surface may pass this - on a whole-course
+  // timetable an empty group column is real information. See the option's own
+  // comment in lib/schedule-timegrid.ts.
+  expandUnopposedGroupItems?: boolean;
 }) {
   // Read as primitives so a caller passing a fresh object literal every render
   // cannot defeat the layout memo.
@@ -64,8 +81,9 @@ export function ScheduleTimeGrid<T extends GroupableScheduleItem>({
           thresholdMinutes !== undefined && compressedSlotCount !== undefined
             ? { thresholdMinutes, compressedSlotCount }
             : undefined,
+        expandUnopposedGroupItems,
       }),
-    [items, slotMinutes, thresholdMinutes, compressedSlotCount]
+    [items, slotMinutes, thresholdMinutes, compressedSlotCount, expandUnopposedGroupItems]
   );
 
   if (positions.length === 0) return null;
@@ -120,14 +138,19 @@ export function ScheduleTimeGrid<T extends GroupableScheduleItem>({
             </div>
           </div>
         ))}
-      {positions.map(({ items: cellItems, column, startSlotIndex, rowSpan }) => {
+      {positions.map(({ items: cellItems, column, fullWidth, startSlotIndex, rowSpan }) => {
         const key = cellItems.map((i) => i.id).join("+");
         return (
           <div
             key={key}
             className="flex h-full flex-col overflow-hidden"
             style={{
-              gridColumn: column === "a" ? 1 : column === "b" ? 2 : "1 / span 2",
+              // fullWidth is the core's per-cell decision. It is true for every
+              // "שתי הקבוצות" cell (so this line is unchanged for them) and, only
+              // under the opt-in above, for an א/ב cell whose opposite column is
+              // empty across its whole range. gridRow is untouched, so a widened
+              // card keeps its exact time placement, duration span and stacking.
+              gridColumn: fullWidth ? "1 / span 2" : column === "a" ? 1 : 2,
               gridRow: `${startSlotIndex + 1} / span ${rowSpan}`,
             }}
           >

@@ -85,6 +85,10 @@ const CLIENT = "app/instructor/InstructorClient.tsx";
 const WEEK_BROWSER = "app/instructor/InstructorScheduleWeekBrowser.tsx";
 const TODAY_CARD = "app/instructor/InstructorTodayScheduleCard.tsx";
 const GROUPING_CORE = "lib/course/unified-instructor-day-grouping-core.ts";
+// IUS-3B - the two OTHER surfaces that render the shared timetable grid and must
+// stay on the unchanged two-column layout.
+const TRAINEE = "app/student/ScheduleSection.tsx";
+const ADMIN_WEEK = "app/admin/weekly-schedule/[id]/WeeklyScheduleDetailClient.tsx";
 
 // ---------------------------------------------------------------------------
 // IUS-2D (1) Real timetable layout: ScheduleTimeGrid, one grid per day/offering.
@@ -314,6 +318,55 @@ test("the gap change alters NOTHING about what data the unified view asks for", 
   // The grid is still fed ONE block's items and nothing else.
   assert.match(body, /<ScheduleTimeGrid\s*\n\s*items=\{block\.items\}/);
   assert.equal(/scheduleFilter|instructorId|courseOfferingId/.test(body), false);
+});
+
+// ---------------------------------------------------------------------------
+// IUS-3B - the mine-only view opts in to full-width unopposed group cards.
+//
+// This view is THIS instructor's own items by definition, so a Level 1 block
+// often holds a single activity belonging to just group א or just group ב - and
+// the other group's column can then never be filled at all. Every other surface
+// shows a whole course's timetable, where an empty group column is real
+// information about the other group, and none of them opts in.
+// ---------------------------------------------------------------------------
+
+test("the unified mine-only view opts in to full-width unopposed group cards", () => {
+  const body = code(UNIFIED);
+  assert.match(body, /expandUnopposedGroupItems/, "the mine-only merged list is the one surface that may");
+  // Passed on the SAME grid element that still receives one block's items, so no
+  // second grid and no new data path is introduced.
+  assert.match(body, /<ScheduleTimeGrid\s*\n\s*items=\{block\.items\}\s*\n\s*expandUnopposedGroupItems\s*\n\s*renderCard=/);
+  assert.equal(body.match(/<ScheduleTimeGrid/g)?.length, 1, "still exactly one grid element");
+  assert.equal(body.match(/expandUnopposedGroupItems/g)?.length, 1, "passed exactly once");
+});
+
+test("IUS-3B adds NO layout logic to the unified view itself", () => {
+  const body = code(UNIFIED);
+  // The decision belongs to the pure core; this view only opts in.
+  assert.equal(/gridTemplateColumns|gridColumn|fullWidth|resolveTimeGridFullWidth/.test(body), false,
+    "the unified view must not reimplement or second-guess the grid's column model");
+  assert.equal(/groupName/.test(body), false,
+    "widening must never be achieved by rewriting or clearing group data here");
+  // And no new reader, filter or identity is introduced by the opt-in.
+  assert.match(body, /getUnifiedScheduleForInstructor\(rangeStart!, rangeEnd!, dayFilter\)/);
+  assert.match(body, /getUnifiedTodayScheduleForInstructor\(\)/);
+  assert.equal(/scheduleFilter|instructorId|courseOfferingId/.test(body), false);
+});
+
+test("the trainee schedule is NOT wired to IUS-3B", () => {
+  const body = code(TRAINEE);
+  assert.match(body, /<ScheduleTimeGrid/, "sanity: the trainee view renders the shared grid");
+  assert.equal(/expandUnopposedGroupItems/.test(body), false,
+    "the trainee grid shows both groups' timetable, where an empty column is real information");
+});
+
+test("the course-scoped instructor and admin week views are NOT wired to IUS-3B", () => {
+  for (const file of [SECTION, OUTER, TODAY_CARD, CLIENT, ADMIN_WEEK]) {
+    assert.equal(/expandUnopposedGroupItems/.test(code(file)), false, `${file} must not opt in`);
+  }
+  // The per-course instructor view keeps rendering through the same grid - it is
+  // simply left on the unchanged two-column layout by this slice.
+  assert.match(code(SECTION), /<ScheduleTimeGrid/);
 });
 
 test("the per-course instructor view keeps the unchanged proportional layout", () => {

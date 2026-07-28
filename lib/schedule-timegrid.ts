@@ -18,6 +18,19 @@ export interface TimeGridPosition<T> {
   // renderer stacks them inside it.
   items: T[];
   column: TimeGridColumn;
+  // IUS-3B - render this cell across BOTH group columns.
+  //
+  // ALWAYS true for column "both", which is byte-for-byte the pre-IUS-3B
+  // behaviour ("שתי הקבוצות" already spanned both columns). For "a"/"b" it is
+  // true only when options.expandUnopposedGroupItems was passed AND the
+  // OPPOSITE group column is unoccupied for every row this cell covers - see
+  // resolveTimeGridFullWidth. With the option absent this field therefore
+  // equals `column === "both"` and the rendered geometry is unchanged.
+  //
+  // Deliberately a SEPARATE field rather than rewriting `column` to "both":
+  // `column` stays the item's real group, so widening a card never falsifies
+  // (or loses) the group identity the card's own badge and colour still show.
+  fullWidth: boolean;
   startSlotIndex: number;
   rowSpan: number;
 }
@@ -53,6 +66,21 @@ export interface BuildTimeGridLayoutOptions {
   // Absent (the default) = the pre-IUS-2F behaviour, byte for byte: every gap
   // stays fully proportional and compressedGaps comes back empty.
   readonly compactLongGaps?: CompactLongGapsConfig;
+  // IUS-3B - OPT-IN. Absent/false (the default) = the pre-IUS-3B behaviour, byte
+  // for byte: a group א / group ב cell always occupies exactly its own half of
+  // the two-column grid, even when the other column is completely empty.
+  //
+  // WHY THIS IS OPT-IN RATHER THAN ALWAYS ON. An empty group column means two
+  // different things depending on the surface. In a WHOLE-TIMETABLE view (the
+  // admin week, the trainee "שתי הקבוצות" view, the per-course instructor "כל
+  // הלו״ז" filter) an empty group-ב column at 07:00 is TRUE INFORMATION - group
+  // ב genuinely has nothing then - and a stable column identity down the day is
+  // how those views are read. In a MINE-ONLY / FILTERED view the same blank half
+  // can never be filled at all (the counterpart item was filtered out
+  // server-side, or the instructor simply is not assigned to it), so it carries
+  // no information and only costs half the row's width. Only such a view may
+  // pass this.
+  readonly expandUnopposedGroupItems?: boolean;
 }
 
 export interface TimeGridLayout<T> {
@@ -220,19 +248,101 @@ interface RawPosition<T> {
   rowSpan: number;
 }
 
+// A positioned cell BEFORE the full-width decision has been taken. Exists only
+// so the decision has exactly one producer (buildTimeGridLayout, via
+// resolveTimeGridFullWidth) and can never be silently defaulted somewhere else.
+type PositionedCell<T> = Omit<TimeGridPosition<T>, "fullWidth">;
+
+// IUS-3B - the minimum ONE POSITIONED CELL needs for the full-width decision.
+// Deliberately not the item and not the layout: the decision is purely about
+// which group column a cell is in and which rows it covers, so it is testable
+// without building a whole day.
+export interface TimeGridFullWidthCandidate {
+  readonly column: TimeGridColumn;
+  readonly startSlotIndex: number;
+  readonly rowSpan: number;
+}
+
+// IUS-3B - PURE decision: may each cell span BOTH group columns?
+//
+// Returns one boolean per input cell, in input order. Neither the array nor any
+// cell is mutated.
+//
+// THE UNIT IS ONE CELL, MEASURED OVER ITS OWN EXACT ROW RANGE - not the whole
+// grid, and not "does this day contain both groups anywhere". A cell in column
+// "a" may widen exactly when NOTHING occupies column "b" on ANY row in
+// [startSlotIndex, startSlotIndex + rowSpan), and symmetrically for "b". So:
+//
+//   - a day with only group א (or only group ב) widens every cell, which is
+//     visually identical to a one-column grid WITHOUT the grid ever changing
+//     its column template;
+//   - simultaneous א/ב cells never widen, so genuine side-by-side survives;
+//   - a PARTIAL overlap still blocks widening for BOTH cells - a card is one
+//     rectangle and cannot be half-width for only part of its duration;
+//   - א at 08:00 and ב at 12:00 (present in the same grid but never at the same
+//     time) BOTH widen, because neither one's own rows are opposed. A per-grid
+//     rule would leave both at half width with two permanently blank halves.
+//
+// A "both" ("שתי הקבוצות") cell already covers both columns, so it (a) always
+// reports true, exactly as it renders today, and (b) marks BOTH occupancy
+// columns busy - an א/ב cell must never widen into rows a shared cell holds, or
+// the two would be painted over each other.
+//
+// FAILS SAFE, never throws: an unusable axis or a degenerate/out-of-axis row
+// range falls back to `column === "both"`, i.e. exactly the current layout.
+export function resolveTimeGridFullWidth(
+  cells: readonly TimeGridFullWidthCandidate[],
+  totalSlots: number
+): boolean[] {
+  if (!Number.isFinite(totalSlots) || totalSlots <= 0) {
+    return cells.map((cell) => cell.column === "both");
+  }
+
+  // Clamped to the axis so a nonsensical range can never index out of bounds.
+  const rowsOf = (cell: TimeGridFullWidthCandidate) => ({
+    from: Math.max(0, cell.startSlotIndex),
+    to: Math.min(totalSlots, cell.startSlotIndex + cell.rowSpan),
+  });
+
+  const occupiedA = new Array<boolean>(totalSlots).fill(false);
+  const occupiedB = new Array<boolean>(totalSlots).fill(false);
+  for (const cell of cells) {
+    const { from, to } = rowsOf(cell);
+    for (let row = from; row < to; row++) {
+      if (cell.column === "a" || cell.column === "both") occupiedA[row] = true;
+      if (cell.column === "b" || cell.column === "both") occupiedB[row] = true;
+    }
+  }
+
+  return cells.map((cell) => {
+    if (cell.column === "both") return true;
+    const { from, to } = rowsOf(cell);
+    // No measurable rows = no evidence. Keep the current half-width layout
+    // rather than widening on nothing.
+    if (to <= from) return false;
+    // A cell only ever marks its OWN column, so reading the opposite one here
+    // needs no self-exclusion.
+    const opposite = cell.column === "a" ? occupiedB : occupiedA;
+    for (let row = from; row < to; row++) {
+      if (opposite[row]) return false;
+    }
+    return true;
+  });
+}
+
 // Groups genuinely-overlapping items within the same column into one shared
 // cell (covering their combined slot range) so the renderer can stack them
 // instead of placing two cells that would cover each other. Back-to-back
 // items (one ends exactly where the next starts) are NOT overlapping and
 // stay as separate cells - only a strict time intersection triggers this.
-function groupOverlappingByColumn<T>(raw: RawPosition<T>[]): TimeGridPosition<T>[] {
+function groupOverlappingByColumn<T>(raw: RawPosition<T>[]): PositionedCell<T>[] {
   const byColumn = new Map<TimeGridColumn, RawPosition<T>[]>();
   for (const p of raw) {
     if (!byColumn.has(p.column)) byColumn.set(p.column, []);
     byColumn.get(p.column)!.push(p);
   }
 
-  const result: TimeGridPosition<T>[] = [];
+  const result: PositionedCell<T>[] = [];
   for (const list of byColumn.values()) {
     const sorted = [...list].sort((a, b) => a.startSlotIndex - b.startSlotIndex);
     let i = 0;
@@ -275,10 +385,20 @@ function groupOverlappingByColumn<T>(raw: RawPosition<T>[]): TimeGridPosition<T>
 //      axis, split into slotMinutes-sized rows.
 //   4. Detect any remaining same-column time overlap (a data-quality edge
 //      case) and merge those cells into one shared, stacked cell.
-//   5. IUS-2F, OPT-IN ONLY: when options.compactLongGaps is passed, collapse
+//   5. Decide, per cell, whether it spans both group columns. Without
+//      options.expandUnopposedGroupItems this is exactly `column === "both"`,
+//      i.e. today's rule; with it, an unopposed א/ב cell may widen too (see
+//      resolveTimeGridFullWidth). The COLUMN TEMPLATE is never touched - the
+//      grid stays two columns and only cell spans change.
+//   6. IUS-2F, OPT-IN ONLY: when options.compactLongGaps is passed, collapse
 //      each long entirely-empty internal stretch to a fixed short band and
 //      shift everything after it up. Off by default - with no config the
 //      output is identical to the pre-IUS-2F layout.
+//
+// Step 5 runs BEFORE step 6 deliberately: the full-width decision is taken on
+// the REAL, uncompressed axis, so a collapsed row can never be mistaken for an
+// unoccupied one. Compression then only rewrites row coordinates and carries
+// each cell's decision through unchanged.
 //
 // The second argument accepts either a plain slotMinutes number (the original
 // call shape, kept working verbatim) or the options object.
@@ -344,7 +464,18 @@ export function buildTimeGridLayout<T extends GroupableScheduleItem>(
     };
   });
 
-  const positions = groupOverlappingByColumn(rawPositions);
+  const cells = groupOverlappingByColumn(rawPositions);
+
+  // IUS-3B - taken on the REAL axis, before any compression rewrite. Off by
+  // default, and then byte-for-byte the previous rule: only a "שתי הקבוצות" cell
+  // spans both columns.
+  const fullWidthFlags = options.expandUnopposedGroupItems
+    ? resolveTimeGridFullWidth(cells, totalSlots)
+    : cells.map((cell) => cell.column === "both");
+  const positions: TimeGridPosition<T>[] = cells.map((cell, index) => ({
+    ...cell,
+    fullWidth: fullWidthFlags[index],
+  }));
 
   // Occupancy is read off the RAW positions, i.e. the exact rows the renderer
   // will fill: groupOverlappingByColumn only fuses cells that already overlap,
