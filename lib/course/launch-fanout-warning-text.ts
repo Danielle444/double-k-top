@@ -3,9 +3,15 @@
  * warning shown before a new message/task is sent and before a new course
  * material that notifies trainees is created.
  *
- * This is an accidental-send warning only, not course-scoped containment.
- * Remove after message and material notification fanout are wired to the
- * roster-authoritative course-scoped resolvers.
+ * The MESSAGE warning is still an accidental-send warning only, not course-scoped
+ * containment: that fan-out remains global. Remove it once message/task
+ * notification fan-out is wired to the roster-authoritative course-scoped
+ * resolvers.
+ *
+ * The MATERIAL warning is no longer that. P-MATERIALS M3B wired material
+ * notifications to the persisted-audience resolver, so the text below states who
+ * WILL be notified instead of warning that the wrong people might be. It stays as
+ * a pre-send confirmation because the instructor side is still a wide fan-out.
  *
  * WHY THE TEXT LIVES HERE AND NOT IN THE COMPONENTS
  * -------------------------------------------------
@@ -39,12 +45,25 @@ export const MESSAGE_FANOUT_WARNING_TEXT =
 /**
  * Shown before a brand-new course material that will notify trainees is created -
  * i.e. only for visibility STUDENTS or BOTH, which are exactly the two values
- * that make createMaterialAddedNotifications fan out to students. An
- * INSTRUCTORS-only material creates no student notification and must never show
- * this.
+ * that make the fan-out reach trainees at all. An INSTRUCTORS-only material
+ * creates no trainee notification and must never show this.
+ *
+ * P-MATERIALS M3B - REWRITTEN, AND NO LONGER A LEAK WARNING. The previous copy
+ * told the admin that a material notification still reached every active trainee
+ * in the system, with no real course separation. That was true of the pre-M2B
+ * global fan-out and it is now false: M3B resolves trainee recipients strictly
+ * from the material's persisted CourseOffering audiences, and only for offerings
+ * whose course-materials capability actually resolves as available, collapsing a
+ * trainee matched by several selected courses to a single notification.
+ *
+ * What survives is a plain, accurate STATEMENT OF EFFECT rather than a caution
+ * about a defect - it tells the admin exactly who is about to be notified. The
+ * one genuinely wide fan-out that remains is the INSTRUCTOR side (every active
+ * instructor, whenever the persisted visibility includes instructors), so that
+ * disclosure is kept explicit rather than dropped along with the leak language.
  */
 export const MATERIAL_FANOUT_WARNING_TEXT =
-  "כעת התראות על חומר חדש עדיין נשלחות לכל החניכים הפעילים במערכת, ללא הפרדה מלאה בין הקורסים. שם החומר עלול להופיע גם לחניכים שאינם שייכים לקורס.";
+  "לאחר יצירת החומר תישלח התראה לחניכים הפעילים בקורסים שנבחרו בלבד, ורק אם חומרי הקורס זמינים עבורם. אם נבחרה חשיפה למדריכים, תישלח התראה גם לכל המדריכים הפעילים.";
 
 /**
  * The shared cancel label. Cancel is the SAFE action on both warnings: it is

@@ -394,8 +394,12 @@ export async function createLinkMaterial(input: CreateLinkMaterialInput): Promis
       return material;
     });
 
-    // Only after the write commits. The trainee branch is suppressed in M2B (see
-    // createMaterialAddedNotifications); instructor notifications are unchanged.
+    // Notification fan-out runs only AFTER the transaction above has committed,
+    // so the material and its audience rows are durable before anyone is told
+    // about them. The values passed here are NOT what drives the fan-out: it
+    // re-reads the persisted CourseMaterial by id and resolves trainee recipients
+    // from that row's persisted CourseOffering audiences (P-MATERIALS M3B), so a
+    // wrong or forged argument can neither widen nor alter who is notified.
     await createMaterialAddedNotifications({
       materialId: created.id,
       title: created.title,

@@ -232,8 +232,14 @@ export async function POST(request: Request) {
   }
 
   // Only a brand-new material notifies - replacing an existing file's content is
-  // not "new material added". The trainee branch is suppressed in M2B (see
-  // fanOutMaterialAddedNotifications); instructor notifications are unchanged.
+  // not "new material added". This runs after the transaction above has
+  // committed. The arguments are NOT authoritative: the fan-out re-reads the
+  // persisted CourseMaterial by id and resolves trainee recipients from that
+  // row's persisted CourseOffering audiences (P-MATERIALS M3B). The non-Server-
+  // Action helper is called DIRECTLY rather than through the guarded boundary
+  // because this route already performed its own equivalent admin authorization
+  // above, before any side effect (see the import comment for why a redirecting
+  // guard cannot be used on a fetch()-invoked, JSON-returning route).
   if (!existing) {
     await fanOutMaterialAddedNotifications({
       materialId: id,

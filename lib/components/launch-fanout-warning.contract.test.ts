@@ -110,9 +110,66 @@ test("message/task warning text is exactly the approved copy", () => {
 });
 
 test("material warning text is exactly the approved copy", () => {
+  // P-MATERIALS M3B-2 - REPLACED, not merely edited. The previous copy warned
+  // that a material notification still reached every active trainee with no real
+  // course separation; M3B made that false, so the text now states the actual
+  // effect. The old string is pinned as FORBIDDEN below so it cannot creep back.
   assert.equal(
     MATERIAL_FANOUT_WARNING_TEXT,
+    "לאחר יצירת החומר תישלח התראה לחניכים הפעילים בקורסים שנבחרו בלבד, ורק אם חומרי הקורס זמינים עבורם. אם נבחרה חשיפה למדריכים, תישלח התראה גם לכל המדריכים הפעילים.",
+  );
+});
+
+test("the superseded trainee-wide material warning is gone", () => {
+  // The exact retired sentence, plus the three CLAIMS it made. Each is now
+  // factually wrong about the committed fan-out, and re-introducing any of them
+  // would tell an admin the product leaks when it does not.
+  assert.notEqual(
+    MATERIAL_FANOUT_WARNING_TEXT,
     "כעת התראות על חומר חדש עדיין נשלחות לכל החניכים הפעילים במערכת, ללא הפרדה מלאה בין הקורסים. שם החומר עלול להופיע גם לחניכים שאינם שייכים לקורס.",
+  );
+  for (const retiredClaim of [
+    "לכל החניכים הפעילים במערכת", // "to every active trainee in the system"
+    "ללא הפרדה מלאה בין הקורסים", // "without full separation between courses"
+    "שאינם שייכים לקורס", // "who do not belong to the course"
+  ]) {
+    assert.ok(
+      !MATERIAL_FANOUT_WARNING_TEXT.includes(retiredClaim),
+      `the material warning must no longer claim: ${retiredClaim}`,
+    );
+  }
+});
+
+test("the material warning limits trainees to the SELECTED courses", () => {
+  assert.ok(
+    MATERIAL_FANOUT_WARNING_TEXT.includes("בקורסים שנבחרו בלבד"),
+    "it must say trainees of the selected courses ONLY",
+  );
+  assert.ok(
+    MATERIAL_FANOUT_WARNING_TEXT.includes("לחניכים הפעילים"),
+    "and that only ACTIVE trainees are notified",
+  );
+});
+
+test("the material warning states the availability/capability condition", () => {
+  // The offering must actually have course materials available to it - a trainee
+  // in a selected course whose offering does not enable materials is NOT notified.
+  assert.ok(
+    MATERIAL_FANOUT_WARNING_TEXT.includes("ורק אם חומרי הקורס זמינים עבורם"),
+    "it must state that materials have to be available to them",
+  );
+});
+
+test("the material warning still discloses the all-active-instructor fan-out", () => {
+  // This one IS still wide, and dropping the disclosure along with the retired
+  // leak language would understate what the admin is about to trigger.
+  assert.ok(
+    MATERIAL_FANOUT_WARNING_TEXT.includes("לכל המדריכים הפעילים"),
+    "it must disclose that every active instructor is notified",
+  );
+  assert.ok(
+    MATERIAL_FANOUT_WARNING_TEXT.includes("אם נבחרה חשיפה למדריכים"),
+    "conditioned on the chosen instructor visibility",
   );
 });
 
