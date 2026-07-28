@@ -15,7 +15,7 @@
 // active instructor. M3B will widen this path to trainees, so the gate lands
 // first.
 //
-// TWO PROTECTIONS, PINNED HERE:
+// THREE PROTECTIONS, PINNED HERE:
 //   1. EXPLICIT AUTHORIZATION - `await requireAdmin()` is the FIRST awaited
 //      operation of the exported boundary, from the canonical shared helper,
 //      failing closed, with no client-supplied admin identity and no role/name
@@ -24,6 +24,24 @@
 //   2. ARCHITECTURAL CONTAINMENT - the fan-out IO lives in
 //      lib/course/capabilities/material-notification-fanout.ts, which holds NO
 //      "use server" directive and therefore mints no public endpoint of its own.
+//      P-MATERIALS M3B adds one more such module, the recipient IO shell
+//      lib/course/capabilities/material-notification-trainee-recipients.ts, held
+//      to the same containment rules (tests 10/10b).
+//   3. THE PERSISTED MATERIAL IS AUTHORITATIVE (P-MATERIALS M3B) - requireAdmin()
+//      fixed WHO may call the boundary, but `title` and `visibility` still
+//      arrived as caller parameters, so an authorized-but-forged direct POST
+//      could still select the audience and dictate the delivered text. The
+//      fan-out now re-reads the persisted CourseMaterial ONCE by id and drives
+//      BOTH branches from it: an unknown or hidden material notifies nobody, the
+//      instructor gate reads the persisted visibility, and every `body` is the
+//      persisted title (tests 11, 12, 12b).
+//
+// HISTORY - tests 10 and 12 previously asserted that the pure recipient core was
+// UNWIRED and that NO trainee fan-out existed. Those were M2B/M3B-0 statements
+// about work not yet done, carrying the standing instruction that the slice which
+// legitimately does it must update them in the SAME reviewed change. M3B is that
+// slice: both were INVERTED to pin the shape of the new wiring (exactly one
+// approved shell; a trainee branch that cannot widen), never relaxed or deleted.
 //
 // A behavioural test of a Server Action would require mocking Prisma, the auth
 // session and next/cache; the repo's established pattern for wiring/authorization
@@ -252,58 +270,179 @@ test("9. authorization is NOT duplicated inside the internal module", () => {
   );
 });
 
-test("10. the M3A recipient core stays unwired, and no out-of-scope surface is touched", () => {
+test("10. the M3A recipient core is wired through EXACTLY ONE approved shell", () => {
+  // M3B - INVERTED, NOT RELAXED. Through M3B-0 this asserted the pure recipient
+  // core was entirely unwired. M3B is the slice that legitimately wires it, so
+  // the tripwire now proves the SHAPE of that wiring instead of its absence:
+  // exactly one IO shell may import the core, and neither the fan-out nor the
+  // Server Action boundary may reach it any other way. A second importer - the
+  // real risk, since it would be a second recipient-resolution path free to
+  // drift - still fails here.
+  //
   // Assembled from parts so this test file never itself contains the literal
   // module specifier, the capability key, or the audience-table identifiers -
   // each of which is policed by an exact-equality tripwire elsewhere.
   const CORE_MODULE = ["material-notification", "recipient-core"].join("-");
   const importMatcher = new RegExp(`from\\s*["'][^"']*${CORE_MODULE}["']`);
-  assert.ok(!importMatcher.test(FANOUT_RAW), "the fan-out must not import the M3A recipient core");
-  assert.ok(!importMatcher.test(NOTIFICATIONS_RAW), "the boundary must not import the M3A recipient core");
+  assert.ok(!importMatcher.test(FANOUT_RAW), "the fan-out must reach the core only through the shell");
+  assert.ok(!importMatcher.test(NOTIFICATIONS_RAW), "the boundary must not import the recipient core");
 
+  // The one approved shell, and the fan-out's single edge to it.
+  const SHELL_MODULE = ["material-notification", "trainee-recipients"].join("-");
+  assert.ok(
+    new RegExp(`from\\s*["'][^"']*${SHELL_MODULE}["']`).test(FANOUT_RAW),
+    "the fan-out must delegate recipient resolution to the approved shell",
+  );
+  const shellRaw = readRaw(`../course/capabilities/${SHELL_MODULE}.ts`);
+  assert.ok(importMatcher.test(shellRaw), "the approved shell must be the core's importer");
+
+  // The capability key and the audience identifiers stay OUT of the fan-out:
+  // both belong to the shell, which is where the scoping decision lives.
   const CAPABILITY_KEY = ["COURSE", "MATERIALS"].join("_");
   assert.ok(
     !new RegExp(`\\b${CAPABILITY_KEY}\\b`).test(FANOUT_RAW),
-    "M3B-0 introduces no capability enforcement - the key must not appear",
+    "the fan-out enforces no capability itself - the key must not appear",
   );
   const AUDIENCE_MODEL = ["course", "material", "audience"].join("");
   const AUDIENCE_TABLE = ["course", "material", "audiences"].join("_");
-  const lowered = FANOUT_RAW.toLowerCase();
-  assert.ok(!lowered.includes(AUDIENCE_MODEL), "the fan-out must not reference the audience model");
-  assert.ok(!lowered.includes(AUDIENCE_TABLE), "the fan-out must not reference the audience table");
+  for (const [label, raw] of [
+    ["fan-out", FANOUT_RAW],
+    ["shell", shellRaw],
+  ] as const) {
+    const lowered = raw.toLowerCase();
+    assert.ok(
+      !lowered.includes(`prisma.${AUDIENCE_MODEL}`),
+      `the ${label} must not access the audience model's Prisma delegate`,
+    );
+    assert.ok(!lowered.includes(AUDIENCE_TABLE), `the ${label} must not reference the audience table`);
+  }
+});
+
+test("10b. the approved shell mints no endpoint and performs no authorization", () => {
+  const SHELL_MODULE = ["material-notification", "trainee-recipients"].join("-");
+  const shellRaw = readRaw(`../course/capabilities/${SHELL_MODULE}.ts`);
+  const shellCode = stripComments(shellRaw);
+
+  // Same containment the fan-out itself is held to (tests 7-9): the shell is a
+  // lib module with no "use server" directive, so wiring the trainee branch
+  // minted no new publicly dispatchable endpoint.
+  assert.ok(
+    !/^\s*["']use server["']\s*;?\s*$/m.test(shellRaw),
+    "the shell must not declare 'use server'",
+  );
+  assert.ok(!/["']use server["']/.test(shellCode), "no inline 'use server' directive in code");
+  for (const marker of ["requireAdmin", "getServerSession", "next-auth", "adminEmail", "cookies("]) {
+    assert.ok(!shellCode.includes(marker), `the shell must not perform its own auth ("${marker}")`);
+  }
+  assert.ok(!/export\s*\*\s*from/.test(shellCode), "no star re-export");
+  const actionImports = [
+    ...shellCode.matchAll(/^\s*import\s+(?!type\b)[^;]*?from\s*["'](@\/lib\/actions\/[^"']+)["']/gm),
+  ];
+  assert.deepEqual(
+    actionImports.map((m) => m[1]),
+    [],
+    "the shell must not take a VALUE import from a 'use server' module",
+  );
 });
 
 // ===========================================================================
 // 11-13. Behaviour preserved: the boundary delegates, the fan-out is unchanged
 // ===========================================================================
 
-test("11. the instructor payload is byte-identical to the pre-M3B-0 fan-out", () => {
+test("11. the instructor RECIPIENT QUERY is unchanged; only its gate and body moved to the persisted row", () => {
+  // M3B - the instructor recipient POPULATION RULE (every currently-active
+  // instructor) is preserved exactly. What changed is mandated by the
+  // authoritative-material correction: the branch is now gated on the PERSISTED
+  // visibility and its body carries the PERSISTED title, so a forged caller
+  // parameter can no longer select this audience or dictate its text.
   const body = fnBody(FANOUT, INTERNAL);
   for (const required of [
     'const notificationTitle = "נוסף חומר קורס חדש";',
-    'params.visibility === "INSTRUCTORS" || params.visibility === "BOTH"',
+    'material.visibility === "INSTRUCTORS" || material.visibility === "BOTH"',
     "prisma.instructor.findMany",
     "where: { isActive: true }",
     "prisma.notification.createMany",
     'type: "MATERIAL_ADDED" as const',
     'recipientRole: "INSTRUCTOR" as const',
     "instructorId: i.id",
-    "relatedId: params.materialId",
+    "relatedId: material.materialId",
     "title: notificationTitle",
-    "body: params.title",
+    "body: material.title",
   ]) {
-    assert.ok(body.includes(required), `the moved fan-out must preserve: ${required}`);
+    assert.ok(body.includes(required), `the fan-out must preserve: ${required}`);
   }
   assert.ok(body.includes("instructors.length > 0"), "the empty-recipient short-circuit is preserved");
+
+  // The caller's parameters must no longer drive ANY notification decision.
+  for (const forbidden of ["params.visibility", "params.title"]) {
+    assert.ok(
+      !body.includes(forbidden),
+      `${forbidden} must not be authoritative - the persisted row is`,
+    );
+  }
 });
 
-test("12. no trainee fan-out exists anywhere in this stage", () => {
-  for (const [name, src] of [["fan-out", FANOUT], ["boundary", NOTIFICATIONS]] as const) {
-    const body = name === "fan-out" ? fnBody(src, INTERNAL) : fnBody(src, BOUNDARY);
-    assert.ok(!body.includes("prisma.student.findMany"), `${name}: no global student fanout`);
-    assert.ok(!body.includes('recipientRole: "STUDENT"'), `${name}: no STUDENT notification`);
-    assert.ok(!body.includes("studentId:"), `${name}: no student recipient field`);
+test("12. the trainee fan-out exists, is delegated, and widens through nothing", () => {
+  // M3B - INVERTED, NOT DELETED. Through M3B-0 this asserted no trainee fan-out
+  // existed at all (the branch was suppressed because the pre-M2B version was a
+  // global query that leaked material titles across courses). M3B restores it
+  // course-scoped, so the tripwire now proves the restored branch cannot widen:
+  // no global student query, no client-supplied recipient list, and recipients
+  // that arrive already resolved from the approved shell.
+  const body = fnBody(FANOUT, INTERNAL);
+
+  assert.ok(body.includes('recipientRole: "STUDENT" as const'), "the trainee branch must exist");
+  assert.ok(
+    body.includes("material.traineeRecipientIds"),
+    "recipients must come from the authoritative snapshot",
+  );
+  assert.ok(body.includes("body: material.title"), "the trainee body is the PERSISTED title");
+  assert.ok(
+    body.includes("relatedId: material.materialId"),
+    "the trainee relatedId is the PERSISTED material id",
+  );
+
+  // The widening vectors, each explicitly closed.
+  assert.ok(!body.includes("prisma.student.findMany"), "no global student fan-out may return");
+  assert.ok(!body.includes("prisma.courseEnrollment"), "the fan-out resolves no roster itself");
+  assert.ok(!body.includes("params.title"), "no forged title reaches a trainee");
+  assert.ok(!body.includes("params.visibility"), "no forged visibility selects the trainee audience");
+  for (const forbidden of ["recipientIds:", "studentIds", "groupName", "subgroupNumber"]) {
+    assert.ok(!body.includes(forbidden), `no client recipient list / scope inference (${forbidden})`);
   }
+
+  // The Server Action boundary still creates nothing of its own.
+  const boundary = fnBody(NOTIFICATIONS, BOUNDARY);
+  assert.ok(!boundary.includes('recipientRole: "STUDENT"'), "boundary: no STUDENT notification");
+  assert.ok(!boundary.includes("prisma."), "boundary: still no Prisma IO");
+});
+
+test("12b. the persisted material is re-read ONCE and refuses the whole fan-out when absent", () => {
+  const body = fnBody(FANOUT, INTERNAL);
+
+  // Exactly one authoritative read, shared by both branches.
+  assert.equal(
+    body.split("loadMaterialNotificationSnapshot(").length - 1,
+    1,
+    "the material must be read exactly once - never once per branch",
+  );
+  const read = body.indexOf("loadMaterialNotificationSnapshot(");
+  const nullGuard = body.indexOf("if (material === null) return;");
+  const activeGuard = body.indexOf("if (material.isActive !== true) return;");
+  const firstWrite = body.indexOf("prisma.notification.createMany");
+
+  assert.ok(read > -1, "the fan-out must re-read the persisted material");
+  assert.ok(nullGuard > read, "an unknown material id must refuse the fan-out");
+  assert.ok(activeGuard > nullGuard, "a hidden material must refuse the fan-out");
+  assert.ok(
+    firstWrite > activeGuard,
+    "no notification of ANY kind may be written before both persisted guards",
+  );
+  // Fail-closed direction: the guards return, they do not fall back to params.
+  assert.ok(
+    !/material === null[\s\S]{0,120}params\./.test(body),
+    "a missing material must not fall back to the caller's parameters",
+  );
 });
 
 test("13. the boundary performs NO Prisma IO of its own - it authorizes and delegates", () => {

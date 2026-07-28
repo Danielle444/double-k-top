@@ -69,7 +69,17 @@
  * original dedupers keep returning ordinary arrays exactly as before, since
  * changing that would be a behaviour change to a committed contract.
  *
- * UNWIRED IN THIS SLICE: nothing in the repository imports this module.
+ * WIRED BY P-MATERIALS M3B: this pure decision core is imported by EXACTLY ONE
+ * approved production module - the material-notification trainee-recipient shell
+ * (./material-notification-trainee-recipients.ts), which supplies the resolved
+ * booleans these functions consume. That one-importer rule is enforced by this
+ * module's own test suite, because a second consumer would be a second
+ * recipient-resolution path free to drift from this one.
+ *
+ * The architectural boundary is UNCHANGED by that wiring: database access,
+ * capability resolution and notification writes all remain OUTSIDE this module.
+ * It stays pure - no database client, no "use server" directive, no session or
+ * authorization logic - and M3B added no runtime behaviour to it.
  */
 import type { CapabilityKey } from "./capability-keys";
 

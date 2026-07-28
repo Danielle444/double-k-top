@@ -199,25 +199,35 @@ test("the upload route still notifies only for a brand-new material", () => {
 // Notification suppression
 // ===========================================================================
 
-test("the material fan-out suppresses the trainee branch", () => {
+test("the material fan-out scopes the trainee branch to the persisted audience", () => {
+  // P-MATERIALS M3B - this assertion previously required the trainee branch to be
+  // SUPPRESSED. M2B suppressed it because the then-current implementation was a
+  // global Student.isActive query that leaked a material's title, via `body`, to
+  // trainees of other courses. M3B removes the leak at its source rather than by
+  // absence, so the tripwire is INVERTED in the slice that does the work: the
+  // branch exists again, and what is now pinned is that it cannot widen.
   const body = functionSource(FANOUT, "fanOutMaterialAddedNotifications");
-  assert.ok(!body.includes("prisma.student.findMany"), "no global student fanout remains");
-  assert.ok(!body.includes('recipientRole: "STUDENT"'), "no STUDENT notification is created");
+  assert.ok(!body.includes("prisma.student.findMany"), "the global student fanout must not return");
+  assert.ok(body.includes('recipientRole: "STUDENT"'), "the trainee branch is restored");
   assert.ok(
-    /M2B[\s\S]*suppress/i.test(body),
-    "an explicit comment must record that trainee notifications are temporarily suppressed",
+    body.includes("material.traineeRecipientIds"),
+    "recipients must come from the authoritative persisted snapshot, already deduplicated",
   );
-  // The suppression must not have leaked back into the authorized boundary
-  // either - the wrapper creates no notification of any kind.
+  assert.ok(
+    !body.includes("params.title") && !body.includes("params.visibility"),
+    "the caller's title/visibility must not drive the fan-out",
+  );
+  // The boundary itself still creates no notification of any kind.
   const wrapper = functionSource(NOTIFICATIONS, "createMaterialAddedNotifications");
   assert.ok(!wrapper.includes('recipientRole: "STUDENT"'), "the boundary creates no STUDENT row");
 });
 
-test("the material fan-out preserves the instructor branch exactly", () => {
+test("the material fan-out preserves the instructor branch, gated on the persisted row", () => {
   const body = functionSource(FANOUT, "fanOutMaterialAddedNotifications");
-  assert.ok(body.includes('params.visibility === "INSTRUCTORS" || params.visibility === "BOTH"'));
+  assert.ok(body.includes('material.visibility === "INSTRUCTORS" || material.visibility === "BOTH"'));
   assert.ok(body.includes("prisma.instructor.findMany"), "instructor recipients still resolved");
   assert.ok(body.includes('recipientRole: "INSTRUCTOR"'), "instructor notifications still created");
+  assert.ok(body.includes("body: material.title"), "the body is the persisted title");
 });
 
 test("other notification types are untouched by M2B", () => {
@@ -230,7 +240,17 @@ test("other notification types are untouched by M2B", () => {
 // The pure notification-recipient core is NOT deleted (M3 will consume it)
 // ===========================================================================
 
-test("the pure material-notification-recipient core is preserved for M3", () => {
+test("the pure material-notification-recipient core is preserved and now consumed", () => {
   const core = readSource("./../course/capabilities/material-notification-recipient-core.ts");
-  assert.ok(core.includes("MATERIAL_NOTIFICATION_CAPABILITY_KEY"), "the M3 core must remain");
+  assert.ok(core.includes("MATERIAL_NOTIFICATION_CAPABILITY_KEY"), "the core must remain");
+  // M3B - the core is no longer merely preserved for a future slice; the approved
+  // IO shell consumes it, and the fan-out reaches recipients only through that.
+  const shell = readSource("./../course/capabilities/material-notification-trainee-recipients.ts");
+  for (const required of [
+    "shouldMaterialNotifyTrainees",
+    "resolveEligibleMaterialNotificationOfferingIds",
+    "resolveMaterialNotificationRecipientIds",
+  ]) {
+    assert.ok(shell.includes(required), `the shell must delegate ${required} to the pure core`);
+  }
 });

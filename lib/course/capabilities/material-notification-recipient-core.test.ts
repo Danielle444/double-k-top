@@ -14,7 +14,9 @@
  *    never the offending value, never a neighbouring id, never any PII;
  *  - the module is genuinely pure (no runtime import at all) and does not restate
  *    any part of effective-capability evaluation;
- *  - nothing in the repository imports it yet.
+ *  - exactly ONE production module (the P-MATERIALS M3B IO shell,
+ *    ./material-notification-trainee-recipients.ts) consumes it, so there is no
+ *    second recipient-resolution path able to drift from this one.
  *
  * Uses the existing `tsx` + node:test approach. Run with:
  *   npx tsx --test lib/course/capabilities/material-notification-recipient-core.test.ts
@@ -1172,7 +1174,7 @@ function collectSourceFiles(directory: string, found: string[] = []): string[] {
   return found;
 }
 
-test("nothing in the repository imports this module yet", () => {
+test("exactly one approved production shell imports this module", () => {
   const files: string[] = [];
   for (const root of SCAN_ROOTS) {
     const full = path.join(REPO_ROOT, root);
@@ -1223,11 +1225,53 @@ test("nothing in the repository imports this module yet", () => {
     assert.ok(!IMPORT_MATCHER.test(mention), `a mention must not count as wiring: ${mention}`);
   }
 
-  const importers = files.filter((file) => {
-    const base = path.basename(file);
-    if (base === MODULE_FILE || base === TEST_FILE) return false;
-    return IMPORT_MATCHER.test(readFileSync(file, "utf8"));
-  });
+  const importers = files
+    .filter((file) => {
+      const base = path.basename(file);
+      if (base === MODULE_FILE || base === TEST_FILE) return false;
+      return IMPORT_MATCHER.test(readFileSync(file, "utf8"));
+    })
+    .map((file) => path.relative(REPO_ROOT, file).replace(/\\/g, "/"))
+    .sort();
 
-  assert.deepEqual(importers, [], "the core must stay unwired in this slice");
+  // P-MATERIALS M3B - INVERTED, NOT RELAXED.
+  //
+  // Through M3A this asserted the core had NO importer at all, with the standing
+  // instruction that the slice which legitimately wires it must update this
+  // assertion rather than delete it. M3B is that slice. The invariant it now
+  // guards is the one that actually matters going forward: the core is consumed
+  // by EXACTLY ONE approved IO shell. A second importer would be a second
+  // recipient-resolution path, free to drift from this one - which is precisely
+  // what the original "stay unwired" rule existed to prevent.
+  //
+  // EXACT equality, never a subset: an unapproved new importer fails, and so does
+  // a stale entry left behind if the shell is renamed or removed. The shell's own
+  // focused test is listed because it exercises the core's typed refusal directly;
+  // it is not a second resolution path, and the production assertion below is what
+  // actually pins the invariant.
+  const SHELL = "lib/course/capabilities/material-notification-trainee-recipients.ts";
+  assert.deepEqual(
+    importers,
+    [SHELL.replace(/\.ts$/, ".test.ts"), SHELL],
+    "only the approved IO shell and its own focused test may consume the pure core",
+  );
+
+  const productionImporters = importers.filter((file) => !file.endsWith(".test.ts"));
+  assert.deepEqual(
+    productionImporters,
+    [SHELL],
+    "exactly ONE production module may consume the pure recipient core",
+  );
+
+  // The shell must be a real consumer of the DECISIONS, not merely an importer of
+  // a type - otherwise this tripwire could pass while the resolution logic was
+  // quietly reimplemented somewhere else.
+  const shell = readFileSync(path.join(REPO_ROOT, SHELL), "utf8");
+  for (const decision of [
+    "shouldMaterialNotifyTrainees",
+    "resolveEligibleMaterialNotificationOfferingIds",
+    "resolveMaterialNotificationRecipientIds",
+  ]) {
+    assert.ok(shell.includes(decision), `the approved shell must consume ${decision}`);
+  }
 });
