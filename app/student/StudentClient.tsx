@@ -350,6 +350,20 @@ export function StudentClient() {
   // from the messages screen's own real readAt/completedAt state, which it
   // keeps using for its own badges and mark-as-read/complete actions.
   const [hasNewMessages, setHasNewMessages] = useState(false);
+  // PERF-1 / P2B - the home screen's SINGLE copy of this trainee's messages and
+  // tasks. The effect below already fetched exactly this payload to derive the
+  // "new since last opened" dot and then discarded it, while
+  // StudentMessagesSummary independently fetched the very same
+  // getStudentMessages(studentId) response to count unread/open items - two
+  // serialized Server Action round trips for one identical payload. The items
+  // are now kept here and handed down, so the summary derives its counts without
+  // a request of its own.
+  //
+  // `null` means NOT LOADED YET (the same convention weeks/courseOptions already
+  // use in this file), and is deliberately distinct from `[]` - "no messages at
+  // all". The summary renders nothing for either, exactly as it did while its own
+  // fetch was in flight.
+  const [messageItems, setMessageItems] = useState<StudentMessageItem[] | null>(null);
   // Drives the "עוד" tab / "משוב שבועי" menu-row dot - a real DB-backed
   // signal (there's a currently-open, unanswered weekly feedback form),
   // reusing the same getOpenWeeklyFeedbackForStudent status the section
@@ -389,6 +403,9 @@ export function StudentClient() {
     let cancelled = false;
     getStudentMessages(session.id).then((items) => {
       if (cancelled) return;
+      // PERF-1 / P2B - publish the payload this effect already had, so the home
+      // summary needs no second fetch. The dot derivation below is unchanged.
+      setMessageItems(items);
       const lastSeenRaw = window.localStorage.getItem(studentMessagesLastSeenKey(session.id));
       const lastSeen = lastSeenRaw ? new Date(lastSeenRaw).getTime() : 0;
       const hasNew = items.some((item) => new Date(item.createdAt).getTime() > lastSeen);
@@ -746,7 +763,19 @@ export function StudentClient() {
     return () => {
       cancelled = true;
     };
-  }, [session]);
+    // PERF-1 / P2A - keyed on the stable ACTOR ID, not the session OBJECT. The
+    // profile refresh above calls setSession(profile) with a freshly parsed
+    // object, so its identity always changes and `[session]` re-ran this load a
+    // second time per page load; the `cancelled` flag suppressed only the stale
+    // state write, never the duplicate POST. This effect reads NO session
+    // property - the identifier appears only in the null guard, and
+    // getDutyWeekSelectionForTrainee() takes no argument - so nothing is closed
+    // over that could go stale. The deliberate INDEPENDENCE documented above is
+    // untouched: this still does not depend on selectedCourseOfferingId, so
+    // switching the schedule course still never re-runs it or resets
+    // dutySelectedWeekId.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id]);
 
   useEffect(() => {
     if (selected || query.trim().length < 2) return;
@@ -1107,8 +1136,11 @@ export function StudentClient() {
               ))}
             </div>
 
+            {/* PERF-1 / P2B - fed from this shell's single message load; it no
+                longer fetches. `studentId` is gone because the fetch it existed
+                for is gone - identity never reaches the summary at all now. */}
             <StudentMessagesSummary
-              studentId={session.id}
+              items={messageItems}
               onOpen={() => setActiveTab("messages")}
             />
 

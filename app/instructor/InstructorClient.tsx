@@ -551,6 +551,23 @@ export function InstructorClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id]);
 
+  // PERF-1 / P2A - keyed on the stable ACTOR ID, not the session OBJECT.
+  //
+  // The profile refresh below calls setSession(profile) with a freshly parsed
+  // object on every load, so its identity always changes even when every field
+  // is equal. With `[session]` this effect therefore ran TWICE per page load -
+  // once on the localStorage restore and again when that refresh landed - and
+  // the `cancelled` flag only suppressed the stale STATE WRITE: the second POST
+  // was still issued and still occupied the queue (Next.js dispatches Server
+  // Actions one at a time per client). It also produced a second `weeks` array,
+  // which re-triggered the riding-summary effect below for a second duplicate
+  // request; keying on the id fixes both with one change.
+  //
+  // Narrowing is safe here because this effect reads NO session property: the
+  // identifier appears only in the null guard, and getWeeklyScheduleSelection()
+  // takes no arguments, so nothing is closed over that could go stale. A logged
+  // out session yields `undefined` and the guard returns; a genuine login or an
+  // instructor SWITCH changes the id and still triggers the load exactly once.
   useEffect(() => {
     if (!session) return;
     let cancelled = false;
@@ -564,7 +581,8 @@ export function InstructorClient({
     return () => {
       cancelled = true;
     };
-  }, [session]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id]);
 
   useEffect(() => {
     if (!session || !weeks) return;

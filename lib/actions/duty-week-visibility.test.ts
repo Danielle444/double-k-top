@@ -133,18 +133,39 @@ test("the Duties content block is guarded by !isLevel2OnlyTrainee (defense in de
   );
 });
 
-test("the duty-week effect depends only on [session], so a schedule-course switch never resets it", () => {
+// PERF-1 / P2A narrowed this dependency from the session OBJECT to the stable
+// actor id. The property this test defends - "a schedule-course switch never
+// resets the duty week" - is UNCHANGED and is still asserted below; what the
+// narrowing removed is a SECOND, duplicate load per page, caused by the profile
+// refresh replacing `session` with an equal-but-new object on every mount.
+//
+// Keying on session?.id is strictly narrower than keying on session: it re-runs
+// on a genuine trainee switch and on nothing else, so it cannot make this effect
+// MORE reactive to a course switch. The independence assertion is therefore kept
+// verbatim, and the dependency assertion now pins the narrowed form so a
+// regression back to the object identity (or forward to a course-keyed array)
+// both fail here.
+test("the duty-week effect is keyed on the actor id only, so a schedule-course switch never resets it", () => {
   // Isolate the effect that loads the duty weeks.
   const effect = studentClientCode.match(
     /getDutyWeekSelectionForTrainee\(\)[\s\S]*?\}, \[[^\]]*\]\);/,
   );
   assert.ok(effect, "the duty-week effect must exist");
   const effectSrc = effect![0];
-  // Its dependency array is exactly [session] - NOT keyed on the selected course.
-  assert.match(effectSrc, /\}, \[session\]\);/);
+  // Its dependency array is exactly [session?.id] - NOT the session object, and
+  // NOT keyed on the selected course.
+  assert.match(effectSrc, /\}, \[session\?\.id\]\);/);
+  assert.ok(
+    !/\}, \[session\]\);/.test(effectSrc),
+    "the duty-week effect must not depend on the session object (it reloads twice per mount)",
+  );
   assert.ok(
     !effectSrc.includes("selectedCourseOfferingId"),
     "the duty-week effect must not depend on the selected schedule course",
+  );
+  assert.ok(
+    !effectSrc.includes("courseOptions"),
+    "the duty-week effect must not depend on the schedule course options either",
   );
 });
 
