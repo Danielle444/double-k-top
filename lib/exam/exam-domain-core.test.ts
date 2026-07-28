@@ -30,6 +30,9 @@ import {
   validateBeginnerSessionShape,
   validateExamPlanUniqueness,
   archiveExternalCandidate,
+  STORED_EXAM_KINDS,
+  isStorableExamKind,
+  validateStoredExamSession,
   type ParticipantRef,
   type ExamSessionShapeInput,
   type ExternalExamCandidate,
@@ -395,4 +398,147 @@ test("the external-candidate type carries no Student/login field", () => {
   };
   assert.equal(Object.prototype.hasOwnProperty.call(candidate, "studentId"), false);
   assert.deepEqual(Object.keys(candidate).sort(), ["archived", "candidateId", "displayName"]);
+});
+
+// ===========================================================================
+// EX-C2-0 — a STORED BEGINNER_INSTRUCTION session is forbidden
+// ===========================================================================
+
+test("STORED_EXAM_KINDS is exactly the three non-beginner kinds", () => {
+  assert.deepEqual(
+    [...STORED_EXAM_KINDS].sort(),
+    ["ADVANCED_INSTRUCTION", "INTERFACE_RIDING", "LUNGE_NO_RIDER"],
+  );
+  assert.equal(STORED_EXAM_KINDS.includes("BEGINNER_INSTRUCTION"), false);
+  assert.equal(Object.isFrozen(STORED_EXAM_KINDS), true);
+});
+
+test("isStorableExamKind accepts the three stored kinds and rejects beginner", () => {
+  for (const kind of STORED_EXAM_KINDS) assert.equal(isStorableExamKind(kind), true, kind);
+  assert.equal(isStorableExamKind("BEGINNER_INSTRUCTION"), false);
+});
+
+test("isStorableExamKind fails closed on junk, non-strings and proto keys", () => {
+  for (const value of [null, undefined, 0, true, {}, [], "", "nope", "interface_riding"]) {
+    assert.equal(isStorableExamKind(value), false);
+  }
+  for (const key of Object.getOwnPropertyNames(Object.prototype)) {
+    assert.equal(isStorableExamKind(key), false, `inherited key ${key}`);
+  }
+});
+
+test("validateStoredExamSession rejects BEGINNER_INSTRUCTION with the exact code", () => {
+  const result = validateStoredExamSession({
+    kind: "BEGINNER_INSTRUCTION",
+    phase: null,
+    interfaceSessionId: null,
+    embeddedAssignmentCount: 3,
+    beginnerFormat: "LUNGE",
+    beginnerChildCount: 2,
+  });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(
+    result.issues.map((i) => i.code),
+    ["EX-DOM-BEGINNER-SESSION-FORBIDDEN"],
+    "the forbidden-kind issue is reported alone, not buried among shape issues",
+  );
+  assert.equal(
+    result.issues[0].message,
+    "בחינת מדריך מתחילים נקראת ישירות מהתנסויות מתחילים ואינה נשמרת כמפגש בחינה",
+  );
+});
+
+test("validateStoredExamSession rejects a beginner session that WOULD have been valid before", () => {
+  // Exactly the shape EX-C1's copy design produced and accepted.
+  const shape: ExamSessionShapeInput = {
+    kind: "BEGINNER_INSTRUCTION",
+    phase: null,
+    interfaceSessionId: null,
+    embeddedAssignmentCount: 2,
+    beginnerFormat: "BEGINNER_GROUP",
+    copyProvenancePresent: true,
+    beginnerChildCount: 3,
+    examineeCount: 2,
+  };
+  assert.equal(validateExamSessionShape(shape).ok, true, "the old shape rule still passes it");
+  assert.equal(validateStoredExamSession(shape).ok, false, "but it may no longer be stored");
+});
+
+test("validateStoredExamSession accepts each of the three stored kinds", () => {
+  assert.equal(
+    validateStoredExamSession({
+      kind: "INTERFACE_RIDING",
+      phase: "INTERFACE",
+      interfaceSessionId: null,
+      embeddedAssignmentCount: 1,
+      examineeCount: 1,
+    }).ok,
+    true,
+  );
+  assert.equal(
+    validateStoredExamSession({
+      kind: "LUNGE_NO_RIDER",
+      phase: null,
+      interfaceSessionId: null,
+      embeddedAssignmentCount: 1,
+      examineeCount: 1,
+    }).ok,
+    true,
+  );
+  assert.equal(
+    validateStoredExamSession({
+      kind: "ADVANCED_INSTRUCTION",
+      phase: null,
+      interfaceSessionId: null,
+      embeddedAssignmentCount: 2,
+      examineeCount: 1,
+      instructedTraineeCount: 1,
+      instructionTopicCount: 1,
+    }).ok,
+    true,
+  );
+});
+
+test("validateStoredExamSession delegates unchanged to validateExamSessionShape", () => {
+  // A LUNGE_NO_RIDER carrying a phase is invalid; the delegated result must be
+  // byte-identical to calling the shape validator directly.
+  const shape: ExamSessionShapeInput = {
+    kind: "LUNGE_NO_RIDER",
+    phase: "RIDING",
+    interfaceSessionId: "other-session",
+    embeddedAssignmentCount: 1,
+  };
+  assert.deepEqual(validateStoredExamSession(shape), validateExamSessionShape(shape));
+});
+
+test("the pre-existing beginner validators are NOT weakened", () => {
+  // EX-DOM-BEGINNER-HAS-PARTICIPANTS still fires on an empty beginner session.
+  const empty = validateBeginnerSessionShape({
+    phase: null,
+    interfaceSessionId: null,
+    embeddedAssignmentCount: 0,
+    beginnerFormat: "LUNGE",
+  });
+  assert.equal(empty.ok, false);
+  assert.equal(empty.issues.some((i) => i.code === "EX-DOM-BEGINNER-HAS-PARTICIPANTS"), true);
+
+  // EX-DOM-FORMAT-REQUIRED still fires when the format is missing.
+  const noFormat = validateBeginnerSessionShape({
+    phase: null,
+    interfaceSessionId: null,
+    embeddedAssignmentCount: 2,
+  });
+  assert.equal(noFormat.issues.some((i) => i.code === "EX-DOM-FORMAT-REQUIRED"), true);
+});
+
+test("every issue code still carries a non-empty Hebrew message", () => {
+  const codes = Object.keys(EXAM_DOMAIN_MESSAGES);
+  assert.equal(codes.includes("EX-DOM-BEGINNER-SESSION-FORBIDDEN"), true);
+  for (const code of codes) {
+    const message = EXAM_DOMAIN_MESSAGES[code as keyof typeof EXAM_DOMAIN_MESSAGES];
+    assert.equal(typeof message, "string");
+    assert.ok(message.trim().length > 0, `${code} has an empty message`);
+  }
+  assert.equal(Object.isFrozen(EXAM_DOMAIN_MESSAGES), true);
 });

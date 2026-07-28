@@ -65,6 +65,28 @@
  * The kind-specific inputs are all OPTIONAL on `ExamSessionShapeInput`: an
  * omitted field reads as ABSENT, which is the fail-closed reading for every
  * FORBIDDEN rule and correctly trips the REQUIRED rules on a beginner session.
+ *
+ * ===========================================================================
+ * EX-C2-0 AMENDMENT — A STORED BEGINNER SESSION IS FORBIDDEN
+ * ===========================================================================
+ * The snapshot/copy design above is SUPERSEDED for BEGINNER_INSTRUCTION.
+ * Beginner exams are now a LIVE PROJECTION of Teaching Practice: the plan
+ * stores only which TP dates it covers (`ExamTeachingPracticeSourceDate`), and
+ * every beginner row — lessons, participants, roles, children, parent contacts,
+ * horses, equipment, absence, notes, instructor, location — is derived at read
+ * time by `exam-live-beginner-adapter-core`. Nothing is copied.
+ *
+ * `STORED_EXAM_KINDS` / `isStorableExamKind` / `validateStoredExamSession`
+ * express that: a write path must reject `BEGINNER_INSTRUCTION` outright with
+ * `EX-DOM-BEGINNER-SESSION-FORBIDDEN`.
+ *
+ * NOTHING ABOVE WAS WEAKENED. `validateExamSessionShape` and
+ * `validateBeginnerSessionShape` keep their exact EX-C1 behaviour and every
+ * existing issue code is preserved; the beginner rules simply become an
+ * unreachable inner defence rather than a live requirement.
+ *
+ * SCHEDULE-ONLY still holds, and now explicitly: no feedback, rating, grade or
+ * result appears in the exam module or in the live projection's inputs.
  */
 
 // ===========================================================================
@@ -192,7 +214,9 @@ export type ExamDomainIssueCode =
   | "EX-DOM-CHILDREN-FORBIDDEN"
   | "EX-DOM-INSTRUCTED-FORBIDDEN"
   | "EX-DOM-TOPIC-FORBIDDEN"
-  | "EX-DOM-PAIRING-REQUIRED";
+  | "EX-DOM-PAIRING-REQUIRED"
+  // --- EX-C2-0: beginner exams are a LIVE PROJECTION, never a stored row -----
+  | "EX-DOM-BEGINNER-SESSION-FORBIDDEN";
 
 /**
  * The authoritative code → Hebrew message table. The exhaustive
@@ -224,6 +248,8 @@ export const EXAM_DOMAIN_MESSAGES: Readonly<Record<ExamDomainIssueCode, string>>
     "EX-DOM-TOPIC-FORBIDDEN": "רק בחינת הדרכת מתקדמים יכולה לכלול נושא הדרכה",
     "EX-DOM-PAIRING-REQUIRED":
       "כאשר יש יותר מנבחן אחד באותו מפגש חובה לשייך כל שיבוץ לזוג הדרכה",
+    "EX-DOM-BEGINNER-SESSION-FORBIDDEN":
+      "בחינת מדריך מתחילים נקראת ישירות מהתנסויות מתחילים ואינה נשמרת כמפגש בחינה",
   });
 
 /** A single structural issue: a stable code and its Hebrew message. */
@@ -462,6 +488,67 @@ export function validateBeginnerSessionShape(
   input: Omit<ExamSessionShapeInput, "kind">,
 ): ExamDomainValidationResult {
   return validateExamSessionShape({ ...input, kind: "BEGINNER_INSTRUCTION" });
+}
+
+// ===========================================================================
+// EX-C2-0 — which kinds may exist as STORED rows
+// ===========================================================================
+
+/**
+ * The kinds that may exist as a stored `ExamSession` row.
+ *
+ * `BEGINNER_INSTRUCTION` is deliberately ABSENT. Beginner exams are a LIVE
+ * PROJECTION of Teaching Practice — the plan stores only which TP dates it
+ * covers (`ExamTeachingPracticeSourceDate`), and every beginner row is derived
+ * at read time — so materialising one as a row would create the second,
+ * divergent source of truth the design exists to prevent.
+ */
+export const STORED_EXAM_KINDS: readonly ExamKind[] = Object.freeze([
+  "INTERFACE_RIDING",
+  "LUNGE_NO_RIDER",
+  "ADVANCED_INSTRUCTION",
+]);
+
+const STORED_KIND_SET: Readonly<Record<string, true>> = Object.freeze({
+  INTERFACE_RIDING: true,
+  LUNGE_NO_RIDER: true,
+  ADVANCED_INSTRUCTION: true,
+});
+
+/**
+ * True only for a kind that may be STORED as an `ExamSession` row. Fails closed
+ * on non-strings, unknown tokens, inherited/prototype keys — and, by design, on
+ * `BEGINNER_INSTRUCTION`, which is a valid `ExamKind` but not a storable one.
+ */
+export function isStorableExamKind(value: unknown): value is ExamKind {
+  return typeof value === "string" && hasOwn(STORED_KIND_SET, value) && STORED_KIND_SET[value];
+}
+
+/**
+ * Validate one session that is about to be STORED (created or updated as a real
+ * `ExamSession` row).
+ *
+ * A `BEGINNER_INSTRUCTION` kind is rejected OUTRIGHT with
+ * `EX-DOM-BEGINNER-SESSION-FORBIDDEN` and no further shape reasoning: once the
+ * kind is disallowed, the remaining per-kind rules describe a row that must not
+ * exist, so reporting them too would only obscure the real problem. Every other
+ * kind is delegated UNCHANGED to `validateExamSessionShape`.
+ *
+ * This deliberately does NOT weaken `validateExamSessionShape` or
+ * `validateBeginnerSessionShape`: both keep their exact EX-C1 behaviour and now
+ * serve as an inner line of defence for any caller that still reasons about a
+ * beginner shape. This function is the outer gate for the WRITE path.
+ *
+ * The database cannot express this rule without a check constraint the approved
+ * migration does not add, which is precisely why it lives here.
+ */
+export function validateStoredExamSession(
+  input: ExamSessionShapeInput,
+): ExamDomainValidationResult {
+  if (input.kind === "BEGINNER_INSTRUCTION") {
+    return result([issue("EX-DOM-BEGINNER-SESSION-FORBIDDEN")]);
+  }
+  return validateExamSessionShape(input);
 }
 
 // ===========================================================================

@@ -1872,13 +1872,20 @@ model TeachingPracticeLesson {
   participants          TeachingPracticeParticipant[]
   childAssignments      TeachingPracticeChildAssignment[]
 
-  // EXAM EX-C1 - additive back-relation for ExamSession.sourceLesson. Teaching
-  // Practice is READ-ONLY INPUT to the exam copy: an ExamSession is an
-  // INDEPENDENT SNAPSHOT of this lesson, never a live reference to it, so this
-  // relation exists purely for provenance/idempotency and is onDelete: SetNull
-  // on the exam side - deleting a lesson must never block or corrupt an exam
-  // that was already copied from it. No exam write path ever writes back to
-  // this model or any Teaching Practice model.
+  // DEPRECATED (EX-C2-0) - RETAINED BUT INACTIVE back-relation for
+  // ExamSession.sourceLesson.
+  //
+  // Teaching Practice is the LIVE, AUTHORITATIVE SOURCE for beginner exams: the
+  // Exams area re-reads this lesson (and its participants, child assignments and
+  // children) on EVERY request, so an edit here appears in every exam view
+  // immediately. Nothing is copied or snapshotted, and a stored
+  // BEGINNER_INSTRUCTION ExamSession is forbidden - so this relation can no
+  // longer be populated. Which dates are exam dates is stored separately in
+  // ExamTeachingPracticeSourceDate.
+  //
+  // Teaching Practice remains READ-ONLY INPUT: no exam path writes back to this
+  // model or any Teaching Practice model. onDelete: SetNull on the exam side is
+  // retained unchanged.
   examSessionsCopiedFrom ExamSession[]
 
   @@index([date])
@@ -1931,12 +1938,14 @@ model TeachingPracticeChild {
   assignments   TeachingPracticeChildAssignment[]
   signedForms   TeachingPracticeSignedForm[]
 
-  // EXAM EX-C1 - additive back-relation for ExamBeginnerChild.sourceChild.
-  // The exam side stores an INDEPENDENT SNAPSHOT of this child's operational
-  // detail (name/age/gender/parent contact/horse/equipment) taken at copy time;
-  // later edits here never propagate there. onDelete: SetNull on the exam side
-  // for the same reason as the lesson provenance above. Signed forms are
-  // deliberately NOT copied into the exam snapshot.
+  // DEPRECATED (EX-C2-0) - RETAINED BUT INACTIVE back-relation for
+  // ExamBeginnerChild.sourceChild.
+  //
+  // This child's operational detail (name/age/gender/parent contact/notes/horse/
+  // equipment) is now read LIVE from here by the Exams area on every request -
+  // there is no exam-side snapshot, and ExamBeginnerChild is retained empty and
+  // unwritten. Edits made here therefore propagate to every exam view
+  // immediately. onDelete: SetNull on the exam side is retained unchanged.
   examBeginnerChildSnapshots ExamBeginnerChild[]
 
   @@map("teaching_practice_children")
@@ -2687,27 +2696,85 @@ model ExamPlan {
 
   courseOffering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Restrict)
   sessions       ExamSession[]
+  // EX-C2-0 - the Teaching-Practice dates that belong to this plan. Beginner
+  // exams are a LIVE PROJECTION of Teaching Practice, so these date rows are
+  // the ONLY beginner data the exam module stores.
+  sourceDates    ExamTeachingPracticeSourceDate[]
 
   @@map("exam_plans")
 }
 
-// The single authoritative exam record. All three admin views (general
-// schedule, by date, by exam type) are read-only projections over these rows,
-// and the shared session editor mutates exactly this row - never a per-view
-// copy.
+// EX-C2-0 - THE ONLY STORED BEGINNER FACT.
+//
+// BEGINNER_INSTRUCTION is NOT stored as exam data. Teaching Practice is the
+// live, authoritative source: every beginner-exam request re-reads the current
+// TeachingPracticeLesson / TeachingPracticeParticipant /
+// TeachingPracticeChildAssignment / TeachingPracticeChild rows, so an edit made
+// in Teaching Practice appears in every exam view on the next request. There is
+// no snapshot, no synchronisation job, no cached copy, no fingerprint and no
+// staleness comparison anywhere in this design.
+//
+// What CANNOT be derived at read time is which Teaching-Practice dates the
+// manager selected as exam dates - that is an explicit product selection, never
+// inferred from a course level, name, group, enrollment or
+// CourseOffering.startDate/endDate range. This table stores exactly that, and
+// is authoritative for it.
+//
+// It therefore holds NO lesson, participant, child, horse, equipment, contact,
+// instructor, time, format or note data. Adding any such column here would
+// recreate the snapshot this design deliberately removes - do not.
+//
+// onDelete: Cascade is deliberate and differs from ExamSession -> ExamPlan
+// (Restrict): a session holds irreplaceable operational content that must not
+// vanish with its plan, whereas a source-date row holds nothing but a pointer,
+// so losing it with the plan destroys no information.
+model ExamTeachingPracticeSourceDate {
+  id        String   @id @default(cuid())
+  planId    String
+  date      DateTime @db.Date
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  plan ExamPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  // One row per (plan, date): selecting the same date twice is meaningless and
+  // must be impossible. The unique index leads with planId, which is also the
+  // only access path the readers use (WHERE planId ORDER BY date), so no
+  // separate index on date is warranted.
+  @@unique([planId, date])
+  @@map("exam_teaching_practice_source_dates")
+}
+
+// The stored exam record for the THREE non-beginner kinds. All three admin
+// views (general schedule, by date, by exam type) are read-only projections
+// over these rows MERGED WITH live beginner rows derived from Teaching
+// Practice, and the shared session editor mutates exactly this row - never a
+// per-view copy.
+//
+// EX-C2-0 - A STORED BEGINNER_INSTRUCTION ROW IS FORBIDDEN. Beginner exams are
+// a live projection of Teaching Practice (see ExamTeachingPracticeSourceDate);
+// they are never materialised here. Only INTERFACE_RIDING, LUNGE_NO_RIDER and
+// ADVANCED_INSTRUCTION may exist as rows. The pure core enforces this via
+// validateStoredExamSession / EX-DOM-BEGINNER-SESSION-FORBIDDEN, because the
+// database cannot express "this enum value may never be inserted" without a
+// check constraint the approved migration does not add.
 //
 // Field applicability is enforced by the pure domain core, not by the database
 // (a nullable column cannot express "required for exactly one kind"):
 //   - phase           : REQUIRED for INTERFACE_RIDING, FORBIDDEN otherwise;
-//   - beginnerFormat  : REQUIRED for BEGINNER_INSTRUCTION, FORBIDDEN otherwise;
 //   - interfaceSessionId : only an INTERFACE_RIDING session in the RIDING
 //     phase may carry it, pointing at its INTERFACE partner. This self-FK IS
 //     the interface/riding link - the two phases are two separate rows with
 //     their own date/time/arena/participants/publication, independent after
 //     the optional one-time seed (divergence is intentional; there is NO
 //     permanent synchronisation);
-//   - sourceTeachingPracticeLessonId / copiedAt / roleLabelOverrides : copy
-//     provenance, only on a BEGINNER_INSTRUCTION session.
+//   - beginnerFormat : DEPRECATED AND UNWRITTEN. It described a copied beginner
+//     session; the live projection now derives the format at read time from
+//     TeachingPracticeLesson.practiceType instead;
+//   - sourceTeachingPracticeLessonId / copiedAt / roleLabelOverrides :
+//     DEPRECATED AND UNWRITTEN copy provenance. Retained empty; no writer
+//     exists and none may be added. roleLabelOverrides is now read live from
+//     TeachingPracticeLesson.roleLabelOverrides.
 //
 // orderIndex is load-bearing, not cosmetic: on the real copy-source dates every
 // start time is shared by 2-4 lessons, so (startTime, orderIndex, id) is what
@@ -2782,13 +2849,11 @@ model ExamSession {
 //   - pairingIndex       : ADVANCED_INSTRUCTION only; assignments sharing an
 //     index form one teaching pair/group, which is what makes "who teaches
 //     whom" answerable when a session holds more than one examinee;
-//   - sourcePracticeRole : BEGINNER_INSTRUCTION only. EVERY trainee copied
-//     from Teaching Practice becomes role = EXAMINEE (including the
-//     participant currently carrying the TP EVALUATOR role), and this column
-//     preserves the EXACT original TP role token. It is deliberately a String,
-//     NOT the live TeachingPracticeRole enum: this is a snapshot, and typing it
-//     to the live enum would drag future Teaching-Practice role evolution into
-//     rows that were already copied.
+//   - sourcePracticeRole : DEPRECATED AND UNWRITTEN (EX-C2-0). It preserved the
+//     original Teaching-Practice role token on a COPIED beginner assignment.
+//     Beginner exams are no longer copied - they are read live - and a stored
+//     BEGINNER_INSTRUCTION session is forbidden, so no row can legitimately
+//     carry this column. Retained empty; no writer exists and none may be added.
 model ExamAssignment {
   id                 String             @id @default(cuid())
   sessionId          String
@@ -2814,20 +2879,27 @@ model ExamAssignment {
   @@map("exam_assignments")
 }
 
-// The INDEPENDENT per-session snapshot of one child taking part in a copied
-// beginner-instruction exam, materialised from one
-// TeachingPracticeChildAssignment (plus its TeachingPracticeChild) at copy
-// time. Editing the live Teaching-Practice child or assignment afterwards
-// never changes these values, and editing these values never writes back.
+// DEPRECATED (EX-C2-0) - RETAINED EMPTY, NEVER WRITTEN, NEVER READ.
 //
-// PII WARNING: parentName / parentPhone duplicate minor-child contact details
-// into a SECOND surface. The locked visibility rule is enforced at runtime in
-// a later slice, not here: admins may see them; an instructor may see them
-// ONLY when they are an ExamSessionSupervisor for that EXACT session; trainees
-// must NEVER receive either field in any view or payload. No new Instructor
-// permission column exists or may be added for this.
+// This model was the per-session snapshot of one child in a COPIED
+// beginner-instruction exam. The copy design is gone: beginner exams are now a
+// LIVE PROJECTION of Teaching Practice, so every child shown in the Exams area
+// is read at request time from TeachingPracticeChildAssignment plus its
+// TeachingPracticeChild. No writer exists for this table and none may be added.
 //
-// Signed forms (TeachingPracticeSignedForm) are deliberately NOT copied.
+// It is retained rather than dropped because dropping an empty table buys
+// nothing and costs an irreversible production DDL operation. Both of its FKs
+// point outward and are onDelete: SetNull, so an empty row set can never block
+// a Teaching-Practice delete.
+//
+// PARENT CONTACTS - the locked rule, superseding the abandoned one that used to
+// be documented here: parentName / parentPhone are read LIVE from
+// TeachingPracticeChild and are visible to admins, instructors AND trainees,
+// exactly as they already are in Teaching Practice itself, with phone-call and
+// WhatsApp actions. There is NO ExamSessionSupervisor gate on contact
+// visibility and no Instructor permission column for it.
+//
+// Signed forms (TeachingPracticeSignedForm) are outside the exam module.
 model ExamBeginnerChild {
   id                      String   @id @default(cuid())
   sessionId               String
@@ -2857,12 +2929,16 @@ model ExamBeginnerChild {
   @@map("exam_beginner_children")
 }
 
-// A supervising instructor / examiner on one exam session. For a copied
-// beginner session this is seeded from TeachingPracticeLesson.
-// responsibleInstructorId. Presence of a row here is ALSO the authorization
-// relationship that will later gate exam parent/contact visibility for
-// instructors - which is precisely why the locked design adds no new
-// Instructor permission column.
+// A supervising instructor / examiner on one exam session. Used by the three
+// STORED exam kinds only - a beginner session is never stored, so this table
+// never carries a beginner row; the responsible instructor of a beginner exam
+// is read live from TeachingPracticeLesson.responsibleInstructorId.
+//
+// EX-C2-0 - this relationship is NOT an authorization gate. An earlier design
+// used it to decide whether an instructor could see a child's parent contact
+// details; that rule is abandoned. Parent contacts are visible to every role
+// that can reach the Exams area, exactly as in Teaching Practice. No new
+// Instructor permission column exists or may be added for this.
 model ExamSessionSupervisor {
   id           String   @id @default(cuid())
   sessionId    String

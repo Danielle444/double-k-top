@@ -23,13 +23,25 @@ const MIGRATION = readFileSync(
   "utf8",
 );
 
-const EXAM_MODELS = [
+/** The five models introduced by EX-C1. EX-C2-0 must not alter any of them. */
+const EXAM_C1_MODELS = [
   "ExamPlan",
   "ExamSession",
   "ExamAssignment",
   "ExamBeginnerChild",
   "ExamSessionSupervisor",
 ] as const;
+
+/** EX-C2-0 adds exactly one model: the live-projection source-date table. */
+const EXAM_MODELS = [...EXAM_C1_MODELS, "ExamTeachingPracticeSourceDate"] as const;
+
+// EX-C2-0 — the additive source-date migration, generated OFFLINE by a
+// schema-to-schema diff (never against a database).
+const SOURCE_DATE_MIGRATION_DIR = "20260729140000_add_exam_teaching_practice_source_date";
+const SOURCE_DATE_MIGRATION = readFileSync(
+  join(REPO_ROOT, "prisma", "migrations", SOURCE_DATE_MIGRATION_DIR, "migration.sql"),
+  "utf8",
+);
 
 const EXAM_ENUMS = [
   "ExamKind",
@@ -49,10 +61,12 @@ function block(kind: "model" | "enum", name: string): string {
 
 // --- model / enum inventory -------------------------------------------------
 
-test("exactly five exam models exist, and no parent Exam entity", () => {
+test("exactly six exam models exist, and no parent Exam entity", () => {
   const declared = [...SCHEMA.matchAll(/^model\s+(Exam\w*)\s*\{/gm)].map((m) => m[1]);
   assert.deepEqual([...declared].sort(), [...EXAM_MODELS].sort());
-  assert.equal(declared.length, 5);
+  // The five EX-C1 models plus the one EX-C2-0 source-date model.
+  assert.equal(declared.length, 6);
+  assert.equal(EXAM_C1_MODELS.length, 5);
 
   // "לפי מבחן" groups by ExamSession.kind - it must NOT have introduced a
   // parent entity between ExamPlan and ExamSession.
@@ -380,6 +394,8 @@ test("no production identifier is hardcoded anywhere in the exam slice", () => {
 
 test("no runtime reader, writer, page or action imports the EX-C1 cores yet", () => {
   const NEW_MODULES = [
+    "exam-beginner-format-core",
+    "exam-live-beginner-adapter-core",
     "exam-beginner-copy-core",
     "exam-schedule-projection-core",
     "exam-kind-labels",
@@ -417,5 +433,244 @@ test("no runtime reader, writer, page or action imports the EX-C1 cores yet", ()
     offenders,
     [],
     `EX-C1 must stay unwired; found: ${offenders.join(", ")}`,
+  );
+});
+
+// ===========================================================================
+// EX-C2-0 ג€” ExamTeachingPracticeSourceDate: the ONLY stored beginner fact
+// ===========================================================================
+
+test("ExamTeachingPracticeSourceDate declares exactly the five approved fields", () => {
+  const model = block("model", "ExamTeachingPracticeSourceDate");
+
+  assert.match(model, /\bid\s+String\s+@id\s+@default\(cuid\(\)\)/);
+  assert.match(model, /\bplanId\s+String\b/);
+  assert.match(model, /\bdate\s+DateTime\s+@db\.Date\b/);
+  assert.match(model, /\bcreatedAt\s+DateTime\s+@default\(now\(\)\)/);
+  assert.match(model, /\bupdatedAt\s+DateTime\s+@updatedAt\b/);
+
+  // Exactly five scalar fields ג€” nothing operational leaked in.
+  const scalars = [
+    ...model.matchAll(/^\s{2}(\w+)\s+(String|DateTime|Int|Boolean|Json)\b/gm),
+  ].map((m) => m[1]);
+  assert.deepEqual(scalars.sort(), ["createdAt", "date", "id", "planId", "updatedAt"]);
+});
+
+test("ExamTeachingPracticeSourceDate duplicates NO Teaching-Practice data", () => {
+  const model = block("model", "ExamTeachingPracticeSourceDate");
+  // The whole point of the live-projection design: this table stores a pointer,
+  // never a copy of lesson/participant/child/contact/horse detail.
+  for (const forbidden of [
+    "lessonId",
+    "practiceType",
+    "startTime",
+    "endTime",
+    "arena",
+    "parentName",
+    "parentPhone",
+    "horseName",
+    "equipmentNotes",
+    "isAbsent",
+    "childId",
+    "traineeId",
+    "instructorId",
+    "roleLabelOverrides",
+    "beginnerFormat",
+    "copiedAt",
+    "fingerprint",
+    "syncedAt",
+  ]) {
+    assert.equal(
+      model.includes(forbidden),
+      false,
+      `ExamTeachingPracticeSourceDate must not carry ${forbidden}`,
+    );
+  }
+});
+
+test("ExamTeachingPracticeSourceDate has all required fields non-nullable", () => {
+  const model = block("model", "ExamTeachingPracticeSourceDate");
+  // No `?` anywhere in the field block: every column is required.
+  const optionals = [...model.matchAll(/^\s{2}(\w+)\s+\w+\?/gm)].map((m) => m[1]);
+  assert.deepEqual(optionals, []);
+});
+
+test("ExamTeachingPracticeSourceDate is unique per (plan, date) and maps correctly", () => {
+  const model = block("model", "ExamTeachingPracticeSourceDate");
+  assert.match(model, /@@unique\(\[planId,\s*date\]\)/);
+  assert.match(model, /@@map\("exam_teaching_practice_source_dates"\)/);
+});
+
+test("ExamTeachingPracticeSourceDate cascades from its plan", () => {
+  const model = block("model", "ExamTeachingPracticeSourceDate");
+  assert.match(
+    model,
+    /plan\s+ExamPlan\s+@relation\(fields:\s*\[planId\],\s*references:\s*\[id\],\s*onDelete:\s*Cascade\)/,
+  );
+});
+
+test("ExamPlan carries the sourceDates back-relation", () => {
+  const model = block("model", "ExamPlan");
+  assert.match(model, /sourceDates\s+ExamTeachingPracticeSourceDate\[\]/);
+});
+
+// --- the additive migration -------------------------------------------------
+
+test("the EX-C2-0 migration contains ONLY the approved additive DDL", () => {
+  const statements = SOURCE_DATE_MIGRATION.split(";")
+    .map((s) => s.trim())
+    .filter(
+      (s) => s.length > 0 && !s.split("\n").every((line) => line.trim().startsWith("--")),
+    );
+
+  assert.equal(statements.length, 3, `expected 3 statements, got:\n${statements.join("\n--\n")}`);
+
+  const [createTable, createIndex, addForeignKey] = statements;
+  assert.match(createTable, /CREATE TABLE "exam_teaching_practice_source_dates"/);
+  assert.match(
+    createIndex,
+    /CREATE UNIQUE INDEX "exam_teaching_practice_source_dates_planId_date_key" ON "exam_teaching_practice_source_dates"\("planId", "date"\)/,
+  );
+  assert.match(
+    addForeignKey,
+    /ALTER TABLE "exam_teaching_practice_source_dates" ADD CONSTRAINT "exam_teaching_practice_source_dates_planId_fkey" FOREIGN KEY \("planId"\) REFERENCES "exam_plans"\("id"\) ON DELETE CASCADE ON UPDATE CASCADE/,
+  );
+});
+
+test("the EX-C2-0 migration alters, drops and writes NOTHING", () => {
+  // The single ALTER TABLE is the FK add on the brand-new table itself; no
+  // pre-existing object may be touched, and no data statement may appear.
+  const alters = [...SOURCE_DATE_MIGRATION.matchAll(/ALTER TABLE "(\w+)"/g)].map((m) => m[1]);
+  assert.deepEqual(alters, ["exam_teaching_practice_source_dates"]);
+
+  // Anchored to STATEMENT starts, not substrings: `ON UPDATE CASCADE` is a
+  // legitimate part of the FK clause and must not read as a data statement.
+  const FORBIDDEN: readonly (readonly [string, RegExp])[] = [
+    ["INSERT", /^\s*INSERT\s/im],
+    ["UPDATE", /^\s*UPDATE\s/im],
+    ["DELETE", /^\s*DELETE\s/im],
+    ["TRUNCATE", /^\s*TRUNCATE\s/im],
+    ["DROP", /\bDROP\b/i],
+    ["ALTER COLUMN", /\bALTER\s+COLUMN\b/i],
+    ["ALTER TYPE", /\bALTER\s+TYPE\b/i],
+    ["CREATE TYPE", /\bCREATE\s+TYPE\b/i],
+  ];
+  for (const [label, pattern] of FORBIDDEN) {
+    assert.equal(
+      pattern.test(SOURCE_DATE_MIGRATION),
+      false,
+      `the migration must not contain ${label}`,
+    );
+  }
+
+  // The ON UPDATE / ON DELETE actions themselves are required and present.
+  assert.match(SOURCE_DATE_MIGRATION, /ON DELETE CASCADE ON UPDATE CASCADE/);
+});
+
+test("the EX-C2-0 migration never touches the five EX-C1 tables", () => {
+  for (const table of [
+    "exam_plans",
+    "exam_sessions",
+    "exam_assignments",
+    "exam_beginner_children",
+    "exam_session_supervisors",
+  ]) {
+    const mentions = [...SOURCE_DATE_MIGRATION.matchAll(new RegExp(`"${table}"`, "g"))].length;
+    if (table === "exam_plans") {
+      // exam_plans may appear ONLY as the FK reference target.
+      assert.equal(mentions, 1, "exam_plans may appear only as the FK REFERENCES target");
+      assert.match(SOURCE_DATE_MIGRATION, /REFERENCES "exam_plans"\("id"\)/);
+    } else {
+      assert.equal(mentions, 0, `${table} must not appear in the EX-C2-0 migration`);
+    }
+  }
+});
+
+test("the five EX-C1 tables and four enums are structurally unchanged", () => {
+  // Re-assert the EX-C1 migration text verbatim: EX-C2-0 is additive only, so
+  // the already-applied migration file must not have been edited after the fact.
+  for (const table of [
+    "exam_plans",
+    "exam_sessions",
+    "exam_assignments",
+    "exam_beginner_children",
+    "exam_session_supervisors",
+  ]) {
+    assert.ok(
+      MIGRATION.includes(`CREATE TABLE "${table}"`),
+      `${table} must still be created by the EX-C1 migration`,
+    );
+    assert.equal(
+      SOURCE_DATE_MIGRATION.includes(`CREATE TABLE "${table}"`),
+      false,
+      `${table} must not be recreated by EX-C2-0`,
+    );
+  }
+
+  const ENUM_VALUES: readonly (readonly [string, string])[] = [
+    [
+      "ExamKind",
+      "'INTERFACE_RIDING', 'LUNGE_NO_RIDER', 'ADVANCED_INSTRUCTION', 'BEGINNER_INSTRUCTION'",
+    ],
+    ["ExamPhase", "'INTERFACE', 'RIDING'"],
+    ["ExamBeginnerFormat", "'LUNGE', 'BEGINNER_PRIVATE', 'BEGINNER_GROUP'"],
+    ["ExamAssignmentRole", "'EXAMINEE', 'INSTRUCTED_TRAINEE'"],
+  ];
+  for (const [enumName, values] of ENUM_VALUES) {
+    assert.ok(
+      MIGRATION.includes(`CREATE TYPE "${enumName}" AS ENUM (${values})`),
+      `${enumName} must keep its exact EX-C1 values`,
+    );
+    assert.equal(
+      SOURCE_DATE_MIGRATION.includes(enumName),
+      false,
+      `${enumName} must not be touched by EX-C2-0`,
+    );
+  }
+
+  // THEORY / DEMO_RIDER were never introduced and must stay absent from the
+  // enum VALUES (the surrounding prose says so deliberately) and from both
+  // migrations.
+  for (const forbidden of ["THEORY", "DEMO_RIDER"]) {
+    assert.equal(block("enum", "ExamKind").includes(forbidden), false);
+    assert.equal(block("enum", "ExamAssignmentRole").includes(forbidden), false);
+    assert.equal(SOURCE_DATE_MIGRATION.includes(forbidden), false);
+  }
+});
+
+// --- the deprecated snapshot surface is retained, not dropped ---------------
+
+test("the EX-C1 snapshot models are retained and documented as deprecated", () => {
+  // Retaining an empty table is deliberate: dropping it would cost an
+  // irreversible production DDL operation and buy nothing.
+  for (const model of EXAM_C1_MODELS) {
+    assert.ok(SCHEMA.includes(`model ${model} {`), `${model} must still exist`);
+  }
+
+  // The deprecation notices live in the comment block ABOVE each model, which
+  // `block()` deliberately excludes - so assert on the schema text directly.
+  assert.ok(
+    SCHEMA.includes("DEPRECATED (EX-C2-0) - RETAINED EMPTY, NEVER WRITTEN, NEVER READ."),
+    "ExamBeginnerChild must be documented as deprecated and retained empty",
+  );
+  assert.ok(
+    SCHEMA.includes("A STORED BEGINNER_INSTRUCTION ROW IS FORBIDDEN"),
+    "ExamSession must document that a stored beginner row is forbidden",
+  );
+  assert.ok(
+    SCHEMA.includes("DEPRECATED AND UNWRITTEN"),
+    "the superseded beginner columns must be marked deprecated and unwritten",
+  );
+
+  // The abandoned trainee/supervisor visibility rule must be gone.
+  assert.equal(
+    SCHEMA.includes("must NEVER receive either field"),
+    false,
+    "the abandoned trainee parent-contact prohibition must not survive",
+  );
+  assert.equal(
+    SCHEMA.includes("ONLY when they are an ExamSessionSupervisor"),
+    false,
+    "the abandoned supervisor contact gate must not survive",
   );
 });

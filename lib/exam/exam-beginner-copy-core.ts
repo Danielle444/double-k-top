@@ -1,4 +1,31 @@
 /**
+ * ===========================================================================
+ * DEPRECATED (EX-C2-0) — NOT USED BY THE LIVE BEGINNER DESIGN.
+ * ===========================================================================
+ * This planner describes the SNAPSHOT/COPY design that has been SUPERSEDED.
+ * Beginner exams are no longer copied into exam rows: Teaching Practice is the
+ * live, authoritative source, an `ExamPlan` stores only which TP dates it
+ * covers (`ExamTeachingPracticeSourceDate`), and every beginner row is derived
+ * at read time by `exam-live-beginner-adapter-core`. A stored
+ * `BEGINNER_INSTRUCTION` `ExamSession` is now FORBIDDEN
+ * (`validateStoredExamSession` / `EX-DOM-BEGINNER-SESSION-FORBIDDEN`), so the
+ * plan this module produces can no longer be applied to anything.
+ *
+ * It was never wired to a service, action or UI, and it must not be. It is
+ * retained (rather than deleted) purely as the record of the copy semantics,
+ * and its tests are kept green so the retirement is provably behaviour-neutral.
+ *
+ * Its one surviving piece of live value — the practice-type → beginner-format
+ * mapping — now LIVES IN `exam-beginner-format-core` and is merely re-exported
+ * here for the existing tests and callers. Do not add a second copy of it.
+ *
+ * DO NOT extend this module, revive the copy path, or import it from any new
+ * code. New beginner work belongs in `exam-live-beginner-adapter-core`.
+ *
+ * ---------------------------------------------------------------------------
+ * Original EX-C1 header follows, unchanged, for the record.
+ * ---------------------------------------------------------------------------
+ *
  * EXAM EX-C1 — PURE beginner-exam COPY PLANNER.
  *
  * PURE by construction: no Prisma, no DB, no Next, no clock (`Date.now`/`new
@@ -45,6 +72,10 @@
  */
 import type { ExamBeginnerFormat } from "./exam-domain-core";
 import { isValidExamTimeInterval } from "./exam-overlap-core";
+// EX-C2-0: the practice-type mapping moved to its own core (see the note at its
+// re-export below). Imported as a value so the planner body below keeps working
+// unchanged, and re-exported so existing callers/tests are unaffected.
+import { mapPracticeTypeToBeginnerFormat } from "./exam-beginner-format-core";
 
 // ===========================================================================
 // Source shapes — plain, already-read Teaching-Practice data
@@ -189,20 +220,12 @@ export interface BeginnerCopyPlan {
  * lesson is REJECTED rather than guessed (fail closed). Own-property lookup, so
  * `__proto__`/`toString` never map to a real format.
  */
-const PRACTICE_TYPE_TO_FORMAT: Readonly<Record<string, ExamBeginnerFormat>> = Object.freeze({
-  LUNGE: "LUNGE",
-  BEGINNER_PRIVATE: "BEGINNER_PRIVATE",
-  BEGINNER_GROUP: "BEGINNER_GROUP",
-});
-
-/** Map a raw practice-type token to a beginner format, or `null` if unknown. */
-export function mapPracticeTypeToBeginnerFormat(
-  practiceType: unknown,
-): ExamBeginnerFormat | null {
-  if (typeof practiceType !== "string") return null;
-  if (!Object.prototype.hasOwnProperty.call(PRACTICE_TYPE_TO_FORMAT, practiceType)) return null;
-  return PRACTICE_TYPE_TO_FORMAT[practiceType];
-}
+// EX-C2-0: OWNERSHIP MOVED. The mapping now lives in
+// `exam-beginner-format-core` (semantics unchanged — it was moved, not
+// rewritten) because the LIVE beginner adapter needs it and must not import a
+// deprecated module. Re-exported here so existing callers and tests are
+// unaffected. Do not reintroduce a local copy.
+export { mapPracticeTypeToBeginnerFormat };
 
 // ===========================================================================
 // Helpers
