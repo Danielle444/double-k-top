@@ -228,11 +228,15 @@ export function InstructorTraineeProgressSection({
       // No deleteGeneralNote - general-note deletion stays manager-only for
       // this stage (see this stage's implementation report).
 
-      listRidingProgress: (studentId) =>
-        listStudentRidingProgressFeedbackForInstructorView(instructorId, studentId),
-      createRidingProgress: (studentId, input) =>
-        createStudentRidingProgressFeedbackAsInstructor(instructorId, studentId, input),
-      updateRidingProgress: (id, input) => updateStudentRidingProgressFeedbackAsInstructor(instructorId, id, input),
+      // AUTH-RPF-1 - the three riding-progress actions no longer take an acting
+      // instructor id: identity is derived server-side from the signed session,
+      // so these are passed through directly (their signatures now match this
+      // data source exactly, same as the admin call site). `instructorId` below
+      // is still threaded to the OTHER actions, which are out of scope for this
+      // slice and unchanged.
+      listRidingProgress: listStudentRidingProgressFeedbackForInstructorView,
+      createRidingProgress: createStudentRidingProgressFeedbackAsInstructor,
+      updateRidingProgress: updateStudentRidingProgressFeedbackAsInstructor,
       // No deleteRidingProgress - progress-feedback deletion stays
       // manager-only for this stage (see this stage's implementation report).
 

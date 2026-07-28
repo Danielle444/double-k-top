@@ -7,7 +7,8 @@ import type {
   StudentRidingProgressFeedbackInput,
   StudentRidingProgressFeedbackRow,
 } from "@/lib/actions/student-riding-progress-feedback";
-import { requireInstructorWithTraineeProgressAccess } from "@/lib/actions/trainee-progress-instructor-access";
+import { getCurrentInstructor } from "@/lib/auth/actor";
+import { canAccessTraineeProgress } from "@/lib/trainee-progress-permissions";
 
 // Instructor/coach read/create/update/delete surface for
 // StudentRidingProgressFeedback - the trainee-progress-journal counterpart
@@ -32,27 +33,68 @@ import { requireInstructorWithTraineeProgressAccess } from "@/lib/actions/traine
 // Ownership: every row created here gets createdByInstructorId set to the
 // acting instructor's id (and createdByName to their fullName, same
 // denormalized-snapshot convention every model in this app already uses).
-// Update/delete are only permitted when row.createdByInstructorId matches
-// the acting instructor - an instructor can never touch another
-// instructor's or an admin's row (admin-created rows always have
-// createdByInstructorId = null, which never equals a real instructor id).
+// Update is only permitted when row.createdByInstructorId matches the acting
+// instructor - an instructor can never touch another instructor's or an
+// admin's row (admin-created rows always have createdByInstructorId = null,
+// which never equals a real instructor id). There is deliberately NO
+// instructor delete action: deletion of a progress-feedback row stays
+// manager-only, unchanged by this slice.
+//
+// AUTH-RPF-1 - SECURITY CONTRACT (why the helper below replaced the old one)
+// ------------------------------------------------------------------------
+// Every action in this file previously took a CLIENT-SUPPLIED instructorId and
+// re-read the instructor row BY THAT ID, evaluating isActive/canEditRidingNotes
+// on whatever identity the caller claimed. There was no session read anywhere in
+// this file, so an unauthenticated caller could invoke these Server Actions with
+// any active instructor's id: borrowing that instructor's permission, writing
+// journal rows about any trainee, and stamping the persisted authorship
+// (createdByName/createdByInstructorId) with the borrowed instructor's name.
+// The ownership check on update was equally hollow - it compared the stored id
+// against the CLAIMED id, so a caller who named the row's author could edit it.
+//
+// Identity now comes ONLY from the signed session via the canonical Actor DAL
+// (getCurrentInstructor). There is no instructorId parameter on any action here.
+// A missing, invalid, expired, wrong-audience, subject-mismatched or INACTIVE
+// instructor session yields a null actor (the DAL returns null in every one of
+// those cases) and the call fails closed before any Prisma read or write. The
+// studentId/id arguments remain, because they name the SUBJECT of the feedback
+// and the row being edited - never the actor.
+//
+// Deliberately NOT changed by this slice: the sibling לונג׳/פרזנטציה instructor
+// journals and the general-notes/Teaching-Practice instructor actions still take
+// a client-supplied instructorId and carry the identical weakness. They are
+// out of scope here by explicit instruction and remain to be fixed separately.
 
-// Re-checks the instructor fresh from the DB on every call - the caller-
-// supplied instructorId is never trusted for identity, and the permission
-// flag is never trusted from a cached client session, same "never trust
-// the client" discipline as every other instructor action in this app
-// (e.g. upsertRidingLessonNoteAsInstructor). Duplicated (not extracted to a
-// shared helper) in the two sibling instructor action files
-// (student-lunge-progress-feedback-instructor.ts,
-// student-presentation-progress-feedback-instructor.ts) - see this stage's
-// implementation report for why: keeps each new action file self-contained
-// and independently reviewable; worth extracting if a 4th caller appears.
-async function requireInstructorWithRidingNotesPermission(instructorId: string) {
-  const instructor = await prisma.instructor.findUnique({ where: { id: instructorId } });
-  if (!instructor || !instructor.isActive || !instructor.canEditRidingNotes) {
+/**
+ * The acting instructor for a riding-progress WRITE, or null.
+ *
+ * Fail-closed at two independent steps: no trustworthy session actor at all, or
+ * an actor lacking canEditRidingNotes. Callers must treat null as "no permission"
+ * and must not fall back to any other identity.
+ */
+async function requireActingInstructorForRidingProgressWrite() {
+  const actor = await getCurrentInstructor();
+  if (!actor || !actor.canEditRidingNotes) {
     return null;
   }
-  return instructor;
+  return actor;
+}
+
+/**
+ * The acting instructor for the trainee-progress DETAIL VIEW read, or null.
+ *
+ * Wider than the write gate on purpose (canEditRidingNotes OR
+ * canEditTeachingPracticeFeedback, via the shared pure predicate): viewing the
+ * section is part of the full-page-access grant, while create/update stay gated
+ * to canEditRidingNotes. Same OR-permission the previous DB-by-client-id helper
+ * applied - only the identity source changed.
+ */
+async function requireActingInstructorForTraineeProgressView() {
+  const actor = await getCurrentInstructor();
+  if (!actor || !canAccessTraineeProgress(actor)) {
+    return null;
+  }
+  return actor;
 }
 
 // Duplicated from lib/actions/student-riding-progress-feedback.ts rather
@@ -104,10 +146,9 @@ function toRow(row: {
 // a permission failure, so a caller can't mistake "not permitted" for
 // "permitted but nothing written yet" (which is a real, valid `[]`).
 export async function listStudentRidingProgressFeedbackForInstructor(
-  instructorId: string,
   studentId?: string
 ): Promise<StudentRidingProgressFeedbackRow[] | null> {
-  const instructor = await requireInstructorWithRidingNotesPermission(instructorId);
+  const instructor = await requireActingInstructorForRidingProgressWrite();
   if (!instructor) return null;
 
   const rows = await prisma.studentRidingProgressFeedback.findMany({
@@ -122,22 +163,20 @@ export async function listStudentRidingProgressFeedbackForInstructor(
 // listStudentRidingProgressFeedbackForAdmin - EVERY row for the trainee
 // (admin- and every instructor-created alike), not just this instructor's
 // own, so the instructor sees the exact same "רכיבה" section content the
-// manager sees (goal: "same progress information"). Gated by
-// requireInstructorWithTraineeProgressAccess (canEditRidingNotes OR
-// canEditTeachingPracticeFeedback) rather than
-// requireInstructorWithRidingNotesPermission above - viewing this section is
-// part of the full-page-access grant, not itself gated to the narrower
-// riding-notes permission; only create/update/delete stay gated to
-// canEditRidingNotes (via the unchanged functions below). The returned
+// manager sees (goal: "same progress information"). Gated by the wider
+// trainee-progress-view gate (canEditRidingNotes OR
+// canEditTeachingPracticeFeedback) rather than the narrower riding-progress
+// write gate above - viewing this section is part of the full-page-access
+// grant, not itself gated to the narrower riding-notes permission; only
+// create/update stay gated to canEditRidingNotes. The returned
 // row's createdByInstructorId lets the caller decide, per row, whether to
 // show edit/delete controls for the acting instructor (never trusted to
 // enforce anything on its own - update/delete below still re-check
 // ownership server-side regardless of what the UI shows).
 export async function listStudentRidingProgressFeedbackForInstructorView(
-  instructorId: string,
   studentId: string
 ): Promise<StudentRidingProgressFeedbackRow[] | null> {
-  const instructor = await requireInstructorWithTraineeProgressAccess(instructorId);
+  const instructor = await requireActingInstructorForTraineeProgressView();
   if (!instructor) return null;
 
   const student = await prisma.student.findUnique({ where: { id: studentId } });
@@ -152,11 +191,10 @@ export async function listStudentRidingProgressFeedbackForInstructorView(
 }
 
 export async function createStudentRidingProgressFeedbackAsInstructor(
-  instructorId: string,
   studentId: string,
   input: StudentRidingProgressFeedbackInput
 ): Promise<ActionResult> {
-  const instructor = await requireInstructorWithRidingNotesPermission(instructorId);
+  const instructor = await requireActingInstructorForRidingProgressWrite();
   if (!instructor) return { success: false, error: "אין הרשאה להזין משוב רכיבה" };
 
   const student = await prisma.student.findUnique({ where: { id: studentId } });
@@ -199,13 +237,15 @@ export async function createStudentRidingProgressFeedbackAsInstructor(
 }
 
 export async function updateStudentRidingProgressFeedbackAsInstructor(
-  instructorId: string,
   id: string,
   input: StudentRidingProgressFeedbackInput
 ): Promise<ActionResult> {
-  const instructor = await requireInstructorWithRidingNotesPermission(instructorId);
+  const instructor = await requireActingInstructorForRidingProgressWrite();
   if (!instructor) return { success: false, error: "אין הרשאה לערוך משוב רכיבה" };
 
+  // Ownership is now meaningful: `instructor.id` is the session-derived actor,
+  // so this compares the row's stored author against WHO THE CALLER ACTUALLY IS,
+  // not against an id they claimed.
   const existing = await prisma.studentRidingProgressFeedback.findUnique({ where: { id } });
   if (!existing) return { success: false, error: "הרשומה לא נמצאה" };
   if (existing.createdByInstructorId !== instructor.id) {
