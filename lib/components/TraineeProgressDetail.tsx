@@ -32,6 +32,10 @@ import {
 } from "@/lib/components/PresentationProgressFeedbackSection";
 import { StudentGeneralNotesSection } from "@/lib/components/StudentGeneralNotesSection";
 import { RidingHistoryList } from "@/lib/components/RidingHistoryList";
+// R1-RIDING-HISTORY-COURSE - the SAME shared label rule RidingHistoryList uses, so
+// the timeline chip and the history-row badge can never disagree about a lesson's
+// course. Level-derived only, never parsed from the course name.
+import { formatRidingHistoryCourseLabel } from "@/lib/course/riding-history-course-scope-core";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
 import { formatHebrewDate, formatHebrewDateTime, parseDateKey } from "@/lib/dates";
 import type { TeachingPracticeRoleValue, TeachingPracticeTypeValue } from "@/lib/teaching-practice-rotation";
@@ -551,6 +555,15 @@ function TeachingPracticeFeedbackSection({
 
 interface CombinedTimelineItem {
   key: string;
+  // R1-RIDING-HISTORY-COURSE - compact course label ("רמה 1"/"רמה 2"/
+  // "ללא שיוך קורס") for the RidingLessonNote-derived ("הדרכת מתקדמים") entries
+  // ONLY, which are the only entries that carry authoritative course identity
+  // (derived from the lesson's own WeeklySchedule -> CourseOffering). Deliberately
+  // OPTIONAL and left undefined by every other builder: the three student-level
+  // journals (רכיבה/לונג׳/פרזנטציה) and the teaching-practice entries have no
+  // course dimension at all in this slice and are explicitly unchanged - an
+  // undefined value renders no chip, so their rows look exactly as before.
+  courseLabel?: string;
   source:
     | "riding"
     | "teachingPracticeLunge"
@@ -579,6 +592,12 @@ function buildRidingTimelineItems(rows: RidingHistoryRow[]): CombinedTimelineIte
     }
     return {
       key: `riding-${row.ridingSlotId}`,
+      // R1-RIDING-HISTORY-COURSE - straight from the row's server-resolved identity
+      // (the lesson's own week's offering). Nothing else about the entry changes:
+      // rating, note text, topic, horse, arena, taught trainees, date, time and the
+      // resulting sort order are all built exactly as before, and no average reads
+      // this field.
+      courseLabel: formatRidingHistoryCourseLabel(row),
       source: "riding",
       date: row.dateKey,
       time: row.startTime,
@@ -722,6 +741,15 @@ function CombinedTimelineList({ items }: { items: CombinedTimelineItem[] }) {
               <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                 {TIMELINE_SOURCE_LABELS[item.source]}
               </span>
+              {/* R1-RIDING-HISTORY-COURSE - rendered only for entries that actually
+                  carry course identity (the lesson-note "הדרכת מתקדמים" rows). Every
+                  other source leaves courseLabel undefined and renders nothing here,
+                  so those rows are visually unchanged. */}
+              {item.courseLabel && (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  {item.courseLabel}
+                </span>
+              )}
               <span className="font-semibold text-card-foreground">
                 {formatHebrewDate(parseDateKey(item.date))} · {item.time}
               </span>

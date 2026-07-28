@@ -10,6 +10,10 @@ import { dateKey, parseDateKey } from "@/lib/dates";
 import { buildScheduleSlots } from "@/lib/schedule-grouping";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
 import { loadHistoricalTraineeStateForOfferings } from "@/lib/course/historical-trainee-state";
+// R1-RIDING-HISTORY-COURSE - pure, DB-free fail-closed mapping of the lesson's own
+// joined CourseOffering to the history row's additive course identity. Takes no
+// date/title/group/session input, so it cannot infer a course any other way.
+import { resolveRidingHistoryCourseIdentity } from "@/lib/course/riding-history-course-scope-core";
 import { getCurrentCourseEnrollmentRoster } from "@/lib/course/current-enrollments";
 import { selectRidingRosterCandidates } from "@/lib/actions/riding-slot-roster-scope";
 import { getKnownHorseNames } from "@/lib/actions/horse-feeding";
@@ -1370,6 +1374,19 @@ export interface RidingHistoryRow {
   taughtStudents: { id: string; fullName: string }[];
   updatedByName: string | null;
   updatedAt: string;
+  // R1-RIDING-HISTORY-COURSE - additive course identity for THIS lesson, resolved
+  // server-side from the lesson's own schedule spine (RidingSlot -> linked
+  // ScheduleItem -> WeeklySchedule -> CourseOffering) so a dual-enrolled trainee's
+  // Level 1 and Level 2 rows stay attributable to the course they were actually
+  // written in. All three are null together for a legacy NULL-scoped week (never
+  // coerced to Level 1 or any ambient offering) - see
+  // resolveRidingHistoryCourseIdentity. courseName is secondary context only; the
+  // displayed badge is derived from courseLevel (see
+  // formatRidingHistoryCourseLabel). Purely additive: every field above is
+  // unchanged, and no existing consumer is required to read these.
+  courseOfferingId: string | null;
+  courseName: string | null;
+  courseLevel: number | null;
 }
 
 export interface StudentRidingHistoryResult {
@@ -1445,10 +1462,28 @@ async function buildStudentRidingHistory(studentId: string): Promise<StudentRidi
           // lesson's own offering. WeeklySchedule is a required relation, so this
           // adds no nullability beyond the column's own (legacy weeks may be
           // NULL-scoped, which fails closed below).
+          //
+          // R1-RIDING-HISTORY-COURSE: the already-fetched weeklySchedule relation is
+          // WIDENED here with its joined CourseOffering (id/name/level) - the
+          // authoritative identity for the row's course badge. This is a wider
+          // projection on an EXISTING relation read, NOT a new query: no findMany/
+          // findUnique is added anywhere, so the reader still issues exactly the same
+          // number of round trips (one Student read, this one notes read, and the
+          // bounded two-query historical loader below) no matter how many lessons or
+          // offerings a trainee's history spans. The relation is optional
+          // (WeeklySchedule.courseOfferingId is nullable), so a legacy NULL-scoped
+          // week yields null here and fails closed to unattributed identity.
           scheduleItems: {
             include: {
               scheduleItem: {
-                include: { weeklySchedule: { select: { courseOfferingId: true } } },
+                include: {
+                  weeklySchedule: {
+                    select: {
+                      courseOfferingId: true,
+                      courseOffering: { select: { id: true, name: true, level: true } },
+                    },
+                  },
+                },
               },
             },
           },
@@ -1508,6 +1543,20 @@ async function buildStudentRidingHistory(studentId: string): Promise<StudentRidi
     const histGroupName = group.ok ? group.value.groupName : null;
     const histSubgroupNumber = group.ok ? group.value.subgroupNumber : null;
 
+    // R1-RIDING-HISTORY-COURSE: resolved PER ROW, from the SAME linked ScheduleItem
+    // (`first`) that already supplies this row's date and scopes its historical group
+    // lookup - so two lessons on one calendar day belonging to different offerings
+    // (a dual-enrolled trainee's Level 1 and Level 2 riding on the same date) each
+    // carry their own identity. The offering arrives already joined off the lesson's
+    // own week, so nothing here reads the row's date, title, group, instructor, the
+    // session, a selected/global course or any singleton current-offering resolver -
+    // the same forbidden-derivation list the L2-RH1 group scoping above obeys, which
+    // lib/course/historical-readers.contract.test.ts enforces by scanning this file's
+    // raw source (hence no helper name is spelled out here). A NULL-scoped legacy
+    // week resolves to all-null, never Level 1. In-memory only - no await, so this
+    // adds no query inside the loop.
+    const courseIdentity = resolveRidingHistoryCourseIdentity(first.weeklySchedule.courseOffering);
+
     const assignment = findAssignmentForStudent(
       n.ridingSlot.assignments,
       histGroupName,
@@ -1542,6 +1591,9 @@ async function buildStudentRidingHistory(studentId: string): Promise<StudentRidi
       taughtStudents: n.taughtStudents.map((t) => ({ id: t.student.id, fullName: t.student.fullName })),
       updatedByName: n.updatedByName,
       updatedAt: n.updatedAt.toISOString(),
+      courseOfferingId: courseIdentity.courseOfferingId,
+      courseName: courseIdentity.courseName,
+      courseLevel: courseIdentity.courseLevel,
     });
   }
 

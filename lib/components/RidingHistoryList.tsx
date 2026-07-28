@@ -4,6 +4,7 @@ import { useState } from "react";
 import { formatHebrewDate, formatHebrewDateTime, getDayPartLabel, parseDateKey } from "@/lib/dates";
 import { getRidingHistoryTitle } from "@/lib/schedule-title";
 import type { RidingHistoryRow } from "@/lib/actions/riding-slots";
+import { formatRidingHistoryCourseLabel } from "@/lib/course/riding-history-course-scope-core";
 
 // Shared read-only riding-history row list + client-side date/topic filters,
 // reused by the admin student history page and the instructor "לפי חניך"
@@ -76,10 +77,24 @@ export function RidingHistoryList({ rows }: { rows: RidingHistoryRow[] }) {
         filteredRows.map((row) => (
           <div key={row.ridingSlotId} className="rounded-xl border border-border bg-card p-4">
             <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-              <span className="font-semibold text-card-foreground">
-                {formatHebrewDate(parseDateKey(row.dateKey))}
-                {getDayPartLabel(row.startTime) && ` · ${getDayPartLabel(row.startTime)}`}
-              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-card-foreground">
+                  {formatHebrewDate(parseDateKey(row.dateKey))}
+                  {getDayPartLabel(row.startTime) && ` · ${getDayPartLabel(row.startTime)}`}
+                </span>
+                {/* R1-RIDING-HISTORY-COURSE - which course this lesson belongs to, so a
+                    dual-enrolled trainee's Level 1 and Level 2 rows are never read as
+                    one undifferentiated history. Text comes from the shared pure core
+                    (level-derived, never from the course name); the full offering name
+                    is secondary context on hover only. Display-only: no filtering,
+                    ordering or count is affected in this slice. */}
+                <span
+                  className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+                  title={row.courseName ?? undefined}
+                >
+                  {formatRidingHistoryCourseLabel(row)}
+                </span>
+              </div>
               <span
                 className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                   row.ratingHalfPoints != null

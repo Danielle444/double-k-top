@@ -163,8 +163,16 @@ test("10. every other production call site of the existing loader is unchanged",
 });
 
 test("11. riding history takes courseOfferingId ONLY from the lesson's weekly schedule", () => {
+  // R1-RIDING-HISTORY-COURSE widened this same weeklySchedule select with the
+  // joined CourseOffering (id/name/level) for the row's course badge, which
+  // reformatted it across several lines. The assertion is therefore anchored on
+  // the AUTHORITATIVE CHAIN (linked scheduleItem -> weeklySchedule select ->
+  // courseOfferingId) rather than on the old single-line literal; the intent -
+  // courseOfferingId comes only from the lesson's own week - is unchanged, and the
+  // additional course-identity wiring has its own contract test in
+  // lib/actions/riding-history-course-identity.contract.test.ts.
   assert.ok(
-    /scheduleItem: \{\s*include: \{ weeklySchedule: \{ select: \{ courseOfferingId: true \} \} \},\s*\}/.test(
+    /scheduleItem: \{\s*include: \{\s*weeklySchedule: \{\s*select: \{\s*courseOfferingId: true,?/.test(
       RIDING,
     ),
     "the existing linked-ScheduleItem include is extended with weeklySchedule.courseOfferingId",
