@@ -1191,12 +1191,43 @@ model StudentRidingProgressFeedback {
   createdByInstructorId String?
   updatedByInstructorId String?
 
-  student             Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  createdByInstructor Instructor? @relation("RidingProgressFeedbackCreatedBy", fields: [createdByInstructorId], references: [id])
-  updatedByInstructor Instructor? @relation("RidingProgressFeedbackUpdatedBy", fields: [updatedByInstructorId], references: [id])
+  // RIDING PROGRESS COURSE SCOPE - S2. The CourseOffering this journal entry
+  // belongs to. Additive and NULLABLE by design:
+  //  - NULL means "written before this journal had a course dimension". Such a
+  //    row is displayed with the neutral unscoped label, and is NEVER claimed as
+  //    Level 1 or Level 2 by any runtime reader. Editing a legacy row does not
+  //    scope it - the course is write-once (see below).
+  //  - Every NEW row is written with a non-null value, resolved server-side
+  //    against the SUBJECT trainee's own ACTIVE CourseEnrollments into ACTIVE
+  //    CourseOfferings (lib/course/riding-progress-course-scope-core.ts). A
+  //    trainee with exactly one eligible course is scoped automatically; a
+  //    dual-enrolled trainee must state which course, and the stated id is only
+  //    ever an exact-equality predicate over that already-eligible set.
+  // The course is never inferred from the entry's date, the trainee's group, the
+  // topic/title, an offering name, an admin course cookie or any offering-id
+  // constant - hence no @default and no offering id anywhere in this schema.
+  //
+  // Deliberately NO unique constraint touching this column: several entries for
+  // the same trainee on the same date in the same course are valid and must stay
+  // valid (this is an accumulating journal, never an upsert target - see the
+  // model comment above).
+  //
+  // onDelete: Restrict matches every other CourseOffering edge in this schema -
+  // an offering must never be deletable out from under a trainee's journal.
+  courseOfferingId String?
 
+  student             Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  createdByInstructor Instructor?     @relation("RidingProgressFeedbackCreatedBy", fields: [createdByInstructorId], references: [id])
+  updatedByInstructor Instructor?     @relation("RidingProgressFeedbackUpdatedBy", fields: [updatedByInstructorId], references: [id])
+  courseOffering      CourseOffering? @relation(fields: [courseOfferingId], references: [id], onDelete: Restrict)
+
+  // @@index([studentId]) is deliberately KEPT alongside the composite below:
+  // dropping a redundant prefix index would turn this additive migration into a
+  // DROP INDEX for no benefit.
   @@index([studentId])
   @@index([createdByInstructorId])
+  @@index([courseOfferingId])
+  @@index([studentId, courseOfferingId])
   @@map("student_riding_progress_feedback")
 }
 
@@ -2237,23 +2268,28 @@ model CourseOffering {
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
-  activityYear ActivityYear       @relation(fields: [activityYearId], references: [id], onDelete: Restrict)
-  enrollments  CourseEnrollment[]
-  groups       CourseGroup[]
+  activityYear           ActivityYear                    @relation(fields: [activityYearId], references: [id], onDelete: Restrict)
+  enrollments            CourseEnrollment[]
+  groups                 CourseGroup[]
   // MULTI-COURSE W0-CAP-2 - back-relation for CourseOfferingCapability.
   // Sparse: an offering with no rows here has NO capabilities enabled. Nothing
   // reads this relation at this stage.
-  capabilities CourseOfferingCapability[]
+  capabilities           CourseOfferingCapability[]
   // MULTI-COURSE Schedule Slice S1 - inverse of WeeklySchedule.courseOffering
   // (nullable FK, onDelete: Restrict). Sparse for now: no week is scoped until a
   // later backfill slice. Nothing reads this relation at this stage.
-  weeklySchedules WeeklySchedule[]
+  weeklySchedules        WeeklySchedule[]
   // MSG0 - additive back-relation for MessageTaskAudience.courseOffering
   // (onDelete: Restrict). Empty and unread in MSG0.
-  messageTaskAudiences MessageTaskAudience[]
+  messageTaskAudiences   MessageTaskAudience[]
   // P-MATERIALS M0 - additive back-relation for CourseMaterialAudience.courseOffering
   // (onDelete: Restrict). Empty and unread in M0.
-  materialAudiences CourseMaterialAudience[]
+  materialAudiences      CourseMaterialAudience[]
+  // RIDING PROGRESS COURSE SCOPE S2 - additive back-relation for
+  // StudentRidingProgressFeedback.courseOffering (nullable FK, onDelete:
+  // Restrict). Sparse: rows written before S2 carry NULL. Nothing reads this
+  // relation at this stage.
+  ridingProgressFeedback StudentRidingProgressFeedback[]
 
   @@unique([activityYearId, name])
   @@index([activityYearId])
