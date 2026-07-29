@@ -1,6 +1,6 @@
 /**
- * EXAM EX-S5B-2 / EX-S5B-3 — STRUCTURAL tests for the ExamDefinition WRITE
- * bindings (lib/actions/exam-definition-write-io.ts).
+ * EXAM EX-S5B-2 / EX-S5B-3 / EX-S5B-4 — STRUCTURAL tests for the ExamDefinition
+ * WRITE bindings (lib/actions/exam-definition-write-io.ts).
  *
  * Run with: npx tsx --test lib/actions/exam-definition-write-io.test.ts
  *
@@ -12,17 +12,26 @@
  * SOURCE and asserts on its structure, while the BEHAVIOUR of each operation is
  * proven at runtime against its pure core with fakes, in
  * lib/exam/create-exam-definition-core.test.ts,
- * lib/exam/update-exam-definition-core.test.ts and
- * lib/exam/delete-exam-definition-core.test.ts.
+ * lib/exam/update-exam-definition-core.test.ts,
+ * lib/exam/delete-exam-definition-core.test.ts and
+ * lib/exam/reorder-exam-definitions-core.test.ts.
+ *
+ * A note on what that split can and cannot prove for the REORDER. The exact-set
+ * and stale-sequence RULES are pure exports of the reorder core and are proven
+ * at runtime there, which is precisely why the transaction binds them instead of
+ * re-deriving them; what this suite proves about the transaction itself is
+ * structural — which statements exist, on which client, in which order, and that
+ * no write can precede either check.
  *
  * DB-FREE AND PRODUCTION-FREE: no database connection is opened, no SQL is
  * executed, no environment variable is read, no network call is made, and no
  * production identifier appears anywhere.
  *
- * NUMBERING. The `C`-prefixed tests are the committed EX-S5B-2 CREATE guards,
- * retained verbatim except where the module legitimately grew; the plain-numbered
- * tests 59–90 are the EX-S5B-3 requirement list for the EDIT and REMOVAL
- * bindings.
+ * NUMBERING. The `C`-prefixed tests are the committed EX-S5B-2 CREATE guards;
+ * the plain-numbered tests 59–90 are the EX-S5B-3 requirement list for the EDIT
+ * and REMOVAL bindings; 91–112 are the EX-S5B-4 REORDER list. Earlier tests are
+ * retained verbatim except where the module legitimately grew a fourth
+ * operation, and each such change is annotated where it happens.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -39,6 +48,8 @@ const UPDATE_CORE_REL = join("lib", "exam", "update-exam-definition-core.ts");
 const UPDATE_CORE_TEST_REL = join("lib", "exam", "update-exam-definition-core.test.ts");
 const DELETE_CORE_REL = join("lib", "exam", "delete-exam-definition-core.ts");
 const DELETE_CORE_TEST_REL = join("lib", "exam", "delete-exam-definition-core.test.ts");
+const REORDER_CORE_REL = join("lib", "exam", "reorder-exam-definitions-core.ts");
+const REORDER_CORE_TEST_REL = join("lib", "exam", "reorder-exam-definitions-core.test.ts");
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
 
@@ -71,12 +82,18 @@ function bodyOf(name: string): string {
 }
 
 /**
- * The transaction call expression ONLY — extracted by paren-depth so the
+ * One transaction call expression ONLY — extracted by paren-depth so the
  * inside/outside assertions are meaningful rather than "everything after here".
+ *
+ * `ordinal` selects which `$transaction(` in the module: there are two, one per
+ * atomic operation (the create's next-position append, and the reorder).
  */
-const TRANSACTION_BODY = (() => {
-  const open = CODE.indexOf("$transaction(");
-  assert.ok(open > 0, "no transaction was found");
+function transactionBody(ordinal: number): string {
+  let open = -1;
+  for (let seen = 0; seen <= ordinal; seen += 1) {
+    open = CODE.indexOf("$transaction(", open + 1);
+    assert.ok(open > 0, `transaction #${ordinal} was not found`);
+  }
   const from = CODE.indexOf("(", open);
   let depth = 0;
   for (let i = from; i < CODE.length; i += 1) {
@@ -86,8 +103,13 @@ const TRANSACTION_BODY = (() => {
       if (depth === 0) return CODE.slice(from, i + 1);
     }
   }
-  throw new Error("the transaction call is unbalanced");
-})();
+  throw new Error(`transaction #${ordinal} is unbalanced`);
+}
+
+/** The CREATE's transaction (the first in source order). */
+const TRANSACTION_BODY = transactionBody(0);
+/** The REORDER's transaction. */
+const REORDER_TRANSACTION_BODY = transactionBody(1);
 
 /** Every exported function signature in the module, in source order. */
 const SIGNATURES = [
@@ -131,14 +153,21 @@ test("C42. the module does NOT declare use server (or use client)", () => {
   assert.ok(COMMENTS.includes("use " + "server"), "the rule is undocumented");
 });
 
-test("C43. the module exports exactly THREE ordinary functions", () => {
+test("C43. the module exports exactly FOUR ordinary functions", () => {
+  // EX-S5B-4 added the fourth; the first three are unchanged and still first.
   assert.deepEqual(SIGNATURES.map((entry) => entry.name), [
     "createExamDefinition",
     "updateExamDefinition",
     "deleteExamDefinition",
+    "reorderExamDefinitions",
   ]);
   // Ordinary async server functions — not generated actions, not handlers.
-  for (const name of ["createExamDefinition", "updateExamDefinition", "deleteExamDefinition"]) {
+  for (const name of [
+    "createExamDefinition",
+    "updateExamDefinition",
+    "deleteExamDefinition",
+    "reorderExamDefinitions",
+  ]) {
     assert.ok(new RegExp(`export async function ${name}\\(`).test(SOURCE));
   }
   for (const token of [
@@ -196,7 +225,24 @@ test("C47. the module binds requireAdminCourseOffering, exactly once", () => {
   assert.equal((CODE.match(/await requireAdminCourseOffering\(/g) ?? []).length, 1);
   // The typed not-found is classified rather than caught broadly.
   assert.ok(CODE.includes("CourseOfferingNotFoundError"));
-  assert.equal(/catch\s*\(/.test(CODE), false, "the binding catches errors itself");
+
+  // EX-S5B-4: the module now contains EXACTLY ONE catch, and it is not an error
+  // classification at all — it is the reorder transaction's rollback signal
+  // being turned back into an outcome. It lives in that one helper, matches a
+  // PRIVATE class by identity, and re-throws everything else, so no course,
+  // policy, Prisma or redirect throw can be absorbed by it.
+  const catches = CODE.match(/catch\s*\(/g) ?? [];
+  assert.equal(catches.length, 1, `the binding catches ${catches.length} times`);
+  const atomic = bodyOf("reorderDefinitionsAtomically");
+  assert.ok(/catch\s*\(error\)\s*\{/.test(atomic), "the catch is not in the reorder helper");
+  assert.ok(
+    /if \(error instanceof ExamDefinitionReorderConflict\) \{/.test(atomic),
+    "the catch does not match the private sentinel by identity",
+  );
+  assert.ok(/\n\s*throw error;\n/.test(atomic), "the catch does not re-throw");
+  // The sentinel is private: declared here, exported nowhere.
+  assert.ok(/^class ExamDefinitionReorderConflict extends Error \{\}$/m.test(CODE));
+  assert.equal(CODE.includes("export class"), false, "the sentinel is exported");
 });
 
 test("C48. the ExamPlan lookup uses the VERIFIED offering id, never the requested one", () => {
@@ -309,8 +355,11 @@ test("C53. the ExamPlan query selects `id` and nothing else", () => {
   }
 });
 
-test("C54. there is EXACTLY one prisma.$transaction", () => {
-  assert.equal((CODE.match(/\$transaction\(/g) ?? []).length, 1);
+test("C54. there are EXACTLY two prisma.$transaction — one per atomic operation", () => {
+  // EX-S5B-4 added the reorder's; the create's is unchanged. The edit and the
+  // removal are still single conditional statements and open neither.
+  assert.equal((CODE.match(/\$transaction\(/g) ?? []).length, 2);
+  assert.equal((CODE.match(/prisma\.\$transaction\(/g) ?? []).length, 2);
   assert.ok(/prisma\.\$transaction\(async \(tx\) =>/.test(CODE));
   for (const token of ["$executeRaw", "$queryRaw", "$connect", "$disconnect"]) {
     assert.equal(CODE.includes(token), false, `the module uses ${token}`);
@@ -441,17 +490,57 @@ test("C65. no query filters on a submitted name", () => {
   for (const clause of WHERE_CLAUSES) {
     assert.equal(clause.includes("name"), false, `a query filters on a name: ${clause}`);
   }
-  for (const token of ["existingDefinition", "countByName", "findMany"]) {
+  for (const token of ["existingDefinition", "countByName"]) {
     assert.equal(CODE.includes(token), false, `the module preflights via ${token}`);
   }
+  // EX-S5B-4: the module DOES now contain one `findMany` — the reorder's
+  // authoritative order read. It is not a name preflight: it is plan-scoped,
+  // selects no name, and lives inside the reorder transaction.
+  assert.equal((CODE.match(/\.findMany\(/g) ?? []).length, 1);
+  assert.ok(REORDER_TRANSACTION_BODY.includes("tx.examDefinition.findMany("));
 });
 
-test("C66. there is no loop or per-row Prisma write anywhere", () => {
-  for (const loop of ["for (", "for(", "while (", "forEach(", ".map(", ".reduce(", "Promise.all"]) {
-    assert.equal(CODE.includes(loop), false, `the module contains ${loop}`);
+test("C66. no CREATE, EDIT or REMOVAL path loops, and no loop performs a read", () => {
+  // The three original operations write one row each and are still statement
+  // -for-statement free of iteration.
+  for (const helper of [
+    "createDefinitionAtNextOrder",
+    "findDefinitionForPlan",
+    "updateDefinitionIfCurrent",
+    "countSessionsForDefinition",
+    "deleteDefinitionIfCurrent",
+  ]) {
+    const body = bodyOf(helper);
+    for (const loop of ["for (", "for(", "while (", "forEach(", ".map(", ".reduce(", "Promise.all"]) {
+      assert.equal(body.includes(loop), false, `${helper} contains ${loop}`);
+    }
   }
-  // One aggregate, one create — the transaction body contains no iteration.
+  // One aggregate, one create — the create transaction body contains no
+  // iteration.
   assert.equal((TRANSACTION_BODY.match(/await /g) ?? []).length, 1);
+
+  // EX-S5B-4: the reorder DOES iterate — a whole-set reorder cannot be one
+  // statement without raw SQL. What matters is that the loop is bounded by the
+  // already-validated moved rows and issues no READ: exactly one `await` in the
+  // module sits inside a `for`, and it is an `updateMany`.
+  const loops = REORDER_TRANSACTION_BODY.match(/for \(const [^)]*\) \{/g) ?? [];
+  assert.equal(loops.length, 2, "the reorder has an unexpected number of loops");
+  const writeLoop = REORDER_TRANSACTION_BODY.slice(
+    REORDER_TRANSACTION_BODY.indexOf("for (const { id, orderIndex } of movedEntries)"),
+  );
+  assert.equal((writeLoop.match(/await /g) ?? []).length, 1, "the write loop awaits twice");
+  assert.ok(writeLoop.includes("tx.examDefinition.updateMany("));
+  for (const read of ["findMany", "findFirst", "findUnique", ".count(", "aggregate"]) {
+    assert.equal(writeLoop.includes(read), false, `the write loop performs a ${read}`);
+  }
+  // The other loop is the pure index map, and touches no client at all.
+  const mapLoop = REORDER_TRANSACTION_BODY.slice(
+    REORDER_TRANSACTION_BODY.indexOf("for (const row of currentRows)"),
+    REORDER_TRANSACTION_BODY.indexOf("const movedEntries"),
+  );
+  assert.equal(/\b(?:prisma|tx)\./.test(mapLoop), false, "the index map touches a client");
+  assert.equal(mapLoop.includes("await"), false, "the index map awaits");
+  assert.equal(CODE.includes("Promise.all"), false, "the module fans writes out concurrently");
 });
 
 test("C67. there is no transaction retry", () => {
@@ -639,30 +728,30 @@ test("66. no instructor or trainee actor helper was introduced", () => {
   }
 });
 
-test("67. all three operations reuse the SAME admin/course resolution", () => {
-  // One helper, bound by name three times — so the three can never drift into
-  // different trust boundaries.
-  assert.equal((CODE.match(/^\s*requireCourseContext,$/gm) ?? []).length, 3);
+test("67. all FOUR operations reuse the SAME admin/course resolution", () => {
+  // One helper, bound by name four times — so the four can never drift into
+  // different trust boundaries. (EX-S5B-4 raised the count from three.)
+  assert.equal((CODE.match(/^\s*requireCourseContext,$/gm) ?? []).length, 4);
   assert.equal((CODE.match(/async function requireCourseContext\(/g) ?? []).length, 1);
   assert.equal((CODE.match(/requireAdminCourseOffering\(/g) ?? []).length, 1);
 });
 
-test("68. all three operations reuse the SAME lifecycle operation", () => {
-  assert.equal((CODE.match(/^\s*assertConfigurationAllowed,$/gm) ?? []).length, 3);
+test("68. all FOUR operations reuse the SAME lifecycle operation", () => {
+  assert.equal((CODE.match(/^\s*assertConfigurationAllowed,$/gm) ?? []).length, 4);
   assert.equal((CODE.match(/function assertConfigurationAllowed\(/g) ?? []).length, 1);
   assert.equal((CODE.match(/"SCHEDULE_DRAFT_CONFIGURATION"/g) ?? []).length, 1);
   // The two typed classifiers are shared too.
-  assert.equal((CODE.match(/^\s*isCourseNotFoundError,$/gm) ?? []).length, 3);
-  assert.equal((CODE.match(/^\s*isOperationNotAllowedError,$/gm) ?? []).length, 3);
+  assert.equal((CODE.match(/^\s*isCourseNotFoundError,$/gm) ?? []).length, 4);
+  assert.equal((CODE.match(/^\s*isOperationNotAllowedError,$/gm) ?? []).length, 4);
 });
 
 // ===========================================================================
 // 69–78. The exact Prisma inventory of the new operations
 // ===========================================================================
 
-test("69. the plan query remains a single id-only findUnique, shared by all three", () => {
+test("69. the plan query remains a single id-only findUnique, shared by all four", () => {
   assert.equal((CODE.match(/examPlan\.findUnique\(/g) ?? []).length, 1);
-  assert.equal((CODE.match(/^\s*findExamPlanByCourseOfferingId,$/gm) ?? []).length, 3);
+  assert.equal((CODE.match(/^\s*findExamPlanByCourseOfferingId,$/gm) ?? []).length, 4);
   const query = bodyOf("findExamPlanByCourseOfferingId");
   assert.ok(/select:\s*\{\s*id:\s*true,?\s*\}/.test(query));
 });
@@ -727,8 +816,12 @@ test("72. the update data excludes kind, orderIndex and planId", () => {
   }
 });
 
-test("73. the updateMany where includes id, planId AND updatedAt", () => {
-  assert.equal((CODE.match(/examDefinition\.updateMany\(/g) ?? []).length, 1);
+test("73. the EDIT's updateMany where includes id, planId AND updatedAt", () => {
+  // Two `updateMany` statements exist now: the EDIT's version-conditional one on
+  // the ordinary client, and the REORDER's position write on the TRANSACTION
+  // client (asserted separately, at 102–104). Exactly one of them is the edit's.
+  assert.equal((CODE.match(/examDefinition\.updateMany\(/g) ?? []).length, 2);
+  assert.equal((CODE.match(/prisma\.examDefinition\.updateMany\(/g) ?? []).length, 1);
   const helper = bodyOf("updateDefinitionIfCurrent");
   const where = helper.slice(helper.indexOf("where: {"), helper.indexOf("data: {"));
   assert.ok(/id:\s*definitionId,/.test(where), `the where lacks the id: ${where}`);
@@ -803,6 +896,7 @@ test("78. there is no blind update or delete by id", () => {
   // Every statement that targets a single definition is BOTH id- and
   // plan-scoped; there is no `where: { id }` anywhere.
   assert.equal(/where:\s*\{\s*id:\s*definitionId,?\s*\}/.test(CODE), false);
+  assert.equal(/where:\s*\{\s*id,?\s*\}/.test(CODE), false);
   assert.deepEqual(PRISMA_CALLS, [
     "prisma.examPlan.findUnique",
     "prisma.$transaction",
@@ -813,6 +907,10 @@ test("78. there is no blind update or delete by id", () => {
     "prisma.examDefinition.findFirst",
     "prisma.examSession.count",
     "prisma.examDefinition.deleteMany",
+    // EX-S5B-4 — the reorder, and nothing else.
+    "prisma.$transaction",
+    "tx.examDefinition.findMany",
+    "tx.examDefinition.updateMany",
   ]);
 });
 
@@ -840,9 +938,10 @@ test("81. there is no transaction retry for the edit or the removal", () => {
   for (const token of ["retry", "Retry", "attempt", "backoff", "maxWait", "timeout"]) {
     assert.equal(CODE.includes(token), false, `the module configures ${token}`);
   }
-  // The conditional statements are single, unwrapped calls — no extra
-  // transaction was introduced for either of them.
-  assert.equal((CODE.match(/\$transaction\(/g) ?? []).length, 1);
+  // The conditional statements are single, unwrapped calls — no transaction was
+  // introduced for either of them. (The module's two transactions belong to the
+  // create and the reorder; EX-S5B-4 raised the count from one to two.)
+  assert.equal((CODE.match(/\$transaction\(/g) ?? []).length, 2);
   assert.equal(bodyOf("updateDefinitionIfCurrent").includes("$transaction"), false);
   assert.equal(bodyOf("deleteDefinitionIfCurrent").includes("$transaction"), false);
 });
@@ -881,6 +980,7 @@ test("84. no notification, message or push module is imported", () => {
     "@/lib/course/operation-policy-core",
     "@/lib/exam/create-exam-definition-core",
     "@/lib/exam/delete-exam-definition-core",
+    "@/lib/exam/reorder-exam-definitions-core",
     "@/lib/exam/update-exam-definition-core",
     "@/lib/prisma",
   ]);
@@ -889,16 +989,24 @@ test("84. no notification, message or push module is imported", () => {
   }
 });
 
-test("85. no app/, route, page or Server Action caller exists for any of the three writers", () => {
+test("85. no app/, route, page or Server Action caller exists for any of the four writers", () => {
   const declaring = new Set(
-    [IO_REL, IO_TEST_REL, CREATE_CORE_REL, UPDATE_CORE_REL, DELETE_CORE_REL].map((rel) =>
-      join(REPO_ROOT, rel),
-    ),
+    [
+      IO_REL,
+      IO_TEST_REL,
+      CREATE_CORE_REL,
+      UPDATE_CORE_REL,
+      DELETE_CORE_REL,
+      REORDER_CORE_REL,
+    ].map((rel) => join(REPO_ROOT, rel)),
   );
   const ownSuites = new Set(
-    [CREATE_CORE_TEST_REL, UPDATE_CORE_TEST_REL, DELETE_CORE_TEST_REL].map((rel) =>
-      join(REPO_ROOT, rel),
-    ),
+    [
+      CREATE_CORE_TEST_REL,
+      UPDATE_CORE_TEST_REL,
+      DELETE_CORE_TEST_REL,
+      REORDER_CORE_TEST_REL,
+    ].map((rel) => join(REPO_ROOT, rel)),
   );
 
   const callers: string[] = [];
@@ -913,8 +1021,11 @@ test("85. no app/, route, page or Server Action caller exists for any of the thr
       const code = stripComments(readFileSync(path, "utf8"));
       const reaches =
         /exam-definition-write-io/.test(code) ||
+        /reorder-exam-definitions-core/.test(code) ||
         /\b(?:create|update|delete)ExamDefinition\s*\(/.test(code) ||
-        /(?:create|update|delete)ExamDefinitionWithDeps\s*\(/.test(code);
+        /(?:create|update|delete)ExamDefinitionWithDeps\s*\(/.test(code) ||
+        /\breorderExamDefinitions\s*\(/.test(code) ||
+        /reorderExamDefinitionsWithDeps\s*\(/.test(code);
       // Each pure core's OWN suite legitimately drives its injectable
       // orchestration with fakes; nothing else may reach any of these symbols.
       if (reaches && !ownSuites.has(path)) {
@@ -984,7 +1095,7 @@ test("87. the committed CREATE slice is untouched by this change", () => {
   }
 });
 
-test("88. the slice consists of EXACTLY the six approved files", () => {
+test("88. the WRITE slice consists of EXACTLY the ten approved files", () => {
   for (const rel of [
     IO_REL,
     IO_TEST_REL,
@@ -994,18 +1105,22 @@ test("88. the slice consists of EXACTLY the six approved files", () => {
     UPDATE_CORE_TEST_REL,
     DELETE_CORE_REL,
     DELETE_CORE_TEST_REL,
+    REORDER_CORE_REL,
+    REORDER_CORE_TEST_REL,
   ]) {
     assert.ok(statSync(join(REPO_ROOT, rel)).isFile(), `${rel} is missing`);
   }
-  // No seventh file was added under either directory for this slice.
+  // No eleventh file was added under either directory for the write slices.
   const examSlice = readdirSync(join(REPO_ROOT, "lib", "exam"))
-    .filter((name) => /^(create|update|delete)-exam-definition/.test(name))
+    .filter((name) => /^(create|update|delete)-exam-definition|^reorder-exam-definitions/.test(name))
     .sort();
   assert.deepEqual(examSlice, [
     "create-exam-definition-core.test.ts",
     "create-exam-definition-core.ts",
     "delete-exam-definition-core.test.ts",
     "delete-exam-definition-core.ts",
+    "reorder-exam-definitions-core.test.ts",
+    "reorder-exam-definitions-core.ts",
     "update-exam-definition-core.test.ts",
     "update-exam-definition-core.ts",
   ]);
@@ -1052,7 +1167,12 @@ test("90. no suite of this slice opens a database or reads the environment", () 
     "create" + "Client",
     "supa" + "base",
   ];
-  for (const rel of [IO_TEST_REL, UPDATE_CORE_TEST_REL, DELETE_CORE_TEST_REL]) {
+  for (const rel of [
+    IO_TEST_REL,
+    UPDATE_CORE_TEST_REL,
+    DELETE_CORE_TEST_REL,
+    REORDER_CORE_TEST_REL,
+  ]) {
     const self = stripComments(readFileSync(join(REPO_ROOT, rel), "utf8"));
     for (const token of forbidden) {
       assert.equal(self.includes(token), false, `${rel} references ${token}`);
@@ -1065,4 +1185,471 @@ test("90. no suite of this slice opens a database or reads the environment", () 
     [...new Set(specifiers)].sort(),
     ["node:assert/strict", "node:fs", "node:path", "node:test"],
   );
+});
+
+// ===========================================================================
+// EX-S5B-4 — 91–112. The atomic REORDER binding
+// ===========================================================================
+
+/** The reorder helper's body, used by most of the assertions below. */
+const REORDER_HELPER = bodyOf("reorderDefinitionsAtomically");
+
+test("91. the REORDER export signature is exact", () => {
+  const reorder = signature("reorderExamDefinitions");
+  assert.equal(
+    reorder.params,
+    "courseOfferingId: string, orderedDefinitionIds: unknown, expectedOrderedDefinitionIds: unknown,",
+  );
+  assert.equal(reorder.returns, "Promise<ReorderExamDefinitionsResult>");
+  assert.ok(/export async function reorderExamDefinitions\(/.test(SOURCE));
+});
+
+test("92. the reorder accepts no planId, orderIndex, admin id or deps parameter", () => {
+  const params = signature("reorderExamDefinitions").params;
+  for (const forbidden of [
+    "planId",
+    "plan",
+    "orderIndex",
+    "index",
+    "position",
+    "adminId",
+    "actorId",
+    "instructorId",
+    "studentId",
+    "definitionId:",
+    "expectedUpdatedAt",
+    "publish",
+    "tx",
+    "prisma",
+    "deps",
+    "Date",
+  ]) {
+    assert.equal(params.includes(forbidden), false, `the reorder accepts ${forbidden}`);
+  }
+  // The deps object is constructed HERE, never handed in.
+  assert.ok(/return reorderExamDefinitionsWithDeps\(/.test(CODE));
+});
+
+test("93. the reorder decides nothing itself — it returns its pure core's result", () => {
+  // The public wrapper contains no ordering, validation, comparison or outcome
+  // of its own; the helper below is the only place with logic, and even its two
+  // rules are the committed pure predicates.
+  const wrapper = bodyOf("reorderExamDefinitions");
+  for (const token of [
+    "reorder_conflict",
+    "invalid_input",
+    "plan_not_found",
+    "offering_not_found",
+    "operation_not_allowed",
+    "changed:",
+    "ok: false",
+    "ok: true",
+    "trim(",
+    "Array.isArray",
+  ]) {
+    assert.equal(wrapper.includes(token), false, `the wrapper decides ${token} itself`);
+  }
+  // The two set/sequence rules are BOUND, not re-derived next to Prisma.
+  assert.ok(CODE.includes("isCurrentExamDefinitionIdOrder("));
+  assert.ok(CODE.includes("isExactExamDefinitionIdPermutation("));
+  const core = readFileSync(join(REPO_ROOT, REORDER_CORE_REL), "utf8");
+  assert.ok(core.includes("export function isCurrentExamDefinitionIdOrder("));
+  assert.ok(core.includes("export function isExactExamDefinitionIdPermutation("));
+  assert.ok(core.includes("export async function reorderExamDefinitionsWithDeps("));
+});
+
+test("94. the reorder reuses the same boundary, gate, classifiers and plan lookup", () => {
+  const wrapper = bodyOf("reorderExamDefinitions");
+  for (const bound of [
+    "requireCourseContext,",
+    "assertConfigurationAllowed,",
+    "findExamPlanByCourseOfferingId,",
+    "reorderDefinitionsAtomically,",
+    "isCourseNotFoundError,",
+    "isOperationNotAllowedError,",
+  ]) {
+    assert.ok(wrapper.includes(bound), `the reorder does not bind ${bound}`);
+  }
+  // ...and binds NOTHING else — in particular no per-row reader or writer.
+  const bound = [...wrapper.matchAll(/^\s{6}(\w+),$/gm)].map(([, name]) => name).sort();
+  assert.deepEqual(bound, [
+    "assertConfigurationAllowed",
+    "findExamPlanByCourseOfferingId",
+    "isCourseNotFoundError",
+    "isOperationNotAllowedError",
+    "reorderDefinitionsAtomically",
+    "requireCourseContext",
+  ]);
+});
+
+test("95. the reorder consults no capability and no instructor/trainee actor helper", () => {
+  // The module-wide guards at C50/C51/65/66 already forbid these tokens
+  // anywhere; this re-asserts them for the helper and wrapper specifically, so a
+  // future edit cannot introduce one only on the reorder path.
+  for (const token of [
+    '"EXAMS"',
+    "capability",
+    "Capability",
+    "getEffectiveCapabilities",
+    "requireCurrentInstructor",
+    "requireCurrentTrainee",
+    "getCurrentInstructor",
+    "getCurrentTrainee",
+    "instructorId",
+    "studentId",
+  ]) {
+    assert.equal(REORDER_HELPER.includes(token), false, `the reorder reaches ${token}`);
+    assert.equal(
+      bodyOf("reorderExamDefinitions").includes(token),
+      false,
+      `the reorder wrapper reaches ${token}`,
+    );
+  }
+});
+
+test("96. the whole reorder is ONE interactive transaction", () => {
+  assert.ok(/return await prisma\.\$transaction\(/.test(REORDER_HELPER));
+  assert.equal((REORDER_HELPER.match(/\$transaction\(/g) ?? []).length, 1);
+  // Nothing touches the ordinary client inside the helper: every statement of
+  // the reorder is on `tx`.
+  assert.equal((REORDER_HELPER.match(/prisma\.\w/g) ?? []).length, 0);
+  assert.equal(
+    (REORDER_HELPER.match(/\bprisma\./g) ?? []).length,
+    1,
+    "the reorder uses the ordinary client for something other than opening the tx",
+  );
+});
+
+test("97. the authoritative order is read INSIDE the transaction, plan-scoped and narrow", () => {
+  assert.ok(REORDER_TRANSACTION_BODY.includes("tx.examDefinition.findMany("));
+  const read = REORDER_TRANSACTION_BODY.slice(
+    REORDER_TRANSACTION_BODY.indexOf("tx.examDefinition.findMany("),
+    REORDER_TRANSACTION_BODY.indexOf("const currentIds"),
+  );
+  assert.ok(/where:\s*\{\s*planId,?\s*\}/.test(read), `the read is not plan-scoped: ${read}`);
+  assert.ok(
+    /select:\s*\{\s*id:\s*true,\s*orderIndex:\s*true,?\s*\}/.test(read),
+    `the read selects more than id + orderIndex: ${read}`,
+  );
+  for (const forbidden of ["name: true", "kind: true", "planId: true", "updatedAt", "include", "take", "skip"]) {
+    assert.equal(read.includes(forbidden), false, `the read uses ${forbidden}`);
+  }
+});
+
+test("98. the authoritative read is ordered by orderIndex THEN id", () => {
+  const read = REORDER_TRANSACTION_BODY.slice(
+    REORDER_TRANSACTION_BODY.indexOf("tx.examDefinition.findMany("),
+    REORDER_TRANSACTION_BODY.indexOf("const currentIds"),
+  );
+  assert.ok(
+    /orderBy:\s*\[\{\s*orderIndex:\s*"asc"\s*\},\s*\{\s*id:\s*"asc"\s*\}\s*\]/.test(
+      read.replace(/\s+/g, " "),
+    ),
+    `the deterministic order is wrong: ${read}`,
+  );
+  // The tie-break exists because equal positions are possible; that is stated.
+  assert.ok(/tie-break/i.test(COMMENTS), "the tie-break is undocumented");
+});
+
+test("99. NO write can precede the stale check or the exact-set check", () => {
+  const readAt = REORDER_TRANSACTION_BODY.indexOf("tx.examDefinition.findMany(");
+  const staleAt = REORDER_TRANSACTION_BODY.indexOf("isCurrentExamDefinitionIdOrder(expected");
+  const setAt = REORDER_TRANSACTION_BODY.indexOf("isExactExamDefinitionIdPermutation(");
+  const writeAt = REORDER_TRANSACTION_BODY.indexOf("tx.examDefinition.updateMany(");
+
+  for (const [name, at] of [["read", readAt], ["stale", staleAt], ["set", setAt], ["write", writeAt]] as const) {
+    assert.ok(at > 0, `${name} was not found`);
+  }
+  assert.ok(readAt < staleAt, "the stale check precedes the authoritative read");
+  assert.ok(staleAt < setAt, "the exact-set check precedes the stale check");
+  assert.ok(setAt < writeAt, "a write precedes the exact-set check");
+  // Both checks abort by THROWING, so anything already written rolls back.
+  const guarded = REORDER_TRANSACTION_BODY.slice(staleAt, writeAt);
+  assert.equal(
+    (guarded.match(/throw new ExamDefinitionReorderConflict\(\)/g) ?? []).length,
+    2,
+    "the two checks do not both abort the transaction",
+  );
+});
+
+test("100. a duplicate, missing, extra or foreign id causes zero writes and no extra query", () => {
+  // All four are the SAME failure: the exact-set predicate returns false and the
+  // transaction throws before the write loop is reached. No branch asks a
+  // different question, and nothing queries another plan to find out which.
+  assert.equal((REORDER_TRANSACTION_BODY.match(/tx\.\w+\./g) ?? []).length, 2);
+  for (const token of [
+    "planId: {",
+    "NOT:",
+    "notIn",
+    "OR:",
+    "examPlan",
+    "courseOfferingId",
+    "findFirst",
+    "findUnique",
+  ]) {
+    assert.equal(
+      REORDER_TRANSACTION_BODY.includes(token),
+      false,
+      `the reorder queries ${token} to explain a bad id`,
+    );
+  }
+  // The refusal carries no diagnostic at all: the outcome is a bare status.
+  assert.ok(/return \{ status: "conflict" \};/.test(REORDER_HELPER));
+  assert.equal(REORDER_HELPER.includes("missing"), false);
+  assert.equal(REORDER_HELPER.includes("unknownIds"), false);
+});
+
+test("101. the no-op returns before any write, and normalizes nothing", () => {
+  const noopAt = REORDER_TRANSACTION_BODY.indexOf(
+    "isCurrentExamDefinitionIdOrder(orderedDefinitionIds",
+  );
+  const writeAt = REORDER_TRANSACTION_BODY.indexOf("tx.examDefinition.updateMany(");
+  assert.ok(noopAt > 0, "the no-op check is missing");
+  assert.ok(noopAt < writeAt, "the no-op check happens after a write");
+  assert.ok(
+    /return \{ status: "unchanged", orderedDefinitionIds: currentIds \};/.test(
+      REORDER_TRANSACTION_BODY,
+    ),
+    "the no-op does not return the authoritative order",
+  );
+  // ...and the fact that a no-op deliberately leaves any pre-existing gap alone
+  // is stated rather than left for the next reader to discover.
+  assert.ok(/no-op/i.test(COMMENTS), "the no-op is undocumented");
+  assert.ok(/gap/i.test(COMMENTS), "the un-normalized gap is undocumented");
+});
+
+test("102. only rows whose stored position differs are written", () => {
+  assert.ok(
+    /const movedEntries = orderedDefinitionIds/.test(REORDER_TRANSACTION_BODY),
+    "the moved set is not computed",
+  );
+  assert.ok(
+    /\.filter\(\(entry\) => storedOrderIndexById\.get\(entry\.id\) !== entry\.orderIndex\)/.test(
+      REORDER_TRANSACTION_BODY,
+    ),
+    "unchanged rows are not skipped",
+  );
+  // The new position is the ARRAY INDEX, never a caller-supplied number.
+  assert.ok(/\.map\(\(id, orderIndex\) => \(\{ id, orderIndex \}\)\)/.test(REORDER_TRANSACTION_BODY));
+  assert.equal(
+    REORDER_TRANSACTION_BODY.includes("entry.orderIndex + "),
+    false,
+    "the position is offset",
+  );
+  // `updatedCount` counts SUCCESSFUL row writes, one at a time.
+  assert.ok(/updatedCount \+= 1;/.test(REORDER_TRANSACTION_BODY));
+  assert.equal(
+    /updatedCount:\s*(?:currentIds|orderedDefinitionIds)\.length/.test(REORDER_TRANSACTION_BODY),
+    false,
+    "the count claims every row changed",
+  );
+});
+
+test("103. each position write is scoped by id AND the server planId", () => {
+  const write = REORDER_TRANSACTION_BODY.slice(
+    REORDER_TRANSACTION_BODY.indexOf("tx.examDefinition.updateMany("),
+  );
+  assert.ok(/where:\s*\{\s*id,\s*planId,?\s*\}/.test(write), `the write where is: ${write}`);
+  // `planId` is the helper's SERVER-supplied parameter, never a caller value.
+  assert.ok(
+    /async function reorderDefinitionsAtomically\(\s*planId: string,/.test(SOURCE),
+    "the atomic helper does not take a server-supplied planId",
+  );
+});
+
+test("104. each position write sets orderIndex and nothing else", () => {
+  const write = REORDER_TRANSACTION_BODY.slice(
+    REORDER_TRANSACTION_BODY.indexOf("tx.examDefinition.updateMany("),
+  );
+  const data = write.slice(write.indexOf("data: {"), write.indexOf("}", write.indexOf("data: {")) + 1);
+  assert.ok(/data:\s*\{\s*orderIndex,?\s*\}/.test(data), `the write data is: ${data}`);
+  for (const forbidden of [
+    "name",
+    "kind",
+    "planId",
+    "durationMinutes",
+    "parallelCapacity",
+    "requires",
+    "updatedAt",
+    "createdAt",
+  ]) {
+    assert.equal(data.includes(forbidden), false, `the position write also sets ${forbidden}`);
+  }
+});
+
+test("105. a row count other than 1 aborts the whole transaction", () => {
+  assert.ok(
+    /if \(written\.count !== 1\) \{\s*throw new ExamDefinitionReorderConflict\(\);/.test(
+      REORDER_TRANSACTION_BODY.replace(/\s+/g, " ").replace(/ \{ /g, " { "),
+    ) || /written\.count !== 1/.test(REORDER_TRANSACTION_BODY),
+    "a failed row write is not detected",
+  );
+  const afterCheck = REORDER_TRANSACTION_BODY.slice(
+    REORDER_TRANSACTION_BODY.indexOf("written.count !== 1"),
+  );
+  assert.ok(
+    afterCheck.includes("throw new ExamDefinitionReorderConflict()"),
+    "a failed row write does not abort",
+  );
+  // There is no partial-success arm: the only non-throwing returns are the two
+  // successes, and neither can be reached once a row write has failed.
+  const flat = REORDER_TRANSACTION_BODY.replace(/\s+/g, " ");
+  const returns = [...flat.matchAll(/return \{ status: "(\w+)"/g)].map(([, status]) => status);
+  assert.deepEqual(returns.sort(), ["unchanged", "updated"]);
+  for (const token of ["partial", "skipped", "failedIds", "continue;"]) {
+    assert.equal(REORDER_TRANSACTION_BODY.includes(token), false, `the loop reports ${token}`);
+  }
+  // The rollback-by-throw decision is documented.
+  assert.ok(/roll(s|ed)? ?back/i.test(COMMENTS), "the rollback is undocumented");
+});
+
+test("106. there is no offset dance, negative index, P2002 handling or retry", () => {
+  for (const token of [
+    "-1",
+    "P2002",
+    "duplicate",
+    "retry",
+    "Retry",
+    "attempt",
+    "backoff",
+    "maxWait",
+    "timeout",
+    "isolationLevel",
+    "Serializable",
+    "RepeatableRead",
+    "ReadCommitted",
+    "Mutex",
+    "mutex",
+    "globalThis",
+    "advisory",
+    "pg_advisory",
+  ]) {
+    assert.equal(CODE.includes(token), false, `the module uses ${token}`);
+  }
+  // Two passes would show up as a second write statement; there is exactly one.
+  assert.equal((REORDER_TRANSACTION_BODY.match(/tx\.examDefinition\.updateMany\(/g) ?? []).length, 1);
+});
+
+test("107. the module does not claim the schema enforces a unique orderIndex", () => {
+  assert.ok(/no unique constraint/i.test(COMMENTS), "the missing constraint is not stated");
+  assert.equal(
+    /(guarantee|prevent|ensure)s?[^.]{0,60}unique/i.test(COMMENTS),
+    false,
+    "the header claims uniqueness it does not enforce",
+  );
+  // The schema really has no such key, and this slice added none.
+  const schema = readFileSync(join(REPO_ROOT, "prisma", "schema.prisma"), "utf8");
+  const model = schema.slice(
+    schema.indexOf("model ExamDefinition {"),
+    schema.indexOf('@@map("exam_definitions")'),
+  );
+  assert.ok(model.length > 0, "sanity: the model should be found");
+  assert.equal(
+    /@@unique\(\[planId,\s*orderIndex\]\)/.test(model),
+    false,
+    "the model gained a unique position key",
+  );
+  assert.equal(
+    /@@index\(\[planId,\s*orderIndex\]\)/.test(model),
+    false,
+    "the model gained a position index",
+  );
+});
+
+test("108. the reorder's concurrency limitation is documented honestly", () => {
+  assert.ok(/concurren/i.test(COMMENTS), "concurrency is not discussed");
+  assert.ok(/stale/i.test(COMMENTS), "the stale-sequence serialization is not stated");
+  assert.ok(/reload/i.test(COMMENTS), "the loser's remedy is not stated");
+});
+
+test("109. the reorder writes nothing but ExamDefinition.orderIndex", () => {
+  // Module-wide: still only one model is ever written.
+  const writes =
+    /\b(?:prisma|tx)\.(\w+)\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\b/g;
+  assert.deepEqual([...new Set([...CODE.matchAll(writes)].map((match) => match[1]))], [
+    "examDefinition",
+  ]);
+  // ...and the reorder in particular writes no plan, session, assignment,
+  // enrollment, person or offering row.
+  for (const model of [
+    "examPlan",
+    "examSession",
+    "examAssignment",
+    "courseOffering",
+    "courseEnrollment",
+    "student",
+    "instructor",
+    "teachingPractice",
+    "notification",
+    "pushSubscription",
+  ]) {
+    assert.equal(REORDER_HELPER.includes(model), false, `the reorder touches ${model}`);
+  }
+});
+
+test("110. the reorder adds no raw SQL and no client escape hatch", () => {
+  for (const token of [
+    "$executeRaw",
+    "$queryRaw",
+    "$executeRawUnsafe",
+    "$queryRawUnsafe",
+    "sql`",
+    "$connect",
+    "$disconnect",
+    "$extends",
+  ]) {
+    assert.equal(CODE.includes(token), false, `the module uses ${token}`);
+  }
+});
+
+test("111. no Server Action, route, page or UI caller was added for the reorder", () => {
+  // Complements 85, which scans the repository: this asserts that the reorder
+  // added no file of its own either.
+  for (const file of [
+    join("lib", "actions", "exam-definition-reorder.ts"),
+    join("lib", "actions", "exam-definition-actions.ts"),
+    join("lib", "actions", "exam-reorder.ts"),
+    join("lib", "exam", "exam-reorder-core.ts"),
+  ]) {
+    assert.equal(existsSync(join(REPO_ROOT, file)), false, `${file} was created`);
+  }
+  for (const dir of [join("app", "admin", "exams"), join("app", "admin", "exam-definitions")]) {
+    assert.equal(existsSync(join(REPO_ROOT, dir)), false, `${dir} was created`);
+  }
+  const io = stripComments(readFileSync(join(REPO_ROOT, IO_REL), "utf8"));
+  assert.equal(io.includes('"use ' + 'server"'), false);
+  assert.ok(new RegExp('import\\s+"server' + '-only";').test(io));
+});
+
+test("112. the reorder core is pure, and the slice changed exactly four paths", () => {
+  // CODE, not source: the core's header legitimately NAMES the markers it does
+  // not declare, exactly as the committed sibling cores' headers do.
+  const core = stripComments(readFileSync(join(REPO_ROOT, REORDER_CORE_REL), "utf8"));
+  const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
+  const GENERATED_CLIENT = ["@prisma", "client"].join("/");
+  for (const specifier of [PRISMA_MODULE, GENERATED_CLIENT, "server" + "-only", "next/"]) {
+    assert.equal(core.includes(specifier), false, `the reorder core imports ${specifier}`);
+  }
+  assert.equal(/^\s*import\s/m.test(core), false, "the reorder core imports something");
+
+  // The four approved paths exist...
+  for (const rel of [REORDER_CORE_REL, REORDER_CORE_TEST_REL, IO_REL, IO_TEST_REL]) {
+    assert.ok(statSync(join(REPO_ROOT, rel)).isFile(), `${rel} is missing`);
+  }
+  // ...and the three committed write cores were not edited to make room for it:
+  // none of them mentions the reorder at all.
+  for (const rel of [CREATE_CORE_REL, UPDATE_CORE_REL, DELETE_CORE_REL]) {
+    const committed = stripComments(readFileSync(join(REPO_ROOT, rel), "utf8"));
+    assert.equal(
+      /reorder/i.test(committed),
+      false,
+      `${rel} was edited to reference the reorder`,
+    );
+  }
+  // The committed write-input core gained no reorder export either.
+  const writeCore = readFileSync(
+    join(REPO_ROOT, "lib", "exam", "exam-definition-write-core.ts"),
+    "utf8",
+  );
+  assert.equal(/reorder/i.test(stripComments(writeCore)), false);
 });

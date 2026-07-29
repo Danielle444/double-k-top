@@ -1,6 +1,6 @@
 /**
- * EXAM EX-S5B-2 / EX-S5B-3 — the ADMIN-SCOPED ExamDefinition WRITES: real
- * bindings for CREATE, EDIT and safe REMOVAL.
+ * EXAM EX-S5B-2 / EX-S5B-3 / EX-S5B-4 — the ADMIN-SCOPED ExamDefinition WRITES:
+ * real bindings for CREATE, EDIT, safe REMOVAL and atomic REORDER.
  *
  * SERVER-ONLY BY DECLARATION. `import "server-only"` — the repository convention,
  * already used by the exam read bindings in this directory — turns an accidental
@@ -10,11 +10,11 @@
  *
  * DELIBERATELY NOT A `"use server"` MODULE. Everything exported from a
  * `"use server"` file becomes a PUBLICLY CALLABLE Server Action with a stable
- * network id — and these WRITE. `createExamDefinition`, `updateExamDefinition`
- * and `deleteExamDefinition` are ORDINARY server functions. The Server Actions,
- * the route and the admin UI that eventually call them are a LATER, separately
- * reviewed slice; nothing in `app/` calls this today, and no exam route or page
- * exists.
+ * network id — and these WRITE. `createExamDefinition`, `updateExamDefinition`,
+ * `deleteExamDefinition` and `reorderExamDefinitions` are ORDINARY server
+ * functions. The Server Actions, the route and the admin UI that eventually call
+ * them are a LATER, separately reviewed slice; nothing in `app/` calls this
+ * today, and no exam route or page exists.
  *
  * ===========================================================================
  * DIVISION OF LABOUR
@@ -25,6 +25,8 @@
  *   create-exam-definition-core     — the CREATE order + outcomes
  *   update-exam-definition-core     — the EDIT order + outcomes
  *   delete-exam-definition-core     — the REMOVAL order + outcomes
+ *   reorder-exam-definitions-core   — the REORDER order + outcomes, and what
+ *                                     "the same order" and "the same set" mean
  * And here:
  *   this module — the REAL admin, policy and Prisma bindings, and nothing else.
  *
@@ -38,15 +40,17 @@
  * classifiers, and returns the core's result unchanged.
  *
  * The admin boundary, the lifecycle gate, the two typed error classifiers and
- * the ExamPlan lookup are each declared ONCE and shared by all three
- * operations — so the three can never drift into different trust boundaries.
+ * the ExamPlan lookup are each declared ONCE and shared by all four
+ * operations — so the four can never drift into different trust boundaries.
  *
  * ===========================================================================
  * WHAT THE CALLER MAY SUPPLY
  * ===========================================================================
- * Create: a REQUESTED `courseOfferingId` and a RAW input object.
- * Edit:   the same, plus a `definitionId` and an optimistic-concurrency token.
- * Remove: a REQUESTED `courseOfferingId`, a `definitionId` and that token.
+ * Create:  a REQUESTED `courseOfferingId` and a RAW input object.
+ * Edit:    the same, plus a `definitionId` and an optimistic-concurrency token.
+ * Remove:  a REQUESTED `courseOfferingId`, a `definitionId` and that token.
+ * Reorder: a REQUESTED `courseOfferingId` and TWO raw id lists — the new order,
+ *          and the order the caller believed was current.
  *
  * There is no parameter for a `planId`, a `kind`, an `orderIndex`, an admin id,
  * a session count, a publication option or a transaction handle — not "ignored",
@@ -125,10 +129,18 @@ import {
   isExamDefinitionInUseError,
   type DeleteExamDefinitionResult,
 } from "@/lib/exam/delete-exam-definition-core";
+import {
+  isCurrentExamDefinitionIdOrder,
+  isExactExamDefinitionIdPermutation,
+  reorderExamDefinitionsWithDeps,
+  type ReorderExamDefinitionsAtomicOutcome,
+  type ReorderExamDefinitionsResult,
+} from "@/lib/exam/reorder-exam-definitions-core";
 
 export type { CreateExamDefinitionResult } from "@/lib/exam/create-exam-definition-core";
 export type { UpdateExamDefinitionResult } from "@/lib/exam/update-exam-definition-core";
 export type { DeleteExamDefinitionResult } from "@/lib/exam/delete-exam-definition-core";
+export type { ReorderExamDefinitionsResult } from "@/lib/exam/reorder-exam-definitions-core";
 
 // ===========================================================================
 // The shared trust boundary — declared ONCE, bound by all three operations
@@ -400,6 +412,150 @@ async function deleteDefinitionIfCurrent(
   return removed.count > 0;
 }
 
+/**
+ * The reorder's private ABORT signal — a class declared here, exported nowhere,
+ * and constructed in exactly one function.
+ *
+ * A reorder rewrites several rows, so its refusals must UNDO whatever has
+ * already been written. Returning a value from the transaction callback commits;
+ * throwing rolls back. So every refusal the callback can decide — a stale
+ * expected sequence, a submission that is not an exact permutation, and a row
+ * that moved between the read and its own update — throws this, and the wrapper
+ * below turns it back into the single `conflict` outcome the pure core knows.
+ *
+ * It is a distinct class rather than a string or a flag so the wrapper's
+ * `instanceof` can never match a Prisma error, an application error or a
+ * framework redirect, and it is private so nothing outside this file can
+ * fabricate one.
+ */
+class ExamDefinitionReorderConflict extends Error {}
+
+/**
+ * Rewrite the positions of ALL of one plan's definitions, atomically.
+ *
+ * ONE interactive transaction does the whole operation: the authoritative read,
+ * both validations and every write. Reading the current order OUTSIDE the
+ * transaction would make the stale check advisory — another manager could add,
+ * remove or move a definition in the gap, and the reorder would happily write a
+ * set that no longer exists.
+ *
+ * THE READ. `findMany` over `planId`, selecting `id` and `orderIndex` and
+ * nothing else, ordered by `orderIndex` then `id`. That tie-break is not
+ * decoration: the sibling create documents that concurrent appends may produce
+ * EQUAL `orderIndex` values, so `orderIndex` alone is not a total order, and the
+ * sequence the stale token is compared against has to be the same one every
+ * reader sees.
+ *
+ * BOTH CHECKS BEFORE ANY WRITE. The expected sequence must equal the current one
+ * exactly, and the submitted list must be an exact permutation of it. Both are
+ * the committed pure predicates, so the rule is proven by a DB-free test rather
+ * than re-derived next to Prisma. A duplicate, a missing id, an extra id, an
+ * unknown id and an id belonging to ANOTHER plan all fail the same check and
+ * produce the same refusal — and no query is ever made against another plan to
+ * find out which it was.
+ *
+ * THE NO-OP. If the submitted order already IS the current order, the callback
+ * returns without issuing a single write. It deliberately does NOT normalize
+ * gaps in that case: "the order you sent is the order that is stored" is the
+ * locked answer, and rewriting rows nobody asked to move would be a surprise.
+ *
+ * THE WRITES. Only rows whose stored `orderIndex` differs from their new
+ * position are written, each by an `updateMany` scoped by BOTH the id and the
+ * SERVER plan id, and each writing `orderIndex` and nothing else. After a
+ * changed reorder every row's `orderIndex` equals its position, so the positions
+ * are contiguous `0..n-1`.
+ *
+ * NO OFFSET DANCE. The schema declares no unique constraint on
+ * `(planId, orderIndex)`, so two rows may hold the same position mid-loop
+ * without the database objecting. That is why there are no temporary negative
+ * indexes, no two-phase shuffle, no `P2002` handling and no retry: none of them
+ * would be doing anything. Nothing here CLAIMS the schema enforces unique
+ * positions — it does not, and no index is added by this slice.
+ *
+ * A `count` other than 1 means the row was removed or re-planned mid-loop; that
+ * throws, so the partial rewrite is rolled back and the caller is told to
+ * reload. There is no partial success.
+ *
+ * CONCURRENCY LIMITATION, STATED HONESTLY: two managers reordering the same plan
+ * at the same instant are serialized by the stale-sequence check, not by a lock
+ * or by SERIALIZABLE isolation — the loser sees `conflict` and reloads. A
+ * concurrent CREATE that lands between this read and its commit can still leave
+ * the appended row sharing a position with an existing one, exactly as the
+ * create binding documents; the next reorder normalizes it.
+ */
+async function reorderDefinitionsAtomically(
+  planId: string,
+  orderedDefinitionIds: readonly string[],
+  expectedOrderedDefinitionIds: readonly string[],
+): Promise<ReorderExamDefinitionsAtomicOutcome> {
+  try {
+    return await prisma.$transaction(
+      async (tx): Promise<ReorderExamDefinitionsAtomicOutcome> => {
+        const currentRows = await tx.examDefinition.findMany({
+          where: { planId },
+          select: { id: true, orderIndex: true },
+          orderBy: [{ orderIndex: "asc" }, { id: "asc" }],
+        });
+
+        const currentIds = currentRows.map((row) => row.id);
+
+        // The stale-write token, compared against the authoritative sequence
+        // read one statement ago inside this same transaction.
+        if (!isCurrentExamDefinitionIdOrder(expectedOrderedDefinitionIds, currentIds)) {
+          throw new ExamDefinitionReorderConflict();
+        }
+
+        // The exact-set rule. Nothing has been written at this point.
+        if (!isExactExamDefinitionIdPermutation(orderedDefinitionIds, currentIds)) {
+          throw new ExamDefinitionReorderConflict();
+        }
+
+        // Already in this order: commit nothing.
+        if (isCurrentExamDefinitionIdOrder(orderedDefinitionIds, currentIds)) {
+          return { status: "unchanged", orderedDefinitionIds: currentIds };
+        }
+
+        const storedOrderIndexById = new Map<string, number>();
+        for (const row of currentRows) {
+          storedOrderIndexById.set(row.id, row.orderIndex);
+        }
+
+        // The already-validated rows that actually move. The loop below iterates
+        // ONLY this list, and issues no read of any kind.
+        const movedEntries = orderedDefinitionIds
+          .map((id, orderIndex) => ({ id, orderIndex }))
+          .filter((entry) => storedOrderIndexById.get(entry.id) !== entry.orderIndex);
+
+        let updatedCount = 0;
+        for (const { id, orderIndex } of movedEntries) {
+          const written = await tx.examDefinition.updateMany({
+            where: { id, planId },
+            data: { orderIndex },
+          });
+          if (written.count !== 1) {
+            throw new ExamDefinitionReorderConflict();
+          }
+          updatedCount += 1;
+        }
+
+        return {
+          status: "updated",
+          orderedDefinitionIds: [...orderedDefinitionIds],
+          updatedCount,
+        };
+      },
+    );
+  } catch (error) {
+    // The ONLY catch in this module, and it recognizes exactly one private
+    // class. A Prisma failure, an application error and a framework redirect all
+    // propagate with their identity intact.
+    if (error instanceof ExamDefinitionReorderConflict) {
+      return { status: "conflict" };
+    }
+    throw error;
+  }
+}
+
 // ===========================================================================
 // 1. Create
 // ===========================================================================
@@ -529,4 +685,51 @@ export async function deleteExamDefinition(
     isOperationNotAllowedError,
     isDefinitionInUseForeignKeyError: isExamDefinitionInUseError,
   });
+}
+
+// ===========================================================================
+// 4. Atomic reorder
+// ===========================================================================
+
+/**
+ * Rewrite the order of ALL of one plan's ExamDefinitions, atomically.
+ *
+ * Order (the committed pure core's contract, bound here to real effects):
+ *   1. admin + exact offering;
+ *   2. the lifecycle gate on the VERIFIED status;
+ *   3. ONE plan lookup on the VERIFIED offering id;
+ *   4. no plan -> the core's plan refusal (never an upsert);
+ *   5. both untrusted lists normalized — array of non-blank strings, trimmed;
+ *   6. malformed -> the core's input refusal, and NO transaction at all;
+ *   7. ONE transaction: one plan-scoped read, both validations, then a write for
+ *      each row that actually moves.
+ *
+ * The caller submits the COMPLETE new order and the order they believed was
+ * current. There is no `planId` parameter, no `orderIndex` parameter and no
+ * per-row payload: positions are assigned by the server from the submitted
+ * sequence, and the plan is the one that belongs to the verified offering.
+ *
+ * Neither of the two lists is trusted, and neither can name a row this operation
+ * may not touch: an id outside the plan's current set fails the exact-set check
+ * and refuses the whole reorder, with nothing written and no query issued
+ * against any other plan.
+ */
+export async function reorderExamDefinitions(
+  courseOfferingId: string,
+  orderedDefinitionIds: unknown,
+  expectedOrderedDefinitionIds: unknown,
+): Promise<ReorderExamDefinitionsResult> {
+  return reorderExamDefinitionsWithDeps(
+    courseOfferingId,
+    orderedDefinitionIds,
+    expectedOrderedDefinitionIds,
+    {
+      requireCourseContext,
+      assertConfigurationAllowed,
+      findExamPlanByCourseOfferingId,
+      reorderDefinitionsAtomically,
+      isCourseNotFoundError,
+      isOperationNotAllowedError,
+    },
+  );
 }
