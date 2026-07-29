@@ -32,14 +32,32 @@ const EXAM_C1_MODELS = [
   "ExamSessionSupervisor",
 ] as const;
 
-/** EX-C2-0 adds exactly one model: the live-projection source-date table. */
-const EXAM_MODELS = [...EXAM_C1_MODELS, "ExamTeachingPracticeSourceDate"] as const;
+/**
+ * EX-C2-0 adds one model (the live-projection source-date table); EX-S3 adds two
+ * more (the canonical definition and the positional break).
+ */
+const EXAM_MODELS = [
+  ...EXAM_C1_MODELS,
+  "ExamTeachingPracticeSourceDate",
+  "ExamDefinition",
+  "ExamSessionBreak",
+] as const;
 
 // EX-C2-0 — the additive source-date migration, generated OFFLINE by a
 // schema-to-schema diff (never against a database).
 const SOURCE_DATE_MIGRATION_DIR = "20260729140000_add_exam_teaching_practice_source_date";
 const SOURCE_DATE_MIGRATION = readFileSync(
   join(REPO_ROOT, "prisma", "migrations", SOURCE_DATE_MIGRATION_DIR, "migration.sql"),
+  "utf8",
+);
+
+// EX-S3 — the additive definition/break migration, likewise generated OFFLINE by
+// a schema-to-schema diff against HEAD's schema. It is the FIRST exam migration
+// to touch an already-created exam table, so its safety assertions below are
+// stricter than the two before it rather than looser.
+const S3_MIGRATION_DIR = "20260730120000_add_exam_definition_and_breaks";
+const S3_MIGRATION = readFileSync(
+  join(REPO_ROOT, "prisma", "migrations", S3_MIGRATION_DIR, "migration.sql"),
   "utf8",
 );
 
@@ -61,18 +79,41 @@ function block(kind: "model" | "enum", name: string): string {
 
 // --- model / enum inventory -------------------------------------------------
 
-test("exactly six exam models exist, and no parent Exam entity", () => {
+test("exactly eight exam models exist, and no catch-all Exam entity", () => {
   const declared = [...SCHEMA.matchAll(/^model\s+(Exam\w*)\s*\{/gm)].map((m) => m[1]);
   assert.deepEqual([...declared].sort(), [...EXAM_MODELS].sort());
-  // The five EX-C1 models plus the one EX-C2-0 source-date model.
-  assert.equal(declared.length, 6);
+  // Five EX-C1 + one EX-C2-0 source-date + two EX-S3 (definition, break).
+  assert.equal(declared.length, 8);
   assert.equal(EXAM_C1_MODELS.length, 5);
 
-  // "לפי מבחן" groups by ExamSession.kind - it must NOT have introduced a
-  // parent entity between ExamPlan and ExamSession.
+  // EX-S3 INVERTS the old EX-C1 rule. "לפי מבחן" no longer groups by
+  // ExamSession.kind: ExamDefinition is now the canonical grouping identity and
+  // MUST exist.
+  assert.ok(
+    SCHEMA.includes("model ExamDefinition {"),
+    "ExamDefinition is the canonical exam identity and must exist",
+  );
+
+  // These two remain forbidden: a catch-all `Exam` and a second, competing
+  // type entity would each reintroduce an identity rival to ExamDefinition.
   assert.equal(SCHEMA.includes("model Exam {"), false);
-  assert.equal(SCHEMA.includes("model ExamDefinition {"), false);
   assert.equal(SCHEMA.includes("model ExamType {"), false);
+});
+
+test("no slot, wave, timetable or calculated-time model exists", () => {
+  // THE load-bearing invariant of the whole module: per-trainee start/end times,
+  // wave boundaries and block end times are DERIVED on every read and are never
+  // persisted. Asserted structurally rather than left to prose, because a
+  // "performance" table is exactly the well-meaning future edit that would
+  // silently create the second source of truth this design exists to prevent.
+  const declared = [...SCHEMA.matchAll(/^model\s+(\w+)\s*\{/gm)].map((m) => m[1]);
+  for (const name of declared) {
+    assert.equal(
+      /^Exam.*(Slot|Wave|Timetable|Schedule|Calculated|Derived|Computed)/.test(name),
+      false,
+      `${name} looks like a persisted derived-time table; derived times are never stored`,
+    );
+  }
 });
 
 test("exactly four exam enums exist with the approved values", () => {
@@ -125,11 +166,15 @@ test("ExamSession carries every approved field with the right nullability", () =
   const s = block("model", "ExamSession");
   // Required.
   assert.match(s, /\n\s+planId\s+String\n/);
-  assert.match(s, /\n\s+kind\s+ExamKind\n/);
+  assert.match(s, /\n\s+definitionId\s+String\n/);
   assert.match(s, /\n\s+date\s+DateTime\s+@db\.Date/);
   assert.match(s, /\n\s+startTime\s+String\n/);
-  assert.match(s, /\n\s+endTime\s+String\n/);
   assert.match(s, /\n\s+orderIndex\s+Int\n/);
+  // EX-S3 — kind is now NULLABLE and unwritten: ExamDefinition.kind is the only
+  // active stored source of behavioural kind.
+  assert.match(s, /\n\s+kind\s+ExamKind\?/);
+  // EX-S3 — endTime is now NULLABLE and superseded by the DERIVED block end.
+  assert.match(s, /\n\s+endTime\s+String\?/);
   // Kind-specific, all nullable.
   assert.match(s, /\n\s+phase\s+ExamPhase\?/);
   assert.match(s, /\n\s+beginnerFormat\s+ExamBeginnerFormat\?/);
@@ -151,6 +196,17 @@ test("ExamAssignment.studentId is NULLABLE and carries the instruction fields", 
   assert.match(a, /\n\s+horseName\s+String\?/);
   assert.match(a, /\n\s+instructionTopic\s+String\?/);
   assert.match(a, /\n\s+pairingIndex\s+Int\?/);
+  // EX-S3 — the manager's explicit EXAMINEE WAVE ORDERING. The default makes
+  // the column total on every row from introduction, and the assignment id
+  // remains the deterministic final tie-break.
+  assert.match(a, /\n\s+orderIndex\s+Int\s+@default\(0\)/);
+  // EX-S3 — optional free text ("ענף"). No Discipline enum, no Discipline table.
+  assert.match(a, /\n\s+discipline\s+String\?/);
+  assert.equal(
+    /enum\s+Discipline\s*\{/.test(SCHEMA) || /model\s+Discipline\s*\{/.test(SCHEMA),
+    false,
+    "discipline is free text: no Discipline enum or table may be introduced",
+  );
   // A STRING snapshot, never the live Teaching-Practice enum.
   assert.match(a, /\n\s+sourcePracticeRole\s+String\?/);
   assert.equal(
@@ -256,17 +312,30 @@ test("external identity FKs use Restrict; Cascade stays inside the exam tree", (
 
 // --- indexes and unique constraints ----------------------------------------
 
-test("the two view-serving composite indexes exist", () => {
+test("the view-serving composite indexes exist", () => {
   const s = block("model", "ExamSession");
   // "by date": WHERE planId AND date ORDER BY startTime, orderIndex, id
   assert.ok(s.includes("@@index([planId, date, orderIndex])"));
-  // "by exam type" + the general schedule's GROUP BY kind
+  // EX-C1's kind-grouped index. DEAD after EX-S3 but RETAINED, not dropped:
+  // dropping is destructive DDL and buys nothing on a table of dozens of rows.
   assert.ok(s.includes("@@index([planId, kind, date, orderIndex])"));
+  // EX-S3 — the ACTIVE "by exam type" index, now keyed on the definition.
+  assert.ok(s.includes("@@index([planId, definitionId, date, orderIndex])"));
   assert.ok(
     MIGRATION.includes('CREATE INDEX "exam_sessions_planId_date_orderIndex_idx"'),
   );
   assert.ok(
     MIGRATION.includes('CREATE INDEX "exam_sessions_planId_kind_date_orderIndex_idx"'),
+  );
+  assert.ok(
+    S3_MIGRATION.includes(
+      'CREATE INDEX "exam_sessions_planId_definitionId_date_orderIndex_idx"',
+    ),
+  );
+  // EX-S3 — the ordered examinee fetch feeding the derived wave calculation.
+  assert.ok(block("model", "ExamAssignment").includes("@@index([sessionId, orderIndex])"));
+  assert.ok(
+    S3_MIGRATION.includes('CREATE INDEX "exam_assignments_sessionId_orderIndex_idx"'),
   );
 });
 
@@ -295,6 +364,28 @@ test("every approved unique constraint exists, including the copy idempotency ke
   ]) {
     assert.ok(
       MIGRATION.includes(`CREATE UNIQUE INDEX "${idx}"`),
+      `missing unique index ${idx}`,
+    );
+  }
+
+  // EX-S3 uniques.
+  const def = block("model", "ExamDefinition");
+  // The visible exam name must be unambiguous within its plan: the name IS the
+  // group label, so a duplicate would render as one group the manager cannot
+  // tell apart.
+  assert.ok(def.includes("@@unique([planId, name])"));
+  // NOT redundant with @id — this is the composite-FK reference target.
+  assert.ok(def.includes("@@unique([planId, id])"));
+  assert.ok(
+    block("model", "ExamSessionBreak").includes("@@unique([sessionId, afterWaveIndex])"),
+  );
+  for (const idx of [
+    "exam_definitions_planId_name_key",
+    "exam_definitions_planId_id_key",
+    "exam_session_breaks_sessionId_afterWaveIndex_key",
+  ]) {
+    assert.ok(
+      S3_MIGRATION.includes(`CREATE UNIQUE INDEX "${idx}"`),
       `missing unique index ${idx}`,
     );
   }
@@ -404,6 +495,11 @@ test("no runtime reader, writer, page or action imports the EX-C1 cores yet", ()
     "exam-overlap-core",
     "exam-publication-core",
     "exam-interface-riding-core",
+    // EX-C2 / EX-S3 — still unwired. S3 adds schema only: no reader, writer,
+    // action, route or UI may import any exam core until the S5 binding slice.
+    "exam-block-timetable-core",
+    "exam-definition-validation-core",
+    "exam-no-feedback-guard",
   ];
   const offenders: string[] = [];
 
@@ -673,4 +769,345 @@ test("the EX-C1 snapshot models are retained and documented as deprecated", () =
     false,
     "the abandoned supervisor contact gate must not survive",
   );
+});
+
+// ===========================================================================
+// EX-S3 — ExamDefinition: the canonical identity of a stored exam
+// ===========================================================================
+
+test("ExamDefinition declares exactly the approved fields with the right nullability", () => {
+  const def = block("model", "ExamDefinition");
+
+  assert.match(def, /\bid\s+String\s+@id\s+@default\(cuid\(\)\)/);
+  assert.match(def, /\n\s+planId\s+String\n/);
+  assert.match(def, /\n\s+name\s+String\n/);
+  assert.match(def, /\n\s+kind\s+ExamKind\n/);
+  assert.match(def, /\n\s+durationMinutes\s+Int\n/);
+  assert.match(def, /\n\s+parallelCapacity\s+Int\n/);
+  assert.match(def, /\n\s+requiresInstructedTrainee\s+Boolean\s+@default\(false\)/);
+  assert.match(def, /\n\s+requiresLessonTopic\s+Boolean\s+@default\(false\)/);
+  assert.match(def, /\n\s+requiresDiscipline\s+Boolean\s+@default\(false\)/);
+  assert.match(def, /\n\s+orderIndex\s+Int\n/);
+  assert.match(def, /\bcreatedAt\s+DateTime\s+@default\(now\(\)\)/);
+  assert.match(def, /\bupdatedAt\s+DateTime\s+@updatedAt\b/);
+
+  // Every column is REQUIRED: a definition with a missing duration or capacity
+  // could not produce a timetable, so there is no meaningful partial definition.
+  const optionals = [...def.matchAll(/^\s{2}(\w+)\s+\w+\?/gm)].map((m) => m[1]);
+  assert.deepEqual(optionals, []);
+
+  // Exactly twelve scalars — nothing operational or derived leaked in.
+  const scalars = [
+    ...def.matchAll(/^\s{2}(\w+)\s+(String|DateTime|Int|Boolean|Json|ExamKind)\b/gm),
+  ].map((m) => m[1]);
+  assert.deepEqual(scalars.sort(), [
+    "createdAt",
+    "durationMinutes",
+    "id",
+    "kind",
+    "name",
+    "orderIndex",
+    "parallelCapacity",
+    "planId",
+    "requiresDiscipline",
+    "requiresInstructedTrainee",
+    "requiresLessonTopic",
+    "updatedAt",
+  ]);
+
+  // A definition is a CONFIGURATION, never an occurrence: it carries no date,
+  // no clock time, no arena and no phase. Matched at FIELD POSITION, not as a
+  // raw substring — `updatedAt` legitimately contains "date".
+  for (const forbidden of ["date", "startTime", "endTime", "arena", "phase", "capacity"]) {
+    assert.equal(
+      new RegExp(`^\\s{2}${forbidden}\\s+`, "m").test(def),
+      false,
+      `ExamDefinition must not carry a ${forbidden} field`,
+    );
+  }
+});
+
+test("ExamDefinition is plan-scoped and Restrict-protected, with no global library", () => {
+  const def = block("model", "ExamDefinition");
+  assert.match(
+    def,
+    /plan\s+ExamPlan\s+@relation\(fields:\s*\[planId\],\s*references:\s*\[id\],\s*onDelete:\s*Restrict\)/,
+  );
+  assert.match(def, /sessions\s+ExamSession\[\]/);
+  assert.ok(def.includes('@@map("exam_definitions")'));
+  assert.ok(def.includes("@@index([planId, kind])"));
+
+  // Plan-scoped means planId is NOT nullable: there is no global/shared
+  // definition library, and no definition may float free of a plan.
+  assert.equal(/planId\s+String\?/.test(def), false);
+
+  const line = S3_MIGRATION.split("\n").find((l) =>
+    l.includes('"exam_definitions_planId_fkey"'),
+  );
+  assert.ok(line, "the definition -> plan FK is missing from the migration");
+  assert.ok(line.includes('REFERENCES "exam_plans"("id")'));
+  assert.ok(line.includes("ON DELETE RESTRICT"));
+});
+
+test("ExamPlan carries the definitions back-relation", () => {
+  assert.match(block("model", "ExamPlan"), /definitions\s+ExamDefinition\[\]/);
+});
+
+test("ExamSession.definitionId is REQUIRED — a definition-less block is unrepresentable", () => {
+  const s = block("model", "ExamSession");
+  // Required, NOT nullable: D6 locked that a persisted block always has its
+  // canonical definition. A draft may exist unsaved in the UI, never as a row.
+  assert.match(s, /\n\s+definitionId\s+String\n/);
+  assert.equal(
+    /definitionId\s+String\?/.test(s),
+    false,
+    "definitionId must be REQUIRED — no persisted definition-less draft block",
+  );
+  assert.ok(S3_MIGRATION.includes('ADD COLUMN     "definitionId" TEXT NOT NULL'));
+});
+
+test("the session -> definition FK is COMPOSITE, making a cross-plan link unrepresentable", () => {
+  const s = block("model", "ExamSession");
+  // planId appears on BOTH sides of the reference, so a session in plan A
+  // referencing a definition in plan B cannot be stored at all — the guarantee
+  // is structural, not a rule someone must remember to write.
+  assert.match(
+    s,
+    /definition\s+ExamDefinition\s+@relation\(fields:\s*\[planId,\s*definitionId\],\s*references:\s*\[planId,\s*id\],\s*onDelete:\s*Restrict\)/,
+  );
+  // The direct plan relation is RETAINED alongside it (prisma validate accepts
+  // the shared planId), because it carries the ExamPlan.sessions back-relation.
+  assert.match(
+    s,
+    /plan\s+ExamPlan\s+@relation\(fields:\s*\[planId\],\s*references:\s*\[id\],\s*onDelete:\s*Restrict\)/,
+  );
+
+  const line = S3_MIGRATION.split("\n").find((l) =>
+    l.includes('"exam_sessions_planId_definitionId_fkey"'),
+  );
+  assert.ok(line, "the composite session -> definition FK is missing");
+  assert.ok(
+    line.includes('FOREIGN KEY ("planId", "definitionId")'),
+    "the FK must be composite on (planId, definitionId)",
+  );
+  assert.ok(
+    line.includes('REFERENCES "exam_definitions"("planId", "id")'),
+    "the FK must reference the composite (planId, id) target",
+  );
+  // Restrict: a definition still in use by any block cannot be deleted, so a
+  // dangling definitionId is impossible rather than a state to render.
+  assert.ok(line.includes("ON DELETE RESTRICT"));
+});
+
+// ===========================================================================
+// EX-S3 — ExamSessionBreak: positional input, never calculated time
+// ===========================================================================
+
+test("ExamSessionBreak declares exactly the approved positional fields", () => {
+  const b = block("model", "ExamSessionBreak");
+
+  assert.match(b, /\bid\s+String\s+@id\s+@default\(cuid\(\)\)/);
+  assert.match(b, /\n\s+sessionId\s+String\n/);
+  assert.match(b, /\n\s+afterWaveIndex\s+Int\n/);
+  assert.match(b, /\n\s+durationMinutes\s+Int\n/);
+  assert.match(b, /\n\s+label\s+String\?/);
+  assert.match(b, /\bcreatedAt\s+DateTime\s+@default\(now\(\)\)/);
+  assert.match(b, /\bupdatedAt\s+DateTime\s+@updatedAt\b/);
+
+  const scalars = [
+    ...b.matchAll(/^\s{2}(\w+)\s+(String|DateTime|Int|Boolean|Json)\b/gm),
+  ].map((m) => m[1]);
+  assert.deepEqual(scalars.sort(), [
+    "afterWaveIndex",
+    "createdAt",
+    "durationMinutes",
+    "id",
+    "label",
+    "sessionId",
+    "updatedAt",
+  ]);
+
+  assert.ok(b.includes('@@map("exam_session_breaks")'));
+});
+
+test("ExamSessionBreak stores NO calculated time", () => {
+  const b = block("model", "ExamSessionBreak");
+  // A break is a POSITION and a DURATION. Wave starts/ends, per-trainee slots
+  // and the block end are derived on every read by exam-block-timetable-core.
+  // Persisting any of them would be the second source of truth.
+  // Matched at FIELD POSITION so the check cannot pass by accident, and so
+  // `afterWaveIndex` is not mistaken for a stored `waveIndex` result.
+  for (const forbidden of [
+    "startTime",
+    "endTime",
+    "waveIndex",
+    "offset",
+    "offsetMinutes",
+    "slot",
+    "slotIndex",
+    "computedAt",
+    "calculatedAt",
+    "derivedAt",
+    "blockEndTime",
+  ]) {
+    assert.equal(
+      new RegExp(`^\\s{2}${forbidden}\\s+`, "m").test(b),
+      false,
+      `ExamSessionBreak must not carry a ${forbidden} field — derived times are never stored`,
+    );
+  }
+  // `afterWaveIndex` is a POSITION, deliberately distinct from a stored
+  // `waveIndex` result: it says where the break sits, not when a wave runs.
+  assert.ok(b.includes("afterWaveIndex"));
+});
+
+test("ExamSessionBreak is unique per (session, afterWaveIndex) and cascades from its block", () => {
+  const b = block("model", "ExamSessionBreak");
+  // Without this, two breaks could share an index and silently SUM — the exact
+  // state exam-block-timetable-core notes it must stay total against.
+  assert.ok(b.includes("@@unique([sessionId, afterWaveIndex])"));
+  assert.match(
+    b,
+    /session\s+ExamSession\s+@relation\(fields:\s*\[sessionId\],\s*references:\s*\[id\],\s*onDelete:\s*Cascade\)/,
+  );
+  assert.match(block("model", "ExamSession"), /breaks\s+ExamSessionBreak\[\]/);
+
+  const line = S3_MIGRATION.split("\n").find((l) =>
+    l.includes('"exam_session_breaks_sessionId_fkey"'),
+  );
+  assert.ok(line, "the break -> session FK is missing");
+  assert.ok(line.includes('REFERENCES "exam_sessions"("id")'));
+  assert.ok(line.includes("ON DELETE CASCADE"));
+});
+
+test("EX-S3 introduced no stored individual start/end time anywhere", () => {
+  // The migration may add exactly three columns, and none of them is a time.
+  const added = [...S3_MIGRATION.matchAll(/ADD COLUMN\s+"(\w+)"/g)].map((m) => m[1]);
+  assert.deepEqual([...added].sort(), ["definitionId", "discipline", "orderIndex"]);
+  for (const column of added) {
+    assert.equal(
+      /(startTime|endTime|slotStart|slotEnd|waveStart|waveEnd|blockEnd)/i.test(column),
+      false,
+      `${column} looks like a persisted derived time`,
+    );
+  }
+  // And neither new table declares one.
+  for (const model of ["ExamDefinition", "ExamSessionBreak"]) {
+    const body = block("model", model);
+    assert.equal(/\n\s+startTime\s+/.test(body), false, `${model} must not store startTime`);
+    assert.equal(/\n\s+endTime\s+/.test(body), false, `${model} must not store endTime`);
+  }
+});
+
+// ===========================================================================
+// EX-S3 — the additive migration
+// ===========================================================================
+
+test("the EX-S3 migration is ADDITIVE: no drop, no enum change, no data statement", () => {
+  const FORBIDDEN_STATEMENTS: readonly [string, RegExp][] = [
+    ["INSERT", /^\s*INSERT\s+INTO\b/im],
+    ["UPDATE", /^\s*UPDATE\s+"/im],
+    ["DELETE", /^\s*DELETE\s+FROM\b/im],
+    ["TRUNCATE", /^\s*TRUNCATE\b/im],
+    ["DROP TABLE", /^\s*DROP\s+TABLE\b/im],
+    ["DROP COLUMN", /\bDROP\s+COLUMN\b/i],
+    ["DROP INDEX", /^\s*DROP\s+INDEX\b/im],
+    ["DROP CONSTRAINT", /\bDROP\s+CONSTRAINT\b/i],
+    ["ALTER TYPE", /^\s*ALTER\s+TYPE\b/im],
+    ["CREATE TYPE", /^\s*CREATE\s+TYPE\b/im],
+    ["COPY", /^\s*COPY\s+"/im],
+  ];
+  for (const [label, pattern] of FORBIDDEN_STATEMENTS) {
+    assert.equal(
+      pattern.test(S3_MIGRATION),
+      false,
+      `the EX-S3 migration must not contain a ${label} statement`,
+    );
+  }
+
+  // The ONE new statement class this slice introduces. DROP NOT NULL WIDENS the
+  // accepted value set, so it is non-destructive — unlike SET NOT NULL, which
+  // would narrow it and is banned outright.
+  assert.match(S3_MIGRATION, /ALTER COLUMN "kind" DROP NOT NULL/);
+  assert.match(S3_MIGRATION, /ALTER COLUMN "endTime" DROP NOT NULL/);
+  assert.equal(
+    /\bSET\s+NOT\s+NULL\b/i.test(S3_MIGRATION),
+    false,
+    "SET NOT NULL on an existing column would be a narrowing change",
+  );
+
+  // Zero enum churn: no exam enum is created, altered or even named.
+  for (const enumName of EXAM_ENUMS) {
+    assert.equal(
+      new RegExp(`(CREATE|ALTER)\\s+TYPE\\s+"${enumName}"`).test(S3_MIGRATION),
+      false,
+      `${enumName} must not be created or altered by EX-S3`,
+    );
+  }
+});
+
+test("the EX-S3 migration matches the approved statement inventory exactly", () => {
+  const count = (re: RegExp): number => [...S3_MIGRATION.matchAll(re)].length;
+
+  assert.equal(count(/CREATE TABLE "(\w+)"/g), 2);
+  assert.equal(count(/ADD COLUMN\s+"\w+"/g), 3);
+  assert.equal(count(/ALTER COLUMN "\w+" DROP NOT NULL/g), 2);
+  assert.equal(count(/CREATE (UNIQUE )?INDEX "\w+"/g), 6);
+  assert.equal(count(/ADD CONSTRAINT "\w+" FOREIGN KEY/g), 3);
+  assert.equal(count(/CREATE TYPE "\w+"/g), 0);
+
+  const tables = [...S3_MIGRATION.matchAll(/CREATE TABLE "(\w+)"/g)].map((m) => m[1]);
+  assert.deepEqual([...tables].sort(), ["exam_definitions", "exam_session_breaks"]);
+
+  // Only exam tables are altered — EX-S3 touches nothing outside the module.
+  for (const m of S3_MIGRATION.matchAll(/ALTER TABLE "(\w+)"/g)) {
+    assert.ok(m[1].startsWith("exam_"), `EX-S3 alters a non-exam table: ${m[1]}`);
+  }
+  // Exactly the two pre-existing exam tables approved for alteration.
+  const altered = new Set(
+    [...S3_MIGRATION.matchAll(/ALTER TABLE "(\w+)" ADD COLUMN/g)].map((m) => m[1]),
+  );
+  assert.deepEqual([...altered].sort(), ["exam_assignments", "exam_sessions"]);
+});
+
+test("the EX-S3 migration sorts after both earlier exam migrations", () => {
+  const dirs = readdirSync(join(REPO_ROOT, "prisma", "migrations")).filter((d) =>
+    /^\d{14}_/.test(d),
+  );
+  assert.ok(dirs.includes(S3_MIGRATION_DIR), "the EX-S3 migration directory is missing");
+  assert.ok(S3_MIGRATION_DIR > MIGRATION_DIR);
+  assert.ok(S3_MIGRATION_DIR > SOURCE_DATE_MIGRATION_DIR);
+
+  // EX-S3 must not have edited either already-applied migration file.
+  assert.equal(S3_MIGRATION.includes("exam_teaching_practice_source_dates"), false);
+  assert.equal(SOURCE_DATE_MIGRATION.includes("exam_definitions"), false);
+  assert.equal(MIGRATION.includes("exam_definitions"), false);
+});
+
+test("the EX-S3 deprecated session columns are retained, present and documented", () => {
+  const s = block("model", "ExamSession");
+  // Retained, never dropped — dropping a column is irreversible production DDL.
+  for (const field of ["kind", "phase", "interfaceSessionId", "capacity"]) {
+    assert.ok(
+      new RegExp(`\\n\\s+${field}\\s+`).test(s),
+      `${field} must be RETAINED, not dropped`,
+    );
+  }
+  // The self-relation fields and the ExamPhase enum survive for the same reason.
+  assert.match(s, /interfaceSession\s+ExamSession\?/);
+  assert.match(s, /ridingSessions\s+ExamSession\[\]/);
+  assert.ok(SCHEMA.includes("enum ExamPhase {"), "ExamPhase is retained to avoid DDL");
+
+  // ...and each is documented as deprecated/unwritten in the comment block
+  // ABOVE the model, which `block()` deliberately excludes.
+  assert.ok(SCHEMA.includes("EX-S3 DEPRECATED AND UNWRITTEN"));
+  assert.ok(SCHEMA.includes("There is NO"));
+  assert.ok(
+    SCHEMA.includes("persistent interface/riding link"),
+    "the abandoned interface/riding link must be documented as gone",
+  );
+  // title is an occurrence subtitle only — never identity, never a group key.
+  assert.ok(SCHEMA.includes("OPTIONAL PER-OCCURRENCE SUBTITLE"));
+  // The EX-C2-0 beginner rules are untouched by EX-S3.
+  assert.ok(SCHEMA.includes("A STORED BEGINNER_INSTRUCTION ROW IS FORBIDDEN"));
 });

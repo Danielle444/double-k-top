@@ -2630,15 +2630,26 @@ model CourseOfferingCapability {
 // mutates the other; the source ids below are provenance and idempotency
 // only, which is exactly why they are onDelete: SetNull rather than Restrict.
 //
-// There is deliberately NO parent Exam/ExamDefinition entity between ExamPlan
-// and ExamSession: the three connected admin views (general schedule / by date
-// / by exam type) are all projections over these same ExamSession rows,
-// grouped by ExamSession.kind. No view-specific table, cached row, aggregate
-// column, or materialized view may ever be added - that would be a second
-// source of truth.
+// EX-S3 SUPERSEDES the earlier "no parent entity" rule. ExamDefinition now sits
+// between ExamPlan and ExamSession and is the CANONICAL IDENTITY of a stored
+// exam: the "by exam type" view groups by ExamDefinition.id and labels with
+// ExamDefinition.name, never by ExamSession.kind and never by ExamSession.title.
+// ExamKind is internal behaviour only, and several definitions may share one
+// kind. What has NOT changed is the rule that made the old note worth writing:
+// the three connected admin views are still read-only projections over the same
+// rows, and no view-specific table, cached row, aggregate column or materialized
+// view may ever be added - that would be a second source of truth.
 //
-// No EXAMS capability exists in this phase (CAPABILITY_KEYS has no EXAMS key).
-// Nothing reads any model below in EX-C1: this slice is schema + pure cores.
+// EQUALLY FORBIDDEN, and for the same reason: any slot, wave, timetable or
+// calculated-time table. Per-trainee start/end times and wave boundaries are
+// DERIVED on every read from the definition, the ordered assignments and the
+// positional breaks. Nothing derived is ever persisted.
+//
+// No EXAMS capability exists yet (CAPABILITY_KEYS has no EXAMS key). One will be
+// added in a LATER production-data slice and enabled independently for Level 1
+// and Level 2; it must NOT reuse TEACHING_PRACTICE. Nothing reads any model
+// below: through EX-S3 this remains schema + pure cores, with no reader, writer,
+// action, route or UI anywhere in the application.
 // ===========================================================================
 
 /// The four exam kinds. Mirrors the ExamKind string-literal union in
@@ -2694,7 +2705,11 @@ model ExamPlan {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  courseOffering CourseOffering @relation(fields: [courseOfferingId], references: [id], onDelete: Restrict)
+  courseOffering CourseOffering                   @relation(fields: [courseOfferingId], references: [id], onDelete: Restrict)
+  // EX-S3 - the manager-created exam definitions of this plan. Definitions are
+  // ALWAYS plan-scoped: there is no global definition library and no seeded or
+  // hardcoded exam name anywhere in this module.
+  definitions    ExamDefinition[]
   sessions       ExamSession[]
   // EX-C2-0 - the Teaching-Practice dates that belong to this plan. Beginner
   // exams are a LIVE PROJECTION of Teaching Practice, so these date rows are
@@ -2745,6 +2760,108 @@ model ExamTeachingPracticeSourceDate {
   @@map("exam_teaching_practice_source_dates")
 }
 
+// EX-S3 - THE CANONICAL IDENTITY OF A STORED EXAM.
+//
+// One manager-created, reusable exam configuration inside ONE ExamPlan.
+// ExamDefinition.id is the grouping identity and ExamDefinition.name is the
+// visible exam name; together they are the ONLY canonical identity a stored exam
+// has. The "by exam type" view groups on the id and labels with the name.
+//
+// SEVERAL DEFINITIONS MAY SHARE ONE KIND, and this is the ordinary case rather
+// than an edge case: separate manager-created "רכיבה" and "ממשק" definitions
+// both legitimately carry kind INTERFACE_RIDING and must remain two DISTINCT
+// exams. That is precisely why ExamKind is NOT a grouping key - grouping on it
+// would silently merge two exams the manager deliberately created apart. Kind is
+// INTERNAL BEHAVIOUR ONLY: it selects which field rules apply, never how exams
+// are grouped, ordered or labelled.
+//
+// ExamDefinition.kind is the ONLY ACTIVE STORED SOURCE of behavioural kind.
+// ExamSession.kind is deprecated and unwritten; readers pass definition.kind
+// into the pure domain and projection cores.
+//
+// durationMinutes and parallelCapacity feed the DERIVED per-trainee timetable in
+// lib/exam/exam-block-timetable-core.ts. parallelCapacity is examinees PER WAVE
+// and never a ceiling: examinees beyond it produce ADDITIONAL WAVES, which is the
+// design, not an overflow. No derived time is ever persisted - see
+// ExamSessionBreak.
+//
+// The three requires* flags are validated by
+// lib/exam/exam-definition-validation-core.ts, which permits
+// requiresInstructedTrainee / requiresLessonTopic ONLY for ADVANCED_INSTRUCTION.
+// Without that check a manager could save a definition that is UNSATISFIABLE BY
+// CONSTRUCTION against rules exam-domain-core already enforces, with no way to
+// fix any block built from it short of deleting the definition.
+//
+// There is NO global definition library, NO seeded or default definition, NO
+// hardcoded exam name, and NO phase field. BEGINNER_INSTRUCTION never has a
+// definition at all: beginner exams are a live Teaching-Practice projection.
+model ExamDefinition {
+  id                        String   @id @default(cuid())
+  planId                    String
+  name                      String
+  kind                      ExamKind
+  durationMinutes           Int
+  parallelCapacity          Int
+  requiresInstructedTrainee Boolean  @default(false)
+  requiresLessonTopic       Boolean  @default(false)
+  requiresDiscipline        Boolean  @default(false)
+  orderIndex                Int
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  plan     ExamPlan      @relation(fields: [planId], references: [id], onDelete: Restrict)
+  sessions ExamSession[]
+
+  // Two definitions in one plan may not share a name: the name IS the group
+  // label in the "by exam type" view, so a duplicate would render as one group
+  // the manager cannot tell apart.
+  @@unique([planId, name])
+  // NOT redundant with @id. This is the constraint the composite foreign key
+  // from ExamSession([planId, definitionId]) requires as its reference target,
+  // and it is what makes a cross-plan session -> definition link
+  // UNREPRESENTABLE rather than merely forbidden by a rule someone must
+  // remember to write.
+  @@unique([planId, id])
+  @@index([planId, kind])
+  @@map("exam_definitions")
+}
+
+// EX-S3 - one POSITIONAL break inside one block's DERIVED timetable.
+//
+// A break occurs AFTER the zero-based afterWaveIndex and shifts every later
+// wave. There is deliberately NO absolute time and no earliest-start floor: an
+// absolute anchor would reintroduce the manual time this whole design exists to
+// remove, and would silently go wrong the moment the block start moved.
+//
+// THIS TABLE STORES NO CALCULATED TIME. It stores a position and a duration.
+// Wave starts, wave ends, per-trainee slots and the block end time are DERIVED
+// on every read by exam-block-timetable-core. Persisting any of them would
+// create the second source of truth this module exists to prevent - do not add
+// startTime, endTime, waveIndex, a calculated offset or a calculated slot here
+// or anywhere else.
+//
+// The unique constraint is the one exam-block-timetable-core already names as
+// planned: without it two breaks could share an index and silently SUM. That
+// core stays total over its inputs regardless, because a pure core must not
+// depend on a constraint it cannot see.
+//
+// onDelete: Cascade matches ExamAssignment: a break holds no independent
+// information and is meaningless without its block.
+model ExamSessionBreak {
+  id              String   @id @default(cuid())
+  sessionId       String
+  afterWaveIndex  Int
+  durationMinutes Int
+  label           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, afterWaveIndex])
+  @@map("exam_session_breaks")
+}
+
 // The stored exam record for the THREE non-beginner kinds. All three admin
 // views (general schedule, by date, by exam type) are read-only projections
 // over these rows MERGED WITH live beginner rows derived from Teaching
@@ -2759,15 +2876,37 @@ model ExamTeachingPracticeSourceDate {
 // database cannot express "this enum value may never be inserted" without a
 // check constraint the approved migration does not add.
 //
-// Field applicability is enforced by the pure domain core, not by the database
-// (a nullable column cannot express "required for exactly one kind"):
-//   - phase           : REQUIRED for INTERFACE_RIDING, FORBIDDEN otherwise;
-//   - interfaceSessionId : only an INTERFACE_RIDING session in the RIDING
-//     phase may carry it, pointing at its INTERFACE partner. This self-FK IS
-//     the interface/riding link - the two phases are two separate rows with
-//     their own date/time/arena/participants/publication, independent after
-//     the optional one-time seed (divergence is intentional; there is NO
-//     permanent synchronisation);
+// EX-S3 - A SESSION MAY NOT EXIST WITHOUT ITS DEFINITION. definitionId is
+// REQUIRED from introduction, and the foreign key is COMPOSITE:
+//
+//     ExamSession(planId, definitionId) -> ExamDefinition(planId, id)
+//
+// A plain definitionId -> ExamDefinition(id) key would permit a session in plan
+// A to reference a definition in plan B. Nothing in the pure cores checks plan
+// identity on that link, so the violation would be SILENT - the block would
+// render under a group belonging to another course's plan. The composite form
+// puts planId on both sides of the reference and makes the cross-plan link
+// UNREPRESENTABLE. onDelete: Restrict then makes a dangling definition
+// impossible rather than a runtime state anything has to render.
+//
+// The direct ExamPlan relation is RETAINED alongside it: it carries the
+// ExamPlan.sessions back-relation every plan-scoped reader uses. The composite
+// key constrains correctness; the plan relation serves access.
+//
+// EX-S3 DEPRECATED AND UNWRITTEN, retained without dropping (dropping a column
+// is irreversible production DDL that buys nothing):
+//   - kind : now NULLABLE. ExamDefinition.kind is the only active stored source
+//     of behavioural kind; readers pass definition.kind into the pure cores.
+//     Retained as a permanent denormalised mirror it is NOT - nothing writes it;
+//   - phase / interfaceSessionId : the interface/riding phase model is
+//     abandoned. ExamDefinition id/name is the canonical identity, and separate
+//     "רכיבה" and "ממשק" definitions are what distinguish them now. There is NO
+//     persistent interface/riding link and NO interface-to-riding copy. Phase
+//     affects no grouping, display, validation or conflict rule. The ExamPhase
+//     enum and the self-relation fields are retained ONLY to avoid destructive
+//     DDL;
+//   - capacity : superseded by ExamDefinition.parallelCapacity. The active
+//     writer always reads parallelCapacity from the definition;
 //   - beginnerFormat : DEPRECATED AND UNWRITTEN. It described a copied beginner
 //     session; the live projection now derives the format at read time from
 //     TeachingPracticeLesson.practiceType instead;
@@ -2775,6 +2914,15 @@ model ExamTeachingPracticeSourceDate {
 //     DEPRECATED AND UNWRITTEN copy provenance. Retained empty; no writer
 //     exists and none may be added. roleLabelOverrides is now read live from
 //     TeachingPracticeLesson.roleLabelOverrides.
+//
+// endTime is now NULLABLE and superseded: the active block end is DERIVED from
+// the definition's durationMinutes / parallelCapacity, the ordered assignments
+// and the positional breaks. It is never persisted, and no per-trainee start or
+// end time is ever persisted anywhere.
+//
+// title is an OPTIONAL PER-OCCURRENCE SUBTITLE only. It is never canonical
+// identity, never a grouping key, and never a fallback exam name - a missing
+// definition name renders as an explicit empty state, never as the title.
 //
 // orderIndex is load-bearing, not cosmetic: on the real copy-source dates every
 // start time is shared by 2-4 lessons, so (startTime, orderIndex, id) is what
@@ -2788,12 +2936,13 @@ model ExamTeachingPracticeSourceDate {
 model ExamSession {
   id                             String              @id @default(cuid())
   planId                         String
-  kind                           ExamKind
+  definitionId                   String
+  kind                           ExamKind?
   phase                          ExamPhase?
   beginnerFormat                 ExamBeginnerFormat?
   date                           DateTime            @db.Date
   startTime                      String
-  endTime                        String
+  endTime                        String?
   orderIndex                     Int
   arena                          String?
   title                          String?
@@ -2808,10 +2957,12 @@ model ExamSession {
   updatedAt                      DateTime            @updatedAt
 
   plan             ExamPlan                @relation(fields: [planId], references: [id], onDelete: Restrict)
+  definition       ExamDefinition          @relation(fields: [planId, definitionId], references: [planId, id], onDelete: Restrict)
   interfaceSession ExamSession?            @relation("ExamInterfaceRiding", fields: [interfaceSessionId], references: [id], onDelete: Restrict)
   ridingSessions   ExamSession[]           @relation("ExamInterfaceRiding")
   sourceLesson     TeachingPracticeLesson? @relation(fields: [sourceTeachingPracticeLessonId], references: [id], onDelete: SetNull)
   assignments      ExamAssignment[]
+  breaks           ExamSessionBreak[]
   supervisors      ExamSessionSupervisor[]
   beginnerChildren ExamBeginnerChild[]
 
@@ -2823,9 +2974,14 @@ model ExamSession {
   // Serves the "by date" view: WHERE planId AND date ORDER BY startTime,
   // orderIndex, id.
   @@index([planId, date, orderIndex])
-  // Serves the "by exam type" view (WHERE planId AND kind ORDER BY date,
-  // startTime, orderIndex, id) and the general schedule's GROUP BY kind.
+  // EX-S3 DEAD BUT RETAINED. This served the old kind-grouped "by exam type"
+  // view. Grouping is now by definition, and kind is unwritten, so nothing
+  // reads it. Retained rather than dropped per the no-destructive-DDL rule; its
+  // only cost is negligible write amplification on a table of dozens of rows.
   @@index([planId, kind, date, orderIndex])
+  // EX-S3 - the ACTIVE "by exam type" index: WHERE planId AND definitionId
+  // ORDER BY date, startTime, orderIndex, id.
+  @@index([planId, definitionId, date, orderIndex])
   @@index([date])
   @@map("exam_sessions")
 }
@@ -2841,6 +2997,19 @@ model ExamSession {
 // horseName is per-ASSIGNMENT, not per-session, so an instruction exam stores
 // the examinee's horse and the instructed trainee's horse independently
 // (free text - there is no Horse model in this app).
+//
+// EX-S3 - orderIndex is the manager's explicit EXAMINEE WAVE ORDERING. The
+// ordered examinees are chunked into consecutive waves of parallelCapacity, and
+// the assignment id is the deterministic final TIE-BREAK, so two assignments
+// sharing an orderIndex still produce one stable timetable. It is deliberately
+// NOT pairingIndex: pairing answers "who teaches whom" and is
+// ADVANCED_INSTRUCTION-only, so reusing it for ordering would leave every other
+// kind unordered and would couple two unrelated meanings in one column.
+//
+// EX-S3 - discipline is OPTIONAL FREE TEXT ("ענף"), demanded per examinee only
+// when its definition sets requiresDiscipline. There is deliberately no
+// Discipline enum and no Discipline table: the value set is not fixed and no
+// existing rule constrains it.
 //
 // Kind-specific fields, enforced by the pure domain core:
 //   - instructionTopic   : ADVANCED_INSTRUCTION only, carried on the EXAMINEE
@@ -2859,8 +3028,10 @@ model ExamAssignment {
   sessionId          String
   studentId          String?
   role               ExamAssignmentRole
+  orderIndex         Int                @default(0)
   horseName          String?
   instructionTopic   String?
+  discipline         String?
   pairingIndex       Int?
   sourcePracticeRole String?
   notes              String?
@@ -2876,6 +3047,8 @@ model ExamAssignment {
   // message; this is the last line of defence.
   @@unique([sessionId, studentId])
   @@index([studentId])
+  // EX-S3 - the ordered examinee fetch that feeds the derived wave calculation.
+  @@index([sessionId, orderIndex])
   @@map("exam_assignments")
 }
 
