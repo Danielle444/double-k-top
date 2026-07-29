@@ -16,12 +16,18 @@
  * There is no THEORY label because there is no THEORY kind: the theory exam is
  * outside this module. There is no DEMO_RIDER label because "rides for the
  * examinee" and "is instructed by the examinee" are the SAME role.
+ *
+ * EX-S3.5 — there is no phase label map either. The phase model is RETIRED, and
+ * `ExamDefinition.name` is the ONLY visible exam name: separate definitions
+ * named "ממשק" and "רכיבה" are what distinguish those exams now. Re-exposing
+ * "ממשק"/"רכיבה" through a phase label would resurrect a second, competing
+ * source of exam identity in the UI, so `EXAM_PHASE_LABELS` is deliberately
+ * gone rather than merely deprecated.
  */
 import type {
   ExamAssignmentRole,
   ExamBeginnerFormat,
   ExamKind,
-  ExamPhase,
 } from "./exam-domain-core";
 import { isExamKind } from "./exam-domain-core";
 
@@ -31,12 +37,6 @@ export const EXAM_KIND_LABELS: Readonly<Record<ExamKind, string>> = Object.freez
   LUNGE_NO_RIDER: "לונג ללא רוכב",
   ADVANCED_INSTRUCTION: "הדרכת מתקדמים",
   BEGINNER_INSTRUCTION: "הדרכת מתחילים",
-});
-
-/** The two phases of an interface/riding exam, in Hebrew. */
-export const EXAM_PHASE_LABELS: Readonly<Record<ExamPhase, string>> = Object.freeze({
-  INTERFACE: "ממשק",
-  RIDING: "רכיבה",
 });
 
 /** The copied beginner-session formats, in Hebrew. */

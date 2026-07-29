@@ -13,12 +13,12 @@
  * results, or examiner feedback anywhere. Do not add them.
  *
  * WHAT THIS ANSWERS (and only this):
- *  - which `ExamKind` / `ExamPhase` values are valid (type guards);
- *  - the valid `ExamSession` SHAPE by phase/kind (INTERFACE_RIDING carries a
- *    phase; the other kinds do not; only a RIDING phase may link to an interface
- *    partner; a BEGINNER_INSTRUCTION session carries an `ExamBeginnerFormat` and
- *    MUST embed the participants COPIED from Teaching Practice — see the EX-C1
- *    amendment note below);
+ *  - which `ExamKind` values are valid (type guard);
+ *  - the valid `ExamSession` SHAPE by kind (no kind carries a phase and no
+ *    session links to another session — see the EX-S3.5 amendment note below; a
+ *    BEGINNER_INSTRUCTION session carries an `ExamBeginnerFormat` and MUST embed
+ *    the participants COPIED from Teaching Practice — see the EX-C1 amendment
+ *    note below);
  *  - which kind-specific fields are FORBIDDEN on which kind (format, copy
  *    provenance, embedded children, instructed trainees, instruction topic);
  *  - the participant XOR rule (an `ExamAssignment` references EITHER an internal
@@ -34,14 +34,14 @@
  *    and reconciliation is X6);
  *  - detect time overlaps (exam-overlap-core) or cross-session conflicts
  *    (exam-conflict-core);
- *  - validate interface/riding PAIRING or the one-time seed
- *    (exam-interface-riding-core);
+ *  - validate any interface/riding PAIRING or seed — that whole model is RETIRED
+ *    (EX-S3.5), and no replacement helper exists;
  *  - compute publication staleness (exam-publication-core);
  *  - touch Prisma, schema, migrations, actions, UI, or any IO.
  *
  * FAIL CLOSED: any structurally invalid input yields an issue, never a silent
  * pass. Membership tests use own-property semantics so inherited keys
- * (`__proto__`, `toString`, …) never validate as a real kind/phase.
+ * (`__proto__`, `toString`, …) never validate as a real kind.
  *
  * ===========================================================================
  * EX-C1 AMENDMENT — SNAPSHOT/COPY SEMANTICS SUPERSEDE REFERENCE/DERIVE
@@ -87,6 +87,32 @@
  *
  * SCHEDULE-ONLY still holds, and now explicitly: no feedback, rating, grade or
  * result appears in the exam module or in the live projection's inputs.
+ *
+ * ===========================================================================
+ * EX-S3.5 AMENDMENT — THE PHASE / INTERFACE-LINK MODEL IS RETIRED
+ * ===========================================================================
+ * `ExamDefinition.id` / `ExamDefinition.name` are the canonical identity of a
+ * stored exam, and `ExamDefinition.kind` is the only active stored behavioural
+ * kind. Two SEPARATE definitions named "רכיבה" and "ממשק" may both use
+ * `INTERFACE_RIDING`; they are independent definitions producing independent
+ * `ExamSession` blocks.
+ *
+ * There is therefore NO active runtime concept of an INTERFACE phase, a RIDING
+ * phase, an interface partner session, a permanent interface/riding
+ * synchronization, or an interface-to-riding seed. `ExamSession.phase` and
+ * `ExamSession.interfaceSessionId` survive in the database ONLY as deprecated,
+ * unwritten columns, because dropping a column is irreversible production DDL
+ * that buys nothing.
+ *
+ * `validateExamSessionShape` reflects exactly that:
+ *  - NO kind requires a phase — `INTERFACE_RIDING` with no phase is VALID;
+ *  - ANY present phase is rejected as deprecated (`EX-DOM-PHASE-FORBIDDEN`);
+ *  - ANY present `interfaceSessionId` is rejected (`EX-DOM-LINK-FORBIDDEN`).
+ *
+ * `EX-DOM-PHASE-REQUIRED` and `EX-DOM-INVALID-PHASE` are RESERVED code strings
+ * that are never emitted again (see `RESERVED_EXAM_DOMAIN_ISSUE_CODES`); they
+ * are retained, unrenumbered, so no downstream consumer's stable contract
+ * breaks. Every rule unrelated to phase/link is preserved EXACTLY.
  */
 
 // ===========================================================================
@@ -100,8 +126,10 @@ export type ExamKind =
   | "ADVANCED_INSTRUCTION"
   | "BEGINNER_INSTRUCTION";
 
-/** The two phases. Only `INTERFACE_RIDING` sessions are phased. */
-export type ExamPhase = "INTERFACE" | "RIDING";
+// EX-S3.5: there is deliberately NO `ExamPhase` union here. The phase model is
+// retired; the `ExamPhase` enum survives in the Prisma schema only to avoid
+// destructive DDL on a column nothing writes. A pure core that re-declared it
+// would be re-establishing the retired concept in the active domain.
 
 /**
  * The format of a COPIED beginner-instruction session, denormalized from the
@@ -120,9 +148,6 @@ export const EXAM_KINDS: readonly ExamKind[] = Object.freeze([
   "ADVANCED_INSTRUCTION",
   "BEGINNER_INSTRUCTION",
 ]);
-
-/** Canonical ordered phase list. */
-export const EXAM_PHASES: readonly ExamPhase[] = Object.freeze(["INTERFACE", "RIDING"]);
 
 /** Canonical ordered beginner-format list (stable; used for iteration/tests). */
 export const EXAM_BEGINNER_FORMATS: readonly ExamBeginnerFormat[] = Object.freeze([
@@ -143,10 +168,6 @@ const KIND_SET: Readonly<Record<string, true>> = Object.freeze({
   LUNGE_NO_RIDER: true,
   ADVANCED_INSTRUCTION: true,
   BEGINNER_INSTRUCTION: true,
-});
-const PHASE_SET: Readonly<Record<string, true>> = Object.freeze({
-  INTERFACE: true,
-  RIDING: true,
 });
 const ROLE_SET: Readonly<Record<string, true>> = Object.freeze({
   EXAMINEE: true,
@@ -173,10 +194,9 @@ export function isExamKind(value: unknown): value is ExamKind {
   return typeof value === "string" && hasOwn(KIND_SET, value);
 }
 
-/** Type guard: a valid `ExamPhase`. Fails closed on non-strings and proto keys. */
-export function isExamPhase(value: unknown): value is ExamPhase {
-  return typeof value === "string" && hasOwn(PHASE_SET, value);
-}
+// EX-S3.5: `isExamPhase` is REMOVED with the phase model. Nothing distinguishes
+// a "valid" from an "invalid" phase any more — ANY present phase is forbidden —
+// so a guard over INTERFACE/RIDING would be a live branch on retired values.
 
 /** Type guard: a valid `ExamAssignmentRole`. */
 export function isExamAssignmentRole(value: unknown): value is ExamAssignmentRole {
@@ -199,8 +219,11 @@ export function isExamBeginnerFormat(value: unknown): value is ExamBeginnerForma
  */
 export type ExamDomainIssueCode =
   | "EX-DOM-INVALID-KIND"
+  // EX-S3.5 RESERVED, NEVER EMITTED — retained (never renumbered) so a stable
+  // downstream contract cannot break. See RESERVED_EXAM_DOMAIN_ISSUE_CODES.
   | "EX-DOM-INVALID-PHASE"
   | "EX-DOM-PHASE-REQUIRED"
+  // EX-S3.5 — now the DEPRECATION codes: any present phase / link is rejected.
   | "EX-DOM-PHASE-FORBIDDEN"
   | "EX-DOM-LINK-FORBIDDEN"
   | "EX-DOM-BEGINNER-HAS-PARTICIPANTS"
@@ -226,10 +249,16 @@ export type ExamDomainIssueCode =
 export const EXAM_DOMAIN_MESSAGES: Readonly<Record<ExamDomainIssueCode, string>> =
   Object.freeze({
     "EX-DOM-INVALID-KIND": "סוג בחינה לא חוקי",
-    "EX-DOM-INVALID-PHASE": "שלב בחינה לא חוקי",
-    "EX-DOM-PHASE-REQUIRED": "לבחינת ממשק ורכיבה חובה להגדיר שלב (ממשק או רכיבה)",
-    "EX-DOM-PHASE-FORBIDDEN": "לסוג בחינה זה אין שלב",
-    "EX-DOM-LINK-FORBIDDEN": "רק מפגש רכיבה יכול להתקשר למפגש ממשק",
+    // EX-S3.5 RESERVED — never emitted. Kept only so the code strings stay
+    // stable; their messages are deliberately worded as out of use.
+    "EX-DOM-INVALID-PHASE": "שדה שלב הבחינה הוצא משימוש ואינו בשימוש עוד",
+    "EX-DOM-PHASE-REQUIRED": "שדה שלב הבחינה הוצא משימוש ואינו נדרש עוד",
+    // EX-S3.5 — the phase/link model is retired: ExamDefinition היא זהות
+    // הבחינה, ואין עוד שלבים או קישור בין מפגשים.
+    "EX-DOM-PHASE-FORBIDDEN":
+      "שדה שלב הבחינה הוצא משימוש ואינו נכתב עוד — אין להגדיר שלב למפגש בחינה",
+    "EX-DOM-LINK-FORBIDDEN":
+      "הקישור בין מפגש ממשק למפגש רכיבה הוצא משימוש ואינו נכתב עוד — אין לקשר מפגשי בחינה זה לזה",
     // EX-C1: meaning INVERTED by the snapshot/copy design — the code string is
     // deliberately unchanged, but a beginner session must now EMBED the
     // participants copied from Teaching Practice.
@@ -251,6 +280,18 @@ export const EXAM_DOMAIN_MESSAGES: Readonly<Record<ExamDomainIssueCode, string>>
     "EX-DOM-BEGINNER-SESSION-FORBIDDEN":
       "בחינת מדריך מתחילים נקראת ישירות מהתנסויות מתחילים ואינה נשמרת כמפגש בחינה",
   });
+
+/**
+ * EX-S3.5 — issue codes that are RESERVED and must never be emitted again.
+ *
+ * The phase model is retired, so "this kind requires a phase" and "this phase
+ * value is out of domain" describe questions the active domain no longer asks.
+ * The strings are retained (and NOT renumbered) purely so a downstream consumer
+ * pinned to the stable code contract cannot break; re-emitting either one would
+ * mean the retired model has crept back in.
+ */
+export const RESERVED_EXAM_DOMAIN_ISSUE_CODES: readonly ExamDomainIssueCode[] =
+  Object.freeze(["EX-DOM-INVALID-PHASE", "EX-DOM-PHASE-REQUIRED"]);
 
 /** A single structural issue: a stable code and its Hebrew message. */
 export interface ExamDomainIssue {
@@ -346,9 +387,19 @@ export function validateAssignmentParticipant(
  */
 export interface ExamSessionShapeInput {
   readonly kind: ExamKind;
-  readonly phase: ExamPhase | null;
-  /** The linked interface partner id — only a RIDING phase may carry one. */
-  readonly interfaceSessionId: string | null;
+  /**
+   * @deprecated EX-S3.5 — the phase model is RETIRED. Omit it (or pass null).
+   * ANY present value is rejected with `EX-DOM-PHASE-FORBIDDEN`, whatever the
+   * kind. Typed as a loose string so a reader passing the deprecated database
+   * column straight through still type-checks and is still rejected.
+   */
+  readonly phase?: string | null;
+  /**
+   * @deprecated EX-S3.5 — there is NO interface partner and no persistent link
+   * between exam sessions. ANY present value is rejected with
+   * `EX-DOM-LINK-FORBIDDEN`.
+   */
+  readonly interfaceSessionId?: string | null;
   /** Total participant assignments the session stores itself. */
   readonly embeddedAssignmentCount: number;
 
@@ -384,9 +435,10 @@ function count(value: unknown): number {
 /**
  * Validate the structural shape of one `ExamSession`:
  *  - the kind must be valid;
- *  - INTERFACE_RIDING requires a valid phase; every other kind forbids a phase;
- *  - only an INTERFACE_RIDING session in the RIDING phase may carry an
- *    `interfaceSessionId` link;
+ *  - NO kind carries a phase (EX-S3.5): a present phase is rejected as
+ *    deprecated, and `INTERFACE_RIDING` with no phase is perfectly valid;
+ *  - NO session links to another session: a present `interfaceSessionId` is
+ *    rejected as deprecated;
  *  - BEGINNER_INSTRUCTION requires a valid `beginnerFormat`; every other kind
  *    forbids one;
  *  - a BEGINNER_INSTRUCTION session MUST embed the participants copied from
@@ -407,22 +459,17 @@ export function validateExamSessionShape(
     return result([issue("EX-DOM-INVALID-KIND")]);
   }
 
-  const phasePresent = input.phase !== null && input.phase !== undefined;
-  if (phasePresent && !isExamPhase(input.phase)) {
-    issues.push(issue("EX-DOM-INVALID-PHASE"));
-  }
-
-  if (input.kind === "INTERFACE_RIDING") {
-    if (!phasePresent) {
-      issues.push(issue("EX-DOM-PHASE-REQUIRED"));
-    }
-  } else if (phasePresent) {
+  // EX-S3.5: phase is DEPRECATED AND UNWRITTEN for every kind. No kind requires
+  // one, no phase VALUE is meaningful any more (so EX-DOM-PHASE-REQUIRED and
+  // EX-DOM-INVALID-PHASE are never emitted), and anything present at all — a
+  // retired INTERFACE/RIDING token or junk alike — is rejected the same way.
+  if (input.phase !== null && input.phase !== undefined) {
     issues.push(issue("EX-DOM-PHASE-FORBIDDEN"));
   }
 
-  const linkPresent = isPresentId(input.interfaceSessionId);
-  const linkAllowed = input.kind === "INTERFACE_RIDING" && input.phase === "RIDING";
-  if (linkPresent && !linkAllowed) {
+  // EX-S3.5: there is no interface partner and no persistent link between exam
+  // sessions, so a link is forbidden unconditionally rather than per phase.
+  if (input.interfaceSessionId !== null && input.interfaceSessionId !== undefined) {
     issues.push(issue("EX-DOM-LINK-FORBIDDEN"));
   }
 
@@ -479,8 +526,9 @@ export function validateExamSessionShape(
 /**
  * Validate the COPIED beginner-session shape ONLY (no Teaching-Practice
  * access — this core never reads TP). A beginner session carries kind
- * BEGINNER_INSTRUCTION, no phase, no interface link, a valid
- * `ExamBeginnerFormat`, and the participants COPIED from its source lesson.
+ * BEGINNER_INSTRUCTION, a valid `ExamBeginnerFormat`, and the participants
+ * COPIED from its source lesson — and, like every other kind since EX-S3.5,
+ * no phase and no interface link.
  * Delegates to `validateExamSessionShape`, which enforces exactly these rules
  * for the beginner kind.
  */

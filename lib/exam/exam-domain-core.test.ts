@@ -6,23 +6,23 @@
  * PURE: no Prisma, no DB, no clock, no randomness, no auth, no cookie, no env,
  * no Teaching-Practice access.
  *
- * SCOPE OF PROOF: valid kinds/phases; the participant XOR rule; instructed ≠
- * examinee; the interface/riding phase & link session-shape invariants; the
+ * SCOPE OF PROOF: valid kinds; the participant XOR rule; instructed ≠
+ * examinee; the EX-S3.5 RETIREMENT of the phase & interface-link model; the
  * normalized beginner-session shape; one ExamPlan per CourseOffering; and
  * external-candidate soft-archive (non-mutating).
  */
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import * as domain from "./exam-domain-core";
 import {
   isExamKind,
-  isExamPhase,
   isExamAssignmentRole,
   isExamBeginnerFormat,
   EXAM_KINDS,
-  EXAM_PHASES,
   EXAM_BEGINNER_FORMATS,
   EXAM_DOMAIN_MESSAGES,
+  RESERVED_EXAM_DOMAIN_ISSUE_CODES,
   resolveParticipant,
   participantKey,
   validateAssignmentParticipant,
@@ -51,10 +51,18 @@ test("valid exam kinds are recognized; invalid values are rejected", () => {
   }
 });
 
-test("valid exam phases are recognized; invalid values are rejected", () => {
-  for (const phase of EXAM_PHASES) assert.equal(isExamPhase(phase), true, phase);
-  for (const bad of ["", "interface", "LUNGE", null, undefined, 1]) {
-    assert.equal(isExamPhase(bad), false, String(bad));
+test("EX-S3.5: the phase enum surface is GONE from the domain core", () => {
+  // No ExamPhase union, no EXAM_PHASES list, no isExamPhase guard: a "valid"
+  // phase is no longer a question the active domain asks.
+  for (const gone of ["EXAM_PHASES", "isExamPhase", "ExamPhase"]) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(domain, gone),
+      false,
+      `${gone} must not be exported any more`,
+    );
+  }
+  for (const name of Object.keys(domain)) {
+    assert.ok(!/PHASE|Phase/.test(name), `a phase export survived: ${name}`);
   }
 });
 
@@ -67,7 +75,6 @@ test("assignment-role guard accepts the two roles only", () => {
 test("guards fail closed on inherited prototype keys", () => {
   for (const evil of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
     assert.equal(isExamKind(evil), false, evil);
-    assert.equal(isExamPhase(evil), false, evil);
     assert.equal(isExamAssignmentRole(evil), false, evil);
   }
 });
@@ -114,7 +121,7 @@ test("participantKey is stable and collision-free across kinds", () => {
 // domain core; it is now the single authoritative conflict code EX-BLK-03 and
 // is proven in exam-conflict-core.test.ts.
 
-// --- session shape: interface/riding phase & link invariants ---------------
+// --- session shape: the EX-S3.5 retired phase & link fields ----------------
 
 function shape(over: Partial<ExamSessionShapeInput>): ExamSessionShapeInput {
   return {
@@ -126,41 +133,140 @@ function shape(over: Partial<ExamSessionShapeInput>): ExamSessionShapeInput {
   };
 }
 
-test("INTERFACE_RIDING requires a phase (EX-DOM-PHASE-REQUIRED)", () => {
-  const r = validateExamSessionShape(shape({ kind: "INTERFACE_RIDING", phase: null }));
-  assert.equal(r.ok, false);
-  assert.ok(r.issues.some((i) => i.code === "EX-DOM-PHASE-REQUIRED"));
-});
-
-test("a non-INTERFACE_RIDING kind forbids a phase (EX-DOM-PHASE-FORBIDDEN)", () => {
-  const r = validateExamSessionShape(shape({ kind: "LUNGE_NO_RIDER", phase: "RIDING" }));
-  assert.equal(r.ok, false);
-  assert.ok(r.issues.some((i) => i.code === "EX-DOM-PHASE-FORBIDDEN"));
-});
-
-test("a valid INTERFACE phase session with no link passes", () => {
-  const r = validateExamSessionShape(
-    shape({ kind: "INTERFACE_RIDING", phase: "INTERFACE", interfaceSessionId: null }),
+test("EX-S3.5: INTERFACE_RIDING with NO phase and NO link is valid", () => {
+  const withNulls = validateExamSessionShape(
+    shape({ kind: "INTERFACE_RIDING", phase: null, interfaceSessionId: null }),
   );
-  assert.equal(r.ok, true, JSON.stringify(r.issues));
+  assert.equal(withNulls.ok, true, JSON.stringify(withNulls.issues));
+
+  // Omitting the deprecated fields entirely is the same thing.
+  const omitted = validateExamSessionShape({
+    kind: "INTERFACE_RIDING",
+    embeddedAssignmentCount: 1,
+    examineeCount: 1,
+  });
+  assert.equal(omitted.ok, true, JSON.stringify(omitted.issues));
 });
 
-test("only a RIDING phase may carry an interface link (EX-DOM-LINK-FORBIDDEN)", () => {
-  // INTERFACE phase carrying a link is forbidden.
-  const iface = validateExamSessionShape(
-    shape({ kind: "INTERFACE_RIDING", phase: "INTERFACE", interfaceSessionId: "if-1" }),
-  );
-  assert.ok(iface.issues.some((i) => i.code === "EX-DOM-LINK-FORBIDDEN"));
+test("EX-S3.5: NO kind requires a phase — EX-DOM-PHASE-REQUIRED is never emitted", () => {
+  for (const kind of EXAM_KINDS) {
+    const r = validateExamSessionShape(
+      shape({
+        kind,
+        phase: null,
+        // Keep every unrelated beginner rule satisfied so only phase is in play.
+        embeddedAssignmentCount: 1,
+        beginnerFormat: kind === "BEGINNER_INSTRUCTION" ? "LUNGE" : null,
+      }),
+    );
+    assert.equal(
+      r.issues.some((i) => i.code === "EX-DOM-PHASE-REQUIRED"),
+      false,
+      `${kind} still demands a phase`,
+    );
+  }
+});
 
-  // A non-interface-riding kind carrying a link is forbidden.
-  const lunge = validateExamSessionShape(shape({ interfaceSessionId: "if-1" }));
-  assert.ok(lunge.issues.some((i) => i.code === "EX-DOM-LINK-FORBIDDEN"));
+test("EX-S3.5: ANY present phase is rejected as deprecated, on EVERY kind", () => {
+  // The two retired tokens and arbitrary junk are all treated identically:
+  // there is no "valid" phase left to distinguish, so nothing is EX-DOM-INVALID-PHASE.
+  for (const kind of EXAM_KINDS) {
+    for (const phase of ["INTERFACE", "RIDING", "SIDEWAYS", ""]) {
+      const r = validateExamSessionShape(
+        shape({
+          kind,
+          phase,
+          embeddedAssignmentCount: 1,
+          beginnerFormat: kind === "BEGINNER_INSTRUCTION" ? "LUNGE" : null,
+        }),
+      );
+      assert.equal(r.ok, false, `${kind}/${phase} was accepted`);
+      assert.ok(
+        r.issues.some((i) => i.code === "EX-DOM-PHASE-FORBIDDEN"),
+        `${kind}/${phase} did not report EX-DOM-PHASE-FORBIDDEN`,
+      );
+      assert.equal(
+        r.issues.some((i) => i.code === "EX-DOM-INVALID-PHASE"),
+        false,
+        `${kind}/${phase} re-emitted the retired EX-DOM-INVALID-PHASE`,
+      );
+    }
+  }
+});
 
-  // RIDING phase WITH a link is allowed.
-  const riding = validateExamSessionShape(
+test("EX-S3.5: ANY present interfaceSessionId is rejected — no RIDING exception", () => {
+  for (const kind of EXAM_KINDS) {
+    const r = validateExamSessionShape(
+      shape({
+        kind,
+        interfaceSessionId: "other-session",
+        embeddedAssignmentCount: 1,
+        beginnerFormat: kind === "BEGINNER_INSTRUCTION" ? "LUNGE" : null,
+      }),
+    );
+    assert.equal(r.ok, false, `${kind} accepted a link`);
+    assert.ok(r.issues.some((i) => i.code === "EX-DOM-LINK-FORBIDDEN"), kind);
+  }
+
+  // The formerly-blessed combination — INTERFACE_RIDING in the RIDING phase
+  // carrying a link to its interface partner — is now doubly rejected.
+  const retiredPair = validateExamSessionShape(
     shape({ kind: "INTERFACE_RIDING", phase: "RIDING", interfaceSessionId: "if-1" }),
   );
-  assert.equal(riding.ok, true, JSON.stringify(riding.issues));
+  assert.equal(retiredPair.ok, false);
+  assert.deepEqual(
+    retiredPair.issues.map((i) => i.code).sort(),
+    ["EX-DOM-LINK-FORBIDDEN", "EX-DOM-PHASE-FORBIDDEN"],
+  );
+});
+
+test("EX-S3.5: there is no special RIDING-vs-INTERFACE case left anywhere", () => {
+  // Whatever the phase token, the outcome is byte-identical: the value is not
+  // inspected, only its presence.
+  const asInterface = validateExamSessionShape(
+    shape({ kind: "INTERFACE_RIDING", phase: "INTERFACE", embeddedAssignmentCount: 1 }),
+  );
+  const asRiding = validateExamSessionShape(
+    shape({ kind: "INTERFACE_RIDING", phase: "RIDING", embeddedAssignmentCount: 1 }),
+  );
+  const asJunk = validateExamSessionShape(
+    shape({ kind: "INTERFACE_RIDING", phase: "whatever", embeddedAssignmentCount: 1 }),
+  );
+  assert.deepEqual(asInterface, asRiding);
+  assert.deepEqual(asInterface, asJunk);
+});
+
+test("the retired issue codes are RESERVED and emitted by nothing", () => {
+  assert.deepEqual(
+    [...RESERVED_EXAM_DOMAIN_ISSUE_CODES].sort(),
+    ["EX-DOM-INVALID-PHASE", "EX-DOM-PHASE-REQUIRED"],
+  );
+  assert.equal(Object.isFrozen(RESERVED_EXAM_DOMAIN_ISSUE_CODES), true);
+
+  // The strings survive in the stable contract...
+  for (const code of RESERVED_EXAM_DOMAIN_ISSUE_CODES) {
+    assert.ok(code in EXAM_DOMAIN_MESSAGES, `${code} lost its reserved slot`);
+  }
+
+  // ...but a broad matrix of shapes never produces either of them.
+  const phases = [null, undefined, "INTERFACE", "RIDING", "SIDEWAYS", ""];
+  const links = [null, undefined, "if-1", ""];
+  for (const kind of EXAM_KINDS) {
+    for (const phase of phases) {
+      for (const interfaceSessionId of links) {
+        const r = validateExamSessionShape(
+          shape({ kind, phase, interfaceSessionId, embeddedAssignmentCount: 1 }),
+        );
+        for (const retired of RESERVED_EXAM_DOMAIN_ISSUE_CODES) {
+          assert.equal(
+            r.issues.some((i) => i.code === retired),
+            false,
+            `${kind}/${String(phase)}/${String(interfaceSessionId)} re-emitted ${retired}`,
+          );
+        }
+      }
+    }
+  }
 });
 
 test("an invalid kind short-circuits to EX-DOM-INVALID-KIND", () => {
@@ -170,14 +276,6 @@ test("an invalid kind short-circuits to EX-DOM-INVALID-KIND", () => {
   assert.equal(r.ok, false);
   assert.equal(r.issues.length, 1);
   assert.equal(r.issues[0].code, "EX-DOM-INVALID-KIND");
-});
-
-test("an out-of-domain phase value is flagged EX-DOM-INVALID-PHASE", () => {
-  const r = validateExamSessionShape(
-    shape({ kind: "INTERFACE_RIDING", phase: "SIDEWAYS" as never }),
-  );
-  assert.equal(r.ok, false);
-  assert.ok(r.issues.some((i) => i.code === "EX-DOM-INVALID-PHASE"));
 });
 
 // --- beginner / native normalized-shape ------------------------------------
@@ -253,7 +351,7 @@ test("copy provenance is beginner-only (EX-DOM-COPY-SOURCE-FORBIDDEN)", () => {
 
 test("embedded children are beginner-only (EX-DOM-CHILDREN-FORBIDDEN)", () => {
   const r = validateExamSessionShape(
-    shape({ kind: "INTERFACE_RIDING", phase: "INTERFACE", beginnerChildCount: 1 }),
+    shape({ kind: "INTERFACE_RIDING", beginnerChildCount: 1 }),
   );
   assert.ok(r.issues.some((i) => i.code === "EX-DOM-CHILDREN-FORBIDDEN"));
 });
@@ -468,8 +566,10 @@ test("validateStoredExamSession rejects a beginner session that WOULD have been 
 test("validateStoredExamSession accepts each of the three stored kinds", () => {
   assert.equal(
     validateStoredExamSession({
+      // EX-S3.5: a stored INTERFACE_RIDING block carries NO phase. The two
+      // exams are told apart by their ExamDefinition, not by a phase column.
       kind: "INTERFACE_RIDING",
-      phase: "INTERFACE",
+      phase: null,
       interfaceSessionId: null,
       embeddedAssignmentCount: 1,
       examineeCount: 1,

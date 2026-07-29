@@ -494,7 +494,8 @@ test("no runtime reader, writer, page or action imports the EX-C1 cores yet", ()
     "exam-conflict-core",
     "exam-overlap-core",
     "exam-publication-core",
-    "exam-interface-riding-core",
+    // EX-S3.5: exam-interface-riding-core is DELETED, so it is no longer listed
+    // here; a dedicated test below proves nothing anywhere still references it.
     // EX-C2 / EX-S3 — still unwired. S3 adds schema only: no reader, writer,
     // action, route or UI may import any exam core until the S5 binding slice.
     "exam-block-timetable-core",
@@ -1110,4 +1111,118 @@ test("the EX-S3 deprecated session columns are retained, present and documented"
   assert.ok(SCHEMA.includes("OPTIONAL PER-OCCURRENCE SUBTITLE"));
   // The EX-C2-0 beginner rules are untouched by EX-S3.
   assert.ok(SCHEMA.includes("A STORED BEGINNER_INSTRUCTION ROW IS FORBIDDEN"));
+});
+
+// ===========================================================================
+// EX-S3.5 — the phase / interface-riding RUNTIME model is retired
+// ===========================================================================
+
+/** Every non-test TypeScript source in lib/exam, as [filename, source]. */
+function activeExamCores(): readonly (readonly [string, string])[] {
+  return readdirSync(join(REPO_ROOT, "lib", "exam"))
+    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+    .map((f) => [f, readFileSync(join(REPO_ROOT, "lib", "exam", f), "utf8")] as const);
+}
+
+test("exam-interface-riding-core is DELETED and referenced by nothing", () => {
+  const examDir = readdirSync(join(REPO_ROOT, "lib", "exam"));
+  assert.equal(examDir.includes("exam-interface-riding-core.ts"), false);
+  assert.equal(examDir.includes("exam-interface-riding-core.test.ts"), false);
+
+  // Nothing anywhere in the repo's own source imports or names it — including
+  // lib/exam itself, which the EX-C1 containment test deliberately excludes.
+  const offenders: string[] = [];
+  function walk(dir: string): void {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (full.includes("generated") || full.includes("node_modules")) continue;
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (/\.tsx?$/.test(entry.name)) {
+        // This suite necessarily names the module it forbids.
+        if (entry.name === "exam-schema-structure.test.ts") continue;
+        if (readFileSync(full, "utf8").includes("exam-interface-riding-core")) {
+          offenders.push(full);
+        }
+      }
+    }
+  }
+  for (const root of ["app", "lib", "components", "scripts"]) {
+    try {
+      walk(join(REPO_ROOT, root));
+    } catch {
+      // An absent optional root is not a failure.
+    }
+  }
+  assert.deepEqual(offenders, [], `the retired core is still referenced: ${offenders.join(", ")}`);
+});
+
+test("the retired interface/riding symbols exist nowhere in the exam module", () => {
+  const RETIRED = [
+    "validateInterfaceRidingPair",
+    "seedRidingFromInterface",
+    "InterfaceSeedSource",
+    "InterfaceSeedOptions",
+    "RidingSeedResult",
+    "PairSessionRef",
+    "EXAM_INTERFACE_RIDING_MESSAGES",
+    "EX-IR-",
+  ];
+  for (const [file, source] of activeExamCores()) {
+    for (const symbol of RETIRED) {
+      assert.equal(source.includes(symbol), false, `${file} still carries ${symbol}`);
+    }
+  }
+});
+
+test("no active pure core REQUIRES a phase or branches on a phase value", () => {
+  // The retired codes may appear as reserved strings in the domain core's type
+  // union / message table, but never as an EMITTED issue.
+  const EMISSION = /issue\(\s*["'](EX-DOM-PHASE-REQUIRED|EX-DOM-INVALID-PHASE)["']\s*\)/;
+  // Any comparison of a phase-ish value against a retired phase token.
+  const BRANCH = [
+    /[Pp]hase\s*[!=]==?\s*["'](INTERFACE|RIDING)["']/,
+    // The reversed form, allowing a dotted path (`"RIDING" === session.phase`).
+    /["'](INTERFACE|RIDING)["']\s*[!=]==?\s*[\w.]*[Pp]hase/,
+    /case\s+["'](INTERFACE|RIDING)["']/,
+  ];
+  for (const [file, source] of activeExamCores()) {
+    assert.equal(EMISSION.test(source), false, `${file} still emits a retired phase issue`);
+    for (const pattern of BRANCH) {
+      assert.equal(
+        pattern.test(source),
+        false,
+        `${file} still branches on a retired phase value (${pattern})`,
+      );
+    }
+  }
+});
+
+test("no active pure core establishes an interface/riding link", () => {
+  // interfaceSessionId may be READ as a deprecated input to be rejected, but no
+  // core may assign one, so the retired linkage cannot be re-established.
+  const ASSIGNMENT = /interfaceSessionId\s*:\s*(?!string|null|undefined|readonly)/;
+  for (const [file, source] of activeExamCores()) {
+    for (const line of source.split("\n")) {
+      // Type declarations (`interfaceSessionId?: string | null`) are fine.
+      if (/interfaceSessionId\s*\??\s*:\s*(string|unknown)/.test(line)) continue;
+      assert.equal(
+        ASSIGNMENT.test(line),
+        false,
+        `${file} appears to construct an interface link: ${line.trim()}`,
+      );
+    }
+  }
+});
+
+test("the deprecated phase columns stay in the schema, unwritten and documented", () => {
+  // EX-S3.5 is a pure-core cleanup: the schema and the migrations are untouched,
+  // so the retired columns must still be declared exactly as EX-S3 left them.
+  const s = block("model", "ExamSession");
+  assert.match(s, /\n\s+phase\s+ExamPhase\?/);
+  assert.match(s, /\n\s+interfaceSessionId\s+String\?/);
+  assert.ok(SCHEMA.includes("enum ExamPhase {"));
+  assert.ok(SCHEMA.includes("EX-S3 DEPRECATED AND UNWRITTEN"));
+  assert.ok(SCHEMA.includes("persistent interface/riding link"));
+  assert.ok(SCHEMA.includes("interface-to-riding copy"));
 });
