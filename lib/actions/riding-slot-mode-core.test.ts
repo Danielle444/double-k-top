@@ -13,10 +13,13 @@
  * What is locked here:
  *  - the full two-boolean truth table, and complex precedence;
  *  - equivalence with the OLD short-circuit detection order;
- *  - RidingSlotRow keeps every pre-existing field, and the two new ones are
+ *  - RidingSlotRow keeps every pre-existing field, and the two mode fields are
  *    additive presence-only booleans;
- *  - RIDING_SLOT_INCLUDE still carries assignments and scheduleItems, and the
- *    two new relations select nothing but `id`;
+ *  - RIDING_SLOT_INCLUDE still carries assignments and scheduleItems; horseList
+ *    still selects nothing but `id`, and complexPlan selects `id` plus - since
+ *    RIDING-MINE-COMPLEX - blocks -> stations -> instructorId AND NOTHING ELSE
+ *    (the co-located riding-slot-assignment-scope-core.test.ts owns the
+ *    forbidden-content scan of that select in full detail);
  *  - neither instructor component performs load-time per-slot mode detection;
  *  - refreshModeFor still performs its user-initiated refresh, and the reader it
  *    depends on still exists;
@@ -245,12 +248,36 @@ test("RIDING_SLOT_INCLUDE still includes assignments and scheduleItems", () => {
   );
 });
 
-test("the two new relations select presence only", () => {
+test("the two mode relations still carry presence, and complexPlan carries only coach ids beyond it", () => {
   const src = readCode(RIDING_SLOTS);
   const include = src.slice(src.indexOf("const RIDING_SLOT_INCLUDE = {"));
   const body = flat(include.slice(0, include.indexOf("\n};")));
-  assert.ok(body.includes("complexPlan: { select: { id: true } }"));
+  // horseList is unchanged: presence only.
   assert.ok(body.includes("horseList: { select: { id: true } }"));
+  // complexPlan still selects `id` - the mode rule's entire input - and, since
+  // RIDING-MINE-COMPLEX, traverses blocks -> stations for `instructorId` only.
+  assert.ok(body.includes("complexPlan: { select: { id: true,"));
+  assert.ok(body.includes("blocks: { select: { stations: { select: { instructorId: true } } } }"));
+  // The traversal is narrowly allowed; NO station content may ride along with
+  // it. (Duplicated deliberately from the scope core's own test - this file
+  // owns the mode contract and must not silently lose the boundary it asserted
+  // when the select was presence-only.)
+  for (const leaked of [
+    "pairs",
+    "trainee1Id",
+    "trainee2Id",
+    "horseName",
+    "arena",
+    "startTime",
+    "endTime",
+    "title",
+    "notes",
+    "sortOrder",
+    "version",
+    "publication",
+  ]) {
+    assert.ok(!body.includes(leaked), `RIDING_SLOT_INCLUDE must not select ${leaked}`);
+  }
 });
 
 test("toRidingSlotRow maps relation presence, never content", () => {
@@ -263,11 +290,19 @@ test("toRidingSlotRow maps relation presence, never content", () => {
     src.indexOf("const RIDING_SLOT_INCLUDE = {"),
   );
   const body = flat(fn);
+  // Mode is still derived from PRESENCE, not from the plan's content - the
+  // widened select must never have turned this into "has blocks" or similar.
   assert.ok(body.includes("hasComplexPlan: slot.complexPlan != null"));
   assert.ok(body.includes("hasHorseList: slot.horseList != null"));
   // The parameter type accepts them as optional so a narrower future select
-  // degrades to `false` rather than failing to compile.
-  assert.ok(body.includes("complexPlan?: { id: string } | null"));
+  // degrades to `false` rather than failing to compile. Since
+  // RIDING-MINE-COMPLEX the complexPlan parameter additionally accepts an
+  // optional blocks -> stations -> instructorId shape, and nothing else.
+  assert.ok(
+    body.includes(
+      "complexPlan?: { id: string; blocks?: { stations: { instructorId: string | null }[] }[] } | null",
+    ),
+  );
   assert.ok(body.includes("horseList?: { id: string } | null"));
 });
 

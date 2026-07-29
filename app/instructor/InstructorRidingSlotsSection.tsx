@@ -28,6 +28,12 @@ import { getRidingSlotHorseListForInstructor } from "@/lib/actions/riding-slot-h
 // PERF-1 / P3A - the pure, DB-free mode rule shared with InstructorClient. Seeds
 // modeByRidingSlotId from the riding payload; issues no request of its own.
 import { buildRidingSlotModeMap } from "@/lib/actions/riding-slot-mode-core";
+// RIDING-MINE-COMPLEX - the single pure, DB-free ownership rule, shared by the
+// "הרכיבות שלי" filter and the "משובץ/ת אליי" badge below so the two can never
+// disagree. It replaces the local helper this file used to declare, which knew
+// only about regular RidingSlotAssignment rows and therefore hid a complex
+// ride from the very coach running one of its stations.
+import { isRidingActivityAssignedToInstructor } from "@/lib/actions/riding-slot-assignment-scope-core";
 import {
   getRidingSlotComplexPlanForInstructor,
   createRidingSlotComplexPlanAsInstructor,
@@ -44,10 +50,6 @@ import type { InstructorSlotMode, RidingStudentOption } from "./instructor-ridin
 type ViewMode = "day" | "week";
 type ScopeMode = "mine" | "all";
 type BrowseMode = "slot" | "student";
-
-function isAssignedToInstructor(activity: WeeklyRidingActivity, instructorId: string): boolean {
-  return activity.ridingSlot?.assignments.some((a) => a.instructorIds.includes(instructorId)) ?? false;
-}
 
 // "loading" is represented by absence from the modeByRidingSlotId map, not a
 // fourth enum value here - see the seeding effect below. The server/database is
@@ -325,7 +327,9 @@ export function InstructorRidingSlotsSection({
       .map((day) => ({
         ...day,
         activities: sortActivitiesForDisplay(
-          day.activities.filter((a) => scopeMode === "all" || isAssignedToInstructor(a, instructorId)),
+          day.activities.filter(
+            (a) => scopeMode === "all" || isRidingActivityAssignedToInstructor(a, instructorId)
+          ),
           day.dateKey === todayKey,
           nowMinutes
         ),
@@ -519,7 +523,7 @@ export function InstructorRidingSlotsSection({
               </p>
               <div className="flex flex-col gap-3">
                 {day.activities.map((activity) => {
-                  const assignedToMe = isAssignedToInstructor(activity, instructorId);
+                  const assignedToMe = isRidingActivityAssignedToInstructor(activity, instructorId);
                   return (
                     <div
                       key={activity.scheduleItemIds.join("+")}

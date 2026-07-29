@@ -40,6 +40,11 @@ import {
   resolveRidingSlotForActivity,
 } from "@/lib/actions/riding-slot-batch-resolve-core";
 import { upsertRidingLessonNoteWithDeps } from "@/lib/actions/riding-slots-write-auth";
+// RIDING-MINE-COMPLEX - pure, DB-free collector for the complex plan's station
+// coach ids. Lives outside this module for the same reason as the cores above:
+// under "use server" every export must be an async Server Action, so a
+// synchronous helper cannot be exported from here.
+import { collectComplexStationInstructorIds } from "@/lib/actions/riding-slot-assignment-scope-core";
 
 const NOT_FOUND_SCHEDULE_ITEM = 'פריט הלו"ז לא נמצא. נסי לרענן את העמוד.';
 const NOT_FOUND_RIDING_SLOT = "ניהול הרכיבה לא נמצא. נסי לרענן את העמוד.";
@@ -81,9 +86,25 @@ export interface RidingSlotRow {
   // They carry NO content: not the plan tree, not the horse list items, not the
   // candidate roster, not the version, publication state or timestamps. Reading
   // any of that still requires the existing editing readers, which are unchanged
-  // and still gated exactly as before. Every field above is untouched.
+  // and still gated exactly as before. Every field above is untouched. (These
+  // two booleans remain presence-only; the separate, additive
+  // complexStationInstructorIds below is the one field derived from inside the
+  // plan, and it carries instructor ids and nothing else.)
   hasComplexPlan: boolean;
   hasHorseList: boolean;
+  // RIDING-MINE-COMPLEX - the distinct Instructor ids named as station coaches
+  // inside this slot's complex plan (RidingSlotComplexStation.instructorId),
+  // trimmed, de-duplicated and sorted. ADDITIVE and IDS ONLY: no pair, trainee,
+  // horse, arena, station time, title, note, sortOrder, version or publication
+  // value rides along with them.
+  //
+  // Always present, never optional: `[]` means "no complex plan, or no station
+  // has a coach yet", which is exactly the input the ownership rule needs (see
+  // lib/actions/riding-slot-assignment-scope-core.ts). A complex ride is very
+  // often staffed ONLY through these stations, with no regular
+  // RidingSlotAssignment at all, so without this field the client cannot tell
+  // that such a ride belongs to the instructor looking at it.
+  complexStationInstructorIds: string[];
 }
 
 export interface RidingSlotActionResult extends ActionResult {
@@ -138,7 +159,11 @@ function toRidingSlotRow(slot: {
   // (not in RidingSlotRow) so this mapper still accepts a slot fetched by some
   // future narrower select; an absent relation maps to `false`, i.e. the
   // least-capable mode, never to an assumed plan.
-  complexPlan?: { id: string } | null;
+  // RIDING-MINE-COMPLEX - the complex plan's blocks/stations are now traversed,
+  // but ONLY to reach instructorId. Nullable and optional at every level so a
+  // slot fetched by a narrower select (or one whose plan has no blocks) maps to
+  // an empty id list rather than failing to compile or assuming a coach.
+  complexPlan?: { id: string; blocks?: { stations: { instructorId: string | null }[] }[] } | null;
   horseList?: { id: string } | null;
 }): RidingSlotRow {
   return {
@@ -149,29 +174,51 @@ function toRidingSlotRow(slot: {
     showArenaToStudents: slot.showArenaToStudents,
     showSubgroupToStudents: slot.showSubgroupToStudents,
     assignments: slot.assignments.map(toAssignmentRow),
-    // Presence, never content: `id` is the only column selected for either.
+    // Presence, never content: `id` is the only column selected for the horse
+    // list, and the complex plan adds nothing but its stations' instructor ids.
     hasComplexPlan: slot.complexPlan != null,
     hasHorseList: slot.horseList != null,
+    // RIDING-MINE-COMPLEX - delegated to the pure core, so the trim/blank-drop/
+    // dedupe/sort rule has exactly one definition and the array is deterministic.
+    complexStationInstructorIds: collectComplexStationInstructorIds(slot.complexPlan?.blocks),
   };
 }
 
-// PERF-1 / P3A - `complexPlan` and `horseList` are ADDITIVE and PRESENCE-ONLY.
-// `assignments` and `scheduleItems` are untouched, in shape and in ordering.
+// PERF-1 / P3A - `complexPlan` and `horseList` are ADDITIVE. `assignments` and
+// `scheduleItems` are untouched, in shape and in ordering.
 //
-// Both new relations are 1:1 (RidingSlotComplexPlan.ridingSlotId and
-// RidingSlotHorseList.ridingSlotId are UNIQUE), and each selects nothing but
-// `id`, so this answers "does such a row exist" and cannot carry plan, list,
-// roster or publication data. Prisma resolves a relation once per findMany, not
-// once per row, so this costs two extra queries per riding-slot read - replacing
-// the ~12 queries and 1-2 serialized Server Action round trips that per-slot
-// mode detection used to pay FOR EVERY SLOT ON SCREEN.
+// Both relations are 1:1 (RidingSlotComplexPlan.ridingSlotId and
+// RidingSlotHorseList.ridingSlotId are UNIQUE). `horseList` selects nothing but
+// `id`, so it answers "does such a row exist" and nothing more. Prisma resolves
+// a relation once per findMany, not once per row, so this costs a few extra
+// queries per riding-slot read - replacing the ~12 queries and 1-2 serialized
+// Server Action round trips that per-slot mode detection used to pay FOR EVERY
+// SLOT ON SCREEN.
+//
+// RIDING-MINE-COMPLEX - `complexPlan` is NO LONGER PRESENCE-ONLY, and this
+// comment says so plainly: it now traverses blocks -> stations to select
+// `instructorId`, and only `instructorId`. What this reader therefore carries
+// from the complex plan is exactly two things:
+//   - the plan's existence (`id`), for the mode rule, and
+//   - its stations' coach ids, for the ownership rule.
+// It still carries NO pairs, NO trainee ids, NO horses or horse names, NO
+// arena, NO station start/end times, NO station titles or notes, NO sortOrder,
+// NO version and NO publication payload. Reading any of that still requires the
+// existing editing readers, which are unchanged and still gated exactly as
+// before. An instructor already sees every station coach's name inside the
+// complex-plan editor for the same slot, so no identity is newly exposed here.
 const RIDING_SLOT_INCLUDE = {
   assignments: {
     include: ASSIGNMENT_WITH_INSTRUCTORS_INCLUDE,
     orderBy: [{ groupName: "asc" as const }, { subgroupNumber: "asc" as const }],
   },
   scheduleItems: { select: { scheduleItemId: true } },
-  complexPlan: { select: { id: true } },
+  complexPlan: {
+    select: {
+      id: true,
+      blocks: { select: { stations: { select: { instructorId: true } } } },
+    },
+  },
   horseList: { select: { id: true } },
 };
 
