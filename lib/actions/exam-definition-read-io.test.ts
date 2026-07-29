@@ -1,0 +1,669 @@
+/**
+ * EXAM EX-S5B-5A — STRUCTURAL contract for the ADMIN ExamDefinition LIST
+ * bindings.
+ *
+ * WHY STRUCTURAL. The module under test declares `import "server-only"`, which
+ * makes it unloadable from a plain `tsx --test` process — that is the point of
+ * the declaration. Its BEHAVIOUR is proven, DB-free, through the pure,
+ * dependency-injected core it binds (the sibling suite in `lib/exam`); its
+ * BINDINGS are proven here, on its source text.
+ *
+ * DB-FREE AND PRODUCTION-FREE: this suite reads repository sources from disk and
+ * runs `git` to describe its own file scope. It opens no database connection,
+ * executes no SQL, reads no environment variable, resolves no session, makes no
+ * network request and names no production identifier.
+ *
+ * WHAT IS PROVEN HERE:
+ *   - the module kind: server-only, NOT a Server Action, not a route handler;
+ *   - authorization is bound FIRST, and no query exists outside the four
+ *     server-owned helpers the core injects;
+ *   - only the DB-VERIFIED offering id reaches the plan query, and only the
+ *     server-resolved plan id reaches the definition and count queries;
+ *   - the gate is the READ gate (`HISTORICAL_READ`), never the write gate, and
+ *     no capability is consulted;
+ *   - EXACTLY three statements touch the database: one plan lookup, one
+ *     definition list and one grouped count — none in a loop, none nested in a
+ *     per-row callback, so there is no N+1 at any size;
+ *   - the selects are exactly the approved column sets, and nothing forbidden is
+ *     read: no session row, assignment, student, instructor, Teaching-Practice
+ *     lesson, source-lesson detail, contact, diagnostic, grade or evaluation;
+ *   - `updatedAt` and `publishedAt` become epoch milliseconds HERE, and no
+ *     `Date` leaves the module;
+ *   - the module writes nothing, opens no transaction, runs no raw SQL and lets
+ *     no database client or raw row type escape;
+ *   - no app/, page, route, UI or client caller exists;
+ *   - the slice is EXACTLY four new files, and modifies no existing file.
+ *
+ * Run with: npx tsx --test lib/actions/exam-definition-read-io.test.ts
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, sep } from "node:path";
+
+const REPO_ROOT = join(import.meta.dirname, "..", "..");
+
+const IO_REL = join("lib", "actions", "exam-definition-read-io.ts");
+const IO_TEST_REL = join("lib", "actions", "exam-definition-read-io.test.ts");
+const CORE_REL = join("lib", "exam", "exam-definition-admin-read-core.ts");
+const CORE_TEST_REL = join("lib", "exam", "exam-definition-admin-read-core.test.ts");
+
+/** The four files this slice is allowed to consist of, in repository form. */
+const NEW_FILES = [
+  "lib/actions/exam-definition-read-io.ts",
+  "lib/actions/exam-definition-read-io.test.ts",
+  "lib/exam/exam-definition-admin-read-core.ts",
+  "lib/exam/exam-definition-admin-read-core.test.ts",
+];
+
+const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
+
+/** Strip comments so the guards assert on CODE, not on explanatory prose. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
+/** Keep ONLY the comments, for the "is this documented?" assertions. */
+function commentsOf(source: string): string {
+  return [
+    ...(source.match(/\/\*[\s\S]*?\*\//g) ?? []),
+    ...(source.match(/^\s*\/\/.*$/gm) ?? []),
+  ].join("\n");
+}
+
+const CODE = stripComments(SOURCE);
+const COMMENTS = commentsOf(SOURCE);
+
+/**
+ * One top-level function's body, from its declaration to the closing brace in
+ * column 0 — so an "inside this helper" assertion means what it says.
+ */
+function bodyOf(name: string): string {
+  const start = CODE.indexOf(`function ${name}(`);
+  assert.ok(start > 0, `${name} is missing`);
+  const end = CODE.indexOf("\n}", start);
+  assert.ok(end > start, `${name} is unbalanced`);
+  return CODE.slice(start, end + 2);
+}
+
+/** The `(` nesting depth at `index` — 0 means "at statement level". */
+function parenDepthAt(source: string, index: number): number {
+  let depth = 0;
+  for (let i = 0; i < index; i += 1) {
+    if (source[i] === "(") depth += 1;
+    else if (source[i] === ")") depth -= 1;
+  }
+  return depth;
+}
+
+/** Every exported function signature, in source order. */
+const SIGNATURES = [
+  ...SOURCE.matchAll(/export (?:async )?function (\w+)\(([\s\S]*?)\):\s*([^{]+)\{/g),
+].map(([, name, params, returns]) => ({
+  name,
+  params: params.replace(/\s+/g, " ").trim(),
+  returns: returns.replace(/\s+/g, " ").trim(),
+}));
+
+function git(args: readonly string[]): { code: number; stdout: string } {
+  const result = spawnSync("git", [...args], { cwd: REPO_ROOT, encoding: "utf8" });
+  return { code: result.status ?? 1, stdout: result.stdout ?? "" };
+}
+
+function gitLines(args: readonly string[]): string[] {
+  const { code, stdout } = git(args);
+  assert.equal(code, 0, `git ${args.join(" ")} failed`);
+  return stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+// Split specifiers: this suite necessarily names some of what it forbids, and
+// the committed exam-slice guards scan sibling directories for them.
+const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
+const GENERATED_CLIENT = ["@prisma", "client"].join("/");
+const TP_ACTIONS_MODULE = ["lib/actions", "teaching-practice"].join("/");
+
+// ===========================================================================
+// 1–5. Module kind and the public signature
+// ===========================================================================
+
+test("1. the module imports server-only as its FIRST statement", () => {
+  const serverOnly = new RegExp('import\\s+"server' + '-only";');
+  assert.ok(serverOnly.test(CODE), "the module is not server-only");
+  const firstStatement = CODE.split("\n").find((line) => line.trim().length > 0);
+  assert.ok(firstStatement);
+  assert.ok(serverOnly.test(firstStatement), `the first statement is: ${firstStatement}`);
+});
+
+test("2. the module does NOT declare use server (or use client)", () => {
+  assert.equal(CODE.includes('"use ' + 'server"'), false);
+  assert.equal(CODE.includes("'use " + "server'"), false);
+  assert.equal(CODE.includes('"use ' + 'client"'), false);
+  assert.equal(CODE.includes("'use " + "client'"), false);
+  // ...and the header states the rule it holds itself to.
+  assert.ok(COMMENTS.includes("use " + "server"), "the rule is undocumented");
+});
+
+test("3. the module exports exactly ONE function, and no value", () => {
+  assert.deepEqual(
+    SIGNATURES.map((entry) => entry.name),
+    ["readExamDefinitionsForAdmin"],
+  );
+  assert.ok(/export async function readExamDefinitionsForAdmin\(/.test(SOURCE));
+  for (const token of [
+    "export const",
+    "export let",
+    "export var",
+    "export default",
+    "export class",
+    "GET",
+    "POST",
+    "PATCH",
+    "NextRequest",
+    "NextResponse",
+    "revalidatePath",
+    "redirect(",
+  ]) {
+    assert.equal(CODE.includes(token), false, `the module declares ${token}`);
+  }
+  // The only other export is a TYPE re-export, which emits no runtime value.
+  const exportStatements = CODE.match(/^export .*$/gm) ?? [];
+  for (const statement of exportStatements) {
+    assert.ok(
+      statement.startsWith("export type {") || statement.startsWith("export async function "),
+      `unexpected export: ${statement}`,
+    );
+  }
+});
+
+test("4. the entry point takes ONLY a courseOfferingId and returns the view", () => {
+  const [entry] = SIGNATURES;
+  assert.equal(entry.params, "courseOfferingId: string,");
+  assert.equal(entry.returns, "Promise<AdminExamDefinitionListView>");
+  for (const forbidden of [
+    "planId",
+    "definitionId",
+    "adminId",
+    "actorId",
+    "instructorId",
+    "studentId",
+    "date",
+    "take",
+    "skip",
+    "cursor",
+    "tx",
+    "prisma",
+    "deps",
+  ]) {
+    assert.equal(entry.params.includes(forbidden), false, `the entry point accepts ${forbidden}`);
+  }
+});
+
+test("5. the entry point only hands the committed core its effects", () => {
+  const entry = bodyOf("readExamDefinitionsForAdmin");
+  assert.ok(entry.includes("readExamDefinitionsForAdminWithDeps(courseOfferingId, {"));
+  // The bound dependency set is exactly the core's boundary…
+  for (const dependency of [
+    "requireCourseContext",
+    "assertHistoricalReadAllowed",
+    "findExamPlanByCourseOfferingId",
+    "findDefinitionsByPlanId",
+    "countSessionsByDefinition",
+  ]) {
+    assert.ok(entry.includes(dependency), `${dependency} is not bound`);
+  }
+  // …and the entry point issues no query, decides no order and builds no view.
+  assert.equal(/prisma\./.test(entry), false, "the entry point queries directly");
+  assert.equal(entry.includes("sort("), false, "the entry point re-implements the order");
+  assert.equal(entry.includes("Object.freeze"), false, "the entry point builds the view");
+  assert.equal(entry.includes("planExists"), false, "the entry point builds the view");
+});
+
+// ===========================================================================
+// 6–10. Authorization, the verified id, and the lifecycle READ gate
+// ===========================================================================
+
+test("6. requireAdminCourseOffering is bound exactly once, with the REQUESTED id", () => {
+  assert.ok(CODE.includes("requireAdminCourseOffering"), "the admin boundary is not bound");
+  assert.equal((CODE.match(/await requireAdminCourseOffering\(/g) ?? []).length, 1);
+  assert.ok(
+    /requireAdminCourseOffering\(requestedCourseOfferingId\)/.test(CODE),
+    "the admin boundary is not called with the requested id",
+  );
+  // It is bound in the ONE helper the core calls first, and that helper performs
+  // no query of its own.
+  const helper = bodyOf("requireCourseContext");
+  assert.ok(helper.includes("requireAdminCourseOffering("));
+  assert.equal(/prisma\./.test(helper), false, "the authorization helper queries");
+  assert.ok(/courseOfferingId:\s*context\.id/.test(helper), "the verified id is not carried");
+  assert.ok(/status:\s*context\.status/.test(helper), "the verified status is not carried");
+});
+
+test("7. authorization precedes EVERY query, because no query can precede it", () => {
+  // The module owns FIVE internal helpers plus the entry point: the
+  // authorization step, the gate, and the three queries. None of the queries can
+  // be reached from outside this file, and the ONLY function that reaches them
+  // is the injected core — which calls the authorization dependency first,
+  // proven DB-free by the sibling suite.
+  const declared = [...CODE.matchAll(/^(?:async )?function (\w+)\(/gm)].map(([, name]) => name);
+  assert.deepEqual(declared, [
+    "requireCourseContext",
+    "assertHistoricalReadAllowed",
+    "findExamPlanByCourseOfferingId",
+    "findDefinitionsByPlanId",
+    "countSessionsByDefinition",
+  ]);
+  for (const name of ["requireCourseContext", "assertHistoricalReadAllowed"]) {
+    assert.equal(/prisma\./.test(bodyOf(name)), false, `${name} performs a query`);
+  }
+  // NO helper is exported: the three queries are unreachable except through the
+  // core, which cannot be entered without the authorization dependency.
+  for (const name of declared) {
+    assert.equal(CODE.includes(`export async function ${name}(`), false, `${name} is exported`);
+    assert.equal(CODE.includes(`export function ${name}(`), false, `${name} is exported`);
+  }
+  // ...and the one exported function is the entry point, which never queries.
+  assert.ok(CODE.includes("export async function readExamDefinitionsForAdmin("));
+});
+
+test("8. the plan query uses the VERIFIED offering id, never the requested one", () => {
+  const helper = bodyOf("findExamPlanByCourseOfferingId");
+  assert.ok(
+    /courseOfferingId:\s*verifiedCourseOfferingId/.test(helper),
+    "the plan lookup does not use the verified id",
+  );
+  assert.equal(helper.includes("requestedCourseOfferingId"), false);
+  // The two plan-scoped queries take a `planId` parameter and nothing else.
+  for (const name of ["findDefinitionsByPlanId", "countSessionsByDefinition"]) {
+    const body = bodyOf(name);
+    assert.ok(/where:\s*\{\s*planId[,\s}]/.test(body), `${name} is not plan-scoped`);
+    assert.equal(body.includes("courseOfferingId"), false, `${name} re-derives the course`);
+  }
+});
+
+test("9. the lifecycle gate is HISTORICAL_READ, via the committed policy", () => {
+  assert.ok(CODE.includes("assertCourseOperationAllowed"));
+  assert.ok(
+    /assertCourseOperationAllowed\([\s\S]{0,120}?"HISTORICAL_READ"\)/.test(CODE),
+    "the gate does not use the approved READ operation",
+  );
+  assert.equal((CODE.match(/assertCourseOperationAllowed\(/g) ?? []).length, 1);
+  // The WRITE gate is deliberately NOT borrowed, and no other operation appears.
+  for (const other of [
+    "SCHEDULE_DRAFT_CONFIGURATION",
+    "SCHEDULE_PUBLICATION",
+    "OFFERING_METADATA_UPDATE",
+    "OFFERING_STRUCTURE_UPDATE",
+    "ENROLLMENT_MANAGEMENT",
+    "TEACHING_PRACTICE_OPERATION",
+    "DESTRUCTIVE_MAINTENANCE",
+    "EXAM_CONFIGURATION",
+  ]) {
+    assert.equal(CODE.includes(other), false, `the module also references ${other}`);
+  }
+  // The choice of the READ gate over the write gate is documented.
+  assert.ok(/ARCHIVED/.test(COMMENTS), "the ARCHIVED consequence is undocumented");
+  assert.ok(/DEFAULT-DENY/i.test(COMMENTS), "the default-deny property is undocumented");
+});
+
+test("10. the module consults NO capability and no other actor role", () => {
+  for (const token of [
+    '"EXAMS"',
+    "'EXAMS'",
+    "TEACHING_PRACTICE",
+    '"SCHEDULE"',
+    "'SCHEDULE'",
+    "CapabilityKey",
+    "capability",
+    "Capability",
+    "getEffectiveCapabilities",
+    "capability-keys",
+    "offering-capabilities",
+    "requireCurrentInstructor",
+    "requireCurrentTrainee",
+    "getCurrentInstructor",
+    "getCurrentTrainee",
+    "resolveInstructorCourseOffering",
+    "resolveTraineeCourseOffering",
+  ]) {
+    assert.equal(CODE.includes(token), false, `the module references ${token}`);
+  }
+  assert.ok(/EXAMS/.test(COMMENTS), "the missing EXAMS capability is undocumented");
+});
+
+// ===========================================================================
+// 11–15. The database inventory: three reads, no N+1
+// ===========================================================================
+
+const APPROVED_QUERIES = [
+  "prisma.examPlan.findUnique",
+  "prisma.examDefinition.findMany",
+  "prisma.examSession.groupBy",
+] as const;
+
+test("11. the module issues EXACTLY the three approved queries", () => {
+  assert.deepEqual(CODE.match(/prisma\.\w+\.\w+/g) ?? [], [...APPROVED_QUERIES]);
+  assert.equal((CODE.match(/=\s*await\s+prisma\./g) ?? []).length, APPROVED_QUERIES.length);
+  // No other model is touched at all.
+  for (const model of [
+    "prisma.examAssignment",
+    "prisma.examSessionBreak",
+    "prisma.examSessionSupervisor",
+    "prisma.examBeginnerChild",
+    "prisma.examTeachingPracticeSourceDate",
+    "prisma.teachingPracticeLesson",
+    "prisma.student",
+    "prisma.instructor",
+    "prisma.courseOffering",
+    "prisma.courseEnrollment",
+  ]) {
+    assert.equal(CODE.includes(model), false, `the module reads ${model}`);
+  }
+});
+
+test("12. no query sits in a loop or in a per-row callback", () => {
+  for (const loop of ["for (", "for(", "while (", "forEach(", "reduce("]) {
+    assert.equal(CODE.includes(loop), false, `the module contains a ${loop} construct`);
+  }
+  for (const match of CODE.matchAll(/prisma\.\w+\./g)) {
+    assert.equal(parenDepthAt(CODE, match.index), 0, `a query at ${match.index} is nested`);
+  }
+  // Each query lives in its own helper, so there is exactly one per function.
+  for (const name of [
+    "findExamPlanByCourseOfferingId",
+    "findDefinitionsByPlanId",
+    "countSessionsByDefinition",
+  ]) {
+    assert.equal((bodyOf(name).match(/prisma\./g) ?? []).length, 1, `${name} queries twice`);
+  }
+});
+
+test("13. the usage count is ONE grouped statement over BOTH key columns", () => {
+  const helper = bodyOf("countSessionsByDefinition");
+  assert.ok(/by:\s*\["planId",\s*"definitionId"\]/.test(helper), "the grouping key is wrong");
+  assert.ok(/where:\s*\{\s*planId\s*\}/.test(helper), "the count is not plan-scoped");
+  assert.ok(/_count:\s*\{\s*_all:\s*true\s*\}/.test(helper), "the count is not a row count");
+  // The QUERY region only — the mapping below it legitimately names the grouped
+  // `definitionId` when it hands the group to the core.
+  const query = helper.slice(0, helper.indexOf("return "));
+  assert.ok(query.includes("groupBy("), "the query region could not be bounded");
+  assert.equal(query.includes("definitionId:"), false, "the count filters one definition");
+  assert.equal(CODE.includes("examSession.count("), false, "a single-definition count exists");
+  // It selects no ExamSession column and includes no relation.
+  for (const column of [
+    "date:",
+    "startTime:",
+    "endTime:",
+    "arena:",
+    "title:",
+    "notes:",
+    "assignments:",
+    "supervisors:",
+    "breaks:",
+    "individualPublishedAt:",
+    "include:",
+  ]) {
+    assert.equal(helper.includes(column), false, `the count reads ${column}`);
+  }
+});
+
+test("14. the plan select is the id and the publication instant, and nothing else", () => {
+  const helper = bodyOf("findExamPlanByCourseOfferingId");
+  assert.ok(
+    /select:\s*\{\s*id:\s*true,\s*publishedAt:\s*true,?\s*\}/.test(helper),
+    `the select was: ${helper}`,
+  );
+  for (const forbidden of [
+    "sourceDates",
+    "sessions",
+    "definitions",
+    "courseOffering:",
+    "createdAt",
+    "updatedAt",
+    "include",
+  ]) {
+    assert.equal(helper.includes(forbidden), false, `the plan query reads ${forbidden}`);
+  }
+  // A read never creates a plan.
+  for (const token of ["examPlan.upsert", "examPlan.create", "examPlan.update"]) {
+    assert.equal(CODE.includes(token), false, `the module performs ${token}`);
+  }
+});
+
+test("15. the definition select is EXACTLY the ten approved columns, in a stable order", () => {
+  const helper = bodyOf("findDefinitionsByPlanId");
+  const select = helper.slice(helper.indexOf("select: {"), helper.indexOf("orderBy:"));
+  const columns = [...select.matchAll(/(\w+):\s*true/g)].map(([, name]) => name);
+  assert.deepEqual(columns, [
+    "id",
+    "name",
+    "kind",
+    "durationMinutes",
+    "parallelCapacity",
+    "requiresInstructedTrainee",
+    "requiresLessonTopic",
+    "requiresDiscipline",
+    "orderIndex",
+    "updatedAt",
+  ]);
+  for (const forbidden of ["planId:", "createdAt:", "sessions:", "plan:", "include:", "_count:"]) {
+    assert.equal(select.includes(forbidden), false, `the definition query reads ${forbidden}`);
+  }
+  // The deterministic order, with the id tie-break the core also imposes.
+  assert.ok(
+    /orderBy:\s*\[\{\s*orderIndex:\s*"asc"\s*\},\s*\{\s*id:\s*"asc"\s*\}\]/.test(helper),
+    "the definition order is not deterministic",
+  );
+});
+
+// ===========================================================================
+// 16–19. What is NOT read, and what NEVER escapes
+// ===========================================================================
+
+test("16. no forbidden entity is read anywhere in the module", () => {
+  // NOTE: `requiresInstructedTrainee` is a per-exam BOOLEAN FLAG the manager
+  // configured, not a person — which is why the person tokens below are the
+  // exact identity/contact fields rather than the substring "trainee".
+  for (const token of [
+    "assignments",
+    "assignment",
+    "supervisor",
+    "participants",
+    "childAssignments",
+    "beginnerChild",
+    "studentId",
+    "traineeId",
+    "instructorId",
+    "prisma.student",
+    "prisma.instructor",
+    "parentName",
+    "parentPhone",
+    "fullName",
+    "TeachingPractice",
+    "teachingPractice",
+    TP_ACTIONS_MODULE,
+    "sourceLesson",
+    "sourceTeachingPracticeLessonId",
+    "diagnostics",
+    GENERATED_CLIENT,
+  ]) {
+    assert.equal(CODE.includes(token), false, `the module reads ${token}`);
+  }
+  // The Exams area models no evaluation of any kind: not selected, not mapped.
+  for (const word of ["feedback", "rating", "grade", "score", "evaluation"]) {
+    const pattern = new RegExp(`\\b\\w*${word}\\w*\\s*:`, "i");
+    assert.equal(pattern.test(CODE), false, `the module names a ${word} field`);
+  }
+});
+
+test("17. the module does not reach the committed exam READ pipeline", () => {
+  // This slice is a NARROW, dedicated reader. It must not reuse the wide
+  // role-scoped plan read, whose payload is the sensitive superset.
+  for (const token of [
+    "readAdminExamPlan",
+    "readInstructorExamPlan",
+    "readTraineeExamDay",
+    "loadExamPlan",
+    "exam-read-scope-core",
+    "exam-plan-loader-core",
+    "exam-read-io",
+    "exam-role-readers",
+    "exam-read-dto",
+    "examPlanReadDeps",
+  ]) {
+    assert.equal(CODE.includes(token), false, `the module reaches ${token}`);
+  }
+  // The ONE exam module it imports is this slice's own pure core.
+  const specifiers = [...CODE.matchAll(/from\s+"([^"]+)"/g)].map(([, value]) => value);
+  assert.deepEqual(specifiers.filter((value) => value.includes("/exam")).sort(), [
+    "@/lib/exam/exam-definition-admin-read-core",
+    "@/lib/exam/exam-definition-admin-read-core",
+  ]);
+  assert.deepEqual(specifiers.sort(), [
+    "@/app/generated/prisma/client",
+    "@/lib/course/admin-course-context",
+    "@/lib/course/operation-policy-core",
+    "@/lib/exam/exam-definition-admin-read-core",
+    "@/lib/exam/exam-definition-admin-read-core",
+    PRISMA_MODULE,
+  ]);
+});
+
+test("18. the module writes NOTHING, opens no transaction and runs no raw SQL", () => {
+  const writes = /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\s*\(/;
+  assert.equal(writes.test(CODE), false, "the module performs a write");
+  for (const token of [
+    "$transaction",
+    "$executeRaw",
+    "$queryRaw",
+    "$connect",
+    "$disconnect",
+    "notification",
+    "Notification",
+    "web-push",
+    "sendMessage",
+  ]) {
+    assert.equal(CODE.includes(token), false, `the module uses ${token}`);
+  }
+});
+
+test("19. no database client, raw row or Date escapes the module", () => {
+  // The client is imported for use, never re-exported or returned.
+  assert.equal(/return\s+prisma\b/.test(CODE), false, "the client is returned");
+  assert.equal(CODE.includes("export { prisma"), false, "the client is re-exported");
+  for (const token of ["PrismaClient", "Prisma.", "PrismaPromise", "prisma as "]) {
+    assert.equal(CODE.includes(token), false, `the module exposes ${token}`);
+  }
+  // Every helper's return type is a committed core type, never an inferred row.
+  for (const [name, returned] of [
+    ["requireCourseContext", "Promise<VerifiedExamDefinitionReadCourseContext>"],
+    ["findExamPlanByCourseOfferingId", "Promise<ResolvedExamPlanForAdminRead | null>"],
+    ["findDefinitionsByPlanId", "Promise<readonly StoredAdminExamDefinitionRow[]>"],
+    ["countSessionsByDefinition", "Promise<readonly ExamDefinitionSessionCountRow[]>"],
+  ] as const) {
+    assert.ok(CODE.includes(`): ${returned} {`), `${name} does not declare ${returned}`);
+  }
+  // Exactly TWO instants are converted, both to epoch milliseconds, both here.
+  assert.equal((CODE.match(/\.getTime\(\)/g) ?? []).length, 2);
+  assert.ok(/publishedAt:\s*plan\.publishedAt === null \? null : plan\.publishedAt\.getTime\(\)/.test(CODE));
+  assert.ok(/updatedAt:\s*row\.updatedAt\.getTime\(\)/.test(CODE));
+  // ...and no `Date` is constructed, compared or formatted anywhere.
+  for (const token of ["new Date", "Date.now", "toISOString", "dateKey", "parseDateKey"]) {
+    assert.equal(CODE.includes(token), false, `the module uses ${token}`);
+  }
+});
+
+// ===========================================================================
+// 20–23. The slice's shape: no caller, no UI, exactly four new files
+// ===========================================================================
+
+test("20. no app/, page, route, UI or client caller reaches this reader", () => {
+  const declaring = new Set([join(REPO_ROOT, IO_REL), join(REPO_ROOT, IO_TEST_REL)]);
+  const callers: string[] = [];
+  for (const dir of ["app", "lib", "components"]) {
+    const root = join(REPO_ROOT, dir);
+    if (!existsSync(root)) continue;
+    for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile() || !/\.tsx?$/.test(entry.name)) continue;
+      const path = join(entry.parentPath ?? root, entry.name);
+      if (path.includes(`${sep}generated${sep}`)) continue;
+      if (declaring.has(path)) continue;
+      const code = stripComments(readFileSync(path, "utf8"));
+      if (/exam-definition-read-io/.test(code) || /\breadExamDefinitionsForAdmin\s*\(/.test(code)) {
+        callers.push(path.slice(REPO_ROOT.length + 1));
+      }
+    }
+  }
+  assert.deepEqual(callers, [], `an unapproved caller exists: ${callers.join(", ")}`);
+
+  // No exam route, page or Server Action surface was created by this slice.
+  for (const dir of [
+    join("app", "admin", "exams"),
+    join("app", "instructor", "exams"),
+    join("app", "student", "exams"),
+  ]) {
+    assert.equal(existsSync(join(REPO_ROOT, dir)), false, `${dir} was created`);
+  }
+  for (const file of [
+    join("lib", "actions", "exam-definition-actions.ts"),
+    join("lib", "actions", "exam-definition-read-actions.ts"),
+    join("lib", "actions", "exams.ts"),
+  ]) {
+    assert.equal(existsSync(join(REPO_ROOT, file)), false, `${file} was created`);
+  }
+});
+
+test("21. the slice's four files exist, and none of them is a UI file", () => {
+  for (const rel of [IO_REL, IO_TEST_REL, CORE_REL, CORE_TEST_REL]) {
+    assert.ok(existsSync(join(REPO_ROOT, rel)), `${rel} is missing`);
+    assert.equal(rel.endsWith(".tsx"), false, `${rel} is a UI file`);
+  }
+  // No fifth file was added under either directory for this read slice.
+  const actionsSlice = readdirSync(join(REPO_ROOT, "lib", "actions"))
+    .filter((name) => name.startsWith("exam-definition-read"))
+    .sort();
+  assert.deepEqual(actionsSlice, [
+    "exam-definition-read-io.test.ts",
+    "exam-definition-read-io.ts",
+  ]);
+  const examSlice = readdirSync(join(REPO_ROOT, "lib", "exam"))
+    .filter((name) => name.startsWith("exam-definition-admin-read"))
+    .sort();
+  assert.deepEqual(examSlice, [
+    "exam-definition-admin-read-core.test.ts",
+    "exam-definition-admin-read-core.ts",
+  ]);
+});
+
+test("22. the slice modifies NO existing tracked file, and stages nothing", () => {
+  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD"]), [], "a tracked file was modified");
+  assert.deepEqual(gitLines(["diff", "--name-only", "--cached", "HEAD"]), [], "something is staged");
+});
+
+test("23. the slice consists of EXACTLY the four approved new files", () => {
+  const untracked = gitLines(["ls-files", "--others", "--exclude-standard"]).filter((path) =>
+    /\.tsx?$/.test(path),
+  );
+  assert.deepEqual(untracked.sort(), [...NEW_FILES].sort());
+});
+
+// ===========================================================================
+// 24. The core it binds stays pure
+// ===========================================================================
+
+test("24. the pure core this module binds imports no database client", () => {
+  const core = readFileSync(join(REPO_ROOT, CORE_REL), "utf8");
+  for (const specifier of [PRISMA_MODULE, GENERATED_CLIENT]) {
+    assert.equal(core.includes(specifier), false, `the core imports ${specifier}`);
+  }
+  // CODE only: the core's header legitimately states that it is NOT server-bound.
+  const coreCode = stripComments(core);
+  assert.equal(coreCode.includes("server" + "-only"), false, "the core is server-bound");
+  assert.equal(/^import\s/m.test(coreCode), false, "the core imports something");
+  // The core is the layer that owns the order and the view; this module is not.
+  assert.ok(core.includes("export async function readExamDefinitionsForAdminWithDeps("));
+  assert.ok(core.includes("export function emptyAdminExamDefinitionListView("));
+});
