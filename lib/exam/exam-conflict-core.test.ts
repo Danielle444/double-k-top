@@ -1,17 +1,26 @@
 /**
- * EXAM X0 — executable tests for the PURE conflict-detection core
+ * EXAM X0 / EX-S4A — executable tests for the PURE conflict-detection core
  * (exam-conflict-core.ts), aligned to the authoritative numbered matrix.
  *
  * Run with: npx tsx --test lib/exam/exam-conflict-core.test.ts
  * PURE: no Prisma, no DB, no clock, no randomness, no env.
  *
- * SCOPE OF PROOF: every EX-BLK-0N and EX-WRN-0N code; unified examinee
+ * SCOPE OF PROOF (X0): every EX-BLK-0N and EX-WRN-0N code; unified examinee
  * double-booking (internal AND external under EX-BLK-01); examinee↔instructed
  * cross-role double-booking (EX-BLK-02); examinee==instructed within a session
  * (EX-BLK-03); duplicate nationalId in the plan (EX-BLK-04); horse / supervisor
  * / examiner-set (incl. different arenas) / arena overlaps; capacity; normalized
  * name-duplicate warning (EX-WRN-06); single staffing code with details
  * (EX-WRN-07); and STABLE ordering with no exact-duplicate entries.
+ *
+ * SCOPE OF PROOF (EX-S4A): SLOT granularity for EX-BLK-01/02 and EX-WRN-01 over
+ * a definition-backed parallel block (real derived timetables, including a
+ * positional break and an inherited instructed-trainee slot); the unresolved
+ * pairing exclusion; the globally-unresolved whole-block fallback and its
+ * TIMETABLE_UNRESOLVED token; horse normalization; live-beginner behaviour
+ * (participants, responsible instructor, no examiner set, no arena comparison);
+ * the beginner-to-beginner TP_OWNED downgrade; the block grain of
+ * EX-WRN-02/03/04; and the legacy-only EX-WRN-05 condition.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -21,9 +30,14 @@ import {
   EXAM_CONFLICT_MESSAGES,
   type ConflictSession,
   type ConflictAssignment,
+  type ConflictAssignmentSlot,
   type ExamConflict,
   type ExamConflictCode,
 } from "./exam-conflict-core";
+import {
+  computeExamBlockTimetable,
+  resolveInstructedTraineeSlots,
+} from "./exam-block-timetable-core";
 import type { ParticipantRef } from "./exam-domain-core";
 
 const D = "2026-07-26";
@@ -61,6 +75,12 @@ function codes(conflicts: readonly ExamConflict[]): ExamConflictCode[] {
 }
 function hasCode(conflicts: readonly ExamConflict[], code: ExamConflictCode): boolean {
   return conflicts.some((c) => c.code === code);
+}
+function find(
+  conflicts: readonly ExamConflict[],
+  code: ExamConflictCode,
+): ExamConflict | undefined {
+  return conflicts.find((c) => c.code === code);
 }
 
 // --- EX-BLK-01: unified examinee double-booking ----------------------------
@@ -431,7 +451,7 @@ test("every EX-BLK-0N and EX-WRN-0N code is reachable and carries a Hebrew messa
         examinerSetId: "eset-1",
         horseIds: ["h1"],
         arenaId: "arena-1",
-        capacity: 1, // 3 examinees > 1 ⇒ EX-WRN-05
+        capacity: 1, // 3 examinees > 1 ⇒ EX-WRN-05 (legacy: no definitionId)
         expectsStaffing: true,
       }),
       session({
@@ -532,4 +552,959 @@ test("detectExamConflicts does not mutate its input", () => {
   const snapshot = JSON.stringify(input);
   detectExamConflicts(input);
   assert.equal(JSON.stringify(input), snapshot);
+});
+
+// ===========================================================================
+// EX-S4A — slot-aware granularity
+// ===========================================================================
+
+/**
+ * The canonical definition-backed block used below: start 09:00, 15 minutes per
+ * examinee, two examined at a time, six waves.
+ *   wave 0 — a1,a2 — 09:00-09:15   …   wave 5 — a11,a12 — 10:15-10:30
+ * The stored block interval is the whole 09:00-10:30.
+ */
+const SIX_WAVE_IDS = [
+  "a1",
+  "a2",
+  "a3",
+  "a4",
+  "a5",
+  "a6",
+  "a7",
+  "a8",
+  "a9",
+  "a10",
+  "a11",
+  "a12",
+] as const;
+
+function sixWaveTimetable() {
+  return computeExamBlockTimetable({
+    blockStartTime: "09:00",
+    durationMinutes: 15,
+    parallelCapacity: 2,
+    examinees: SIX_WAVE_IDS.map((assignmentId, index) => ({ assignmentId, orderIndex: index })),
+  });
+}
+
+/** A definition-backed stored block with derived slots attached. */
+function storedBlock(
+  over: Partial<ConflictSession> & { readonly slots: readonly ConflictAssignmentSlot[] },
+): ConflictSession {
+  return session({
+    definitionId: "def-1",
+    source: "STORED",
+    timetableStatus: "OK",
+    ...over,
+  });
+}
+
+/** A live Teaching-Practice beginner row: its own real lesson interval. */
+function beginnerRow(over: Partial<ConflictSession>): ConflictSession {
+  return session({
+    source: "BEGINNER",
+    definitionId: null,
+    supervisorIds: [],
+    examinerSetId: null,
+    expectsStaffing: false,
+    ...over,
+  });
+}
+
+// --- 1/2/3: participant slot granularity -----------------------------------
+
+test("S4A-1: a wave-1 examinee does NOT conflict with an event occurring only during wave 6", () => {
+  const tt = sixWaveTimetable();
+  assert.equal(tt.ok, true);
+  assert.equal(tt.waveCount, 6);
+  assert.equal(tt.waves[0].startTime, "09:00");
+  assert.equal(tt.waves[5].startTime, "10:15");
+
+  const wave1Trainee = internal("stu-wave1");
+  const conflicts = detectExamConflicts({
+    sessions: [
+      storedBlock({
+        sessionId: "block",
+        interval: { date: D, start: "09:00", end: "10:30" },
+        slots: tt.slots,
+        // a1 is in wave 0 (09:00-09:15).
+        assignments: [{ ...examinee(wave1Trainee), assignmentId: "a1" }],
+      }),
+      session({
+        sessionId: "late",
+        // Overlaps the BLOCK, but only during the last wave.
+        interval: { date: D, start: "10:15", end: "10:30" },
+        assignments: [examinee(wave1Trainee)],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+      }),
+    ],
+  });
+  assert.equal(
+    hasCode(conflicts, "EX-BLK-01"),
+    false,
+    "the whole-block interval must not be used for a participant",
+  );
+});
+
+test("S4A-2: a genuine same-slot overlap is still reported", () => {
+  const tt = sixWaveTimetable();
+  const wave1Trainee = internal("stu-wave1");
+  const conflicts = detectExamConflicts({
+    sessions: [
+      storedBlock({
+        sessionId: "block",
+        interval: { date: D, start: "09:00", end: "10:30" },
+        slots: tt.slots,
+        assignments: [{ ...examinee(wave1Trainee), assignmentId: "a1" }],
+      }),
+      session({
+        sessionId: "early",
+        interval: { date: D, start: "09:05", end: "09:20" }, // inside wave 0
+        assignments: [examinee(wave1Trainee)],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+      }),
+    ],
+  });
+  const blk = find(conflicts, "EX-BLK-01");
+  assert.ok(blk, "expected a real slot overlap to be reported");
+  assert.equal(blk!.severity, "BLOCK");
+  assert.equal(blk!.subjectId, "INTERNAL:stu-wave1");
+  assert.deepEqual([...blk!.details], [], "a resolved slot carries no fallback token");
+});
+
+test("S4A-3: touching slot boundaries are NOT an overlap", () => {
+  const tt = sixWaveTimetable();
+  const trainee = internal("stu-wave1");
+  const conflicts = detectExamConflicts({
+    sessions: [
+      storedBlock({
+        sessionId: "block",
+        interval: { date: D, start: "09:00", end: "10:30" },
+        slots: tt.slots,
+        assignments: [{ ...examinee(trainee), assignmentId: "a1" }], // 09:00-09:15
+      }),
+      session({
+        sessionId: "next",
+        interval: { date: D, start: "09:15", end: "09:30" }, // starts exactly at slot end
+        assignments: [examinee(trainee)],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+      }),
+    ],
+  });
+  assert.equal(hasCode(conflicts, "EX-BLK-01"), false);
+});
+
+// --- 4/5: instructed-trainee inheritance and unresolved pairing ------------
+
+/** A two-wave block: a1 09:00-09:15 (pairing 1), a2 09:15-09:30 (pairing 2). */
+function pairedBlockTimetable() {
+  return computeExamBlockTimetable({
+    blockStartTime: "09:00",
+    durationMinutes: 15,
+    parallelCapacity: 1,
+    examinees: [
+      { assignmentId: "a1", orderIndex: 0 },
+      { assignmentId: "a2", orderIndex: 1 },
+    ],
+  });
+}
+
+test("S4A-4: an instructed trainee is compared on its INHERITED slot, not the block", () => {
+  const tt = pairedBlockTimetable();
+  const inherited = resolveInstructedTraineeSlots(
+    tt,
+    [
+      { assignmentId: "a1", pairingIndex: 1 },
+      { assignmentId: "a2", pairingIndex: 2 },
+    ],
+    [{ assignmentId: "i2", pairingIndex: 2 }],
+  );
+  assert.equal(inherited.length, 1);
+  assert.equal(inherited[0].startTime, "09:15");
+  assert.equal(inherited[0].endTime, "09:30");
+
+  const pupil = internal("stu-pupil");
+  const block = storedBlock({
+    sessionId: "block",
+    interval: { date: D, start: "09:00", end: "09:30" },
+    slots: [...tt.slots, ...inherited],
+    assignments: [
+      { ...examinee(internal("stu-e1")), assignmentId: "a1" },
+      { ...examinee(internal("stu-e2")), assignmentId: "a2" },
+      { ...instructed(pupil), assignmentId: "i2" },
+    ],
+  });
+
+  const duringInherited = detectExamConflicts({
+    sessions: [
+      block,
+      session({
+        sessionId: "other",
+        interval: { date: D, start: "09:20", end: "09:40" },
+        assignments: [examinee(pupil)],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+      }),
+    ],
+  });
+  const blk = find(duringInherited, "EX-BLK-02");
+  assert.ok(blk, "the inherited slot must be compared");
+  assert.equal(blk!.subjectId, "INTERNAL:stu-pupil");
+
+  const beforeInherited = detectExamConflicts({
+    sessions: [
+      block,
+      session({
+        sessionId: "other",
+        interval: { date: D, start: "09:00", end: "09:15" }, // the OTHER wave
+        assignments: [examinee(pupil)],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+      }),
+    ],
+  });
+  assert.equal(
+    hasCode(beforeInherited, "EX-BLK-02"),
+    false,
+    "the instructed trainee is not present during the paired examinee's other wave",
+  );
+});
+
+test("S4A-5: an UNRESOLVED individual pairing does not fall back to the block interval", () => {
+  const tt = pairedBlockTimetable();
+  const orphan = internal("stu-orphan");
+  const inherited = resolveInstructedTraineeSlots(
+    tt,
+    [
+      { assignmentId: "a1", pairingIndex: 1 },
+      { assignmentId: "a2", pairingIndex: 2 },
+    ],
+    [{ assignmentId: "i9", pairingIndex: 99 }], // matches no examinee
+  );
+  assert.equal(inherited.length, 0, "an unmatched pairing resolves no slot");
+
+  const conflicts = detectExamConflicts({
+    sessions: [
+      storedBlock({
+        sessionId: "block",
+        interval: { date: D, start: "09:00", end: "09:30" },
+        slots: tt.slots,
+        assignments: [
+          { ...examinee(internal("stu-e1")), assignmentId: "a1" },
+          { ...examinee(internal("stu-e2")), assignmentId: "a2" },
+          { ...instructed(orphan), assignmentId: "i9" },
+        ],
+      }),
+      session({
+        sessionId: "other",
+        interval: { date: D, start: "09:00", end: "09:30" }, // the WHOLE block
+        assignments: [examinee(orphan)],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+      }),
+    ],
+  });
+  assert.equal(
+    hasCode(conflicts, "EX-BLK-02"),
+    false,
+    "an unresolved pairing must not inherit the whole-block interval",
+  );
+  assert.equal(
+    conflicts.some((c) => c.details.includes("TIMETABLE_UNRESOLVED")),
+    false,
+    "an individual pairing problem is not a timetable failure",
+  );
+});
+
+// --- 6: globally unresolved timetable --------------------------------------
+
+test("S4A-6: a globally UNRESOLVED timetable falls back to the block and tags TIMETABLE_UNRESOLVED", () => {
+  const shared = internal("stu-1");
+  const conflicts = detectExamConflicts({
+    sessions: [
+      storedBlock({
+        sessionId: "block",
+        interval: { date: D, start: "09:00", end: "10:30" },
+        timetableStatus: "UNRESOLVED",
+        slots: [],
+        assignments: [{ ...examinee(shared), assignmentId: "a1", horse: "Rex" }],
+      }),
+      session({
+        sessionId: "late",
+        interval: { date: D, start: "10:15", end: "10:30" },
+        assignments: [examinee(shared)],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+        horseIds: ["Rex"],
+      }),
+    ],
+  });
+  const blk = find(conflicts, "EX-BLK-01");
+  assert.ok(blk, "conflicts must NOT be dropped when the timetable fails");
+  assert.deepEqual([...blk!.details], ["TIMETABLE_UNRESOLVED"]);
+
+  const horse = find(conflicts, "EX-WRN-01");
+  assert.ok(horse, "horses fall back too");
+  assert.deepEqual([...horse!.details], ["TIMETABLE_UNRESOLVED"]);
+  assert.equal(horse!.subjectId, "rex");
+});
+
+test("S4A-6b: a definition-backed block with no slots at all defaults to the conservative fallback", () => {
+  const shared = internal("stu-1");
+  const conflicts = detectExamConflicts({
+    sessions: [
+      session({
+        sessionId: "block",
+        definitionId: "def-1",
+        interval: { date: D, start: "09:00", end: "10:30" },
+        assignments: [{ ...examinee(shared), assignmentId: "a1" }],
+      }),
+      session({
+        sessionId: "late",
+        interval: { date: D, start: "10:15", end: "10:30" },
+        assignments: [examinee(shared)],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+      }),
+    ],
+  });
+  const blk = find(conflicts, "EX-BLK-01");
+  assert.ok(blk, "an absent timetable fails closed to the block interval");
+  assert.deepEqual([...blk!.details], ["TIMETABLE_UNRESOLVED"]);
+});
+
+// --- 6c: a globally unresolved timetable is NOT an unresolved pairing -------
+
+/**
+ * A definition-backed block whose timetable failed globally (an invalid
+ * duration/capacity/start), so NO slot exists for anybody. `pairingIndex` is
+ * then the only thing that can still place an instructed trainee.
+ */
+function failedTimetableBlock(
+  instructedAssignment: ConflictAssignment,
+  over: Partial<ConflictSession> = {},
+): ConflictSession {
+  return session({
+    sessionId: "block",
+    definitionId: "def-1",
+    source: "STORED",
+    timetableStatus: "UNRESOLVED",
+    slots: [],
+    interval: { date: D, start: "09:00", end: "10:30" },
+    assignments: [
+      { ...examinee(internal("stu-e1")), assignmentId: "a1", pairingIndex: 1 },
+      { ...examinee(internal("stu-e2")), assignmentId: "a2", pairingIndex: 2 },
+      instructedAssignment,
+    ],
+    ...over,
+  });
+}
+
+/** The counterpart session, overlapping only the tail of the failed block. */
+function lateCounterpart(over: Partial<ConflictSession> = {}): ConflictSession {
+  return session({
+    sessionId: "late",
+    interval: { date: D, start: "10:15", end: "10:30" },
+    supervisorIds: ["sup-other"],
+    examinerSetId: "eset-other",
+    ...over,
+  });
+}
+
+test("S4A-6c-1: globally unresolved timetable + VALID instructed pairing ⇒ block fallback + token", () => {
+  const pupil = internal("stu-pupil");
+  const conflicts = detectExamConflicts({
+    sessions: [
+      failedTimetableBlock({ ...instructed(pupil), assignmentId: "i2", pairingIndex: 2 }),
+      lateCounterpart({ assignments: [examinee(pupil)] }),
+    ],
+  });
+  const blk = find(conflicts, "EX-BLK-02");
+  assert.ok(
+    blk,
+    "a uniquely paired instructed trainee is still KNOWN to be in the block — only un-timed",
+  );
+  assert.equal(blk!.severity, "BLOCK");
+  assert.equal(blk!.subjectId, "INTERNAL:stu-pupil");
+  assert.deepEqual([...blk!.details], ["TIMETABLE_UNRESOLVED"]);
+});
+
+test("S4A-6c-2: globally unresolved timetable + VALID instructed pairing ⇒ its horse falls back too", () => {
+  const pupil = internal("stu-pupil");
+  const conflicts = detectExamConflicts({
+    sessions: [
+      failedTimetableBlock({
+        ...instructed(pupil),
+        assignmentId: "i2",
+        pairingIndex: 2,
+        horse: "Rex",
+      }),
+      lateCounterpart({ horseIds: ["rex"] }),
+    ],
+  });
+  const horse = find(conflicts, "EX-WRN-01");
+  assert.ok(horse, "the instructed trainee's horse takes the same conservative fallback");
+  assert.equal(horse!.subjectId, "rex");
+  assert.deepEqual([...horse!.details], ["TIMETABLE_UNRESOLVED"]);
+});
+
+test("S4A-6c-3: globally unresolved timetable + ABSENT pairing ⇒ excluded, no false conflicts", () => {
+  const orphan = internal("stu-orphan");
+  const conflicts = detectExamConflicts({
+    sessions: [
+      failedTimetableBlock({ ...instructed(orphan), assignmentId: "i9", horse: "Rex" }),
+      lateCounterpart({ assignments: [examinee(orphan)], horseIds: ["rex"] }),
+    ],
+  });
+  assert.equal(hasCode(conflicts, "EX-BLK-02"), false, "no participant fallback");
+  assert.equal(hasCode(conflicts, "EX-WRN-01"), false, "no horse fallback");
+});
+
+test("S4A-6c-4: globally unresolved timetable + UNMATCHED pairing ⇒ same exclusion", () => {
+  const orphan = internal("stu-orphan");
+  const unmatched = detectExamConflicts({
+    sessions: [
+      failedTimetableBlock({
+        ...instructed(orphan),
+        assignmentId: "i9",
+        pairingIndex: 99, // matches no examinee
+        horse: "Rex",
+      }),
+      lateCounterpart({ assignments: [examinee(orphan)], horseIds: ["rex"] }),
+    ],
+  });
+  assert.equal(hasCode(unmatched, "EX-BLK-02"), false);
+  assert.equal(hasCode(unmatched, "EX-WRN-01"), false);
+
+  // An AMBIGUOUS pairing — claimed by two examinees — identifies neither.
+  const ambiguous = detectExamConflicts({
+    sessions: [
+      session({
+        sessionId: "block",
+        definitionId: "def-1",
+        source: "STORED",
+        timetableStatus: "UNRESOLVED",
+        slots: [],
+        interval: { date: D, start: "09:00", end: "10:30" },
+        assignments: [
+          { ...examinee(internal("stu-e1")), assignmentId: "a1", pairingIndex: 1 },
+          { ...examinee(internal("stu-e2")), assignmentId: "a2", pairingIndex: 1 }, // same index
+          { ...instructed(orphan), assignmentId: "i1", pairingIndex: 1, horse: "Rex" },
+        ],
+      }),
+      lateCounterpart({ assignments: [examinee(orphan)], horseIds: ["rex"] }),
+    ],
+  });
+  assert.equal(hasCode(ambiguous, "EX-BLK-02"), false);
+  assert.equal(hasCode(ambiguous, "EX-WRN-01"), false);
+  // The examinees themselves still take the fallback — only the pupil is unplaced.
+  assert.equal(
+    ambiguous.every((c) => c.code !== "EX-BLK-02"),
+    true,
+  );
+});
+
+test("S4A-6c-5: timetable OK + unresolved pairing stays excluded — no whole-block fallback", () => {
+  const tt = pairedBlockTimetable();
+  const orphan = internal("stu-orphan");
+  const conflicts = detectExamConflicts({
+    sessions: [
+      storedBlock({
+        sessionId: "block",
+        interval: { date: D, start: "09:00", end: "09:30" },
+        slots: tt.slots, // resolves a1/a2 only — no inherited slot for i9
+        assignments: [
+          { ...examinee(internal("stu-e1")), assignmentId: "a1", pairingIndex: 1 },
+          { ...examinee(internal("stu-e2")), assignmentId: "a2", pairingIndex: 2 },
+          // A pairing that WOULD resolve uniquely, but the timetable is OK and
+          // produced no inherited slot, so the pupil is still excluded.
+          { ...instructed(orphan), assignmentId: "i9", pairingIndex: 2, horse: "Rex" },
+        ],
+      }),
+      session({
+        sessionId: "other",
+        interval: { date: D, start: "09:00", end: "09:30" }, // the WHOLE block
+        assignments: [examinee(orphan)],
+        horseIds: ["rex"],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+      }),
+    ],
+  });
+  assert.equal(hasCode(conflicts, "EX-BLK-02"), false, "OK requires a real inherited slot");
+  assert.equal(hasCode(conflicts, "EX-WRN-01"), false);
+  assert.equal(
+    conflicts.some((c) => c.details.includes("TIMETABLE_UNRESOLVED")),
+    false,
+    "a successful timetable never emits the fallback token",
+  );
+});
+
+// --- 7: positional break ---------------------------------------------------
+
+test("S4A-7: a positional break shifts later slots and conflicts follow the shifted time", () => {
+  const tt = computeExamBlockTimetable({
+    blockStartTime: "09:00",
+    durationMinutes: 15,
+    parallelCapacity: 1,
+    examinees: [
+      { assignmentId: "a1", orderIndex: 0 },
+      { assignmentId: "a2", orderIndex: 1 },
+    ],
+    breaks: [{ breakId: "brk-1", afterWaveIndex: 0, durationMinutes: 30 }],
+  });
+  assert.equal(tt.ok, true);
+  assert.equal(tt.waves[0].startTime, "09:00");
+  assert.equal(tt.waves[1].startTime, "09:45", "the break pushed wave 2 to 09:45");
+
+  const shifted = internal("stu-shifted");
+  const block = (): ConflictSession =>
+    storedBlock({
+      sessionId: "block",
+      interval: { date: D, start: "09:00", end: "10:00" },
+      slots: tt.slots,
+      assignments: [{ ...examinee(shifted), assignmentId: "a2" }],
+    });
+
+  const atOldTime = detectExamConflicts({
+    sessions: [
+      block(),
+      session({
+        sessionId: "other",
+        interval: { date: D, start: "09:15", end: "09:30" }, // where wave 2 would be without the break
+        assignments: [examinee(shifted)],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+      }),
+    ],
+  });
+  assert.equal(hasCode(atOldTime, "EX-BLK-01"), false);
+
+  const atShiftedTime = detectExamConflicts({
+    sessions: [
+      block(),
+      session({
+        sessionId: "other",
+        interval: { date: D, start: "09:45", end: "10:00" },
+        assignments: [examinee(shifted)],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+      }),
+    ],
+  });
+  assert.equal(hasCode(atShiftedTime, "EX-BLK-01"), true);
+});
+
+// --- 8/9: horses -----------------------------------------------------------
+
+test("S4A-8: a stored per-assignment horse is compared on its SLOT interval", () => {
+  const tt = sixWaveTimetable();
+  const block = (): ConflictSession =>
+    storedBlock({
+      sessionId: "block",
+      interval: { date: D, start: "09:00", end: "10:30" },
+      slots: tt.slots,
+      assignments: [
+        { ...examinee(internal("stu-1")), assignmentId: "a1", horse: "Rex" }, // wave 0
+      ],
+    });
+
+  const late = detectExamConflicts({
+    sessions: [
+      block(),
+      session({
+        sessionId: "late",
+        interval: { date: D, start: "10:15", end: "10:30" },
+        horseIds: ["Rex"],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+      }),
+    ],
+  });
+  assert.equal(hasCode(late, "EX-WRN-01"), false, "the horse is free during wave 6");
+
+  const early = detectExamConflicts({
+    sessions: [
+      block(),
+      session({
+        sessionId: "early",
+        interval: { date: D, start: "09:05", end: "09:20" },
+        horseIds: ["Rex"],
+        supervisorIds: ["sup-other"],
+        examinerSetId: "eset-other",
+      }),
+    ],
+  });
+  const w = find(early, "EX-WRN-01");
+  assert.ok(w, "a real slot-time horse clash must be reported");
+  assert.equal(w!.subjectId, "rex");
+});
+
+test("S4A-9: horse values are trimmed, whitespace-collapsed and case-insensitive — and nothing else", () => {
+  const matched = detectExamConflicts({
+    sessions: [
+      session({
+        sessionId: "a",
+        assignments: [{ ...examinee(internal("s1")), assignmentId: "a1", horse: "  Rex   Star " }],
+      }),
+      session({
+        sessionId: "b",
+        interval: { date: D, start: "09:30", end: "10:30" },
+        assignments: [{ ...examinee(internal("s2")), assignmentId: "b1", horse: "rex star" }],
+      }),
+    ],
+  });
+  const w = find(matched, "EX-WRN-01");
+  assert.ok(w, "trim + whitespace collapse + case-insensitive must match");
+  assert.equal(w!.subjectId, "rex star");
+
+  // Digits, punctuation and extra words are NEVER stripped — a different horse.
+  const distinct = detectExamConflicts({
+    sessions: [
+      session({
+        sessionId: "a",
+        assignments: [{ ...examinee(internal("s1")), assignmentId: "a1", horse: "סוסה 2" }],
+      }),
+      session({
+        sessionId: "b",
+        interval: { date: D, start: "09:30", end: "10:30" },
+        assignments: [{ ...examinee(internal("s2")), assignmentId: "b1", horse: "סוסה" }],
+      }),
+    ],
+  });
+  assert.equal(hasCode(distinct, "EX-WRN-01"), false);
+
+  // A blank horse never participates.
+  const blank = detectExamConflicts({
+    sessions: [
+      session({
+        sessionId: "a",
+        assignments: [{ ...examinee(internal("s1")), assignmentId: "a1", horse: "   " }],
+      }),
+      session({
+        sessionId: "b",
+        interval: { date: D, start: "09:30", end: "10:30" },
+        assignments: [{ ...examinee(internal("s2")), assignmentId: "b1", horse: "" }],
+      }),
+    ],
+  });
+  assert.equal(hasCode(blank, "EX-WRN-01"), false);
+});
+
+// --- 10/11/12: live beginner rows ------------------------------------------
+
+test("S4A-10: a beginner participant conflicts with a stored SLOT on the lesson's real interval", () => {
+  const tt = sixWaveTimetable();
+  const shared = internal("stu-shared");
+  const block = (): ConflictSession =>
+    storedBlock({
+      sessionId: "block",
+      interval: { date: D, start: "09:00", end: "10:30" },
+      slots: tt.slots,
+      assignments: [{ ...examinee(shared), assignmentId: "a1" }], // wave 0, 09:00-09:15
+    });
+
+  const clashing = detectExamConflicts({
+    sessions: [
+      block(),
+      beginnerRow({
+        sessionId: "tp:lesson-1",
+        interval: { date: D, start: "09:10", end: "10:00" },
+        assignments: [examinee(shared)],
+      }),
+    ],
+  });
+  const blk = find(clashing, "EX-BLK-01");
+  assert.ok(blk, "a beginner lesson overlapping the stored slot is a real conflict");
+  assert.equal(blk!.severity, "BLOCK", "beginner-vs-STORED keeps the normal severity");
+  assert.deepEqual([...blk!.details], [], "only beginner-vs-beginner is TP_OWNED");
+
+  const clear = detectExamConflicts({
+    sessions: [
+      block(),
+      beginnerRow({
+        sessionId: "tp:lesson-1",
+        interval: { date: D, start: "09:30", end: "10:00" }, // after the trainee's slot
+        assignments: [examinee(shared)],
+      }),
+    ],
+  });
+  assert.equal(hasCode(clear, "EX-BLK-01"), false);
+});
+
+test("S4A-11: a beginner responsible instructor competes with a stored supervisor (EX-WRN-02)", () => {
+  const conflicts = detectExamConflicts({
+    sessions: [
+      session({
+        sessionId: "block",
+        interval: { date: D, start: "09:00", end: "10:00" },
+        supervisorIds: ["inst-7"],
+      }),
+      beginnerRow({
+        sessionId: "tp:lesson-1",
+        interval: { date: D, start: "09:30", end: "10:30" },
+        responsibleInstructorId: "inst-7",
+      }),
+    ],
+  });
+  const w = find(conflicts, "EX-WRN-02");
+  assert.ok(w, "the responsible TP instructor is occupied for the whole lesson");
+  assert.equal(w!.subjectId, "inst-7");
+  assert.deepEqual([...w!.sessionIds], ["block", "tp:lesson-1"]);
+});
+
+test("S4A-12: a beginner location is never compared to a stored arena; stored-vs-stored still warns", () => {
+  const withBeginner = detectExamConflicts({
+    sessions: [
+      session({
+        sessionId: "block",
+        interval: { date: D, start: "09:00", end: "10:00" },
+        arenaId: "arena-1",
+      }),
+      beginnerRow({
+        sessionId: "tp:lesson-1",
+        interval: { date: D, start: "09:30", end: "10:30" },
+        arenaId: "arena-1", // free TP text, NOT an arena identity
+      }),
+    ],
+  });
+  assert.equal(hasCode(withBeginner, "EX-WRN-04"), false);
+  assert.equal(
+    hasCode(withBeginner, "EX-WRN-03"),
+    false,
+    "a beginner row has no examiner-set concept",
+  );
+
+  const storedOnly = detectExamConflicts({
+    sessions: [
+      session({
+        sessionId: "block-a",
+        interval: { date: D, start: "09:00", end: "10:00" },
+        arenaId: "arena-1",
+      }),
+      session({
+        sessionId: "block-b",
+        interval: { date: D, start: "09:30", end: "10:30" },
+        arenaId: "arena-1",
+      }),
+    ],
+  });
+  assert.equal(hasCode(storedOnly, "EX-WRN-04"), true, "stored-vs-stored arena stays active");
+});
+
+// --- 13: beginner-to-beginner ----------------------------------------------
+
+test("S4A-13: a beginner-to-beginner BLOCK is downgraded to WARN and tagged TP_OWNED", () => {
+  const shared = internal("stu-shared");
+  const conflicts = detectExamConflicts({
+    sessions: [
+      beginnerRow({
+        sessionId: "tp:lesson-1",
+        interval: { date: D, start: "09:00", end: "10:00" },
+        assignments: [examinee(shared)],
+        horseIds: ["Rex"],
+        responsibleInstructorId: "inst-7",
+      }),
+      beginnerRow({
+        sessionId: "tp:lesson-2",
+        interval: { date: D, start: "09:30", end: "10:30" },
+        assignments: [examinee(shared)],
+        horseIds: ["rex"],
+        responsibleInstructorId: "inst-7",
+      }),
+    ],
+  });
+
+  const blk = find(conflicts, "EX-BLK-01");
+  assert.ok(blk, "the conflict is reported, never suppressed");
+  assert.equal(blk!.severity, "WARN", "the Exams module cannot fix two TP lessons");
+  assert.deepEqual([...blk!.details], ["TP_OWNED"]);
+
+  const horse = find(conflicts, "EX-WRN-01");
+  assert.ok(horse);
+  assert.deepEqual([...horse!.details], ["TP_OWNED"]);
+
+  const sup = find(conflicts, "EX-WRN-02");
+  assert.ok(sup, "two TP lessons sharing one responsible instructor still warn");
+  assert.equal(sup!.subjectId, "inst-7");
+  assert.deepEqual([...sup!.details], ["TP_OWNED"]);
+});
+
+// --- 14: the block-grained rules stay block-grained -------------------------
+
+test("S4A-14: supervisor, examiner-set and arena stay BLOCK-grained across two stored blocks", () => {
+  const tt = sixWaveTimetable();
+  const shared = internal("stu-shared");
+  const conflicts = detectExamConflicts({
+    sessions: [
+      storedBlock({
+        sessionId: "block-a",
+        interval: { date: D, start: "09:00", end: "10:30" },
+        slots: tt.slots,
+        assignments: [{ ...examinee(shared), assignmentId: "a1" }], // 09:00-09:15
+        supervisorIds: ["sup-shared"],
+        examinerSetId: "eset-shared",
+        arenaId: "arena-shared",
+      }),
+      storedBlock({
+        sessionId: "block-b",
+        interval: { date: D, start: "10:00", end: "11:30" },
+        slots: [{ assignmentId: "b1", startTime: "11:15", endTime: "11:30" }],
+        assignments: [{ ...examinee(shared), assignmentId: "b1" }], // 11:15-11:30
+        supervisorIds: ["sup-shared"],
+        examinerSetId: "eset-shared",
+        arenaId: "arena-shared",
+      }),
+    ],
+  });
+
+  assert.equal(hasCode(conflicts, "EX-WRN-02"), true, "supervisor is held for the whole block");
+  assert.equal(hasCode(conflicts, "EX-WRN-03"), true, "examiner set is held for the whole block");
+  assert.equal(hasCode(conflicts, "EX-WRN-04"), true, "arena is held for the whole block");
+  assert.equal(
+    hasCode(conflicts, "EX-BLK-01"),
+    false,
+    "the shared trainee's own slots do not overlap",
+  );
+});
+
+// --- 15/16: EX-WRN-05 ------------------------------------------------------
+
+test("S4A-15: EX-WRN-05 still fires for a LEGACY definition-less block over capacity", () => {
+  const conflicts = detectExamConflicts({
+    sessions: [
+      session({
+        sessionId: "legacy",
+        capacity: 2,
+        assignments: [
+          examinee(internal("s1")),
+          examinee(internal("s2")),
+          examinee(internal("s3")),
+        ],
+      }),
+    ],
+  });
+  const w = find(conflicts, "EX-WRN-05");
+  assert.ok(w, "the legacy capacity warning is preserved");
+  assert.equal(w!.subjectKind, "SESSION");
+  assert.deepEqual([...w!.sessionIds], ["legacy"]);
+});
+
+test("S4A-16: EX-WRN-05 NEVER fires for a definition-backed block, however many waves it has", () => {
+  const tt = sixWaveTimetable();
+  const conflicts = detectExamConflicts({
+    sessions: [
+      storedBlock({
+        sessionId: "block",
+        interval: { date: D, start: "09:00", end: "10:30" },
+        slots: tt.slots,
+        // parallelCapacity 2 with 12 examinees is SIX WAVES — entirely normal.
+        capacity: 2,
+        assignments: SIX_WAVE_IDS.map((assignmentId, index) => ({
+          ...examinee(internal(`stu-${index}`)),
+          assignmentId,
+        })),
+      }),
+    ],
+  });
+  assert.equal(
+    hasCode(conflicts, "EX-WRN-05"),
+    false,
+    "parallelCapacity is examinees per wave, not a maximum assignment count",
+  );
+});
+
+// --- 17/18: legacy compatibility, immutability, determinism ----------------
+
+test("S4A-17: a legacy fixture with no slot fields keeps whole-block behaviour and no tokens", () => {
+  const shared = internal("stu-1");
+  const conflicts = detectExamConflicts({
+    sessions: [
+      session({
+        sessionId: "a",
+        interval: { date: D, start: "09:00", end: "10:30" },
+        assignments: [examinee(shared)],
+        horseIds: ["h1"],
+      }),
+      session({
+        sessionId: "b",
+        interval: { date: D, start: "10:15", end: "10:45" },
+        assignments: [examinee(shared)],
+        horseIds: ["h1"],
+      }),
+    ],
+  });
+  const blk = find(conflicts, "EX-BLK-01");
+  assert.ok(blk, "a legacy session still compares its whole interval");
+  assert.equal(blk!.severity, "BLOCK");
+  assert.deepEqual([...blk!.details], [], "legacy input carries no S4A tokens");
+  const horse = find(conflicts, "EX-WRN-01");
+  assert.ok(horse, "the session-level horse list is still honoured as a fallback");
+  assert.deepEqual([...horse!.details], []);
+});
+
+test("S4A-18: slot-aware input is never mutated and the output stays deterministic and ordered", () => {
+  const tt = sixWaveTimetable();
+  const shared = internal("stu-shared");
+  const build = () => ({
+    sessions: [
+      storedBlock({
+        sessionId: "block",
+        interval: { date: D, start: "09:00", end: "10:30" },
+        slots: tt.slots,
+        assignments: [{ ...examinee(shared), assignmentId: "a1", horse: " Rex " }],
+        supervisorIds: ["sup-shared"],
+        examinerSetId: "eset-shared",
+        arenaId: "arena-shared",
+      }),
+      storedBlock({
+        sessionId: "block-2",
+        interval: { date: D, start: "09:00", end: "10:30" },
+        slots: [{ assignmentId: "c1", startTime: "09:05", endTime: "09:20" }],
+        assignments: [{ ...examinee(shared), assignmentId: "c1", horse: "REX" }],
+        supervisorIds: ["sup-shared"],
+        examinerSetId: "eset-shared",
+        arenaId: "arena-shared",
+      }),
+      beginnerRow({
+        sessionId: "tp:lesson-1",
+        interval: { date: D, start: "09:00", end: "10:00" },
+        assignments: [examinee(shared)],
+        responsibleInstructorId: "sup-shared",
+      }),
+    ],
+  });
+
+  const input = build();
+  const snapshot = JSON.stringify(input);
+  const first = detectExamConflicts(input);
+  assert.equal(JSON.stringify(input), snapshot, "input must not be mutated");
+
+  const second = detectExamConflicts(build());
+  assert.deepEqual(codes(first), codes(second), "deterministic across runs");
+  assert.deepEqual(
+    first.map((c) => `${c.severity}|${c.code}|${c.subjectId ?? ""}|${c.sessionIds.join(",")}`),
+    second.map((c) => `${c.severity}|${c.code}|${c.subjectId ?? ""}|${c.sessionIds.join(",")}`),
+    "full tuples are deterministic",
+  );
+
+  const severities = first.map((c) => c.severity);
+  const firstWarn = severities.indexOf("WARN");
+  if (firstWarn !== -1) {
+    assert.equal(
+      severities.slice(firstWarn).every((s) => s === "WARN"),
+      true,
+      "no BLOCK appears after the first WARN",
+    );
+  }
+
+  const keys = first.map((c) => `${c.code}|${c.subjectId ?? ""}|${[...c.sessionIds].join(",")}`);
+  assert.equal(new Set(keys).size, keys.length, "no duplicate conflict tuples");
+
+  // The frozen output must not be writable.
+  assert.equal(Object.isFrozen(first), true);
 });
