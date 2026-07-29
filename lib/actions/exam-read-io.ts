@@ -9,6 +9,14 @@
  * and proven the course scope — the role wrappers of EX-S5A-4. No export here is
  * a callable action surface.
  *
+ * SERVER-ONLY BY DECLARATION. `import "server-only"` (the repository's existing
+ * convention, used by lib/course/capabilities/attendance-capability-resolver.ts
+ * and current-attendance-capability.ts) makes an accidental import from a
+ * `"use client"` module a BUILD ERROR. It is declared here as well as in the
+ * role readers because THIS is the module that holds the Prisma client and the
+ * queries: not being a Server Action keeps these functions off the network, and
+ * that is a different guarantee from keeping the module out of a browser bundle.
+ *
  * THE ROWS THESE QUERIES RETURN ARE SENSITIVE. They are the ROLE-NEUTRAL
  * SUPERSET — other people's student ids, and the beginner lessons' child and
  * parent-contact detail — and they must never be returned to a browser as they
@@ -60,6 +68,18 @@
  * caller choose which plan it reads.
  *
  * ===========================================================================
+ * THE DISPLAY-NAME LOOKUPS (EX-S5A-4B)
+ * ===========================================================================
+ * The two name queries added for the role readers take ids the AUTHORIZED
+ * wrapper collected from the payload it had already loaded — they widen nothing,
+ * because an id can only be asked about after the read that produced it was
+ * allowed. Each is ONE batched `id IN (...)` lookup selecting `id` and
+ * `fullName` and NOTHING else: no national id, no email, no phone, no auth-user
+ * relation, no enrollment, no group, no attendance and no evaluation of any
+ * kind. An EMPTY id set short-circuits with no database round trip at all, and
+ * neither function is ever called per row, per session or per lesson.
+ *
+ * ===========================================================================
  * DATES ARE OPAQUE TOKENS ABOVE THIS LINE
  * ===========================================================================
  * `@db.Date` columns are converted ONCE here with the shared `dateKey`, and
@@ -69,6 +89,8 @@
  * `parseDateKey`, so the query's day boundaries use the same UTC convention the
  * rest of the repository does.
  */
+import "server-only";
+
 import { prisma } from "@/lib/prisma";
 import { dateKey, parseDateKey } from "@/lib/dates";
 import type {
@@ -367,6 +389,94 @@ export async function fetchExamTeachingPracticeLessonsByDates(
       isAbsent: c.isAbsent,
     })),
   }));
+}
+
+// ===========================================================================
+// 6. Display names — EX-S5A-4B, one batched lookup per entity per read
+// ===========================================================================
+
+/**
+ * The exact projection both name queries use: the authoritative id and the
+ * display name, and nothing else.
+ */
+interface DisplayNameRow {
+  readonly id: string;
+  readonly fullName: string;
+}
+
+/**
+ * Normalize a collected id list for a batched `IN (...)` filter: trim, drop
+ * blanks, DEDUPLICATE and sort deterministically.
+ *
+ * Pure and in-memory — it issues no query. The sort exists so the same read
+ * produces the same query twice; the dedupe exists so a trainee assigned to two
+ * rows is asked about once.
+ */
+function normalizeDisplayNameIds(ids: readonly string[]): string[] {
+  const list = Array.isArray(ids) ? ids : [];
+  return [
+    ...new Set(
+      list
+        .map((id) => (typeof id === "string" ? id.trim() : ""))
+        .filter((id) => id.length > 0),
+    ),
+  ].sort();
+}
+
+/**
+ * Index rows by their AUTHORITATIVE database id. The display name is trimmed;
+ * the id is used verbatim, because it is identity and identity is never
+ * reformatted. An id with no row simply has no entry — the caller's narrowing
+ * treats that as "not resolved" and never substitutes the id for a name.
+ */
+function toDisplayNameMap(rows: readonly DisplayNameRow[]): ReadonlyMap<string, string> {
+  return new Map(rows.map((row) => [row.id, row.fullName.trim()]));
+}
+
+/**
+ * `Student.id` → `Student.fullName`, in ONE batched query.
+ *
+ * The caller — an already-authorized EX-S5A-4B role reader — collects the ids
+ * from the payload it loaded. An EMPTY set returns a fresh empty map WITHOUT
+ * touching the database: there is nothing to ask, and an empty `IN ()` can only
+ * return nothing.
+ *
+ * The select is two columns. No national id, no email, no phone, no auth user,
+ * no enrollment, no group, no attendance: a column that is never selected cannot
+ * be leaked by a later mapper.
+ */
+export async function fetchStudentDisplayNamesByIds(
+  ids: readonly string[],
+): Promise<ReadonlyMap<string, string>> {
+  const normalized = normalizeDisplayNameIds(ids);
+  if (normalized.length === 0) return new Map<string, string>();
+
+  const rows = await prisma.student.findMany({
+    where: { id: { in: normalized } },
+    select: { id: true, fullName: true },
+  });
+  return toDisplayNameMap(rows);
+}
+
+/**
+ * `Instructor.id` → `Instructor.fullName`, in ONE batched query.
+ *
+ * Called by the OPERATIONAL readers only, for stored supervisor ids and the
+ * beginner rows' responsible-instructor ids. The trainee reader never calls it:
+ * its one instructor-shaped display value already arrives as a name on the live
+ * beginner detail. Same two-column select, same empty short-circuit.
+ */
+export async function fetchInstructorDisplayNamesByIds(
+  ids: readonly string[],
+): Promise<ReadonlyMap<string, string>> {
+  const normalized = normalizeDisplayNameIds(ids);
+  if (normalized.length === 0) return new Map<string, string>();
+
+  const rows = await prisma.instructor.findMany({
+    where: { id: { in: normalized } },
+    select: { id: true, fullName: true },
+  });
+  return toDisplayNameMap(rows);
 }
 
 // ===========================================================================

@@ -1055,13 +1055,109 @@ test("the session select names NONE of the deprecated columns", () => {
 
 test("the Teaching-Practice query is ONE batched lookup over the explicit dates", () => {
   assert.ok(IO_CODE.includes("date: { in: dates.map"), "the date filter is not batched");
-  // No loop of any kind, so no query can be issued per session or per lesson.
+  const body = exportedIoRegion("fetchExamTeachingPracticeLessonsByDates");
+  assert.equal((body.match(/prisma\./g) ?? []).length, 1, "the TP fetcher issues >1 query");
+});
+
+/**
+ * The name → BODY of each exported member of the IO shell.
+ *
+ * The split drops the `export async function` / `export const` prefix, so each
+ * part runs from a member's own name to the next export — a good-enough function
+ * region for the structural checks below, which only count occurrences.
+ */
+function exportedIoMembers(): { name: string; body: string }[] {
+  return IO_CODE.split(/export\s+(?:async\s+function|const)\s+/)
+    .slice(1)
+    .map((part) => ({ name: part.split(/[\s(:]/)[0], body: part }));
+}
+
+function exportedIoRegion(name: string): string {
+  const found = exportedIoMembers().find((member) => member.name === name);
+  assert.ok(found !== undefined, `${name} was not found in the IO shell`);
+  return found.body;
+}
+
+/** The `(` nesting depth at `index` — 0 means "at statement level". */
+function parenDepthAt(source: string, index: number): number {
+  let depth = 0;
+  for (let i = 0; i < index; i += 1) {
+    if (source[i] === "(") depth += 1;
+    else if (source[i] === ")") depth -= 1;
+  }
+  return depth;
+}
+
+/**
+ * The SEVEN approved queries of the IO shell, in source order.
+ *
+ * Five are the EX-S5A-3 plan reads. The two added by EX-S5A-4B are the batched
+ * display-name lookups the authorized role readers need — they widen nothing,
+ * because an id can only be asked about after the read that produced it was
+ * allowed. The list is EXACT: an eighth query has to be added here, in review.
+ */
+const APPROVED_IO_QUERIES = [
+  "prisma.examPlan.findUnique",
+  "prisma.examDefinition.findMany",
+  "prisma.examSession.findMany",
+  "prisma.examTeachingPracticeSourceDate.findMany",
+  "prisma.teachingPracticeLesson.findMany",
+  "prisma.student.findMany",
+  "prisma.instructor.findMany",
+] as const;
+
+test("the IO shell issues EXACTLY the seven approved queries", () => {
+  const calls = IO_CODE.match(/prisma\.\w+\.\w+/g) ?? [];
+  assert.deepEqual(calls, [...APPROVED_IO_QUERIES]);
+});
+
+test("no Prisma query runs inside a loop or a per-row callback", () => {
+  // Iteration IS allowed in this file — but only for in-memory work: EX-S5A-4B
+  // normalizes an id list (trim / de-blank / dedupe / sort) and indexes rows
+  // into a map. What must never happen is a QUERY inside one.
   for (const loop of ["for (", "while (", "forEach("]) {
     assert.equal(IO_CODE.includes(loop), false, `the IO shell contains a ${loop} loop`);
   }
-  // Exactly one database call per dependency function — no per-row query exists.
-  const calls = IO_CODE.match(/prisma\.\w+\./g) ?? [];
-  assert.equal(calls.length, 5, `expected 5 queries, found ${calls.length}`);
+  // Every query is bound by an awaited assignment...
+  assert.equal((IO_CODE.match(/=\s*await\s+prisma\./g) ?? []).length, APPROVED_IO_QUERIES.length);
+  // ...at STATEMENT level, never nested inside a `.map()` / `.filter()` callback
+  // (which would put it once per row rather than once per read)...
+  for (const match of IO_CODE.matchAll(/prisma\.\w+\./g)) {
+    assert.equal(
+      parenDepthAt(IO_CODE, match.index),
+      0,
+      `a query at offset ${match.index} is nested inside a callback`,
+    );
+  }
+  // ...and no exported member holds more than one.
+  for (const { name, body } of exportedIoMembers()) {
+    assert.ok(
+      (body.match(/prisma\./g) ?? []).length <= 1,
+      `${name} issues more than one query`,
+    );
+  }
+});
+
+test("each display-name lookup is ONE batched, two-column query that skips empty input", () => {
+  for (const name of ["fetchStudentDisplayNamesByIds", "fetchInstructorDisplayNamesByIds"]) {
+    const body = exportedIoRegion(name);
+    // An empty id set is answered without a database round trip at all.
+    assert.ok(body.includes("normalized.length === 0"), `${name} does not short-circuit`);
+    // ONE batched `id IN (...)` over the normalized list — never a per-id fetch.
+    assert.ok(body.includes("where: { id: { in: normalized } }"), `${name} is not batched`);
+    // Exactly two columns: the authoritative id and the display name. No
+    // national id, email, phone, auth user, enrollment or group.
+    assert.ok(
+      body.includes("select: { id: true, fullName: true }"),
+      `${name} widens its select`,
+    );
+    assert.equal((body.match(/prisma\./g) ?? []).length, 1, `${name} issues >1 query`);
+  }
+  // The ids reaching either query are normalized in memory, once, before IO.
+  const normalizer = IO_CODE.slice(IO_CODE.indexOf("function normalizeDisplayNameIds"));
+  assert.ok(normalizer.includes("new Set("), "ids are not deduplicated");
+  assert.ok(normalizer.includes(".trim()"), "ids are not trimmed");
+  assert.ok(normalizer.includes(".sort()"), "ids are not ordered deterministically");
 });
 
 // --- the privacy-boundary guards -------------------------------------------
@@ -1184,22 +1280,51 @@ function repoSourceFiles(): { path: string; source: string }[] {
   return out;
 }
 
-test("NO route, action, page or UI file calls the loader yet", () => {
+/**
+ * The loader call site, assembled from split literals so the guards below do not
+ * match their OWN source and so the sibling allow-list guards stay green.
+ */
+const LOADER_CALL = new RegExp("\\bload" + "ExamPlan\\s*\\(");
+
+/** The ONE production module allowed to call the loader (EX-S5A-4B). */
+const APPROVED_LOADER_CALLER = join("lib", "actions", "exam-role-readers.ts");
+
+test("the ONLY production caller of the loader is the EX-S5A-4B role binding", () => {
   const files = repoSourceFiles();
   assert.ok(files.length > 100, `sanity: expected the repository, found ${files.length} files`);
 
+  // PRODUCTION code only. A `.test.ts` suite legitimately drives the pure loader
+  // directly with fakes — that is what makes it testable — so the contract being
+  // guarded here is which SHIPPED module may reach the sensitive payload.
+  // CODE only: the IO shell's header legitimately NAMES the loader when it
+  // explains who is expected to call it.
   const callers = files
-    .filter((f) => f.path !== LOADER_SOURCE_PATH && f.path !== TEST_SOURCE_PATH)
-    // CODE only: the IO shell's header legitimately NAMES the loader when it
-    // explains who is expected to call it.
-    .filter((f) => /\bloadExamPlan\s*\(/.test(stripComments(f.source)))
+    .filter((f) => f.path !== LOADER_SOURCE_PATH)
+    .filter((f) => !/\.test\.tsx?$/.test(f.path))
+    .filter((f) => LOADER_CALL.test(stripComments(f.source)))
     .map((f) => f.path.slice(REPO_ROOT.length + 1));
 
   assert.deepEqual(
     callers,
-    [],
-    `EX-S5A-3 is unwired infrastructure; the payload may only be consumed through the EX-S5A-4 narrowing. Found: ${callers.join(", ")}`,
+    [APPROVED_LOADER_CALLER],
+    `the internal payload may be produced in ONE place only, and consumed solely through the EX-S5A-4A narrowing. Found: ${callers.join(", ")}`,
   );
+
+  // NO app/, route, page, UI or client caller of any kind — not even a test one.
+  const appCallers = files
+    .filter((f) => f.path.startsWith(join(REPO_ROOT, "app")))
+    .filter((f) => LOADER_CALL.test(stripComments(f.source)))
+    .map((f) => f.path.slice(REPO_ROOT.length + 1));
+  assert.deepEqual(appCallers, [], `an app caller was added: ${appCallers.join(", ")}`);
+
+  // ...and the approved caller is NOT a Server Action module, so it exposes no
+  // network-callable entry point of its own.
+  const bindingSource = readFileSync(join(REPO_ROOT, APPROVED_LOADER_CALLER), "utf8");
+  const bindingCode = stripComments(bindingSource);
+  assert.equal(bindingCode.includes('"use server"'), false);
+  assert.equal(bindingCode.includes("'use server'"), false);
+  // It returns narrowed role contracts, never the internal payload.
+  assert.equal(/Promise<ExamPlanPayload>/.test(bindingCode), false);
 
   // The IO shell may reference the loader's CONTRACT, but only as a type.
   assert.ok(IO_CODE.includes('import type {'), "the loader contract must be type-only here");
@@ -1217,8 +1342,10 @@ test("this slice adds no route, page, UI or write action", () => {
   for (const dir of ["app/admin/exams", "app/instructor/exams", "app/student/exams"]) {
     assert.equal(existsSync(join(REPO_ROOT, dir)), false, `${dir} was created`);
   }
-  // The IO shell exports narrow fetches and one dependency bundle — there is no
-  // role-accessible entry point yet; that is EX-S5A-4.
+  // The IO shell exports narrow fetches, the two batched display-name lookups
+  // EX-S5A-4B added, and one dependency bundle. There is still no role-accessible
+  // entry point here: authorization lives in lib/exam/exam-read-scope-core.ts and
+  // its binding, never in the query layer.
   const exported = (IO_CODE.match(/export\s+(?:async\s+function|const)\s+(\w+)/g) ?? []).map(
     (line) => line.split(/\s+/).pop(),
   );
@@ -1228,10 +1355,12 @@ test("this slice adds no route, page, UI or write action", () => {
     "fetchExamSessionsByPlanId",
     "fetchExamSourceDatesByPlanId",
     "fetchExamTeachingPracticeLessonsByDates",
+    "fetchStudentDisplayNamesByIds",
+    "fetchInstructorDisplayNamesByIds",
     "examPlanReadDeps",
   ]);
   // Narrow read bindings ONLY: no role-facing reader that would hand a caller
-  // the un-narrowed payload. Such an entry point is EX-S5A-4's, with its DTO.
+  // the un-narrowed payload. Such an entry point is EX-S5A-4B's, with its DTO.
   for (const name of exported) {
     assert.equal(
       /^(get|load|read)Exam/.test(name ?? ""),
@@ -1240,4 +1369,8 @@ test("this slice adds no route, page, UI or write action", () => {
     );
   }
   assert.equal(IO_CODE.includes("loadExamPlan"), false, "the IO shell calls the loader");
+  // No authorization, actor, session or capability logic leaked down here.
+  for (const token of ["requireAdmin", "getCurrentInstructor", "requireCurrent", "Capabilit"]) {
+    assert.equal(IO_CODE.includes(token), false, `the IO shell references ${token}`);
+  }
 });

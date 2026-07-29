@@ -1357,7 +1357,8 @@ test("the module never re-exports the internal payload type", () => {
   assert.ok(/import type \{\s*\n?\s*ExamPlanPayload/.test(DTO_SOURCE));
 });
 
-test("EX-S5A-4A is unwired: nothing in the repository consumes it yet", () => {
+/** Every `.ts`/`.tsx` file in the repository's own source trees. */
+function repoSourceFiles(): { path: string; source: string }[] {
   const files: { path: string; source: string }[] = [];
   for (const dir of ["app", "lib"]) {
     const root = join(REPO_ROOT, dir);
@@ -1370,24 +1371,100 @@ test("EX-S5A-4A is unwired: nothing in the repository consumes it yet", () => {
       files.push({ path, source: readFileSync(path, "utf8") });
     }
   }
+  return files;
+}
+
+/**
+ * The narrowing's own identifiers and the loader call site, assembled from SPLIT
+ * LITERALS so these guards never match their own source.
+ */
+const DTO_TOKENS = new RegExp(
+  [
+    "exam-read-" + "dto",
+    "build" + "AdminExamReadDto",
+    "build" + "InstructorExamReadDto",
+    "build" + "TraineeExamDayDto",
+  ].join("|"),
+);
+const LOADER_CALL = new RegExp("\\bload" + "ExamPlan\\s*\\(");
+
+/** The ONE production module allowed to narrow, and the ONE allowed to load. */
+const APPROVED_DTO_CONSUMER = join("lib", "exam", "exam-read-scope-core.ts");
+const APPROVED_LOADER_CALLER = join("lib", "actions", "exam-role-readers.ts");
+
+test("the DTO builders have exactly ONE production consumer: the EX-S5A-4B scope core", () => {
+  const files = repoSourceFiles();
   assert.ok(files.length > 100, `sanity: expected the repository, found ${files.length} files`);
 
+  // PRODUCTION code only: a `.test.ts` suite legitimately exercises the pure
+  // builders directly. What is guarded is which SHIPPED module may turn the
+  // sensitive superset into something a viewer receives.
   const consumers = files
-    .filter((f) => f.path !== DTO_PATH && f.path !== DTO_TEST_PATH)
-    .filter((f) =>
-      /exam-read-dto|buildAdminExamReadDto|buildInstructorExamReadDto|buildTraineeExamDayDto/.test(
-        stripComments(f.source),
-      ),
-    )
+    .filter((f) => f.path !== DTO_PATH)
+    .filter((f) => !/\.test\.tsx?$/.test(f.path))
+    .filter((f) => DTO_TOKENS.test(stripComments(f.source)))
     .map((f) => f.path.slice(REPO_ROOT.length + 1));
-  assert.deepEqual(consumers, [], `EX-S5A-4A is pure infrastructure; found: ${consumers.join(", ")}`);
+  assert.deepEqual(
+    consumers,
+    [APPROVED_DTO_CONSUMER],
+    `narrowing may happen in ONE authorized place only; found: ${consumers.join(", ")}`,
+  );
 
-  // ...and no caller for the loader was added either — that is EX-S5A-4B.
-  const loaderCallers = files
-    .filter((f) => !f.path.startsWith(join(REPO_ROOT, "lib", "exam")))
-    .filter((f) => /\bloadExamPlan\s*\(/.test(stripComments(f.source)))
+  // NO app/, route, page, UI or client component consumes the narrowing module —
+  // not even a test file there. A DTO reaches a page through the role readers.
+  const appConsumers = files
+    .filter((f) => f.path.startsWith(join(REPO_ROOT, "app")))
+    .filter((f) => DTO_TOKENS.test(stripComments(f.source)))
     .map((f) => f.path.slice(REPO_ROOT.length + 1));
-  assert.deepEqual(loaderCallers, []);
+  assert.deepEqual(appConsumers, [], `an app consumer was added: ${appConsumers.join(", ")}`);
+
+  // The ONLY production caller of the loader is the EX-S5A-4B binding.
+  const loaderCallers = files
+    .filter((f) => f.path !== join(REPO_ROOT, "lib", "exam", "exam-plan-loader-core.ts"))
+    .filter((f) => !/\.test\.tsx?$/.test(f.path))
+    .filter((f) => LOADER_CALL.test(stripComments(f.source)))
+    .map((f) => f.path.slice(REPO_ROOT.length + 1));
+  assert.deepEqual(loaderCallers, [APPROVED_LOADER_CALLER]);
+});
+
+test("the one authorized consumer returns DTOs only, and never the internal payload", () => {
+  const scopeSource = readFileSync(join(REPO_ROOT, APPROVED_DTO_CONSUMER), "utf8");
+  const scopeCode = stripComments(scopeSource);
+
+  // Every exported reader's return type is a role contract...
+  const returnTypes = [...scopeCode.matchAll(/export async function \w+\([\s\S]*?\): (\w+<[^>]+>)/g)]
+    .map((match) => match[1]);
+  assert.deepEqual(returnTypes, [
+    "Promise<AdminExamReadDto>",
+    "Promise<InstructorExamReadDto>",
+    "Promise<TraineeExamDayDto>",
+  ]);
+  // ...the internal payload is NOT among them. It appears in exactly one place:
+  // the injected loader contract, which is an INPUT seam (it is what makes the
+  // loader replaceable in a test) and never something this module hands back.
+  const payloadReturns = scopeCode.match(/Promise<ExamPlanPayload>/g) ?? [];
+  assert.equal(
+    payloadReturns.length,
+    1,
+    "the internal payload type appears outside the injected loader contract",
+  );
+  assert.ok(
+    /export type ExamPlanLoadFn = \(\s*input: ExamPlanLoadInput,?\s*\) => Promise<ExamPlanPayload>;/.test(
+      scopeCode,
+    ),
+    "the payload type is used somewhere other than the injected loader contract",
+  );
+  // ...and it is never re-exported, so no caller can even name it from here.
+  assert.equal(/export\s+(?:type\s+)?\{[^}]*ExamPlanPayload/.test(scopeCode), false);
+  // ...and every result is produced by a COMMITTED builder, never assembled
+  // field-by-field a second time.
+  for (const builder of [
+    "build" + "AdminExamReadDto(",
+    "build" + "InstructorExamReadDto(",
+    "build" + "TraineeExamDayDto(",
+  ]) {
+    assert.ok(scopeCode.includes(`return ${builder}`), `the scope core bypasses ${builder}`);
+  }
 });
 
 test("the approved file scope is exactly the two new files", () => {
