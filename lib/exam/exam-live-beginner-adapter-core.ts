@@ -39,6 +39,17 @@
  * `exam-no-feedback-guard.test.ts` enforces this across the whole exam slice.
  *
  * ===========================================================================
+ * NO DEFINITION, NO TIMETABLE (EX-S4B)
+ * ===========================================================================
+ * A beginner row is a Teaching-Practice lesson, not a stored exam block: it has
+ * NO `ExamDefinition`, so it carries neither `definitionId` nor `definitionName`
+ * — absent, never null-filled and never synthesized from its kind, its format or
+ * a label. It likewise never runs through the block timetable calculator, so it
+ * has no `derivedBlockEndTime` and declares `timetableStatus:
+ * "NOT_APPLICABLE"`; its REAL lesson `startTime`/`endTime` remain its own
+ * authoritative interval in every projection.
+ *
+ * ===========================================================================
  * SELF-ASSIGNMENT
  * ===========================================================================
  * `isSelf` is matched on AUTHORITATIVE STUDENT IDS ONLY — `traineeId` against a
@@ -396,12 +407,20 @@ export function projectLiveBeginnerRows(
       beginnerFormat,
       date: lesson.date,
       startTime: lesson.startTime,
+      // The REAL lesson interval, verbatim. A beginner row never goes through
+      // the block timetable calculator, so this is its authoritative end.
       endTime: lesson.endTime,
       orderIndex,
       examineeStudentIds,
       // Always empty: instructed trainees are ADVANCED_INSTRUCTION-only.
       instructedTraineeStudentIds: Object.freeze([]),
       beginnerChildCount: children.length,
+      // EX-S4B. Stated EXPLICITLY rather than left absent, so a merged array
+      // shows on inspection that this row is intentionally outside the
+      // timetable, not merely a row nobody has computed a timetable for yet.
+      // The three definition-aware fields are ABSENT, not null: a beginner row
+      // has no ExamDefinition, and none is ever synthesized for it.
+      timetableStatus: "NOT_APPLICABLE" as const,
     });
 
     const detail: BeginnerDetail = Object.freeze({

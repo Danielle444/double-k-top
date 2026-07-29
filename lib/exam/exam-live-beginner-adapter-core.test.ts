@@ -21,6 +21,11 @@ import {
   type LiveBeginnerLessonSource,
   type LiveBeginnerParticipantSource,
 } from "./exam-live-beginner-adapter-core";
+import {
+  projectByDate,
+  projectGeneralSchedule,
+  type ProjectionSession,
+} from "./exam-schedule-projection-core";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -450,8 +455,99 @@ test("the session row is shaped exactly like a stored ExamSession projection", (
     "orderIndex",
     "sessionId",
     "startTime",
+    // EX-S4B: stated explicitly. The three definition-aware fields are ABSENT,
+    // which is why they are not in this list.
+    "timetableStatus",
   ]);
   assert.equal(rows[0].session.kind, "BEGINNER_INSTRUCTION");
+});
+
+// ---------------------------------------------------------------------------
+// EX-S4B — no definition, no timetable
+// ---------------------------------------------------------------------------
+
+test("every beginner row declares timetableStatus NOT_APPLICABLE", () => {
+  const { rows } = projectLiveBeginnerRows({
+    lessons: [
+      lesson({ lessonId: "a", date: "2026-08-02" }),
+      lesson({ lessonId: "b", date: "2026-08-03", practiceType: "BEGINNER_GROUP" }),
+    ],
+    viewerTraineeId: null,
+  });
+  assert.equal(rows.length, 2);
+  for (const row of rows) {
+    assert.equal(row.session.timetableStatus, "NOT_APPLICABLE");
+  }
+});
+
+test("a beginner row carries NO definition fields, absent rather than null", () => {
+  const { rows } = projectLiveBeginnerRows({
+    lessons: [lesson()],
+    viewerTraineeId: "student-1",
+  });
+  const { session } = rows[0];
+
+  // Absent: `in` distinguishes a missing key from a key holding null, and the
+  // distinction is the point — a beginner row has no ExamDefinition at all, and
+  // none is ever synthesized from its kind, its format or a label.
+  assert.equal("definitionId" in session, false);
+  assert.equal("definitionName" in session, false);
+  assert.equal("derivedBlockEndTime" in session, false);
+
+  // The detail payload invents none of them either.
+  assert.equal("definitionId" in rows[0].detail, false);
+  assert.equal("definitionName" in rows[0].detail, false);
+});
+
+test("a beginner row keeps its REAL lesson interval, untouched by any timetable", () => {
+  const { rows } = projectLiveBeginnerRows({
+    lessons: [lesson({ startTime: "18:15", endTime: "19:45" })],
+    viewerTraineeId: null,
+  });
+  assert.equal(rows[0].session.startTime, "18:15");
+  assert.equal(rows[0].session.endTime, "19:45");
+  // The detail and the session row agree — one interval, not two readings.
+  assert.equal(rows[0].detail.startTime, "18:15");
+  assert.equal(rows[0].detail.endTime, "19:45");
+});
+
+test("a live beginner row is measured by its own endTime in a merged projection", () => {
+  const { rows } = projectLiveBeginnerRows({
+    lessons: [lesson({ startTime: "16:00", endTime: "16:30" })],
+    viewerTraineeId: null,
+  });
+
+  // The merged array the views actually consume: this live row beside a stored,
+  // definition-backed block. Each is measured by its OWN rule.
+  const stored: ProjectionSession = {
+    sessionId: "stored-1",
+    kind: "ADVANCED_INSTRUCTION",
+    beginnerFormat: null,
+    date: "2026-08-02",
+    startTime: "17:00",
+    endTime: "18:00",
+    orderIndex: 0,
+    examineeStudentIds: ["student-9"],
+    instructedTraineeStudentIds: [],
+    beginnerChildCount: 0,
+    definitionId: "def-1",
+    definitionName: "מבחן הדרכה מתקדמת",
+    derivedBlockEndTime: "20:00",
+    timetableStatus: "OK",
+  };
+
+  const general = projectGeneralSchedule([rows[0].session, stored]);
+  const beginner = general.find((r) => r.kind === "BEGINNER_INSTRUCTION");
+  const advanced = general.find((r) => r.kind === "ADVANCED_INSTRUCTION");
+  assert.ok(beginner);
+  assert.ok(advanced);
+  // 16:00 -> 16:30, the real lesson interval.
+  assert.equal(beginner.totalDurationMinutes, 30);
+  // 17:00 -> 20:00, the DERIVED block end, not the stored 18:00.
+  assert.equal(advanced.totalDurationMinutes, 180);
+
+  // One flat array, both kinds present, neither aware of the other.
+  assert.deepEqual(projectByDate([rows[0].session, stored], "2026-08-02").length, 2);
 });
 
 // ---------------------------------------------------------------------------

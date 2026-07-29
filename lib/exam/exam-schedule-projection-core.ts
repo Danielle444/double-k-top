@@ -38,6 +38,40 @@
  *
  * It does NOT read or write anything, does NOT paginate, and knows nothing
  * about publication, authorization, or PII gating.
+ *
+ * ===========================================================================
+ * EX-S4B — DEFINITION-AWARE CONTRACT
+ * ===========================================================================
+ * ONE flat merged array carries BOTH stored `ExamSession` blocks and LIVE
+ * Teaching-Practice beginner rows, and the projections deliberately do not care
+ * which is which. Four OPTIONAL scalar fields carry the difference:
+ *
+ *  - `definitionId` / `definitionName` — the canonical `ExamDefinition` identity
+ *    of a stored block. NEVER synthesized: not from `kind`, not from a title,
+ *    not from `EXAM_KIND_LABELS`. A live beginner row simply has neither, and a
+ *    row with neither is displayed by its own occurrence data.
+ *  - `derivedBlockEndTime` — the end computed by the block timetable core, which
+ *    is the ONLY authoritative end of a stored definition-backed block. This
+ *    core never computes it and never fabricates it; the caller supplies what
+ *    the timetable produced, or nothing.
+ *  - `timetableStatus` — `OK` (timetable computed), `UNRESOLVED` (it could not
+ *    be), or `NOT_APPLICABLE` (a live beginner row, which never goes through the
+ *    timetable calculator at all and keeps its real lesson interval).
+ *
+ * WHY THE FIELDS ARE OPTIONAL. They are additive: a row that carries none of
+ * them behaves exactly as it did before this slice, so the existing contract —
+ * and every caller of it — is unchanged. `timetableStatus` is what selects the
+ * end-time reading (see `effectiveEndTime`), and its ABSENCE means "this row's
+ * own `endTime` is authoritative", which is precisely the pre-S4B behaviour.
+ *
+ * WHAT IS DELIBERATELY ABSENT. No slots, waves, timetable issues or warnings,
+ * no `isSelf`, no full definition or assignment payload. Those belong in a
+ * sibling DETAIL payload keyed by `sessionId`, never on the compact row that
+ * every list view holds in memory. `phase` and `interfaceSessionId` are retired
+ * (EX-S3.5) and must not reappear.
+ *
+ * GROUPING BY DEFINITION IS NOT THIS SLICE. `projectByExamKind` still groups by
+ * `ExamKind` exactly as before; the definition-based grouping view is EX-S4C.
  */
 import type { ExamBeginnerFormat, ExamKind } from "./exam-domain-core";
 import { EXAM_KINDS } from "./exam-domain-core";
@@ -47,7 +81,27 @@ import { parseHHMM } from "./exam-overlap-core";
 // Input
 // ===========================================================================
 
-/** One authoritative `ExamSession` row as seen by the projections. */
+/**
+ * Whether the block timetable applies to a row, and if so whether it resolved.
+ *
+ *  - `OK`             — a stored block whose timetable computed; its
+ *                       `derivedBlockEndTime` is the authoritative end.
+ *  - `UNRESOLVED`     — a stored block whose timetable could NOT be computed.
+ *                       It has no usable end, so it contributes nothing to any
+ *                       duration total. Its stored `endTime` is NOT a fallback.
+ *  - `NOT_APPLICABLE` — a live beginner row. It never runs through the timetable
+ *                       calculator and keeps its real lesson interval.
+ */
+export type ProjectionTimetableStatus = "NOT_APPLICABLE" | "OK" | "UNRESOLVED";
+
+/**
+ * One authoritative row as seen by the projections — a stored `ExamSession`
+ * block OR a live Teaching-Practice beginner row, indistinguishable here by
+ * design.
+ *
+ * The four trailing fields are OPTIONAL and purely additive; see the
+ * DEFINITION-AWARE CONTRACT note at the top of this file.
+ */
 export interface ProjectionSession {
   readonly sessionId: string;
   readonly kind: ExamKind;
@@ -63,6 +117,25 @@ export interface ProjectionSession {
   readonly instructedTraineeStudentIds: readonly string[];
   /** Embedded `ExamBeginnerChild` snapshot count. */
   readonly beginnerChildCount: number;
+  /**
+   * `ExamDefinition.id` — the canonical identity of a stored block. Absent/null
+   * on a live beginner row, which has no definition. Never synthesized.
+   */
+  readonly definitionId?: string | null;
+  /**
+   * `ExamDefinition.name` — the visible exam name of a stored block. Absent/null
+   * on a live beginner row. NEVER falls back to an occurrence title or to
+   * `EXAM_KIND_LABELS`: a title is an optional occurrence subtitle, not a name.
+   */
+  readonly definitionName?: string | null;
+  /**
+   * The block end produced by the timetable core (`blockEndTime`). Present only
+   * when `timetableStatus === "OK"`. Never fabricated, and never taken from the
+   * stored `endTime`.
+   */
+  readonly derivedBlockEndTime?: string | null;
+  /** Absent means "this row's own `endTime` is authoritative" (pre-S4B rows). */
+  readonly timetableStatus?: ProjectionTimetableStatus;
 }
 
 // ===========================================================================
@@ -120,10 +193,41 @@ function cmpNum(a: number, b: number): number {
   return a - b;
 }
 
+function isPresent(v: unknown): v is string {
+  return typeof v === "string" && v.trim().length > 0;
+}
+
+/**
+ * The end a row is actually measured by, or `null` when it has none.
+ *
+ * This is the ONE place the definition-aware end-time rule lives:
+ *
+ *  - `OK`             → the timetable's `derivedBlockEndTime`, and only that. A
+ *                       block claiming OK without one is inconsistent input, so
+ *                       it FAILS CLOSED to `null` rather than silently falling
+ *                       back to the stored `endTime`, which for a
+ *                       definition-backed block is stale by construction.
+ *  - `UNRESOLVED`     → `null`. Nothing is fabricated and nothing is inherited.
+ *  - `NOT_APPLICABLE` → the row's own `endTime` (a live beginner lesson).
+ *  - absent           → the row's own `endTime` (pre-S4B behaviour, unchanged).
+ *
+ * A `null` here means "contributes zero", never NaN and never a substituted
+ * `startTime`, `00:00`, `23:59` or empty string.
+ */
+function effectiveEndTime(session: ProjectionSession): string | null {
+  const status = session.timetableStatus;
+  if (status === "OK") {
+    return isPresent(session.derivedBlockEndTime) ? session.derivedBlockEndTime : null;
+  }
+  if (status === "UNRESOLVED") return null;
+  return isPresent(session.endTime) ? session.endTime : null;
+}
+
 /** Duration in minutes, or 0 when either endpoint is malformed (fail closed). */
 function durationMinutes(session: ProjectionSession): number {
   const start = parseHHMM(session.startTime);
-  const end = parseHHMM(session.endTime);
+  const effectiveEnd = effectiveEndTime(session);
+  const end = effectiveEnd === null ? null : parseHHMM(effectiveEnd);
   if (start === null || end === null || end <= start) return 0;
   return end - start;
 }
@@ -140,10 +244,6 @@ function compareWithinDate(a: ProjectionSession, b: ProjectionSession): number {
 /** The locked "by kind" comparator: date, then the within-date order. */
 function compareAcrossDates(a: ProjectionSession, b: ProjectionSession): number {
   return cmp(a.date, b.date) || compareWithinDate(a, b);
-}
-
-function isPresent(v: unknown): v is string {
-  return typeof v === "string" && v.trim().length > 0;
 }
 
 // ===========================================================================
@@ -188,19 +288,30 @@ export function projectGeneralSchedule(
       totalDuration += durationMinutes(s);
       childCount += typeof s.beginnerChildCount === "number" ? s.beginnerChildCount : 0;
       if (firstStart === null || s.startTime < firstStart) firstStart = s.startTime;
-      if (lastEnd === null || s.endTime > lastEnd) lastEnd = s.endTime;
+      // The EFFECTIVE end, so an unresolved block cannot pass its stale stored
+      // endTime off as the kind's last end.
+      const end = effectiveEndTime(s);
+      if (end !== null && (lastEnd === null || end > lastEnd)) lastEnd = end;
     }
 
     // The operational span is computed PER DATE and summed: a kind spanning two
-    // separate days is two separate working windows, not one long one.
+    // separate days is two separate working windows, not one long one. Each
+    // row's end is its EFFECTIVE end (derived block end for a resolved stored
+    // block, the real lesson end for a live beginner row), so an unresolved
+    // block widens nothing.
     let spanMinutes = 0;
     for (const date of dates) {
       const onDate = group.filter((s) => s.date === date);
       let minStart: number | null = null;
       let maxEnd: number | null = null;
       for (const s of onDate) {
+        const effectiveEnd = effectiveEndTime(s);
+        // A row with no usable end defines no working window at all, so it
+        // contributes NEITHER endpoint — its start must not widen the span
+        // either.
+        if (effectiveEnd === null) continue;
         const start = parseHHMM(s.startTime);
-        const end = parseHHMM(s.endTime);
+        const end = parseHHMM(effectiveEnd);
         if (start !== null && (minStart === null || start < minStart)) minStart = start;
         if (end !== null && (maxEnd === null || end > maxEnd)) maxEnd = end;
       }
@@ -258,11 +369,40 @@ export function projectByDate(
   return Object.freeze(onDate);
 }
 
-/** The distinct dates present, ascending — for the date picker. */
+/** A `YYYY-MM-DD` SHAPE check. Not a calendar check — no `Date` is constructed. */
+const DATE_TOKEN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The distinct dates present, ascending — for the date picker.
+ *
+ * `sourceDates` is OPTIONAL and purely additive (EX-S4B): the beginner source
+ * dates an exam plan selects are a real part of the plan's calendar even before
+ * any row exists on them, so a caller that knows them can union them in. Omit it
+ * and the behaviour is exactly what it was.
+ *
+ * Only the shape is validated, and only for `sourceDates` — stored `date`
+ * values are projected verbatim, as before. Tokens are compared and sorted as
+ * plain `YYYY-MM-DD` STRINGS: lexicographic order is chronological for that
+ * shape, so no `Date` is constructed and no timezone or calendar arithmetic
+ * happens anywhere in this module.
+ *
+ * This returns DATE TOKENS ONLY. It creates no rows, and a source date with no
+ * sessions stays an empty date in every projection.
+ */
 export function listExamDates(
   sessions: readonly ProjectionSession[],
+  sourceDates?: readonly string[],
 ): readonly string[] {
-  return Object.freeze([...new Set(sessions.map((s) => s.date))].sort(cmp));
+  const dates = new Set<string>(sessions.map((s) => s.date));
+  if (Array.isArray(sourceDates)) {
+    for (const raw of sourceDates) {
+      if (typeof raw !== "string") continue;
+      const token = raw.trim();
+      if (!DATE_TOKEN.test(token)) continue;
+      dates.add(token);
+    }
+  }
+  return Object.freeze([...dates].sort(cmp));
 }
 
 // ===========================================================================
