@@ -58,11 +58,20 @@ const FORM_REL = join(ROUTE_DIR_REL, "ExamSessionCreateForm.tsx");
 const MESSAGES_REL = join(ROUTE_DIR_REL, "exam-session-create-error-messages.ts");
 const PAGE_REL = join(ROUTE_DIR_REL, "page.tsx");
 
-/** The route's EXACT final file set, after this slice's three additions. */
+/**
+ * The route's EXACT final file set.
+ *
+ * RE-POINTED by EX-SES-UI-2, not relaxed: that slice added three reviewed files
+ * to this route — an edit form, a delete form and its own contract suite — so the
+ * exact set grew from eleven to fourteen. It is still an EXHAUSTIVE literal list;
+ * a fifteenth file still fails here.
+ */
 const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
@@ -70,17 +79,23 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
 ].sort();
 
 /**
- * The THIRTEEN paths in scope once EX-SES-UI-1 wires this form.
+ * The FOURTEEN paths in scope for EX-SES-UI-2.
  *
- * EX-SES-S4 contributed eight — three new route files and five amended guards —
- * and deliberately excluded `page.tsx`, because that slice committed the form
- * without connecting it. EX-SES-UI-1 connects it, which adds the page itself and
- * the three further footprint guards whose approved-path sets had to learn about
- * this slice.
+ * EX-SES-S4 contributed eight and EX-SES-UI-1 five more; both are COMMITTED, so
+ * a clean tree reports neither and this list must describe the slice that is
+ * currently in the working tree instead. RE-POINTED, not widened: it is still an
+ * exhaustive literal set of exact paths, and it still admits no directory, no
+ * prefix and no glob.
+ *
+ * EX-SES-UI-2's own shape is three new route files (an edit form, a delete form
+ * and its contract suite), two amended route production files, and nine committed
+ * guard suites — the four here on the route and five under `lib/` — whose exact
+ * allow-lists had to learn about it.
  *
  * The session write binding's path is ASSEMBLED for the reason in the header, and
  * the session READER's most sharply of all: its committed guard pins the reader's
@@ -88,16 +103,20 @@ const FINAL_ROUTE_FILES = [
  * would become the second entry in a list that must hold one.
  */
 const SLICE_PATHS = [
-  "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
-  "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
-  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  // The three new route files.
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  // The two amended production files.
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  // The four route guard suites, including this one.
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  // The five committed `lib/` footprint guards.
   "lib/actions/" + "exam-session-write" + "-io.test.ts",
-  // EX-SES-UI-1's own five.
-  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
   "lib/actions/" + "exam-definition-read" + "-io.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
@@ -273,24 +292,31 @@ test("4. the action module is still a Server Action module and nothing else", ()
   assert.equal(ACTIONS.includes("server" + "-only"), false);
 });
 
-test("5. the module exports EXACTLY the three approved actions, in order", () => {
+test("5. the module exports EXACTLY the five approved actions, in order", () => {
   const exported = [
     ...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g),
   ].map(([, name]) => name);
-  // An EXHAUSTIVE allow-list in a FIXED order. Everything exported from a
-  // "use server" module is a public network endpoint, so this list IS the attack
-  // surface: no fourth endpoint, and no helper, parser, constant or type beside
-  // them.
+  // RE-POINTED by EX-SES-UI-2, not relaxed. Still an EXHAUSTIVE allow-list, still
+  // in a fixed order — it simply names all five approved actions, because the
+  // route legitimately has five. Everything exported from a "use server" module is
+  // a public network endpoint, so this list IS the attack surface: no sixth
+  // endpoint, and no helper, parser, constant or type beside them.
+  //
+  // The edit and the removal are SEPARATE endpoints rather than one "save" action
+  // with an intent field, which is what stops a request that looks like an edit
+  // from being able to delete.
   assert.deepEqual(exported, [
     "createExamPlanAction",
     "createExamDefinitionAction",
     "createExamSessionAction",
+    "updateExamSessionAction",
+    "deleteExamSessionAction",
   ]);
-  assert.equal(exported.length, 3, "no fourth endpoint may exist in this module");
+  assert.equal(exported.length, 5, "no sixth endpoint may exist in this module");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 3);
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 5);
 });
 
 test("6. the session action has the EXACT locked signature, and returns void", () => {
@@ -514,10 +540,21 @@ test("15. the action imports no database client, capability or notification surf
   }
 });
 
-test("16. no session edit, delete, reorder, assignment, break, supervisor, publication or source-date path exists", () => {
+test("16. no session reorder, assignment, break, supervisor, publication or source-date path exists", () => {
+  // RE-POINTED by EX-SES-UI-2. The session EDIT and REMOVAL verbs have LEFT this
+  // universal list, because the module now legitimately holds those two approved
+  // endpoints — exactly the treatment the definition CREATE and the session CREATE
+  // verbs already received when each became an approved neighbour.
+  //
+  // The relaxation is NARROW and is re-established from the other side rather than
+  // dropped: the CREATE FORM and the CREATE MESSAGE TABLE are still swept for both
+  // verbs below, so the create slice's own files provably gained nothing; the two
+  // new endpoints' exact FormData budget and result mapping are proven in the
+  // EX-SES-UI-2 suite; and the write binding's own committed guard still pins the
+  // complete caller list for all three session writers to this ONE module.
+  //
+  // Everything genuinely absent stays banned across all three files.
   for (const token of [
-    UPDATE_WRITER,
-    DELETE_WRITER,
     "reorder" + "ExamSessions",
     "update" + "ExamDefinition",
     "delete" + "ExamDefinition",
@@ -542,6 +579,21 @@ test("16. no session edit, delete, reorder, assignment, break, supervisor, publi
       assert.equal(code.includes(token), false, `the ${label} reaches ${token}`);
     }
   }
+  // The CREATE slice's OWN two files still reach neither destructive verb: the
+  // relaxation above is for the shared action MODULE, and the create form and its
+  // message table gain nothing from it.
+  for (const token of [UPDATE_WRITER, DELETE_WRITER]) {
+    for (const [label, code] of [
+      ["form", FORM],
+      ["messages", MESSAGES],
+    ] as const) {
+      assert.equal(code.includes(token), false, `the ${label} reaches ${token}`);
+    }
+  }
+  // ...and the CREATE ACTION's own body reaches neither, so the five endpoints in
+  // the shared module provably did not become entangled.
+  assert.equal(SESSION_ACTION.includes(UPDATE_WRITER + "("), false);
+  assert.equal(SESSION_ACTION.includes(DELETE_WRITER + "("), false);
   // No schema or migration work travels with this slice.
   const touched = new Set([
     ...gitLines(["diff", "--name-only", "HEAD"]),
@@ -845,15 +897,39 @@ test("26. page.tsx WIRES this form to the committed reader, grouping core and ac
     assert.equal(PAGE.includes(forbidden), false, `the page must not surface ${forbidden}`);
   }
 
-  // The session id is a React KEY and nothing else, and no per-session identifier,
-  // ordering number, version stamp or derived end time is rendered.
+  // RE-POINTED by EX-SES-UI-2. The claim was "the session id is a React key and
+  // nothing else, and no definition id or version stamp exists on this page at
+  // all" — correct while the page only READ sessions. Editing one requires naming
+  // WHICH row, at WHICH version, against WHICH definition, so the ban is NARROWED
+  // to what it was always protecting rather than dropped: none of the three may be
+  // rendered as TEXT, interpolated into a string, or placed in an href. Each may
+  // travel only as a React key or as a prop the client form turns into a HIDDEN
+  // field, and the exact counts below are what keep "only" honest.
   assert.ok(PAGE.includes("key={session.sessionId}"));
-  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 1);
+  // Once as the key, twice as the two forms' hidden-field props.
+  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 3);
+  assert.equal((PAGE.match(/sessionId=\{session\.sessionId\}/g) ?? []).length, 2);
+  // Once per form, and only as the hidden concurrency token.
+  assert.equal((PAGE.match(/session\.updatedAt/g) ?? []).length, 2);
+  assert.equal((PAGE.match(/expectedUpdatedAt=\{session\.updatedAt\}/g) ?? []).length, 2);
+  // Once, and only to preselect the edit picker's current option.
+  assert.equal((PAGE.match(/session\.definitionId/g) ?? []).length, 1);
+  assert.ok(PAGE.includes("definitionId={session.definitionId}"));
+  // None of the three is ever TEXT, an interpolation or part of a link.
   for (const forbidden of [
-    "session.definitionId",
+    ">{session.sessionId}<",
+    ">{session.updatedAt}<",
+    ">{session.definitionId}<",
+    "${session.sessionId}",
+    "${session.updatedAt}",
+    "${session.definitionId}",
+  ]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page renders an identifier: ${forbidden}`);
+  }
+  // Everything that was never rendered still is not.
+  for (const forbidden of [
     "session.definitionKind",
     "session.orderIndex",
-    "session.updatedAt",
     "endTime",
     "waves",
     "slots",
@@ -990,7 +1066,13 @@ test("27. EXACTLY ONE module in the repository reaches the CREATE writer", () =>
   assert.equal(callers.some((path) => path.endsWith(".tsx")), false);
 });
 
-test("28. the EDIT and REMOVAL writers remain reachable from NOTHING", () => {
+test("28. EXACTLY ONE module reaches the EDIT and REMOVAL writers, and no component does", () => {
+  // EX-SES-UI-2 TRANSITION. This guard asserted the allow-list was EMPTY, which
+  // was the correct claim while only the CREATE had an approved UI. Giving the
+  // edit and the removal their own reviewed forms is exactly what makes it
+  // obsolete, so it is RE-POINTED to an EXACT one-entry list rather than deleted
+  // or widened to the route directory: a second Server Action module, a `.tsx`
+  // component, a layout, a route handler or any other file still fails here.
   const offenders = gitGrepFiles([
     "-e",
     UPDATE_WRITER + "(",
@@ -1001,18 +1083,34 @@ test("28. the EDIT and REMOVAL writers remain reachable from NOTHING", () => {
     "components",
   ]);
   assert.deepEqual(
-    offenders,
-    [],
-    `a UI or route module reaches a destructive session writer: ${offenders.join(", ")}`,
+    offenders.sort(),
+    ["app/admin/courses/[courseOfferingId]/exams/actions.ts"],
+    `an unapproved module reaches a destructive session writer: ${offenders.join(", ")}`,
   );
-  // Nothing under app/ names their pure cores either.
+  // The one caller is a Server Action module, never a UI file — which is the half
+  // of the original claim that has no exception at all.
+  assert.equal(offenders.some((path) => path.endsWith(".tsx")), false);
+  // And it is the SAME module that owns the create: no second endpoint module was
+  // introduced to host the destructive pair.
+  assert.deepEqual(
+    offenders.sort(),
+    gitGrepFiles(["-e", CREATE_WRITER_CALL, "--", "app", "components"]).sort(),
+  );
+
+  // Nothing under app/ names their pure cores, in ANY spelling: the writers are
+  // reached through the committed binding alone, never around it.
   for (const core of ["update-exam-session" + "-core", "delete-exam-session" + "-core"]) {
     const named = gitGrepFiles([core, "--", "app", "components"]);
     assert.deepEqual(named, [], `${core} is named under app/: ${named.join(", ")}`);
   }
+  // ...and no `WithDeps` orchestration is reachable from a route either.
+  for (const symbol of [UPDATE_WRITER + "WithDeps", DELETE_WRITER + "WithDeps"]) {
+    const named = gitGrepFiles([symbol, "--", "app", "components"]);
+    assert.deepEqual(named, [], `${symbol} is reachable from app/: ${named.join(", ")}`);
+  }
 });
 
-test("29. the slice touched EXACTLY its eight approved paths", () => {
+test("29. the slice touched EXACTLY its fourteen approved paths", () => {
   const touched = new Set([
     ...gitLines(["diff", "--name-only", "HEAD"]),
     ...gitLines(["diff", "--name-only", "--cached", "HEAD"]),
@@ -1020,12 +1118,11 @@ test("29. the slice touched EXACTLY its eight approved paths", () => {
   ]);
   const offenders = [...touched].filter((path) => !SLICE_PATHS.includes(path)).sort();
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
-  // EX-SES-UI-1 TRANSITION. The scope was EIGHT files while the form was committed
-  // but unwired, and this guard asserted page.tsx was NOT among them. Wiring is
-  // what makes that claim obsolete, so it is REPLACED rather than dropped: the
-  // count moves to thirteen and page.tsx becomes the ONE production file in scope
-  // that is a page — asserted positively, and asserted to be the only one.
-  assert.equal(SLICE_PATHS.length, 13, "the approved scope is thirteen files");
+  // EX-SES-UI-2 TRANSITION. The scope was thirteen files while EX-SES-UI-1 was in
+  // the working tree; that slice is COMMITTED, so this list now describes the one
+  // that is uncommitted instead. RE-POINTED to an exact fourteen, with the page
+  // still asserted positively as an in-scope production file.
+  assert.equal(SLICE_PATHS.length, 14, "the approved scope is fourteen files");
   assert.ok(
     SLICE_PATHS.includes(`${ROUTE_DIR_PREFIX}page.tsx`),
     "the wired page must be in scope",
@@ -1036,10 +1133,20 @@ test("29. the slice touched EXACTLY its eight approved paths", () => {
     (path) => !path.endsWith(".test.ts") && path !== `${ROUTE_DIR_PREFIX}page.tsx`,
   );
   assert.deepEqual(production.sort(), [
-    `${ROUTE_DIR_PREFIX}ExamSessionCreateForm.tsx`,
+    `${ROUTE_DIR_PREFIX}ExamSessionEditForm.tsx`,
+    `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
     `${ROUTE_DIR_PREFIX}actions.ts`,
-    `${ROUTE_DIR_PREFIX}exam-session-create-error-messages.ts`,
   ].sort());
+  // No `lib/` PRODUCTION module is in scope: every lib path here is a guard suite,
+  // which is what "the committed writers were reused, not changed" means for the
+  // footprint.
+  for (const path of SLICE_PATHS) {
+    assert.equal(
+      path.startsWith("lib/") && !path.endsWith(".test.ts"),
+      false,
+      `a lib production module entered the scope: ${path}`,
+    );
+  }
   for (const path of SLICE_PATHS) {
     assert.equal(
       path.endsWith("layout.tsx") || path.endsWith("route.ts"),

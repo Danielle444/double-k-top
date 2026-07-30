@@ -1115,7 +1115,13 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     ["lib", "actions", "exam-session-write" + "-io.test.ts"].join("/"),
     ["lib", "actions", "exam-definition-read" + "-io.test.ts"].join("/"),
   ];
-  const TOLERATED_PRODUCTION = [P3_PAGE_TRACKED_PATH];
+  // RE-POINTED by EX-SES-UI-2 from ONE tolerated production file to TWO. That
+  // slice adds the approved session EDIT and REMOVAL endpoints to the route's
+  // SHARED Server Action module, so that module — and not a new one — is what
+  // differs. Both paths are spelled EXACTLY; a third production file, a `lib/`
+  // module, this core, its binding or a second route all still fail below.
+  const P3_ACTIONS_TRACKED_PATH = `${ROUTE_DIR}/actions.ts`;
+  const TOLERATED_PRODUCTION = [P3_PAGE_TRACKED_PATH, P3_ACTIONS_TRACKED_PATH];
   const TOLERATED = [...TOLERATED_SUITES, ...TOLERATED_PRODUCTION];
   const unexpected = modified.filter((path) => !TOLERATED.includes(path));
   assert.deepEqual(
@@ -1132,9 +1138,14 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
   for (const path of TOLERATED_SUITES) {
     assert.match(path, /\.test\.ts$/);
   }
-  // ...and the single tolerated production file is exactly the exams page — not a
-  // lib module, not the binding, not a second route.
-  assert.deepEqual(TOLERATED_PRODUCTION, [P3_PAGE_TRACKED_PATH]);
+  // ...and the tolerated production files are exactly the exams page and the
+  // route's shared Server Action module — not a lib module, not this core, not the
+  // binding, and not a second route.
+  assert.deepEqual(TOLERATED_PRODUCTION, [P3_PAGE_TRACKED_PATH, P3_ACTIONS_TRACKED_PATH]);
+  for (const path of TOLERATED_PRODUCTION) {
+    assert.ok(path.startsWith(`${ROUTE_DIR}/`), `${path} is outside the approved route`);
+    assert.equal(path.startsWith("lib/"), false, `${path} is a lib module`);
+  }
 });
 
 /**

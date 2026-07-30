@@ -917,13 +917,24 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
     ["lib", "actions", "admin-exam-session-read" + "-io.test.ts"].join("/"),
     ["lib", "actions", "exam-session-write" + "-io.test.ts"].join("/"),
     ["lib", "actions", "exam-definition-read" + "-io.test.ts"].join("/"),
+    // EX-SES-UI-2 adds ONE further tolerated PRODUCTION file — the route's shared
+    // Server Action module, which gains the approved session EDIT and REMOVAL
+    // endpoints. It adds no `lib/` module of any kind, and its two new client forms
+    // and contract suite are ADDITIONS, which this modifications-only diff
+    // correctly does not report.
+    `${P3_ROUTE_DIR}/actions.ts`,
   ];
-  // Every tolerated path is a guard suite except the ONE approved page: no second
-  // production file can enter this list unnoticed.
+  // RE-POINTED by EX-SES-UI-2 from ONE approved production file to TWO, both named
+  // EXACTLY: a third production file still cannot enter this list unnoticed, and
+  // every other tolerated path is still a guard suite.
+  const TOLERATED_PRODUCTION = [
+    `${P3_ROUTE_DIR}/page.tsx`,
+    `${P3_ROUTE_DIR}/actions.ts`,
+  ];
   for (const path of TOLERATED) {
     assert.ok(
-      path.endsWith(".test.ts") || path === `${P3_ROUTE_DIR}/page.tsx`,
-      `${path} is neither a suite nor the one approved page`,
+      path.endsWith(".test.ts") || TOLERATED_PRODUCTION.includes(path),
+      `${path} is neither a suite nor an approved production file`,
     );
   }
   const unexpected = modified.filter((path) => !TOLERATED.includes(path));

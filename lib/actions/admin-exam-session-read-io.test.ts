@@ -105,6 +105,29 @@ const APPROVED_MODIFIED_FILES = [
   "lib/actions/" + "exam-definition-read" + "-io.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  // EX-SES-UI-2 — the approved session EDIT and REMOVAL UI, which travels in the
+  // same working tree. It adds the route's shared Server Action module to the
+  // MODIFIED set, and its three new route files to `INTRODUCED_FILES` below.
+  //
+  // Guard 29's claim about who may call THIS reader is untouched by it: the page
+  // is still the only consumer, and neither new form reads a session — both are
+  // handed their values as props by that one page.
+  `${ROUTE_DIR_PREFIX}actions.ts`,
+];
+
+/**
+ * The three files EX-SES-UI-2 ADDS under `app/`, as git reports them.
+ *
+ * Kept apart from both lists above: they are neither this reader's own files nor
+ * modifications, and the two guards below need them for different reasons — one
+ * checks what was introduced, the other checks which UI paths may differ at all.
+ * Every entry is a route-local file; no `lib/` module is among them, because this
+ * slice reuses the committed writers rather than adding one.
+ */
+const APPROVED_NEW_ROUTE_FILES = [
+  `${ROUTE_DIR_PREFIX}ExamSessionEditForm.tsx`,
+  `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
+  `${ROUTE_DIR_PREFIX}exam-session-edit-delete.contract.test.ts`,
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
@@ -839,10 +862,18 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
   }
   // ...and every approved modification really is a guard suite, except the ONE
   // approved production file: the page this reader was wired into.
+  //
+  // RE-POINTED by EX-SES-UI-2 from ONE approved production file to TWO: the page,
+  // and the route's shared Server Action module that slice extends. Both are named
+  // EXACTLY — no directory, no prefix — so a third production file still fails.
+  const APPROVED_PRODUCTION = [
+    `${ROUTE_DIR_PREFIX}page.tsx`,
+    `${ROUTE_DIR_PREFIX}actions.ts`,
+  ];
   for (const path of APPROVED_MODIFIED_FILES) {
     assert.ok(
-      path.endsWith(".test.ts") || path === `${ROUTE_DIR_PREFIX}page.tsx`,
-      `${path} is neither a suite nor the approved page`,
+      path.endsWith(".test.ts") || APPROVED_PRODUCTION.includes(path),
+      `${path} is neither a suite nor an approved production file`,
     );
   }
 
@@ -863,8 +894,19 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
     ...scope,
   ]);
   const introduced = [...new Set([...added, ...untracked])].sort();
-  const unapproved = introduced.filter((path) => !NEW_FILES.includes(path));
+  // RE-POINTED by EX-SES-UI-2, which introduces THREE new files of its own — an
+  // edit form, a delete form and their contract suite, all under `app/`. They are
+  // listed SEPARATELY from `NEW_FILES` on purpose: that list is also asserted to be
+  // fully TRACKED below, which is a claim about this reader's own four committed
+  // files and must not be diluted by files that are legitimately still untracked.
+  const INTRODUCED_FILES = [...NEW_FILES, ...APPROVED_NEW_ROUTE_FILES];
+  const unapproved = introduced.filter((path) => !INTRODUCED_FILES.includes(path));
   assert.deepEqual(unapproved, [], `unexpected files: ${unapproved.join(", ")}`);
+  // No `lib/` module was introduced at all: this slice reuses the committed
+  // writers rather than adding one.
+  for (const path of introduced) {
+    assert.equal(path.startsWith("lib/"), false, `a lib module was introduced: ${path}`);
+  }
 
   // ...and the four approved files are each present AND TRACKED. Spelled out one
   // by one from the same explicit list, never as a directory or a glob, so this
@@ -891,9 +933,15 @@ test("32. the slice touches no schema, migration, capability or policy file", ()
     // may differ — the approved page — so those two bans become an EXACT
     // allow-list rather than being dropped. A second UI file, or any other route,
     // still fails here.
+    //
+    // RE-POINTED AGAIN by EX-SES-UI-2, which adds two client forms and a contract
+    // suite under the SAME route. The allow-list therefore spans the approved
+    // MODIFICATIONS and the approved ADDITIONS — still every path spelled exactly,
+    // still no directory and no prefix. A second route, or any UI file outside
+    // these two exact lists, still fails here.
     if (path.endsWith(".tsx") || path.includes("app/")) {
       assert.ok(
-        APPROVED_MODIFIED_FILES.includes(path),
+        APPROVED_MODIFIED_FILES.includes(path) || APPROVED_NEW_ROUTE_FILES.includes(path),
         `an unapproved UI or route file was touched: ${path}`,
       );
     }
@@ -908,12 +956,27 @@ test("32. the slice touches no schema, migration, capability or policy file", ()
       assert.equal(path.includes(forbidden), false, `a forbidden path was touched: ${path}`);
     }
   }
-  // At most ONE `.tsx` may differ across the whole slice, and it is that page.
+  // RE-POINTED by EX-SES-UI-2. The claim was "at most ONE `.tsx` may differ, and
+  // it is that page" — correct while the only UI change was wiring this reader in.
+  // A safe edit and a safe removal need a form each, so the bound moves from one
+  // to THREE and every one of them is named EXACTLY: the page, plus the two new
+  // client forms. It is still a closed set, not a directory: a fourth UI file, or
+  // any `.tsx` outside these three, still fails.
+  const APPROVED_UI_FILES = [
+    `${ROUTE_DIR_PREFIX}page.tsx`,
+    `${ROUTE_DIR_PREFIX}ExamSessionEditForm.tsx`,
+    `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
+  ];
   const uiTouched = [...new Set(touched.filter((path) => path.endsWith(".tsx")))];
   for (const path of uiTouched) {
-    assert.equal(path, `${ROUTE_DIR_PREFIX}page.tsx`, `a second UI file was touched: ${path}`);
+    assert.ok(APPROVED_UI_FILES.includes(path), `an unapproved UI file was touched: ${path}`);
   }
-  assert.ok(uiTouched.length <= 1, "more than one UI file was touched");
+  assert.ok(uiTouched.length <= 3, "more than three UI files were touched");
+  // Every approved UI file lives in the ONE approved route directory: no second
+  // route, no shared component library and no role-area page is in scope.
+  for (const path of APPROVED_UI_FILES) {
+    assert.ok(path.startsWith(ROUTE_DIR_PREFIX), `${path} is outside the approved route`);
+  }
   // The committed schema and policy files are untouched in the working tree.
   const schemaChanged = gitLines([
     "diff",

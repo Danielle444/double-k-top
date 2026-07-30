@@ -1,8 +1,9 @@
 "use server";
 
 /**
- * EXAM PLAN P3 + EXAM EX-S5B-5C + EXAM EX-SES-S4 — the Server Action module of
- * the course-scoped exams route, holding EXACTLY THREE approved mutations:
+ * EXAM PLAN P3 + EXAM EX-S5B-5C + EXAM EX-SES-S4 + EXAM EX-SES-UI-2 — the Server
+ * Action module of the course-scoped exams route, holding EXACTLY FIVE approved
+ * mutations:
  *
  *   1. `createExamPlanAction`       — bring ONE empty, unpublished ExamPlan into
  *                                     existence for ONE course offering;
@@ -10,32 +11,38 @@
  *                                     EXISTING plan of ONE course offering;
  *   3. `createExamSessionAction`    — append ONE stored session to that same
  *                                     already-existing plan, under a definition
- *                                     the plan already holds.
+ *                                     the plan already holds;
+ *   4. `updateExamSessionAction`    — edit ONE stored session of that same plan,
+ *                                     against the version the manager was shown;
+ *   5. `deleteExamSessionAction`    — remove ONE stored session of that same
+ *                                     plan, and only one nobody is assigned to.
  *
  * ===========================================================================
- * WHY THREE EXPORTS, AND WHY EXACTLY THREE
+ * WHY FIVE EXPORTS, AND WHY EXACTLY FIVE
  * ===========================================================================
  * Everything exported from a `"use server"` module has a stable, PUBLICLY
- * CALLABLE network id, so the export list IS the attack surface. These three
+ * CALLABLE network id, so the export list IS the attack surface. These five
  * actions were each approved and reviewed on their own, and they are kept as
  * SEPARATE endpoints rather than folded into one generic "exams" action: a single
  * action taking a discriminator would have to decide FROM THE REQUEST which
  * operation to run, which is precisely the decision that must not be
- * client-influenced. Three narrow endpoints, each with a fixed operation, cannot
+ * client-influenced. Five narrow endpoints, each with a fixed operation, cannot
  * be talked into performing another one.
  *
- * Nothing else leaves this file. No helper, no parser, no constant and no type is
- * exported alongside them: an exported helper here would be a fourth public
- * endpoint, and a future reader would have no way to tell which of the four was
- * meant to be called. The committed writer modules behind these three also expose
- * definition EDIT, safe REMOVAL and atomic REORDER, session EDIT and safe
- * REMOVAL, plus plan publication and deletion; none of those is re-exported,
- * wrapped or imported here, so this route adds exactly three callable mutations
- * to the app and every other one remains unreachable from any client.
+ * That applies most sharply to the two added by EX-SES-UI-2. The EDIT and the
+ * REMOVAL are DELIBERATELY not one "save" endpoint carrying an intent field: an
+ * endpoint that chose between editing and deleting from a submitted flag would
+ * make deletion reachable from a request that looks like an edit. They read
+ * different fields, map different result codes and are wired to different forms.
  *
- * The session EDIT and REMOVAL bindings in particular stay CALLERLESS on purpose:
- * only the CREATE was approved for a UI, and importing its two siblings "for
- * later" would publish two destructive endpoints nothing renders.
+ * Nothing else leaves this file. No helper, no parser, no constant and no type is
+ * exported alongside them: an exported helper here would be a sixth public
+ * endpoint, and a future reader would have no way to tell which of the six was
+ * meant to be called. The committed writer modules behind these five also expose
+ * definition EDIT, safe REMOVAL and atomic REORDER, session REORDERING, plus plan
+ * publication and deletion; none of those is re-exported, wrapped or imported
+ * here, so this route adds exactly five callable mutations to the app and every
+ * other one remains unreachable from any client.
  *
  * Neither action contains policy, validation, idempotence rules or Prisma access.
  * The committed pure cores decide every outcome and the committed server-only
@@ -109,12 +116,20 @@
  *   - `createIssues=<codes>` — the definition writer's own issue codes, joined;
  *   - `createdSession=1`     — the session create performed the write;
  *   - `sessionError=<code>`  — the session writer's stable refusal codes;
- *   - `sessionIssues=<codes>`— the session writer's own issue codes, joined.
+ *   - `sessionIssues=<codes>`— the session writer's own issue codes, joined;
+ *   - `updatedSession=1`     — the session edit CHANGED something;
+ *   - `unchangedSession=1`   — the session edit was a no-op and wrote nothing;
+ *   - `sessionEditError=<code>`  — the edit writer's stable refusal codes;
+ *   - `sessionEditIssues=<codes>`— the edit writer's own issue codes, joined;
+ *   - `deletedSession=1`     — the session removal performed the delete;
+ *   - `sessionDeleteError=<code>`— the removal writer's stable refusal codes.
  *
- * The session tokens are DISTINCT from the definition ones rather than shared.
- * Two forms live on one screen, and a shared `createError` would render a
- * definition diagnostic above a session form (or the reverse) with no way for the
- * page to tell which submission failed.
+ * The session tokens are DISTINCT from the definition ones rather than shared,
+ * and the EDIT and REMOVAL tokens are distinct from the CREATE's for the same
+ * reason a step further: five forms can live on one screen, and a shared
+ * `sessionError` would render an edit diagnostic above the create form (or a
+ * delete diagnostic above an edit form) with no way for the page to tell which
+ * submission failed.
  *
  * A refusal that the offering does not exist routes to the safe courses list
  * instead, from EVERY action: the bound id did not resolve, so no course-scoped
@@ -122,30 +137,47 @@
  * not-found. The requested id is not reflected back in that destination.
  *
  * Nothing else is ever put in the URL. No submitted value, no id, no plan id, no
- * definition id, no session id, no date, no start time, no arena, no title, no
- * note, no Prisma message, no exception text, no stack and no interpolated
- * status. The only dynamic values that reach a redirect target are `result.code` —
- * a compile-time-known literal from a closed set — and the joined issue codes.
- * The session create's own success carries NO id either: the writer returns the
- * new session id and its assigned position, and this module reads neither.
+ * definition id, no session id, no version stamp, no date, no start time, no
+ * arena, no title, no note, no Prisma message, no exception text, no stack and no
+ * interpolated status. The only dynamic values that reach a redirect target are
+ * `result.code` — a compile-time-known literal from a closed set — and the joined
+ * issue codes. The session create's own success carries NO id either: the writer
+ * returns the new session id and its assigned position, and this module reads
+ * neither. The EDIT and the REMOVAL are the same: each writer returns the session
+ * id it acted on, and neither is read here.
  *
  * ===========================================================================
  * WHAT THIS MODULE DOES NOT DO
  * ===========================================================================
- * It creates ONE empty plan, it appends ONE definition, and it appends ONE
- * session. It does not publish, unpublish, delete or edit a plan; it does not
- * edit, reorder or delete an ExamDefinition; it does not edit or delete an
- * ExamSession; it does not reorder sessions, assign anyone, add a break, a
- * supervisor or a source date; it sends no notification, reads no capability and
- * touches no schema. None of those modules is imported, so none of them can be
- * reached from here.
+ * It creates ONE empty plan, it appends ONE definition, and it appends, edits or
+ * removes ONE session. It does not publish, unpublish, delete or edit a plan; it
+ * does not edit, reorder or delete an ExamDefinition; it does not reorder
+ * sessions, assign anyone, add a break, a supervisor or a source date; it sends no
+ * notification, reads no capability and touches no schema. None of those modules
+ * is imported, so none of them can be reached from here.
+ *
+ * ===========================================================================
+ * THE ASSIGNMENT COUNT IS NEVER AN INPUT
+ * ===========================================================================
+ * The page shows each session's assignment count, and the delete form uses it to
+ * decide whether to offer a delete button at all. That is EXPLANATORY UI and
+ * nothing more. No action below reads an `assignmentCount` field, no writer below
+ * is given one, and neither writer's signature has a parameter for it. Whether a
+ * session may be removed is decided ONLY by the committed removal writer's own
+ * count and by the atomic `assignments: { none: {} }` condition it carries on the
+ * delete statement itself — so a session that gains an assignment between the
+ * page read and the click is refused by the DATABASE, not by the button.
  */
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createExamPlan } from "@/lib/actions/exam-plan-write-io";
 import { createExamDefinition } from "@/lib/actions/exam-definition-write-io";
-import { createExamSession } from "@/lib/actions/exam-session-write-io";
+import {
+  createExamSession,
+  updateExamSession,
+  deleteExamSession,
+} from "@/lib/actions/exam-session-write-io";
 
 /**
  * Create ONE empty ExamPlan for the bound course offering.
@@ -401,4 +433,184 @@ export async function createExamSessionAction(
   // 8. Every other refusal — the lifecycle denial, the missing plan and the
   //    missing-or-foreign definition — is fully described by its code alone.
   redirect(`${examsPath}?sessionError=${encodeURIComponent(result.code)}`);
+}
+
+/**
+ * Edit ONE stored ExamSession of the bound offering's plan.
+ *
+ * Returns `Promise<void>`: every outcome is expressed as a navigation, exactly
+ * like its three neighbours, so this action holds no client-visible state either.
+ *
+ * ===========================================================================
+ * WHAT THE FORM MAY SAY — EIGHT FIELDS, AND WHY EACH IS THERE
+ * ===========================================================================
+ * SIX of them are the session's mutable values, forwarded RAW to the committed
+ * edit normalizer for the reason spelled out on the create action above: that core
+ * accepts `unknown` for every field, fails closed on every shape it does not want,
+ * and REFUSES a non-string rather than stringifying it — so a `File` entry from a
+ * multipart submission can never become the text of a field. There is no
+ * `String(...)`, no `??`, no `.trim()`, no default and no empty-string collapse
+ * applied to any of them here.
+ *
+ * The other two identify WHICH session, and at WHICH version:
+ *   - `sessionId` names the row. It is a REQUEST and not a grant: the committed
+ *     writer resolves the plan from the SERVER-VERIFIED offering and then looks
+ *     this id up WITHIN that plan, so an id belonging to another course's plan is
+ *     reported as `session_not_found` and nothing is written. It is read through a
+ *     `typeof` narrowing rather than `String(...)` — the writer's parameter is a
+ *     `string`, and a narrowing that yields `""` for an absent, `null` or
+ *     non-string entry FAILS CLOSED (no session has an empty id), whereas
+ *     `String(...)` would turn a `File` into the text `"[object File]"` and send
+ *     that to the database as an id.
+ *   - `expectedUpdatedAt` is the OPTIMISTIC CONCURRENCY token — the `updatedAt`
+ *     epoch-millisecond stamp the manager's page was rendered from. It is the one
+ *     value coerced here, with `Number(...)`, because the writer's parameter is a
+ *     `number`. Every malformed form fails closed, by two different routes:
+ *     a non-numeric string becomes `NaN` and the committed version predicate
+ *     refuses it outright; an ABSENT or empty field becomes `0`, which IS a
+ *     structurally valid token but cannot equal any stored `updatedAt`, so the
+ *     conditional update matches no row and is classified as `stale_write`.
+ *     Neither route can silently overwrite a row the manager never saw.
+ *
+ * `courseOfferingId`, `planId`, `orderIndex`, `endTime` and an actor id are not
+ * among them — not filtered out, but never looked for. Nor is `assignmentCount`:
+ * whether assignments block this edit is the committed writer's decision, taken
+ * against the DATABASE at write time, and a submitted count could only ever lie.
+ */
+export async function updateExamSessionAction(
+  courseOfferingId: string,
+  formData: FormData,
+): Promise<void> {
+  // 1. Authorize the manager BEFORE anything is read, coerced or written.
+  await requireAdmin();
+
+  // 2. The exams path of THIS offering — the only path this action revalidates
+  //    and the only one it redirects back to.
+  const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
+
+  // 3. WHICH row, and at WHICH version. Both fail closed; see the header.
+  const submittedSessionId = formData.get("sessionId");
+  const sessionId = typeof submittedSessionId === "string" ? submittedSessionId : "";
+  const expectedUpdatedAt = Number(formData.get("expectedUpdatedAt"));
+
+  // 4. The six mutable values, forwarded EXACTLY as `FormData.get` returned them.
+  const rawInput = {
+    definitionId: formData.get("definitionId"),
+    date: formData.get("date"),
+    startTime: formData.get("startTime"),
+    arena: formData.get("arena"),
+    title: formData.get("title"),
+    notes: formData.get("notes"),
+  };
+
+  // 5. The committed writer. The bound offering id is a REQUEST: the writer runs
+  //    the admin boundary and the exact-offering lookup itself, resolves the plan
+  //    from the DB-verified id, reads the session WITHIN that plan, and — when and
+  //    only when the definition changes — re-checks assignments atomically.
+  const result = await updateExamSession(
+    courseOfferingId,
+    sessionId,
+    expectedUpdatedAt,
+    rawInput,
+  );
+
+  // 6. Success, in its TWO distinguishable forms. A real change revalidates this
+  //    one exams path and says so; a no-op revalidates NOTHING, because nothing
+  //    was written and a cache invalidation would be a lie about what happened.
+  //    Neither carries the session id, the new version or any submitted value.
+  if (result.ok) {
+    if (result.changed) {
+      revalidatePath(examsPath);
+      redirect(`${examsPath}?updatedSession=1`);
+    }
+    redirect(`${examsPath}?unchangedSession=1`);
+  }
+
+  // 7. The one refusal that is NOT about this page: the offering does not exist,
+  //    so returning to its exams route would render a second not-found. The
+  //    manager goes to the course list, and the requested id is not reflected back.
+  if (result.code === "offering_not_found") {
+    redirect("/admin/courses?error=invalid");
+  }
+
+  // 8. Field diagnostics: the writer's own stable codes, in the writer's own
+  //    order. Only codes travel — never a submitted definition id, date, time,
+  //    arena, title, note or version stamp, and never a message built from one.
+  if (result.code === "invalid_input") {
+    const codes = result.issues.map((issue) => issue.code).join(",");
+    redirect(
+      `${examsPath}?sessionEditError=invalid_input&sessionEditIssues=${encodeURIComponent(codes)}`,
+    );
+  }
+
+  // 9. Every other refusal is fully described by its code alone: the missing or
+  //    foreign session, the definition change blocked by existing assignments, the
+  //    stale version token, the lifecycle denial, the missing plan and the
+  //    missing-or-foreign definition.
+  redirect(`${examsPath}?sessionEditError=${encodeURIComponent(result.code)}`);
+}
+
+/**
+ * Remove ONE stored ExamSession of the bound offering's plan — and only one
+ * nobody is assigned to.
+ *
+ * Returns `Promise<void>`, like its four neighbours.
+ *
+ * ===========================================================================
+ * TWO FIELDS, AND DELIBERATELY NOT A THIRD
+ * ===========================================================================
+ * This action reads `sessionId` and `expectedUpdatedAt` and NOTHING else. It does
+ * not read the six editable values — a removal has no payload to normalize — and
+ * it does not read `assignmentCount`. The page hides the delete button when the
+ * count it read is non-zero, which is a courtesy to the manager and NOT the
+ * authority: assignments can be created between that read and this click, so the
+ * committed writer counts them again itself AND carries an atomic
+ * `assignments: { none: {} }` condition on the delete statement. A submitted count
+ * would be a client claim about server state, which is exactly the kind of input
+ * that must never authorize a destructive write.
+ *
+ * The version token is coerced with `Number(...)` and fails closed by the same two
+ * routes documented on the edit above — with one difference the committed removal
+ * core makes explicit: an unusable token (a `NaN` from a non-numeric string) is
+ * refused as `invalid_input` before any delete is attempted.
+ */
+export async function deleteExamSessionAction(
+  courseOfferingId: string,
+  formData: FormData,
+): Promise<void> {
+  // 1. Authorize the manager BEFORE anything is read or removed.
+  await requireAdmin();
+
+  // 2. The exams path of THIS offering — the only path this action revalidates
+  //    and the only one it redirects back to.
+  const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
+
+  // 3. WHICH row, and at WHICH version. Exactly two reads; see the header.
+  const submittedSessionId = formData.get("sessionId");
+  const sessionId = typeof submittedSessionId === "string" ? submittedSessionId : "";
+  const expectedUpdatedAt = Number(formData.get("expectedUpdatedAt"));
+
+  // 4. The committed writer, which re-runs the admin boundary, the lifecycle gate
+  //    and the plan resolution, reads the session WITHIN that plan, counts
+  //    assignments, and then issues ONE conditional delete carrying BOTH the
+  //    version and the atomic no-assignments condition.
+  const result = await deleteExamSession(courseOfferingId, sessionId, expectedUpdatedAt);
+
+  // 5. Success: revalidate EXACTLY this exams path, then return to it. The removed
+  //    session's id is NOT reflected in the URL.
+  if (result.ok) {
+    revalidatePath(examsPath);
+    redirect(`${examsPath}?deletedSession=1`);
+  }
+
+  // 6. The one refusal that is NOT about this page.
+  if (result.code === "offering_not_found") {
+    redirect("/admin/courses?error=invalid");
+  }
+
+  // 7. Every other refusal is fully described by its code alone: the missing or
+  //    foreign session, the removal blocked by existing assignments, the stale
+  //    version token, the unusable token, the lifecycle denial and the missing
+  //    plan. No diagnostics list exists for a removal, so there is no issues token.
+  redirect(`${examsPath}?sessionDeleteError=${encodeURIComponent(result.code)}`);
 }

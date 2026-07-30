@@ -61,6 +61,12 @@ const APPROVED_NEW_FILES = [
   "lib/exam/delete-exam-session-core.ts",
   "lib/exam/update-exam-session-core.test.ts",
   "lib/exam/update-exam-session-core.ts",
+  // EX-SES-UI-2's three NEW route files: the edit form, the delete form and their
+  // contract suite. Every one is under `app/` — this slice adds no `lib/` module
+  // at all, which is the footprint half of "the committed writers were reused".
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
 ];
 
 /**
@@ -94,6 +100,17 @@ const APPROVED_MODIFIED_FILES = [
   "lib/actions/" + "exam-definition-read" + "-io.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  // EX-SES-UI-2 adds ONE further tracked file to this list — the route's shared
+  // Server Action module, which gains the approved EDIT and REMOVAL endpoints that
+  // finally give this binding's two destructive writers a caller. Guard 33 below
+  // is re-pointed to that ONE exact path; this binding's own production module and
+  // all three pure cores stay byte-identical to HEAD, which is what makes "the
+  // committed writers were REUSED, not changed" a checkable claim rather than a
+  // description.
+  //
+  // The three NEW route files that slice adds are covered by the untracked half of
+  // guard 35 through APPROVED_NEW_FILES below.
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
@@ -943,7 +960,7 @@ test("32. the pure core it binds is DB-free, and no lib/exam module imports a cl
 // 33–36. Containment: no caller, no UI, four new files, nothing modified
 // ===========================================================================
 
-test("33. EXACTLY ONE approved caller reaches the CREATE writer, and NOTHING reaches the other two", () => {
+test("33. EXACTLY ONE approved caller reaches all three writers, and it is not a component", () => {
   const declaring = new Set(
     [IO_REL, IO_TEST_REL, ...BOUND_CORE_RELS].map((rel) => join(REPO_ROOT, rel)),
   );
@@ -975,10 +992,17 @@ test("33. EXACTLY ONE approved caller reaches the CREATE writer, and NOTHING rea
       if (reaches) {
         callers.push(path.slice(REPO_ROOT.length + 1));
       }
-      // The EDIT and REMOVAL writers are tracked SEPARATELY, and their allow-list
-      // stays EMPTY. The approved caller below is approved for the CREATE alone:
-      // if it ever names one of the destructive two, it fails here rather than
-      // being waved through by the create's own entry.
+      // The EDIT and REMOVAL writers are still tracked SEPARATELY from the CREATE,
+      // so their caller list can be asserted on its own rather than being waved
+      // through by the create's entry.
+      //
+      // EX-SES-UI-2 TRANSITION. This list was required to be EMPTY, which was the
+      // correct claim while only the CREATE had an approved UI: importing the
+      // destructive pair "for later" would have published two endpoints nothing
+      // rendered. That slice gives each its own reviewed form, so the list is
+      // RE-POINTED to the SAME single Server Action module rather than dropped or
+      // widened to the route directory — a second module in that very directory, a
+      // `.tsx` component, a layout, a route handler or any other file still fails.
       if (
         /\b(update|delete)ExamSession(WithDeps)?\s*\(/.test(code) ||
         /(update|delete)-exam-session-core/.test(code)
@@ -989,25 +1013,34 @@ test("33. EXACTLY ONE approved caller reaches the CREATE writer, and NOTHING rea
   }
 
   // EX-SES-S4 approved ONE production caller: the course-scoped exams route's
-  // Server Action module, which wraps the CREATE and nothing else. This is an
-  // EXACT path and not a directory or a pattern — a second file in the very same
-  // directory still fails, which is the whole point of listing it this way.
-  const APPROVED_CREATE_CALLER = ["app", "admin", "courses", "[courseOfferingId]", "exams", "actions.ts"].join(sep);
+  // Server Action module, which wrapped the CREATE and nothing else. EX-SES-UI-2
+  // adds the EDIT and the REMOVAL to that SAME module — no second module, and no
+  // component. This is an EXACT path and not a directory or a pattern, so a second
+  // file in the very same directory still fails, which is the whole point of
+  // listing it this way.
+  const APPROVED_CALLER = ["app", "admin", "courses", "[courseOfferingId]", "exams", "actions.ts"].join(sep);
   assert.deepEqual(
     callers.sort(),
-    [APPROVED_CREATE_CALLER],
+    [APPROVED_CALLER],
     `an unapproved caller exists: ${callers.join(", ")}`,
   );
   // The approved caller is a Server Action module, never a UI file: no component
   // may reach a write binding directly.
-  assert.equal(APPROVED_CREATE_CALLER.endsWith(".tsx"), false);
+  assert.equal(APPROVED_CALLER.endsWith(".tsx"), false);
 
-  // Unchanged from EX-SES-S3, and the guard this slice most had to avoid
-  // weakening: NOTHING in the application may edit or remove a stored session.
+  // The destructive pair, asserted SEPARATELY and as an EXACT one-entry list. The
+  // claim is no longer "nothing may edit or remove a stored session" but "exactly
+  // ONE reviewed Server Action module may, and it is the same one that owns the
+  // create" — which is what keeps a future second caller failing here.
   assert.deepEqual(
-    editOrDeleteCallers,
-    [],
-    `an edit/delete caller exists: ${editOrDeleteCallers.join(", ")}`,
+    editOrDeleteCallers.sort(),
+    [APPROVED_CALLER],
+    `an unapproved edit/delete caller exists: ${editOrDeleteCallers.join(", ")}`,
+  );
+  assert.equal(
+    editOrDeleteCallers.some((path) => path.endsWith(".tsx")),
+    false,
+    "no component may reach a destructive session writer",
   );
 
   for (const dir of [
