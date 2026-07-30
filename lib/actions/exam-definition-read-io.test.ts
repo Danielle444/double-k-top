@@ -31,8 +31,18 @@
  *     `Date` leaves the module;
  *   - the module writes nothing, opens no transaction, runs no raw SQL and lets
  *     no database client or raw row type escape;
- *   - no app/, page, route, UI or client caller exists;
- *   - the slice is EXACTLY four new files, and modifies no existing file.
+ *   - EXACTLY ONE shipped module reaches this reader: the read-only admin exam
+ *     definitions page added by EX-S5B-5B. Nothing else in `app`, `lib` or
+ *     `components` may, and no top-level exam route exists in any role area;
+ *   - nothing outside this slice's approved paths was touched.
+ *
+ * EX-S5B-5B AMENDED THIS FILE. Guards 20, 22 and 23 were written while the
+ * reader was deliberately UNWIRED, and asserted that it had no caller and that
+ * the slice modified no tracked file. Wiring it is exactly what EX-S5B-5B was
+ * authorized to do, so those three are re-pointed at EXACT allow-lists rather
+ * than relaxed: guard 20 still fails for any caller that is not the one approved
+ * page, and guards 22 and 23 still fail for any path outside the approved set.
+ * Guards 1–19, 21 and 24 are untouched.
  *
  * Run with: npx tsx --test lib/actions/exam-definition-read-io.test.ts
  */
@@ -49,12 +59,45 @@ const IO_TEST_REL = join("lib", "actions", "exam-definition-read-io.test.ts");
 const CORE_REL = join("lib", "exam", "exam-definition-admin-read-core.ts");
 const CORE_TEST_REL = join("lib", "exam", "exam-definition-admin-read-core.test.ts");
 
-/** The four files this slice is allowed to consist of, in repository form. */
+/** The four files the EX-S5B-5A read slice consists of, in repository form. */
 const NEW_FILES = [
   "lib/actions/exam-definition-read-io.ts",
   "lib/actions/exam-definition-read-io.test.ts",
   "lib/exam/exam-definition-admin-read-core.ts",
   "lib/exam/exam-definition-admin-read-core.test.ts",
+];
+
+/**
+ * EX-S5B-5B — the ONE shipped module authorized to reach this reader, and the
+ * route's own contract suite, which necessarily names the specifier in its
+ * assertions. Any other caller is a guard failure.
+ */
+const APPROVED_PAGE = join(
+  "app",
+  "admin",
+  "courses",
+  "[courseOfferingId]",
+  "exams",
+  "page.tsx",
+);
+const APPROVED_PAGE_SUITE = join(
+  "app",
+  "admin",
+  "courses",
+  "[courseOfferingId]",
+  "exams",
+  "exam-definitions-page.contract.test.ts",
+);
+
+/**
+ * Every path EX-S5B-5B was authorized to touch: the two new route files, the
+ * course dashboard it adds one link to, and this guard suite.
+ */
+const SLICE_PATHS = [
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/page.tsx",
+  "lib/actions/exam-definition-read-io.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
@@ -577,10 +620,10 @@ test("19. no database client, raw row or Date escapes the module", () => {
 });
 
 // ===========================================================================
-// 20–23. The slice's shape: no caller, no UI, exactly four new files
+// 20–23. The slice's shape: exactly one caller, and an exact file footprint
 // ===========================================================================
 
-test("20. no app/, page, route, UI or client caller reaches this reader", () => {
+test("20. EXACTLY the one approved admin page reaches this reader", () => {
   const declaring = new Set([join(REPO_ROOT, IO_REL), join(REPO_ROOT, IO_TEST_REL)]);
   const callers: string[] = [];
   for (const dir of ["app", "lib", "components"]) {
@@ -597,9 +640,24 @@ test("20. no app/, page, route, UI or client caller reaches this reader", () => 
       }
     }
   }
-  assert.deepEqual(callers, [], `an unapproved caller exists: ${callers.join(", ")}`);
+  // The COMPLETE caller set — the approved page, plus that route's own contract
+  // suite, which names the specifier only in order to forbid everything else.
+  assert.deepEqual(
+    callers.sort(),
+    [APPROVED_PAGE, APPROVED_PAGE_SUITE].sort(),
+    `an unapproved caller exists: ${callers.join(", ")}`,
+  );
 
-  // No exam route, page or Server Action surface was created by this slice.
+  // And of those, exactly ONE is shipped code. A test suite may drive or describe
+  // the reader; only this page may render it to a user.
+  assert.deepEqual(
+    callers.filter((path) => !/\.test\.tsx?$/.test(path)),
+    [APPROVED_PAGE],
+    "exactly one production module may reach this reader",
+  );
+
+  // No top-level exam route and no exam Server Action surface exists. The
+  // approved page is course-scoped, so it matches none of these.
   for (const dir of [
     join("app", "admin", "exams"),
     join("app", "instructor", "exams"),
@@ -638,16 +696,29 @@ test("21. the slice's four files exist, and none of them is a UI file", () => {
   ]);
 });
 
-test("22. the slice modifies NO existing tracked file, and stages nothing", () => {
-  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD"]), [], "a tracked file was modified");
-  assert.deepEqual(gitLines(["diff", "--name-only", "--cached", "HEAD"]), [], "something is staged");
+test("22. nothing outside the approved paths was touched", () => {
+  // Worktree, index and untracked together, so this describes the SLICE rather
+  // than one moment in its lifecycle. The previous form asserted that NO tracked
+  // file changed at all — which the authorized EX-S5B-5B dashboard link makes
+  // permanently impossible — and that nothing was staged, which stopped being a
+  // containment statement the moment the read slice was committed.
+  const touched = new Set([
+    ...gitLines(["diff", "--name-only", "HEAD"]),
+    ...gitLines(["diff", "--name-only", "--cached", "HEAD"]),
+    ...gitLines(["ls-files", "--others", "--exclude-standard"]),
+  ]);
+  const offenders = [...touched].filter((path) => !SLICE_PATHS.includes(path)).sort();
+  assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
 });
 
-test("23. the slice consists of EXACTLY the four approved new files", () => {
-  const untracked = gitLines(["ls-files", "--others", "--exclude-standard"]).filter((path) =>
-    /\.tsx?$/.test(path),
-  );
-  assert.deepEqual(untracked.sort(), [...NEW_FILES].sort());
+test("23. the four EX-S5B-5A files are all tracked, and none was deleted", () => {
+  // The previous form compared the UNTRACKED file list against these four, which
+  // could only ever hold before they were committed (and had already stopped
+  // holding at 85f0818). Tracked-existence is the same invariant, permanently.
+  const tracked = new Set(gitLines(["ls-files"]));
+  for (const rel of NEW_FILES) {
+    assert.ok(tracked.has(rel), `${rel} is not tracked`);
+  }
 });
 
 // ===========================================================================

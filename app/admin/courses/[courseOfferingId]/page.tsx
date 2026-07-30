@@ -71,6 +71,7 @@ export default async function CourseDashboardPage({
   const enrollmentsHref = `/admin/courses/${encodeURIComponent(context.id)}/enrollments`;
   const horsesHref = `/admin/courses/${encodeURIComponent(context.id)}/horses`;
   const scheduleHref = `/admin/courses/${encodeURIComponent(context.id)}/schedule`;
+  const examsHref = `/admin/courses/${encodeURIComponent(context.id)}/exams`;
 
   // The rename affordance is shown only when a name change is permitted for this
   // offering's status (OFFERING_METADATA_UPDATE: PLANNED/ACTIVE, not ARCHIVED).
@@ -158,6 +159,16 @@ export default async function CourseDashboardPage({
         <h3 className="text-base font-semibold text-card-foreground">לוז שבועי</h3>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           העלאת לוז שבועי לקורס זה בלבד, כטיוטה שאינה מפורסמת לחניכים.
+        </p>
+      </Link>
+
+      <Link
+        href={examsHref}
+        className="rounded-xl border border-border bg-card p-5 transition-colors hover:bg-muted"
+      >
+        <h3 className="text-base font-semibold text-card-foreground">מבחנים</h3>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          הגדרות המבחנים של הקורס, לקריאה בלבד. ללא מועדי מבחן וללא שיבוץ נבחנים.
         </p>
       </Link>
 
