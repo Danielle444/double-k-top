@@ -1,27 +1,29 @@
 /**
- * EXAM EX-S5B-5B — the FIRST Exams surface: a READ-ONLY admin view of ONE course
- * offering's ExamDefinition configuration.
+ * EXAM EX-S5B-5B + EXAM PLAN P3 — the Exams surface: a read-only admin view of ONE
+ * course offering's ExamDefinition configuration, plus the single explicit
+ * affordance that brings an EMPTY exam plan into existence.
  *
- * Server Component only. There is no `"use client"` here and no client component
- * in this route: everything on the page is static text derived from one server
- * read, so there is no state to hold, nothing to hydrate and no optimistic
- * update to get wrong.
+ * Server Component. The only client component in this route is the create form,
+ * and it exists solely to disable its own submit button while the action is in
+ * flight; everything else on the page is static text derived from one server read.
  *
  * ===========================================================================
- * READ-ONLY BY CONSTRUCTION
+ * READ-ONLY EXCEPT FOR ONE EXPLICIT CREATE
  * ===========================================================================
- * This route contains NO Server Action, no `<form>`, no `<button>`, no `action=`
- * and no mutation import of any kind. The committed definition WRITE bindings
- * (create / edit / delete / reorder) and the plan-creation, source-date and
- * session slices are deliberately NOT reachable from here — not disabled, not
- * hidden behind a policy flag, but absent. A "no exam plan yet" offering is
- * therefore reported as an ordinary state and NOT offered a create button: this
- * slice may not bring a plan into existence, and a fake disabled affordance
- * would only claim otherwise.
+ * This route contains exactly ONE mutation: creating an empty, unpublished
+ * ExamPlan. The committed definition WRITE bindings (create / edit / delete /
+ * reorder) and the source-date, session, publication and delete-plan slices remain
+ * deliberately NOT reachable from here — not disabled, not hidden behind a flag,
+ * but absent, with no import that could reach them.
  *
- * That is also why an ARCHIVED offering needs no special handling. The page is
- * readable history for PLANNED, ACTIVE and ARCHIVED alike, and there is no
- * mutation affordance for the lifecycle to have to withdraw.
+ * The create is ALWAYS an explicit click. The page performs no write, so a plain
+ * GET of this route — a refresh, a back button, a prefetch, a bookmark — can never
+ * bring a plan into existence. There is no effect, no auto-submit and no redirect
+ * that writes.
+ *
+ * An ARCHIVED offering stays READABLE and gains no affordance: the create button
+ * is rendered only when the course lifecycle permits configuration, and the server
+ * binding independently refuses regardless of what is on screen.
  *
  * ===========================================================================
  * THE ORDER
@@ -37,14 +39,41 @@
  *   3. `readExamDefinitionsForAdmin(context.id)` — with the VERIFIED context id,
  *      never the raw route param.
  *
+ * The query string is resolved AFTER the authorization boundary, so a caller who
+ * is not an admin never has a query value parsed on their behalf.
+ *
  * The reader independently re-runs both the admin/offering boundary and the same
  * lifecycle gate. That repetition is intended: the page must not be the only
  * thing standing between a caller and the data, and the page needs the verified
  * context anyway for its own back link.
  *
- * The route's `[courseOfferingId]` is the ONLY scope input. No `searchParams`, no
- * cookie, no current-offering resolver and no form field can influence which
- * course is read.
+ * ===========================================================================
+ * `searchParams` IS FEEDBACK ONLY — IT IS NOT SCOPE
+ * ===========================================================================
+ * The route's `[courseOfferingId]` remains the ONLY thing that decides which
+ * course is read or written. `searchParams` carries CLOSED feedback tokens and
+ * nothing else, and is parsed by `feedbackFrom` below into a fixed set of Hebrew
+ * messages:
+ *
+ *   - `created=1`  — the plan was created by the previous click;
+ *   - `existing=1` — a plan was already there and nothing was touched;
+ *   - `error=<one of two known refusal codes>`.
+ *
+ * The parser is CLOSED in both directions. `created`/`existing` are honoured only
+ * on the exact string `"1"`, and `error` only on a key the message table actually
+ * owns — checked with `Object.hasOwn`, so an inherited property name such as
+ * `constructor` cannot select a message. Every other query value, and every
+ * unknown code, is silently IGNORED.
+ *
+ * Nothing read from the query is ever interpolated into the page. The rendered
+ * strings are constants chosen by the parser, so a submitted value cannot be
+ * reflected back — the query can only pick a message, never supply one.
+ *
+ * Structurally, no query value can influence scope: `courseOfferingId` comes from
+ * `params`, everything downstream uses the VERIFIED `context.id`, and the parsed
+ * feedback is a `{ tone, message }` pair that reaches nothing but JSX. There is no
+ * plan id anywhere on this page — the create action produces one and never
+ * reveals it.
  *
  * ===========================================================================
  * WHAT IS SHOWN, AND WHAT IS DELIBERATELY NOT
@@ -72,13 +101,73 @@ import {
   CourseOfferingNotFoundError,
   type AdminCourseContext,
 } from "@/lib/course/admin-course-context";
-import { assertCourseOperationAllowed } from "@/lib/course/operation-policy-core";
+import {
+  assertCourseOperationAllowed,
+  evaluateCourseOperationPolicy,
+} from "@/lib/course/operation-policy-core";
 import {
   readExamDefinitionsForAdmin,
   type AdminExamDefinitionListView,
 } from "@/lib/actions/exam-definition-read-io";
+import { createExamPlanAction } from "./actions";
+import { ExamPlanCreateForm } from "./ExamPlanCreateForm";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * The CLOSED refusal-code table. A code the create action can actually produce
+ * maps to a fixed Hebrew sentence; anything else is ignored entirely rather than
+ * falling back to a generic message, so an attacker-chosen `?error=` value cannot
+ * make the page display a banner at all.
+ *
+ * `offering_not_found` is deliberately absent: that refusal never returns to this
+ * course-scoped route, because an id that did not resolve cannot be used to build
+ * a URL for it. It routes to the courses list instead.
+ */
+const EXAM_PLAN_ERROR_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  operation_not_allowed: "לא ניתן ליצור תוכנית מבחנים במצב הנוכחי של הקורס.",
+  plan_conflict: "יצירת תוכנית המבחנים לא הושלמה. יש לרענן את הדף ולנסות שוב.",
+});
+
+/** What the page may display as feedback: a tone and a message it chose itself. */
+type PlanFeedback = { tone: "success" | "neutral" | "error"; message: string };
+
+/**
+ * Parse the CLOSED feedback query. Total, and closed in both directions: every
+ * input that is not an exactly-recognized token yields `null`.
+ *
+ * The `typeof === "string"` checks matter. A repeated query key arrives as an
+ * array, and a loose comparison would let `["1"]` coerce its way to a match; an
+ * array must simply not be a recognized token. `Object.hasOwn` matters for the
+ * same reason on the other side: a plain property lookup would let
+ * `?error=constructor` resolve to an inherited value.
+ *
+ * Nothing from the query reaches the returned message — the strings are constants
+ * owned by this module, so a submitted value can never be echoed back.
+ */
+function feedbackFrom(query: {
+  created?: string | string[];
+  existing?: string | string[];
+  error?: string | string[];
+}): PlanFeedback | null {
+  if (typeof query.created === "string" && query.created === "1") {
+    return { tone: "success", message: "תוכנית המבחנים נוצרה. היא ריקה — עדיין לא הוגדר בה אף מבחן." };
+  }
+  if (typeof query.existing === "string" && query.existing === "1") {
+    return { tone: "neutral", message: "תוכנית מבחנים כבר קיימת לקורס זה. לא בוצע שינוי." };
+  }
+  if (typeof query.error === "string" && Object.hasOwn(EXAM_PLAN_ERROR_MESSAGES, query.error)) {
+    return { tone: "error", message: EXAM_PLAN_ERROR_MESSAGES[query.error] };
+  }
+  return null;
+}
+
+/** Tone -> the one banner class set it is allowed to use. */
+const FEEDBACK_CLASS: Readonly<Record<PlanFeedback["tone"], string>> = Object.freeze({
+  success: "rounded-lg bg-success-muted px-4 py-3 text-sm font-medium text-success",
+  neutral: "rounded-lg bg-muted px-4 py-3 text-sm font-medium text-muted-foreground",
+  error: "rounded-lg bg-danger-muted px-4 py-3 text-sm font-medium text-danger",
+});
 
 /** The Hebrew name of each exam kind. See the header note on why this is local. */
 const EXAM_KIND_TEXT: Readonly<Record<string, string>> = Object.freeze({
@@ -117,8 +206,14 @@ function DefinitionFact({ label, value }: { label: string; value: string }) {
 
 export default async function CourseExamsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ courseOfferingId: string }>;
+  searchParams: Promise<{
+    created?: string | string[];
+    existing?: string | string[];
+    error?: string | string[];
+  }>;
 }) {
   const { courseOfferingId } = await params;
 
@@ -135,6 +230,11 @@ export default async function CourseExamsPage({
 
   // 2. The course-lifecycle READ gate, on the VERIFIED status.
   assertCourseOperationAllowed(context.status, "HISTORICAL_READ");
+
+  // The CLOSED feedback query, resolved only AFTER authorization. It selects a
+  // constant message and influences nothing else — not the read below, not the
+  // back link, not the create affordance.
+  const feedback = feedbackFrom(await searchParams);
 
   // 3. The read, scoped by the VALIDATED context id only. A typed not-found from
   //    the reader's own re-validation fails closed the same way; every other
@@ -153,13 +253,24 @@ export default async function CourseExamsPage({
   const isPublished = view.publishedAt !== null;
   const hasDefinitions = view.definitions.length > 0;
 
+  // The create affordance is shown only when this offering's lifecycle permits
+  // configuration (PLANNED/ACTIVE, never ARCHIVED). This gates the VISIBLE button
+  // only — the server binding re-evaluates the same gate and refuses on its own,
+  // so hiding the button is convenience and not enforcement.
+  const canCreatePlan = evaluateCourseOperationPolicy(
+    context.status,
+    "SCHEDULE_DRAFT_CONFIGURATION",
+  ).allowed;
+
   return (
     <div className="flex flex-col gap-4">
+      {feedback && <div className={FEEDBACK_CLASS[feedback.tone]}>{feedback.message}</div>}
+
       <div className="rounded-xl border border-border bg-card p-5">
         <h2 className="text-base font-semibold text-card-foreground">מבחנים</h2>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          הגדרות המבחנים של הקורס, לקריאה בלבד. מוצגות ההגדרות עצמן בלבד — ללא
-          מועדי מבחן, ללא שיבוץ נבחנים וללא נתוני חניכים או מדריכים.
+          הגדרות המבחנים של הקורס. מוצגות ההגדרות עצמן בלבד — ללא מועדי מבחן, ללא
+          שיבוץ נבחנים וללא נתוני חניכים או מדריכים.
         </p>
       </div>
 
@@ -169,9 +280,20 @@ export default async function CourseExamsPage({
             עדיין לא נוצרה תוכנית מבחנים לקורס זה
           </h3>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            אין זו שגיאה — פשוט טרם הוגדרה תוכנית מבחנים עבור הקורס. יצירת תוכנית
-            והגדרת מבחנים אינן מתבצעות במסך זה, שהוא מסך צפייה בלבד.
+            אין זו שגיאה — פשוט טרם הוגדרה תוכנית מבחנים עבור הקורס.
           </p>
+          {canCreatePlan && (
+            <div className="mt-4 border-t border-border pt-4">
+              <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
+                יצירת התוכנית פותחת מסגרת <strong>ריקה</strong> בלבד: לא נוצר אף
+                מבחן, לא נקבע אף מועד ולא מתפרסם דבר. הגדרת המבחנים עצמם נעשית
+                בשלב נפרד, ולאחר מכן.
+              </p>
+              <ExamPlanCreateForm
+                action={createExamPlanAction.bind(null, context.id)}
+              />
+            </div>
+          )}
         </div>
       ) : (
         <>

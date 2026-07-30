@@ -60,6 +60,19 @@ const IO_TEST_REL = join("lib", "actions", "exam-plan-write-io.test.ts");
 const CORE_REL = join("lib", "exam", "create-exam-plan-core.ts");
 const CORE_TEST_REL = join("lib", "exam", "create-exam-plan-core.test.ts");
 
+/**
+ * P3 — the course-scoped exams route, in git's own form (forward slashes on every
+ * platform), and the ONE Server Action module authorized to call this binding.
+ *
+ * Spelled out as an exact path rather than a directory or a glob on purpose: the
+ * point of the caller guard is that a SECOND route, a second Server Action module
+ * or any `.tsx` component still fails it.
+ */
+const P3_ROUTE_DIR = "app/admin/courses/[courseOfferingId]/exams";
+const P3_APPROVED_CALLER = `${P3_ROUTE_DIR}/actions.ts`;
+/** That route's own contract suite, which NAMES this module in order to pin it. */
+const P3_APPROVED_SUITE = `${P3_ROUTE_DIR}/exam-plan-create.contract.test.ts`;
+
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
 
 /** Strip comments so the guards assert on CODE, not on explanatory prose. */
@@ -859,16 +872,17 @@ test("31. the slice's lib/actions files are EXACTLY the approved pair", () => {
   }
 });
 
-test("32. the slice MODIFIED exactly ONE tracked file — the P1 containment guard", () => {
+test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", () => {
   // Compared against HEAD, so it stays green once the change is committed and fires
   // if any further existing file is edited. Scoped to the trees this slice could
   // plausibly have touched.
   //
-  // The single expected modification is the committed P1 SUITE, whose two
-  // containment claims this slice makes obsolete by design: the pure core now has
-  // a consumer, and an ExamPlan IO binding now exists. Those two guards were
-  // re-pointed to this exact path rather than relaxed — no PRODUCTION file was
-  // touched, and in particular the pure core was not.
+  // P2 -> P3 TRANSITION. While P2 was the binding alone, the single expected
+  // modification was the committed P1 SUITE, whose containment claims P2 made
+  // obsolete. P3 wires the binding to a manager-facing button, which makes the
+  // "no caller at all" claim obsolete in turn and edits the exams PAGE to render
+  // the affordance. Those guards are re-pointed to EXACT paths rather than
+  // relaxed — the pure core and this binding are still byte-identical to HEAD.
   const result = spawnSync(
     "git",
     ["diff", "--name-only", "HEAD", "--", "lib", "prisma", "app", "scripts"],
@@ -879,13 +893,16 @@ test("32. the slice MODIFIED exactly ONE tracked file — the P1 containment gua
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
-  // The two GUARD SUITES are TOLERATED, not required: before this slice is
-  // committed the diff holds them, afterwards it is empty, and a later fix to a
-  // guard puts one back — all three states are correct. What must never differ is
-  // PRODUCTION code, which is what this guard exists for.
+  // These paths are TOLERATED, not required: before a slice is committed the diff
+  // holds them, afterwards it is empty, and a later fix puts one back — all three
+  // states are correct. What must never differ is PRODUCTION code other than the
+  // single approved page, which is what this guard exists for.
   const TOLERATED = [
     ["lib", "exam", "create-exam-plan-core.test.ts"].join("/"),
     ["lib", "actions", "exam-plan-write-io.test.ts"].join("/"),
+    `${P3_ROUTE_DIR}/exam-definitions-page.contract.test.ts`,
+    `${P3_ROUTE_DIR}/exam-plan-create.contract.test.ts`,
+    `${P3_ROUTE_DIR}/page.tsx`,
   ];
   const unexpected = modified.filter((path) => !TOLERATED.includes(path));
   assert.deepEqual(
@@ -911,7 +928,13 @@ test("32. the slice MODIFIED exactly ONE tracked file — the P1 containment gua
   assert.ok(policy.includes("SCHEDULE_DRAFT_CONFIGURATION"));
 });
 
-test("33. nothing in app/, components/ or another lib/actions module calls this writer", () => {
+test("33. EXACTLY ONE app Server Action calls this writer, and nothing else does", () => {
+  // P2 -> P3 TRANSITION. This guard previously asserted the caller list was EMPTY.
+  // P3 gives the binding its first and only public caller, so the list is now
+  // pinned to that ONE exact path instead of being dropped or widened to the route
+  // directory: a second Server Action module, a `.tsx` component, another
+  // lib/actions module, a script or any other route still fails this test.
+  //
   // The committed P1 guard suite is excluded: it NAMES this module's path in its
   // own re-pointed containment assertions, which is the opposite of calling it —
   // it imports nothing from here and invokes nothing here.
@@ -945,7 +968,28 @@ test("33. nothing in app/, components/ or another lib/actions module calls this 
     const dir = join(REPO_ROOT, root);
     if (existsSync(dir)) walk(dir);
   }
-  assert.deepEqual(callers, [], `an unapproved caller exists: ${callers.join(", ")}`);
+
+  // The complete caller set, as git spells the paths: the ONE approved Server
+  // Action. That route's own contract suite is permitted to NAME this module, but
+  // only if it does so — it currently uses split literals and so does not appear.
+  const normalized = callers.map((path) => path.split(sep).join("/")).sort();
+  const unapproved = normalized.filter(
+    (path) => path !== P3_APPROVED_CALLER && path !== P3_APPROVED_SUITE,
+  );
+  assert.deepEqual(unapproved, [], `an unapproved caller exists: ${unapproved.join(", ")}`);
+
+  // Exactly ONE shipped module may reach this writer — a test suite may describe
+  // it, but only this Server Action may expose it to a user.
+  const production = normalized.filter((path) => !/\.test\.tsx?$/.test(path));
+  assert.deepEqual(production, [P3_APPROVED_CALLER]);
+
+  // ...and that caller is a Server Action module, never a component.
+  assert.equal(P3_APPROVED_CALLER.endsWith(".tsx"), false);
+  assert.equal(
+    normalized.some((path) => path.endsWith(".tsx")),
+    false,
+    "a UI component reaches the writer",
+  );
 });
 
 test("34. this suite opens no database and reads no environment", () => {
