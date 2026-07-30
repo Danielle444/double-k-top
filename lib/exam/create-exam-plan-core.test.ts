@@ -1057,18 +1057,24 @@ const SUITE_TRACKED_PATH = ["lib", "exam", TEST_NAME].join("/");
 const IO_TRACKED_PATH = ["lib", "actions", "exam-plan-write-io.ts"].join("/");
 const IO_TEST_TRACKED_PATH = ["lib", "actions", "exam-plan-write-io.test.ts"].join("/");
 
-test("S14. the slice modified NO production file — only this guard suite", () => {
-  // P1 -> P2 TRANSITION, STATED EXPLICITLY. While P1 was the pure core alone, the
-  // approved diff was EMPTY and this guard asserted exactly that. P2 adds the
-  // server-only Prisma binding, which makes two of P1's containment CLAIMS
-  // obsolete — the core now has a consumer, and an IO binding now exists — and
-  // amending those claims means editing THIS FILE. So the expected diff is this
-  // suite and nothing else.
+/** P3 — the exams route that wires the binding to a manager-facing button. */
+const ROUTE_DIR = ["app", "admin", "courses", "[courseOfferingId]", "exams"].join("/");
+const P3_ACTION_TRACKED_PATH = `${ROUTE_DIR}/actions.ts`;
+const P3_PAGE_TRACKED_PATH = `${ROUTE_DIR}/page.tsx`;
+const P3_PAGE_SUITE_TRACKED_PATH = `${ROUTE_DIR}/exam-definitions-page.contract.test.ts`;
+const P3_SUITE_TRACKED_PATH = `${ROUTE_DIR}/exam-plan-create.contract.test.ts`;
+
+test("S14. the slice modified NO production file outside the approved P3 wiring", () => {
+  // P1 -> P2 -> P3 TRANSITION, STATED EXPLICITLY. While P1 was the pure core alone,
+  // the approved diff was EMPTY. P2 added the server-only Prisma binding, which
+  // made two of P1's containment CLAIMS obsolete — the core gained a consumer, and
+  // an IO binding came to exist. P3 now adds the ONE app caller, which makes the
+  // "wired to nothing" claim obsolete in turn.
   //
-  // The guard is NOT relaxed by that: the pure core, the schema, the migrations
-  // and every app/component tree are still asserted to be untouched, and S15/S16
-  // below now pin the consumer and the absence of wiring by exact path rather
-  // than by "there is none".
+  // The guard is NOT relaxed by that. The pure core and the binding are still
+  // asserted byte-identical to HEAD; the schema and the migrations are still
+  // untouched; and S15/S16 below still pin the consumer and the caller to EXACT
+  // paths rather than to a directory, a glob or "there is none".
   const result = spawnSync(
     "git",
     ["diff", "--name-only", "HEAD", "--", "lib", "prisma", "app", "components"],
@@ -1079,16 +1085,24 @@ test("S14. the slice modified NO production file — only this guard suite", () 
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
-  // WHAT IS TOLERATED, AND WHY IT IS TOLERATED RATHER THAN REQUIRED. The two GUARD
-  // SUITES of this slice may legitimately differ from HEAD — before the slice is
-  // committed the diff holds them, afterwards it is empty, and a later fix to a
-  // guard puts one back. Pinning the diff to an exact list would make this test
-  // flip red on every one of those perfectly correct states.
+  // WHAT IS TOLERATED, AND WHY IT IS TOLERATED RATHER THAN REQUIRED. These paths
+  // may legitimately differ from HEAD — before a slice is committed the diff holds
+  // them, afterwards it is empty, and a later fix puts one back. Pinning the diff
+  // to an exact list would make this test flip red on every one of those perfectly
+  // correct states.
   //
-  // What must NEVER differ is PRODUCTION code, which is the whole point of the
-  // guard: the pure core, the binding, the schema, the migrations and every app or
-  // component tree.
-  const TOLERATED = [SUITE_TRACKED_PATH, IO_TEST_TRACKED_PATH];
+  // The GUARD SUITES are tolerated because amending an obsolete containment claim
+  // means editing them. The ONE tolerated production file is the exams PAGE, which
+  // P3 edits to render the create affordance. Everything else — and in particular
+  // the pure core, the binding, the schema and the migrations — must NEVER differ.
+  const TOLERATED_SUITES = [
+    SUITE_TRACKED_PATH,
+    IO_TEST_TRACKED_PATH,
+    P3_PAGE_SUITE_TRACKED_PATH,
+    P3_SUITE_TRACKED_PATH,
+  ];
+  const TOLERATED_PRODUCTION = [P3_PAGE_TRACKED_PATH];
+  const TOLERATED = [...TOLERATED_SUITES, ...TOLERATED_PRODUCTION];
   const unexpected = modified.filter((path) => !TOLERATED.includes(path));
   assert.deepEqual(
     unexpected,
@@ -1100,10 +1114,13 @@ test("S14. the slice modified NO production file — only this guard suite", () 
   for (const production of [CORE_TRACKED_PATH, IO_TRACKED_PATH]) {
     assert.equal(modified.includes(production), false, `${production} was modified`);
   }
-  // Every tolerated path really is a test suite, never a shipped module.
-  for (const path of TOLERATED) {
+  // Every tolerated suite really is a test suite...
+  for (const path of TOLERATED_SUITES) {
     assert.match(path, /\.test\.ts$/);
   }
+  // ...and the single tolerated production file is exactly the exams page — not a
+  // lib module, not the binding, not a second route.
+  assert.deepEqual(TOLERATED_PRODUCTION, [P3_PAGE_TRACKED_PATH]);
 });
 
 /**
@@ -1181,11 +1198,12 @@ test("S15. the ONLY production consumer of this core is the server-only IO bindi
   ]);
 });
 
-test("S16. the binding is reachable from NO app route, page, UI or Server Action", () => {
-  // P1 -> P2 TRANSITION. This guard previously asserted that no ExamPlan IO
-  // binding existed at all. It now asserts the binding exists as EXACTLY the
-  // approved pair and is still wired to NOTHING: the trust boundary it declares is
-  // only meaningful while no public surface can call it.
+test("S16. the binding is reachable from EXACTLY ONE app Server Action, and no UI", () => {
+  // P1 -> P2 -> P3 TRANSITION. This guard first asserted that no ExamPlan IO
+  // binding existed at all, then that one existed and was wired to NOTHING. P3's
+  // whole purpose is to give it exactly ONE public caller, so the claim is now
+  // pinned to that one PATH — spelled out in full, never as a directory or a glob,
+  // so a second route, a second Server Action module or any `.tsx` still fails.
   const created = readdirSync(join(REPO_ROOT, "lib", "actions"))
     .filter((name) => /exam-plan/.test(name))
     .sort();
@@ -1204,9 +1222,10 @@ test("S16. the binding is reachable from NO app route, page, UI or Server Action
   assert.equal(io.includes('"use ' + 'server"'), false, "the binding is a Server Action module");
   assert.equal(io.includes("'use " + "server'"), false);
 
-  // No app/, components/ or UI file names it, and no UI file of any kind reaches
-  // the core either. THIS suite is excluded because a guard necessarily names the
-  // path it guards; it imports nothing from the binding and calls nothing in it.
+  // Exactly ONE file outside the slice's own modules names the binding: the P3
+  // Server Action. THIS suite and the binding's own suite are excluded because a
+  // guard necessarily names the path it guards; they import nothing from the
+  // binding and call nothing in it.
   const reaching = repoSourceFiles().filter(
     (file) =>
       file.source.includes("exam-plan-write-io") &&
@@ -1214,7 +1233,18 @@ test("S16. the binding is reachable from NO app route, page, UI or Server Action
       file.path !== IO_TEST_TRACKED_PATH &&
       file.path !== SUITE_TRACKED_PATH,
   );
-  assert.deepEqual(reaching.map((file) => file.path), []);
+  assert.deepEqual(
+    reaching.map((file) => file.path),
+    [P3_ACTION_TRACKED_PATH],
+    "the binding is reachable from an unapproved file",
+  );
+  // That one caller is a Server Action module, NOT a component: no `.tsx` reaches
+  // the binding, and no UI file of any kind reaches the pure core either.
+  assert.equal(P3_ACTION_TRACKED_PATH.endsWith(".ts"), true);
+  const tsxReaching = repoSourceFiles().filter(
+    (file) => file.path.endsWith(".tsx") && file.source.includes("exam-plan-write-io"),
+  );
+  assert.deepEqual(tsxReaching.map((file) => file.path), []);
   const uiReaching = repoSourceFiles().filter(
     (file) => file.path.endsWith(".tsx") && file.source.includes("create-exam-plan-core"),
   );

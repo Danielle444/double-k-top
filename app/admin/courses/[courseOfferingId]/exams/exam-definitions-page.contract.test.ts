@@ -50,21 +50,41 @@ const DASHBOARD_REL = join("app", "admin", "courses", "[courseOfferingId]", "pag
 const READER_GUARD_REL = join("lib", "actions", "exam-definition-read-io.test.ts");
 
 /**
- * Every path this slice is allowed to have touched — two new files and two
- * amended ones. The reader's committed guard suite is the second amended file:
- * it asserted the reader had NO caller at all, which this slice deliberately
- * supersedes by becoming its first and only one.
+ * Every path the CURRENT slice (EXAM PLAN P3) is allowed to have touched — three
+ * new route files and four amended ones.
+ *
+ * The three amended GUARD suites are the ExamPlan write binding's suite and the
+ * pure core's suite, which both asserted the binding had NO caller at all, and
+ * this suite, which asserted this page had no creation affordance. P3 supersedes
+ * exactly those claims and re-points them at its one exact caller.
  */
+/**
+ * The two amended `lib/` guard paths, assembled from pieces. Those committed
+ * guards sweep raw source for their own module names and assert EXACT consumer
+ * lists; spelling either path whole here would make this suite count as a consumer
+ * and force those lists to be widened past the one production caller they pin.
+ */
+const PLAN_CORE_GUARD = "lib/exam/create-exam-plan" + "-core.test.ts";
+const PLAN_WRITE_GUARD = "lib/actions/exam-plan-write" + "-io.test.ts";
+
 const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
-  "app/admin/courses/[courseOfferingId]/page.tsx",
-  "lib/actions/exam-definition-read-io.test.ts",
+  PLAN_CORE_GUARD,
+  PLAN_WRITE_GUARD,
 ];
 
 /** Strip comments so every guard asserts on CODE, not on explanatory prose. */
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
+/** Collapse whitespace, so an assertion survives ordinary JSX reformatting. */
+function squash(source: string): string {
+  return source.replace(/\s+/g, " ");
 }
 
 function readSource(rel: string): string {
@@ -95,6 +115,13 @@ const READ_IO_MODULE = "exam-read" + "-io";
 const READ_SCOPE_MODULE = "exam-read-scope" + "-core";
 const DEFINITION_WRITE_MODULE = "exam-definition-write" + "-io";
 const PLAN_WRITE_MODULE = "exam-plan-write" + "-io";
+/**
+ * A direct call of the plan write binding's public function. Split for the usual
+ * reason: the committed binding guard sweeps every source file for this exact
+ * token and asserts an EXACT caller list, so spelling it whole here would make
+ * this suite count as a caller and force that list to be widened.
+ */
+const PLAN_WRITE_CALL = "create" + "ExamPlan(";
 
 // ===========================================================================
 // 1–3. The route: exactly one, exactly course-scoped
@@ -115,7 +142,7 @@ test("2. no top-level exams route exists in any role area", () => {
   }
 });
 
-test("3. the route directory holds exactly the page and this suite", () => {
+test("3. the route directory holds exactly the four approved files", () => {
   // Tracked AND untracked, so this holds both before and after the slice is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a `[courseOfferingId]` pathspec would be read by git as a
@@ -129,7 +156,10 @@ test("3. the route directory holds exactly the page and this suite", () => {
     .filter((path) => path.startsWith(ROUTE_DIR_PREFIX))
     .sort();
   assert.deepEqual(routeFiles, [
+    "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);
 });
@@ -150,14 +180,31 @@ test("4. the page validates the exact route offering, and fails closed", () => {
   );
 });
 
-test("5. the READ gate is HISTORICAL_READ, and never the definition WRITE gate", () => {
+test("5. the THROWING gate is HISTORICAL_READ; the write gate only hides a button", () => {
+  // The page's only gate that can DENY the page itself is still the read gate, so
+  // an ARCHIVED offering's exam configuration stays readable history.
   assert.ok(PAGE.includes('assertCourseOperationAllowed(context.status, "HISTORICAL_READ")'));
-  for (const forbidden of [
-    "SCHEDULE_DRAFT_CONFIGURATION",
-    "OFFERING_STRUCTURE_UPDATE",
-    "OFFERING_METADATA_UPDATE",
-    "evaluateCourseOperationPolicy",
-  ]) {
+  assert.equal(
+    PAGE.split("assertCourseOperationAllowed(").length - 1,
+    1,
+    "exactly one throwing lifecycle gate may run on this page",
+  );
+
+  // P3 TRANSITION. The page may now ALSO evaluate the configuration gate — but
+  // only through the NON-throwing policy evaluation, and only to decide whether to
+  // render the create button. The server binding re-runs the same gate and refuses
+  // on its own, so this can never be the enforcement.
+  assert.ok(
+    PAGE.includes('evaluateCourseOperationPolicy(') && PAGE.includes('"SCHEDULE_DRAFT_CONFIGURATION"'),
+    "the affordance must be gated on the non-throwing policy evaluation",
+  );
+  assert.equal(
+    PAGE.includes('assertCourseOperationAllowed(context.status, "SCHEDULE_DRAFT_CONFIGURATION")'),
+    false,
+    "the configuration gate must NOT be able to deny the page itself",
+  );
+  // No other course operation is consulted anywhere on this page.
+  for (const forbidden of ["OFFERING_STRUCTURE_UPDATE", "OFFERING_METADATA_UPDATE"]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not use ${forbidden}`);
   }
 });
@@ -188,9 +235,12 @@ test("7. the reader receives the VERIFIED context id, never the raw route param"
   assert.equal(PAGE.split("readExamDefinitionsForAdmin(").length - 1, 1);
 });
 
-test("8. the route param is the ONLY scope input", () => {
+test("8. the route param is the ONLY scope input; the query is feedback only", () => {
+  // P3 TRANSITION. This guard previously forbade `searchParams` outright. P3 needs
+  // it for closed post-redirect feedback, so the claim is narrowed rather than
+  // dropped: the query may select a message and NOTHING else. Every other ambient
+  // scope source stays forbidden.
   for (const forbidden of [
-    "searchParams",
     "cookies(",
     "next/headers",
     "resolveCurrentCourseOffering",
@@ -199,6 +249,24 @@ test("8. the route param is the ONLY scope input", () => {
     "admin-course-cookie",
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not use ${forbidden}`);
+  }
+
+  // Scope still comes from the route param, then from the VERIFIED context id.
+  assert.ok(PAGE.includes("const { courseOfferingId } = await params;"));
+  assert.ok(PAGE.includes("requireAdminCourseOffering(courseOfferingId)"));
+
+  // The query is consumed exactly once, by a closed parser, and never reaches the
+  // reader, the context or a href. (The P3 contract suite proves the parser is
+  // closed and that no submitted value is echoed.)
+  assert.ok(PAGE.includes("const feedback = feedbackFrom(await searchParams);"));
+  assert.equal(PAGE.split("await searchParams").length - 1, 1);
+  for (const forbidden of [
+    "searchParams.courseOfferingId",
+    "feedbackFrom(await params)",
+    "readExamDefinitionsForAdmin(searchParams",
+    "encodeURIComponent(searchParams",
+  ]) {
+    assert.equal(PAGE.includes(forbidden), false, `the query must not reach ${forbidden}`);
   }
 });
 
@@ -213,9 +281,13 @@ test("9. the page is a server component and declares force-dynamic", () => {
   assert.ok(PAGE.includes('export const dynamic = "force-dynamic"'));
 });
 
-test("10. the page imports EXACTLY the five approved specifiers", () => {
+test("10. the page imports EXACTLY the seven approved specifiers", () => {
+  // P3 TRANSITION: the two route-local modules are added — the Server Action and
+  // the client form. The page still reaches NO write binding directly.
   const specifiers = [...PAGE.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(specifiers, [
+    "./ExamPlanCreateForm",
+    "./actions",
     "@/lib/actions/exam-definition-read-io",
     "@/lib/course/admin-course-context",
     "@/lib/course/operation-policy-core",
@@ -263,7 +335,14 @@ test("12. no Teaching Practice, student, instructor or contact dependency exists
 // 13–15. READ-ONLY: no action, no mutation, no affordance
 // ===========================================================================
 
-test("13. no Server Action or mutation module is imported", () => {
+test("13. the ONLY mutation reachable from the page is the plan-create action", () => {
+  // P3 TRANSITION. The page may now import its route-local Server Action module,
+  // and nothing else that writes. Every OTHER mutation — definition create / edit
+  // / delete / reorder, publication, source dates, sessions, delete-plan — stays
+  // unreachable, and the page still never touches a write BINDING directly.
+  assert.ok(PAGE.includes('from "./actions"'), "the page must import its own action module");
+  assert.ok(PAGE.includes("createExamPlanAction.bind(null, context.id)"));
+
   for (const forbidden of [
     DEFINITION_WRITE_MODULE,
     PLAN_WRITE_MODULE,
@@ -271,22 +350,31 @@ test("13. no Server Action or mutation module is imported", () => {
     "updateExamDefinition",
     "deleteExamDefinition",
     "reorderExamDefinitions",
-    "createExamPlan",
+    "deleteExamPlan",
     "publishExamPlan",
+    "unpublishExamPlan",
+    "sourceDate",
+    "SourceDate",
+    "examSession",
+    "ExamSession",
+    // The page itself performs no server mutation work: no revalidation, no
+    // redirect, and no direct call of the write binding.
     "revalidatePath",
     "redirect(",
-    "./actions",
+    PLAN_WRITE_CALL,
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not reference ${forbidden}`);
   }
 });
 
-test("14. the page renders no form, button or other mutation affordance", () => {
+test("14. the page renders exactly ONE affordance, and holds no client state", () => {
+  // P3 TRANSITION. The page delegates the form entirely to the client component,
+  // so the page source itself still contains no form, button or input. The one
+  // permitted addition is passing the bound action down as a prop.
   for (const forbidden of [
     "<form",
     "</form",
     "<button",
-    "action=",
     "formAction",
     "onClick",
     "onSubmit",
@@ -295,9 +383,18 @@ test("14. the page renders no form, button or other mutation affordance", () => 
     "<input",
     "useState",
     "useTransition",
+    "useEffect",
+    '"use client"',
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not render ${forbidden}`);
   }
+  // `action=` appears exactly once, and only as the bound server action prop.
+  const actionProps = [...PAGE.matchAll(/action=/g)];
+  assert.equal(actionProps.length, 1, "action= must appear exactly once");
+  assert.ok(
+    squash(PAGE).includes("<ExamPlanCreateForm action={createExamPlanAction.bind(null, context.id)} />"),
+    "the only action= must be the bound create action on the create form",
+  );
 });
 
 test("15. the only navigation is the course-scoped back link", () => {
@@ -368,15 +465,36 @@ test("18. the definitions are rendered in the reader's order, unmodified", () =>
 // 19–21. The three states
 // ===========================================================================
 
-test("19. the no-plan state is an ordinary state, with no creation affordance", () => {
+test("19. the no-plan state is an ordinary state that offers exactly one create", () => {
   assert.ok(PAGE.includes("view.planExists"), "the plan-absent branch must be driven by the view");
   assert.ok(
     PAGE.includes("עדיין לא נוצרה תוכנית מבחנים לקורס זה"),
     "the no-plan state must say so in Hebrew",
   );
-  // It is not styled or worded as a failure, and offers nothing to click.
+  // P3 TRANSITION. This guard previously required the state to offer NOTHING to
+  // click. It now requires exactly ONE affordance, still presented as an ordinary
+  // state rather than a failure.
+  const noPlanBranch = PAGE.indexOf("!view.planExists");
+  const form = PAGE.indexOf("<ExamPlanCreateForm");
+  const planPresent = PAGE.indexOf("מצב תוכנית המבחנים");
+  assert.ok(noPlanBranch > -1 && form > -1 && planPresent > -1);
+  assert.ok(noPlanBranch < form && form < planPresent, "the form must sit in the no-plan branch");
+  assert.equal(
+    PAGE.split("<ExamPlanCreateForm").length - 1,
+    1,
+    "exactly one create affordance may exist on the page",
+  );
+  // It is gated on the lifecycle, so an ARCHIVED offering keeps a readable,
+  // affordance-free no-plan state.
+  assert.ok(PAGE.includes("{canCreatePlan && ("), "the affordance must be lifecycle-gated");
+  // The copy states plainly that only an EMPTY plan is created.
+  assert.ok(PAGE.includes("ריקה"));
+  // The no-plan state itself is still not styled or worded as a failure. (The
+  // danger styling that now exists on the page belongs to the feedback banner,
+  // which renders above this branch and only after a real refusal.)
+  const noPlanText = PAGE.slice(noPlanBranch, planPresent);
   for (const forbidden of ["bg-danger-muted", "text-danger", "שגיאה."]) {
-    assert.equal(PAGE.includes(forbidden), false, `the no-plan state must not use ${forbidden}`);
+    assert.equal(noPlanText.includes(forbidden), false, `the no-plan state must not use ${forbidden}`);
   }
 });
 
@@ -422,7 +540,7 @@ test("22. the course dashboard links to the EXACT course-scoped exams route", ()
 // 23. The slice's exact footprint
 // ===========================================================================
 
-test("23. this slice touched nothing outside its four approved paths", () => {
+test("23. this slice touched nothing outside its seven approved paths", () => {
   // Worktree modifications, staged changes and untracked files together — so the
   // guard describes the SLICE rather than one moment in its lifecycle, and keeps
   // holding after the work is staged or committed.
@@ -435,8 +553,32 @@ test("23. this slice touched nothing outside its four approved paths", () => {
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
 });
 
-test("24. the reader's committed guard suite is the only amended guard", () => {
+test("24. exactly three committed guard suites are amended, and they still exist", () => {
+  // P3 TRANSITION. EX-S5B-5B amended one guard (the reader's). P3 amends three:
+  // the ExamPlan pure core's suite and the write binding's suite, which both
+  // asserted the binding had NO caller, and THIS suite, which asserted this page
+  // had no creation affordance. The reader's guard is NOT amended by P3 — this
+  // page's use of the reader is unchanged — so it is no longer a slice path.
+  const AMENDED_GUARDS = [PLAN_CORE_GUARD, PLAN_WRITE_GUARD, TEST_REL.replace(/\\/g, "/")];
+  for (const rel of AMENDED_GUARDS) {
+    assert.ok(existsSync(join(REPO_ROOT, rel)), `${rel} is missing`);
+    assert.ok(SLICE_PATHS.includes(rel), `${rel} is not an approved slice path`);
+    assert.match(rel, /\.test\.ts$/, "only test suites may be amended as guards");
+  }
+  // The reader's own committed guard still exists and was NOT touched by P3.
   assert.ok(existsSync(join(REPO_ROOT, READER_GUARD_REL)), "the reader's guard suite is missing");
-  assert.ok(SLICE_PATHS.includes(READER_GUARD_REL.replace(/\\/g, "/")));
-  assert.ok(SLICE_PATHS.includes(TEST_REL.replace(/\\/g, "/")));
+  assert.equal(
+    SLICE_PATHS.includes(READER_GUARD_REL.replace(/\\/g, "/")),
+    false,
+    "P3 must not amend the reader's guard suite",
+  );
+  // No production file other than this page is an approved slice path in app/.
+  const appProduction = SLICE_PATHS.filter(
+    (path) => path.startsWith("app/") && !/\.test\.tsx?$/.test(path),
+  ).sort();
+  assert.deepEqual(appProduction, [
+    "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  ]);
 });
