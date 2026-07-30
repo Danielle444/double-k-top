@@ -924,7 +924,7 @@ test("32. the pure core it binds is DB-free, and no lib/exam module imports a cl
 // 33–36. Containment: no caller, no UI, four new files, nothing modified
 // ===========================================================================
 
-test("33. no app/, route, page, Server Action or UI caller exists for these writers", () => {
+test("33. EXACTLY ONE approved caller reaches the CREATE writer, and NOTHING reaches the other two", () => {
   const declaring = new Set(
     [IO_REL, IO_TEST_REL, ...BOUND_CORE_RELS].map((rel) => join(REPO_ROOT, rel)),
   );
@@ -937,6 +937,7 @@ test("33. no app/, route, page, Server Action or UI caller exists for these writ
   );
 
   const callers: string[] = [];
+  const editOrDeleteCallers: string[] = [];
   for (const dir of ["app", "lib", "components"]) {
     const root = join(REPO_ROOT, dir);
     if (!existsSync(root)) continue;
@@ -945,18 +946,50 @@ test("33. no app/, route, page, Server Action or UI caller exists for these writ
       const path = join(entry.parentPath ?? root, entry.name);
       if (path.includes(`${sep}generated${sep}`)) continue;
       if (declaring.has(path)) continue;
+      if (ownSuites.has(path)) continue;
       const code = stripComments(readFileSync(path, "utf8"));
       const reaches =
         /exam-session-write-io/.test(code) ||
         /(create|update|delete)-exam-session-core/.test(code) ||
         /\b(create|update|delete)ExamSession\s*\(/.test(code) ||
         /\b(create|update|delete)ExamSessionWithDeps\s*\(/.test(code);
-      if (reaches && !ownSuites.has(path)) {
+      if (reaches) {
         callers.push(path.slice(REPO_ROOT.length + 1));
+      }
+      // The EDIT and REMOVAL writers are tracked SEPARATELY, and their allow-list
+      // stays EMPTY. The approved caller below is approved for the CREATE alone:
+      // if it ever names one of the destructive two, it fails here rather than
+      // being waved through by the create's own entry.
+      if (
+        /\b(update|delete)ExamSession(WithDeps)?\s*\(/.test(code) ||
+        /(update|delete)-exam-session-core/.test(code)
+      ) {
+        editOrDeleteCallers.push(path.slice(REPO_ROOT.length + 1));
       }
     }
   }
-  assert.deepEqual(callers, [], `an unapproved caller exists: ${callers.join(", ")}`);
+
+  // EX-SES-S4 approved ONE production caller: the course-scoped exams route's
+  // Server Action module, which wraps the CREATE and nothing else. This is an
+  // EXACT path and not a directory or a pattern — a second file in the very same
+  // directory still fails, which is the whole point of listing it this way.
+  const APPROVED_CREATE_CALLER = ["app", "admin", "courses", "[courseOfferingId]", "exams", "actions.ts"].join(sep);
+  assert.deepEqual(
+    callers.sort(),
+    [APPROVED_CREATE_CALLER],
+    `an unapproved caller exists: ${callers.join(", ")}`,
+  );
+  // The approved caller is a Server Action module, never a UI file: no component
+  // may reach a write binding directly.
+  assert.equal(APPROVED_CREATE_CALLER.endsWith(".tsx"), false);
+
+  // Unchanged from EX-SES-S3, and the guard this slice most had to avoid
+  // weakening: NOTHING in the application may edit or remove a stored session.
+  assert.deepEqual(
+    editOrDeleteCallers,
+    [],
+    `an edit/delete caller exists: ${editOrDeleteCallers.join(", ")}`,
+  );
 
   for (const dir of [
     join("app", "admin", "exams"),

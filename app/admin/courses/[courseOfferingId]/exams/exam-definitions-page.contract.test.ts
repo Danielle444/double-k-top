@@ -108,6 +108,14 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  // EX-SES-S4 — the approved ExamSession CREATE UI. Three NEW route files, none
+  // of them wired into the page: this slice re-points the route file set below
+  // and nothing else here. `page.tsx` is asserted BYTE-IDENTICAL to HEAD by that
+  // slice's own suite, and it stays in this list only because the earlier batch
+  // legitimately changed it.
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   READER_GUARD_REL.replace(/\\/g, "/"),
   PLAN_CORE_GUARD,
   PLAN_WRITE_GUARD,
@@ -187,11 +195,15 @@ test("2. no top-level exams route exists in any role area", () => {
   }
 });
 
-test("3. the route directory holds exactly the eight approved files", () => {
+test("3. the route directory holds exactly the eleven approved files", () => {
   // Tracked AND untracked, so this holds both before and after the batch is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a `[courseOfferingId]` pathspec would be read by git as a
   // character class and quietly match nothing.
+  //
+  // RE-POINTED by EX-SES-S4, not relaxed: three reviewed session-create files
+  // joined the route. None of them is rendered by the page — the wiring is a
+  // later slice — so every page assertion in this suite is unaffected.
   const routeFiles = [
     ...new Set([
       ...gitLines(["ls-files"]),
@@ -203,11 +215,14 @@ test("3. the route directory holds exactly the eight approved files", () => {
   assert.deepEqual(routeFiles, [
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/actions.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);
 });
@@ -753,8 +768,13 @@ test("24. the amended committed guard suites all exist and are approved paths", 
   assert.deepEqual(appProduction, [
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
+    // RE-POINTED by EX-SES-S4: a third form and a third message table joined the
+    // route. Neither is rendered by the page — the wiring is a later slice — so
+    // this list grew while the page's own affordance matrix did not.
+    "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/actions.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);
 
