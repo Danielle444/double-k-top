@@ -1,0 +1,548 @@
+/**
+ * EXAM EX-ASG-IO1 — the guard suite for the ADMIN assignment READ bindings.
+ *
+ * Run with: npx tsx --test lib/actions/exam-assignment-read-io.test.ts
+ *
+ * WHY THIS SUITE IS STRUCTURAL RATHER THAN BEHAVIOURAL. The module under test
+ * declares `server-only` and imports the database client, so importing it here
+ * would either fail the build or open a real connection. The SHAPING it binds —
+ * the two total orders, the placeholder, the freeze, the empty views — is proven
+ * at runtime by the pure core's own DB-free suite. What is left, and what only a
+ * source-text guard can prove, is that the BINDING reads exactly what it is
+ * allowed to read, scoped by exactly the server-verified ids, behind exactly the
+ * right gate, and writes nothing at all.
+ *
+ * DB-FREE: no database connection is opened, no SQL is executed, no environment
+ * variable is read, and no production identifier appears anywhere. The only
+ * files read are module SOURCE TEXTS and `git`'s own output.
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, sep } from "node:path";
+
+const REPO_ROOT = join(import.meta.dirname, "..", "..");
+
+const IO_REL = join("lib", "actions", "exam-assignment-read-io.ts");
+const IO_TEST_REL = join("lib", "actions", "exam-assignment-read-io.test.ts");
+const CORE_REL = join("lib", "exam", "admin-exam-assignment-read-core.ts");
+const CORE_TEST_REL = join("lib", "exam", "admin-exam-assignment-read-core.test.ts");
+
+const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
+const CORE_SOURCE = readFileSync(join(REPO_ROOT, CORE_REL), "utf8");
+
+/** Strip comments so the guards assert on CODE, not on explanatory prose. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
+/** Keep ONLY the comments, for the "is this documented?" assertions. */
+function commentsOf(source: string): string {
+  return [
+    ...(source.match(/\/\*[\s\S]*?\*\//g) ?? []),
+    ...(source.match(/^\s*\/\/.*$/gm) ?? []),
+  ].join("\n");
+}
+
+const CODE = stripComments(SOURCE);
+const COMMENTS = commentsOf(SOURCE);
+
+/**
+ * One top-level function's body, from its declaration to the closing brace in
+ * column 0 — so an "inside this reader" assertion means what it says.
+ */
+function bodyOf(name: string): string {
+  const start = CODE.indexOf(`function ${name}(`);
+  assert.ok(start > 0, `${name} is missing`);
+  const end = CODE.indexOf("\n}", start);
+  assert.ok(end > start, `${name} is unbalanced`);
+  return CODE.slice(start, end + 2);
+}
+
+/** Every exported function signature, in source order. */
+const SIGNATURES = [
+  ...SOURCE.matchAll(/export (?:async )?function (\w+)\(([\s\S]*?)\):\s*([^{]+)\{/g),
+].map(([, name, params, returns]) => ({
+  name,
+  params: params.replace(/\s+/g, " ").trim(),
+  returns: returns.replace(/\s+/g, " ").trim(),
+}));
+
+function gitLines(args: readonly string[]): string[] {
+  const result = spawnSync("git", [...args], { cwd: REPO_ROOT, encoding: "utf8" });
+  assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr ?? ""}`);
+  return (result.stdout ?? "")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0);
+}
+
+// Split specifiers: this suite necessarily names some of what it forbids, and
+// the committed exam-slice guards scan sibling directories for them.
+const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
+const GENERATED_CLIENT = ["@prisma", "client"].join("/");
+const ENV_READ = "process" + ".env";
+
+// ===========================================================================
+// 1–5. Module kind and the public signatures
+// ===========================================================================
+
+test("1. the module imports server-only as its FIRST statement", () => {
+  const serverOnly = new RegExp('import\\s+"server' + '-only";');
+  assert.ok(serverOnly.test(CODE), "the module is not server-only");
+  const firstStatement = CODE.split("\n").find((line) => line.trim().length > 0);
+  assert.ok(firstStatement);
+  assert.ok(serverOnly.test(firstStatement), `the first statement is: ${firstStatement}`);
+});
+
+test("2. the module does NOT declare use server (or use client)", () => {
+  assert.equal(CODE.includes('"use ' + 'server"'), false);
+  assert.equal(CODE.includes("'use " + "server'"), false);
+  assert.equal(CODE.includes('"use ' + 'client"'), false);
+  assert.equal(CODE.includes("'use " + "client'"), false);
+  assert.ok(COMMENTS.includes("use " + "server"), "the rule is undocumented");
+});
+
+test("3. the module exports exactly TWO functions, and no value", () => {
+  assert.deepEqual(
+    SIGNATURES.map((entry) => entry.name),
+    ["readEligibleExamTraineesForAdmin", "readAdminExamAssignments"],
+  );
+  for (const token of [
+    "export const",
+    "export let",
+    "export var",
+    "export default",
+    "export class",
+    "GET",
+    "POST",
+    "PATCH",
+    "NextRequest",
+    "NextResponse",
+    "revalidatePath",
+    "redirect(",
+  ]) {
+    assert.equal(CODE.includes(token), false, `the module declares ${token}`);
+  }
+  const exportStatements = CODE.match(/^export .*$/gm) ?? [];
+  for (const statement of exportStatements) {
+    assert.ok(
+      statement.startsWith("export type {") || statement.startsWith("export async function "),
+      `unexpected export: ${statement}`,
+    );
+  }
+});
+
+test("4. each entry point takes ONLY a courseOfferingId and returns its view", () => {
+  const [trainees, assignments] = SIGNATURES;
+  assert.equal(trainees.params, "courseOfferingId: string,");
+  assert.equal(trainees.returns, "Promise<EligibleExamTraineeListView>");
+  assert.equal(assignments.params, "courseOfferingId: string,");
+  assert.equal(assignments.returns, "Promise<AdminExamAssignmentListView>");
+
+  for (const forbidden of [
+    "planId",
+    "sessionId",
+    "studentId",
+    "assignmentId",
+    "role",
+    "adminId",
+    "actorId",
+    "instructorId",
+    "date",
+    "take",
+    "skip",
+    "cursor",
+    "tx",
+    "prisma",
+    "deps",
+  ]) {
+    for (const entry of [trainees, assignments]) {
+      assert.equal(
+        entry.params.includes(forbidden),
+        false,
+        `${entry.name} accepts ${forbidden}`,
+      );
+    }
+  }
+});
+
+test("5. the module imports EXACTLY the approved specifiers", () => {
+  const specifiers = [...CODE.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(
+    [...new Set(specifiers)].sort(),
+    [
+      "@/app/generated/prisma/client",
+      "@/lib/course/admin-course-context",
+      "@/lib/course/operation-policy-core",
+      "@/lib/exam/admin-exam-assignment-read-core",
+      PRISMA_MODULE,
+    ].sort(),
+  );
+  assert.ok(/import type \{ CourseOfferingStatus \} from/.test(CODE));
+  // No date helper is needed: not one selected column is a calendar value.
+  for (const forbidden of [
+    "@/lib/dates",
+    "notifications",
+    "messages",
+    "push",
+    "teaching-practice",
+    "capability",
+    "@/lib/auth",
+  ]) {
+    assert.equal(CODE.includes(forbidden), false, `the module imports ${forbidden}`);
+  }
+});
+
+// ===========================================================================
+// 6–9. Authorization, the verified id, and the lifecycle READ gate
+// ===========================================================================
+
+test("6. requireAdminCourseOffering is bound once, with the RAW requested id", () => {
+  assert.equal((CODE.match(/await requireAdminCourseOffering\(/g) ?? []).length, 1);
+  assert.ok(
+    /requireAdminCourseOffering\(requestedCourseOfferingId\)/.test(CODE),
+    "the admin boundary is not called with the requested id",
+  );
+  const helper = bodyOf("requireCourseContext");
+  assert.equal(/prisma\./.test(helper), false, "the authorization helper queries");
+  assert.ok(/courseOfferingId:\s*context\.id/.test(helper), "the verified id is not carried");
+  assert.ok(/status:\s*context\.status/.test(helper), "the verified status is not carried");
+  // ONE helper, shared by BOTH reads.
+  assert.equal((CODE.match(/function requireCourseContext\(/g) ?? []).length, 1);
+  assert.equal((CODE.match(/requireCourseContext\(courseOfferingId\)/g) ?? []).length, 2);
+});
+
+test("7. BOTH reads authorize FIRST, then gate, before any query", () => {
+  for (const name of ["readEligibleExamTraineesForAdmin", "readAdminExamAssignments"]) {
+    const entry = bodyOf(name);
+    const authorize = entry.indexOf("await requireCourseContext(courseOfferingId)");
+    const gate = entry.indexOf("assertHistoricalReadAllowed(context.status)");
+    const firstQuery = entry.search(/\b(prisma\.|findExamPlanByCourseOfferingId\()/);
+    assert.ok(authorize > 0, `${name} does not authorize`);
+    assert.ok(gate > authorize, `${name} gates before it authorizes`);
+    assert.ok(firstQuery > gate, `${name} queries before it gates`);
+  }
+});
+
+test("8. the lifecycle gate is HISTORICAL_READ, and no capability is consulted", () => {
+  const gate = bodyOf("assertHistoricalReadAllowed");
+  assert.ok(gate.includes("assertCourseOperationAllowed("));
+  assert.ok(gate.includes('"HISTORICAL_READ"'), "the wrong operation is gated");
+  assert.ok(gate.includes("status as CourseOfferingStatus"));
+  assert.equal((CODE.match(/assertCourseOperationAllowed\(/g) ?? []).length, 1);
+  // A READ never borrows the write gate: an ARCHIVED offering's roster stays
+  // readable history while its assignments may no longer be changed.
+  assert.equal(CODE.includes("SCHEDULE_DRAFT_CONFIGURATION"), false);
+  for (const token of [
+    '"EXAMS"',
+    "'EXAMS'",
+    "TEACHING_PRACTICE",
+    '"SCHEDULE"',
+    "'SCHEDULE'",
+    "CapabilityKey",
+    "getEffectiveCapabilities",
+    "capability-keys",
+  ]) {
+    assert.equal(CODE.includes(token), false, `the module consults ${token}`);
+  }
+  assert.ok(/EXAMS/.test(COMMENTS), "the absent capability is undocumented");
+});
+
+test("9. NOTHING is classified: a denial never becomes an empty view", () => {
+  assert.equal(/\btry\s*\{/.test(CODE), false, "the reader catches");
+  assert.equal(/\bcatch\s*\(/.test(CODE), false, "the reader catches");
+  for (const token of [
+    "instanceof",
+    "CourseOfferingNotFoundError",
+    "CourseOperationNotPermittedError",
+    "NEXT_" + "REDIRECT",
+    "notFound(",
+    "P2002",
+    "P2025",
+  ]) {
+    assert.equal(CODE.includes(token), false, `the reader handles ${token}`);
+  }
+  // The one absence it DOES report is the honest one, and it is the core's own
+  // empty view rather than a locally invented shape.
+  assert.ok(CODE.includes("return emptyAdminExamAssignmentListView();"));
+  assert.equal(CODE.includes("Object.freeze"), false, "the reader builds a view itself");
+});
+
+// ===========================================================================
+// 10–13. The exact query inventory, and no write of any kind
+// ===========================================================================
+
+test("10. the module issues EXACTLY three statements, all reads", () => {
+  const statements = [...CODE.matchAll(/\bprisma\.(\w+)\.(\w+)\(/g)].map(
+    ([, model, method]) => `${model}.${method}`,
+  );
+  assert.deepEqual(statements.sort(), [
+    "courseEnrollment.findMany",
+    "examAssignment.findMany",
+    "examPlan.findUnique",
+  ]);
+});
+
+test("11. NO write method, transaction or raw statement exists in the reader", () => {
+  const writes = /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\s*\(/;
+  assert.equal(writes.test(CODE), false, "the reader performs a write");
+  for (const token of [
+    "$transaction",
+    "$executeRaw",
+    "$queryRaw",
+    "aggregate(",
+    "groupBy(",
+    "count(",
+  ]) {
+    assert.equal(CODE.includes(token), false, `the reader uses ${token}`);
+  }
+  // ...and it reaches no model outside the three it reads.
+  for (const token of [
+    "teachingPractice",
+    "examBeginnerChild",
+    "examSessionSupervisor",
+    "examSessionBreak",
+    "signedForm",
+    "prisma.student.",
+    "prisma.instructor.",
+  ]) {
+    assert.equal(CODE.includes(token), false, `the reader touches ${token}`);
+  }
+});
+
+test("12. the plan lookup uses the VERIFIED offering id and selects only its id", () => {
+  const reader = bodyOf("findExamPlanByCourseOfferingId");
+  assert.ok(reader.includes("prisma.examPlan.findUnique("));
+  assert.ok(
+    /where:\s*\{\s*courseOfferingId:\s*verifiedCourseOfferingId\s*\}/.test(reader),
+    `the plan where was: ${reader}`,
+  );
+  const select = reader.slice(reader.indexOf("select: {"));
+  assert.ok(/select:\s*\{\s*id:\s*true\s*\}/.test(select));
+  for (const forbidden of ["publishedAt", "sessions", "definitions", "include"]) {
+    assert.equal(select.includes(forbidden), false, `the plan read selects ${forbidden}`);
+  }
+  // It is called with the VERIFIED id, never the requested one.
+  assert.ok(CODE.includes("findExamPlanByCourseOfferingId(context.courseOfferingId)"));
+  // No plan short-circuits BEFORE the assignment query.
+  const entry = bodyOf("readAdminExamAssignments");
+  assert.ok(
+    entry.indexOf("emptyAdminExamAssignmentListView()") <
+      entry.indexOf("prisma.examAssignment.findMany("),
+    "the empty view is not returned before the assignment query",
+  );
+});
+
+test("13. the eligible read is scoped, fail-closed and two-column", () => {
+  const entry = bodyOf("readEligibleExamTraineesForAdmin");
+  assert.ok(entry.includes("prisma.courseEnrollment.findMany("));
+  for (const condition of [
+    "courseOfferingId: context.courseOfferingId,",
+    'status: "ACTIVE",',
+    "student: { isActive: true },",
+  ]) {
+    assert.ok(entry.includes(condition), `the eligibility where lacks: ${condition}`);
+  }
+  // Exactly the trainee id and the display name.
+  assert.ok(entry.includes("studentId: true,"));
+  assert.ok(entry.includes("student: { select: { fullName: true } },"));
+  for (const forbidden of [
+    "isPrimary",
+    "identityNumber",
+    "phone",
+    "parent",
+    "memberships",
+    "groupName",
+    "subgroupNumber",
+    "assignedHorseName",
+    "privateHorseName",
+    "id: true,",
+    "include",
+  ]) {
+    assert.equal(entry.includes(forbidden), false, `the eligible read reads ${forbidden}`);
+  }
+  // The database order matches the core's, which re-imposes it regardless.
+  assert.ok(
+    entry.includes('orderBy: [{ student: { fullName: "asc" } }, { studentId: "asc" }],'),
+  );
+  // The rows are handed straight to the pure builder: no local order, no local
+  // shaping and no local filter.
+  assert.ok(entry.includes("buildEligibleExamTraineeListView("));
+  assert.equal(entry.includes(".sort("), false, "the reader re-implements the order");
+  assert.equal(entry.includes(".filter("), false, "the reader filters rows");
+});
+
+test("14. the assignment read is plan-scoped, unfiltered and student-id-free", () => {
+  const entry = bodyOf("readAdminExamAssignments");
+  assert.ok(entry.includes("prisma.examAssignment.findMany("));
+  // A relation FILTER on the SERVER-resolved plan, never an include.
+  assert.ok(
+    entry.includes("where: { session: { planId: plan.id } },"),
+    "the assignment read is not plan-scoped",
+  );
+  assert.equal(entry.includes("include"), false, "the assignment read includes a relation");
+
+  // HISTORY: no role filter, no activity filter, no enrolment join.
+  for (const forbidden of [
+    'role: "',
+    "role: {",
+    "isActive",
+    "courseEnrollment",
+    "enrollments",
+    "enrollment:",
+  ]) {
+    assert.equal(entry.includes(forbidden), false, `the assignment read filters on ${forbidden}`);
+  }
+  assert.equal(entry.includes(".filter("), false, "the reader filters rows");
+  assert.equal(entry.includes(".sort("), false, "the reader re-implements the order");
+
+  // Exactly five own columns plus the trainee's display name — and no Student.id.
+  const select = entry.slice(entry.indexOf("select: {"), entry.indexOf("orderBy:"));
+  const columns = [...select.matchAll(/^\s+(\w+): true,/gm)].map((match) => match[1]);
+  assert.deepEqual(columns, ["id", "sessionId", "role", "horseName", "orderIndex"]);
+  assert.ok(select.includes("student: { select: { fullName: true } },"));
+  for (const forbidden of [
+    "studentId: true",
+    "instructionTopic",
+    "discipline",
+    "pairingIndex",
+    "sourcePracticeRole",
+    "notes",
+    "createdAt",
+    "updatedAt",
+    "session: {",
+  ]) {
+    assert.equal(select.includes(forbidden), false, `the assignment read selects ${forbidden}`);
+  }
+
+  // The nullable relation is mapped to null, which the pure core resolves to its
+  // ONE fixed placeholder — the binding invents no name of its own.
+  assert.ok(entry.includes("traineeName: row.student === null ? null : row.student.fullName,"));
+  assert.equal(entry.includes("ללא"), false, "the binding hardcodes the placeholder");
+  assert.ok(CORE_SOURCE.includes("ללא חניך משויך"), "the core lost its placeholder");
+
+  assert.ok(
+    entry.includes('orderBy: [{ sessionId: "asc" }, { orderIndex: "asc" }, { id: "asc" }],'),
+  );
+  assert.ok(entry.includes("buildAdminExamAssignmentListView("));
+  // `Student.id` is neither selected nor mapped on the ASSIGNMENT path. (The
+  // eligible picker DOES carry one, deliberately: it exists to be submitted back
+  // as the create's chosen trainee.)
+  assert.equal(entry.includes("studentId"), false, "a Student.id reaches the assignment view");
+});
+
+// ===========================================================================
+// 15–18. Containment: no caller, no UI, the approved files, nothing modified
+// ===========================================================================
+
+test("15. NOTHING calls either reader: the module is deliberately unwired", () => {
+  const declaring = new Set(
+    [IO_REL, IO_TEST_REL, CORE_REL, CORE_TEST_REL].map((rel) => join(REPO_ROOT, rel)),
+  );
+
+  const callers: string[] = [];
+  let scanned = 0;
+  for (const dir of ["app", "lib", "components"]) {
+    const root = join(REPO_ROOT, dir);
+    if (!existsSync(root)) continue;
+    for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile() || !/\.tsx?$/.test(entry.name)) continue;
+      const path = join(entry.parentPath ?? root, entry.name);
+      if (path.includes(`${sep}generated${sep}`)) continue;
+      scanned += 1;
+      if (declaring.has(path)) continue;
+      const code = stripComments(readFileSync(path, "utf8"));
+      const reaches =
+        /exam-assignment-read-io/.test(code) ||
+        /admin-exam-assignment-read-core/.test(code) ||
+        /\breadEligibleExamTraineesForAdmin\s*\(/.test(code) ||
+        /\breadAdminExamAssignments\s*\(/.test(code) ||
+        /\bbuild(EligibleExamTraineeListView|AdminExamAssignmentListView)\s*\(/.test(code);
+      if (reaches) callers.push(path.slice(REPO_ROOT.length + 1));
+    }
+  }
+  assert.ok(scanned > 100, `expected the repository, scanned ${scanned} files`);
+  assert.deepEqual(callers, [], `an unapproved caller exists: ${callers.join(", ")}`);
+});
+
+test("16. no exam route, page, form or Server Action was created", () => {
+  for (const dir of [
+    join("app", "admin", "exams"),
+    join("app", "instructor", "exams"),
+    join("app", "student", "exams"),
+  ]) {
+    assert.equal(existsSync(join(REPO_ROOT, dir)), false, `${dir} was created`);
+  }
+  for (const rel of [IO_REL, IO_TEST_REL, CORE_REL, CORE_TEST_REL]) {
+    assert.equal(rel.endsWith(".tsx"), false, `${rel} is a UI file`);
+    const source = stripComments(readFileSync(join(REPO_ROOT, rel), "utf8"));
+    assert.equal(source.includes('"use ' + 'server"'), false, `${rel} is a Server Action module`);
+  }
+});
+
+test("17. the pure core stays DB-free, and the read pair is exactly two files", () => {
+  const core = stripComments(CORE_SOURCE);
+  for (const token of [
+    PRISMA_MODULE,
+    GENERATED_CLIENT,
+    ENV_READ,
+    "server" + "-only",
+    "next/",
+    "lib/auth",
+    "lib/course",
+  ]) {
+    assert.equal(core.includes(token), false, `the pure core references ${token}`);
+  }
+  assert.equal(/(^|\n)\s*import\s/.test(core), false, "the pure core imports something");
+
+  assert.deepEqual(
+    readdirSync(join(REPO_ROOT, "lib", "actions"))
+      .filter((name) => name.startsWith("exam-assignment-read"))
+      .sort(),
+    ["exam-assignment-read-io.test.ts", "exam-assignment-read-io.ts"],
+  );
+  assert.deepEqual(
+    readdirSync(join(REPO_ROOT, "lib", "exam"))
+      .filter((name) => name.startsWith("admin-exam-assignment-read"))
+      .sort(),
+    ["admin-exam-assignment-read-core.test.ts", "admin-exam-assignment-read-core.ts"],
+  );
+});
+
+test("18. the slice modified NO tracked file: no schema, migration, auth or policy", () => {
+  const modified = gitLines([
+    "diff",
+    "--name-only",
+    "--diff-filter=MDRT",
+    "HEAD",
+    "--",
+    "lib",
+    "prisma",
+    "app",
+    "components",
+  ]);
+  assert.deepEqual(modified, [], `the slice modified: ${modified.join(", ")}`);
+
+  const prismaStatus = gitLines(["status", "--porcelain", "--", "prisma"]);
+  assert.deepEqual(prismaStatus, [], `prisma/ changed: ${prismaStatus.join(", ")}`);
+});
+
+test("19. this suite opens no database and reads no environment", () => {
+  const own = stripComments(readFileSync(join(REPO_ROOT, IO_TEST_REL), "utf8"));
+  for (const token of [
+    PRISMA_MODULE,
+    GENERATED_CLIENT,
+    ENV_READ,
+    "DATABASE" + "_URL",
+    "Prisma" + "Client",
+  ]) {
+    assert.equal(own.includes(token), false, `the suite references ${token}`);
+  }
+  const specifiers = [...own.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(
+    [...new Set(specifiers)].sort(),
+    ["node:assert/strict", "node:child_process", "node:fs", "node:path", "node:test"],
+  );
+});
