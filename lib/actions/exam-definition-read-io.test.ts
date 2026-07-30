@@ -142,6 +142,15 @@ const SLICE_PATHS = [
   "lib/actions/" + "exam-session-write" + "-io.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  // EX-SES-UI-2 — the approved session EDIT and REMOVAL UI, which travels in the
+  // same working tree: two new client forms and their contract suite. Listed here
+  // for the footprint guard below and for NO other reason — test 20's claim about
+  // who may call the DEFINITION reader is untouched, and the page is still its only
+  // production caller. Neither new form reads a definition: the edit picker's
+  // options are handed to it as a prop by that same page.
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");

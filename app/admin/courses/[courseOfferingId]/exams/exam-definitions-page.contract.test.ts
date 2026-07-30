@@ -132,6 +132,13 @@ const SLICE_PATHS = [
   // grouping core and the session create form into this page. It amends this
   // suite's exact counts and lists; the guard suite it re-points travels with it.
   SESSION_READ_GUARD,
+  // EX-SES-UI-2 — the approved ExamSession EDIT and REMOVAL UI. Two new route
+  // forms and one new contract suite, plus the amendments this slice makes to the
+  // page's own exact counts (imports, action bindings, feedback keys) and to the
+  // version-stamp rule below.
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
 ];
 
 /** Strip comments so every guard asserts on CODE, not on explanatory prose. */
@@ -206,7 +213,7 @@ test("2. no top-level exams route exists in any role area", () => {
   }
 });
 
-test("3. the route directory holds exactly the eleven approved files", () => {
+test("3. the route directory holds exactly the fourteen approved files", () => {
   // Tracked AND untracked, so this holds both before and after the batch is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a `[courseOfferingId]` pathspec would be read by git as a
@@ -215,6 +222,11 @@ test("3. the route directory holds exactly the eleven approved files", () => {
   // RE-POINTED by EX-SES-S4, not relaxed: three reviewed session-create files
   // joined the route. None of them is rendered by the page — the wiring is a
   // later slice — so every page assertion in this suite is unaffected.
+  //
+  // RE-POINTED AGAIN by EX-SES-UI-2: an edit form, a delete form and their
+  // contract suite joined it, so the exact set grew from eleven to fourteen. Both
+  // new forms ARE rendered by the page, which is why this slice also re-points the
+  // import, binding and version-stamp guards below rather than only this one.
   const routeFiles = [
     ...new Set([
       ...gitLines(["ls-files"]),
@@ -227,6 +239,8 @@ test("3. the route directory holds exactly the eleven approved files", () => {
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/actions.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
@@ -234,6 +248,7 @@ test("3. the route directory holds exactly the eleven approved files", () => {
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);
 });
@@ -381,10 +396,13 @@ test("8. the route param is the ONLY scope input; the query is feedback only", (
     "the session outcome must come from that same one resolved query",
   );
 
-  // The declared query shape is CLOSED: exactly the nine feedback keys, and not one
-  // of them names a course, a plan, a definition, a session or any other id. Every
-  // key admits an ARRAY, which is what a repeated query key arrives as — so the
-  // parsers are forced to reject it rather than coerce it.
+  // RE-POINTED by EX-SES-UI-2, which brings the session EDIT's four outcome tokens
+  // and the REMOVAL's two. The declared query shape is CLOSED: exactly the fifteen
+  // feedback keys, and not one of them names a course, a plan, a definition, a
+  // session, a version stamp or any other id — a per-row diagnostic would need one
+  // in the URL, and this page does not put one there. Every key admits an ARRAY,
+  // which is what a repeated query key arrives as, so the parsers are forced to
+  // reject it rather than coerce it.
   const typeStart = PAGE.indexOf("searchParams: Promise<{");
   assert.ok(typeStart > -1, "the searchParams type must be declared inline");
   const queryType = PAGE.slice(typeStart, PAGE.indexOf("}>;", typeStart));
@@ -401,16 +419,37 @@ test("8. the route param is the ONLY scope input; the query is feedback only", (
       "createdSession",
       "sessionError",
       "sessionIssues",
+      "updatedSession",
+      "unchangedSession",
+      "sessionEditError",
+      "sessionEditIssues",
+      "deletedSession",
+      "sessionDeleteError",
     ].sort(),
   );
   assert.equal(
     (queryType.match(/string \| string\[\]/g) ?? []).length,
-    9,
+    15,
     "every feedback key must admit the array form a repeated key produces",
   );
-  for (const forbidden of ["courseOfferingId?", "planId", "definitionId", "offeringId"]) {
+  for (const forbidden of [
+    "courseOfferingId?",
+    "planId",
+    "definitionId",
+    "offeringId",
+    "sessionId",
+    "updatedAt",
+  ]) {
     assert.equal(queryType.includes(forbidden), false, `searchParams must not carry ${forbidden}`);
   }
+  // The six new tokens are DESTRUCTURED from that same one resolution, exactly as
+  // the definition and session-create ones are — never read as `query.x`.
+  assert.ok(
+    PAGE_FLAT.includes(
+      "const { updatedSession, unchangedSession, sessionEditError, sessionEditIssues, deletedSession, sessionDeleteError, } = query;",
+    ),
+    "the edit and removal outcomes must come from that same one resolved query",
+  );
 
   // Nothing from the query may reach authorization, the reader, a href or a bind.
   for (const forbidden of [
@@ -438,21 +477,29 @@ test("9. the page is a server component and declares force-dynamic", () => {
   assert.ok(PAGE.includes('export const dynamic = "force-dynamic"'));
 });
 
-test("10. the page imports EXACTLY the thirteen approved specifiers", () => {
+test("10. the page imports EXACTLY the fifteen approved specifiers", () => {
   // RE-POINTED by EX-SES-UI-1, which adds FOUR: two more route-local files (the
   // session create form and its message table) and two committed `lib/` modules —
   // the admin session READ binding and the PURE day-grouping core.
+  //
+  // RE-POINTED AGAIN by EX-SES-UI-2, which adds exactly TWO — both route-local
+  // client forms. It adds NO `lib/` module and NO message module: the edit and
+  // removal wording lives in frozen tables inside the page itself, and both
+  // writers are reached through the SAME `./actions` module the other three
+  // mutations already use.
   //
   // What did NOT change is the shape of the list. Every entry is still either
   // route-local or a committed read/policy module: no write binding, no database
   // client, no second data source and no shared component library entered the
   // page, and it still reaches NO writer directly. `./actions` is named once, so
-  // the third Server Action arrives through the same module as the other two.
+  // all five Server Actions arrive through one module.
   const specifiers = [...PAGE.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(specifiers, [
     "./ExamDefinitionCreateForm",
     "./ExamPlanCreateForm",
     "./ExamSessionCreateForm",
+    "./ExamSessionDeleteForm",
+    "./ExamSessionEditForm",
     "./actions",
     "./exam-definition-create-error-messages",
     "./exam-session-create-error-messages",
@@ -560,10 +607,19 @@ test("13. EXACTLY the two approved Server Actions are reachable from the page", 
     // EDIT, REMOVAL and reordering are not, and are banned by name. The Prisma
     // ACCESSOR spelling `examSession.` is KEPT — the trailing dot is what makes it
     // an accessor, and the no-database claim it protects is untouched.
+    //
+    // RE-POINTED AGAIN by EX-SES-UI-2, on the same principle and no wider. The
+    // EDIT and REMOVAL are now approved fourth and fifth affordances, so the ban
+    // moves from their NAMES to their WRITER CALL SHAPES — spelled with the
+    // trailing parenthesis, which is what makes it a call. The page renders two
+    // bound Server Actions whose names legitimately begin with those verbs and
+    // reaches no writer itself; the distinction between naming an action and
+    // calling a writer is exactly what the parenthesis expresses. Reordering is
+    // still banned outright, because no reorder affordance exists at all.
     "examSession.",
     "examDefinition.",
-    "update" + "ExamSession",
-    "delete" + "ExamSession",
+    "update" + "ExamSession" + "(",
+    "delete" + "ExamSession" + "(",
     "reorder" + "ExamSessions",
     // Nothing BELOW a session is reachable either: the page reads a schedule, not
     // who is on it, and it cannot express publication of an individual session.
@@ -591,6 +647,24 @@ test("13. EXACTLY the two approved Server Actions are reachable from the page", 
     false,
     "the raw route param must not be bound",
   );
+
+  // The FOURTH and FIFTH, added by EX-SES-UI-2 and stated the same way. Each is
+  // imported once and bound once — a per-session control is RENDERED once per
+  // session by React, but the BINDING expression appears exactly once in the
+  // source, which is what these counts pin.
+  for (const name of ["updateExamSessionAction", "deleteExamSessionAction"]) {
+    assert.ok(PAGE.includes(`${name}.bind(null, context.id)`), `${name} is not bound correctly`);
+    assert.equal((PAGE.match(new RegExp(name, "g")) ?? []).length, 2, `${name} is not bound once`);
+    assert.equal(
+      PAGE.includes(`${name}.bind(null, courseOfferingId)`),
+      false,
+      "the raw route param must not be bound",
+    );
+  }
+  // No SIXTH mutation entered the page: exactly five bindings, all to the verified
+  // context id and none to anything else.
+  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 5);
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 5);
 });
 
 test("14. the page renders NO control itself and holds no state", () => {
@@ -620,10 +694,19 @@ test("14. the page renders NO control itself and holds no state", () => {
     assert.equal(PAGE.includes(forbidden), false, `the page must not render ${forbidden}`);
   }
 
-  // `action=` appears exactly THREE times — once per approved form — and each one
+  // `action=` appears exactly FIVE times — once per approved form — and each one
   // is a server-bound action prop, never an `action=` on markup the page renders
-  // itself. RE-POINTED by EX-SES-UI-1, which adds the third and last of them.
-  assert.equal((PAGE.match(/action=/g) ?? []).length, 3, "action= must appear exactly three times");
+  // itself. RE-POINTED by EX-SES-UI-1, which added the third, and again by
+  // EX-SES-UI-2, which adds the fourth and fifth.
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 5, "action= must appear exactly five times");
+  assert.ok(
+    PAGE_FLAT.includes("action={updateExamSessionAction.bind(null, context.id)}"),
+    "the edit form must receive exactly the bound edit action",
+  );
+  assert.ok(
+    PAGE_FLAT.includes("action={deleteExamSessionAction.bind(null, context.id)}"),
+    "the delete form must receive exactly the bound removal action",
+  );
   assert.ok(
     PAGE_FLAT.includes("action={createExamSessionAction.bind(null, context.id)}"),
     "the session form must receive exactly the bound session action",
@@ -655,11 +738,41 @@ test("15. the only navigation is the course-scoped back link", () => {
 // 16–18. What is rendered, and what must never be
 // ===========================================================================
 
-test("16. no raw id, plan id or version stamp is rendered", () => {
+test("16. no raw id, plan id or version stamp is RENDERED", () => {
   // `{definition.id}` is not forbidden outright: it is the legitimate React key.
   // What is forbidden is rendering it as TEXT or as a field value.
+  //
+  // RE-POINTED by EX-SES-UI-2. The blanket `updatedAt` ban described a page that
+  // only READ sessions; a safe edit and a safe removal need the OPTIMISTIC
+  // CONCURRENCY token, or a stale click would silently overwrite or delete a row
+  // the manager never saw. The ban is therefore NARROWED to what it always
+  // protected — the stamp may never be visible — rather than dropped:
+  //
+  //   - it may appear ONLY as `expectedUpdatedAt={session.updatedAt}`, the prop
+  //     each client form turns into a hidden field;
+  //   - it may never be text, an interpolation, an href or a formatted date.
+  //
+  // The exact occurrence count is what keeps "only" honest, and the sibling
+  // EX-SES-UI-2 suite pins the same claim from the form side.
+  // TWO occurrences of the lowercase reader field, one per form. (The prop NAME
+  // `expectedUpdatedAt` capitalises the U, so it is deliberately not counted here:
+  // this assertion is about the STORED VALUE reaching the markup, not about the
+  // field it is handed to.)
+  assert.equal((PAGE.match(/updatedAt/g) ?? []).length, 2, "the version stamp must appear exactly twice");
+  assert.equal((PAGE.match(/expectedUpdatedAt=\{session\.updatedAt\}/g) ?? []).length, 2);
   for (const forbidden of [
-    "updatedAt",
+    ">{session.updatedAt}<",
+    "${session.updatedAt}",
+    "value={session.updatedAt}",
+    "String(session.updatedAt)",
+    "new Date(session.updatedAt",
+    "toLocaleString",
+    "publishedAt}",
+  ]) {
+    assert.equal(PAGE.includes(forbidden), false, `the version stamp is rendered: ${forbidden}`);
+  }
+
+  for (const forbidden of [
     "planId",
     "orderIndex",
     ">{definition.id}<",
@@ -855,6 +968,12 @@ test("24. the amended committed guard suites all exist and are approved paths", 
     // route. Neither is rendered by the page — the wiring is a later slice — so
     // this list grew while the page's own affordance matrix did not.
     "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
+    // RE-POINTED AGAIN by EX-SES-UI-2: an edit form and a delete form joined it,
+    // and BOTH are rendered by the page. No fourth message module came with them —
+    // their wording lives in frozen tables inside the page — so this list grew by
+    // exactly two, and every entry is still a route-local file under `app/`.
+    "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/actions.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
