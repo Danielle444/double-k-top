@@ -897,13 +897,35 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
   // holds them, afterwards it is empty, and a later fix puts one back — all three
   // states are correct. What must never differ is PRODUCTION code other than the
   // single approved page, which is what this guard exists for.
+  // EX-SES-UI-1 adds the four route/`lib` suites its own wiring slice amends. The
+  // approved PRODUCTION file is still exactly one — `${P3_ROUTE_DIR}/page.tsx`,
+  // already tolerated here since P3 — and the two assertions below still name the
+  // pure core and this binding as files that may never differ.
+  //
+  // The session paths are ASSEMBLED, not spelled: the session reader's committed
+  // guard pins its caller list to EXACTLY that page, and the session write
+  // binding's guard pins its own to EXACTLY one Server Action, so a suite naming
+  // either module whole would become an extra entry in a list it must stay out of.
   const TOLERATED = [
     ["lib", "exam", "create-exam-plan-core.test.ts"].join("/"),
     ["lib", "actions", "exam-plan-write-io.test.ts"].join("/"),
     `${P3_ROUTE_DIR}/exam-definitions-page.contract.test.ts`,
     `${P3_ROUTE_DIR}/exam-plan-create.contract.test.ts`,
     `${P3_ROUTE_DIR}/page.tsx`,
+    `${P3_ROUTE_DIR}/exam-definition-create.contract.test.ts`,
+    `${P3_ROUTE_DIR}/exam-session-create.contract.test.ts`,
+    ["lib", "actions", "admin-exam-session-read" + "-io.test.ts"].join("/"),
+    ["lib", "actions", "exam-session-write" + "-io.test.ts"].join("/"),
+    ["lib", "actions", "exam-definition-read" + "-io.test.ts"].join("/"),
   ];
+  // Every tolerated path is a guard suite except the ONE approved page: no second
+  // production file can enter this list unnoticed.
+  for (const path of TOLERATED) {
+    assert.ok(
+      path.endsWith(".test.ts") || path === `${P3_ROUTE_DIR}/page.tsx`,
+      `${path} is neither a suite nor the one approved page`,
+    );
+  }
   const unexpected = modified.filter((path) => !TOLERATED.includes(path));
   assert.deepEqual(
     unexpected,

@@ -75,6 +75,25 @@ const APPROVED_NEW_FILES = [
 const APPROVED_MODIFIED_FILES = [
   "lib/actions/exam-session-write-io.test.ts",
   "lib/actions/exam-session-write-io.ts",
+  // EX-SES-UI-1 widens this list and NOTHING else in this suite. That slice wires
+  // the committed session reader, the grouping core and the create form into the
+  // course exams page, which puts the page, the four route contract suites and
+  // four `lib/` footprint guards into the same working tree as this one. Guard 33
+  // still pins the CREATE writer to its single Server Action caller and the EDIT
+  // and REMOVAL writers to no caller at all — this slice reaches none of them.
+  //
+  // ASSEMBLED, not spelled: each of those `lib/` suites sweeps `app/`, `lib/` and
+  // `components/` for its own module name and pins the result to an exact caller
+  // list, so naming one whole here would enrol this suite in it.
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");

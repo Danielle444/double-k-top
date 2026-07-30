@@ -1095,11 +1095,25 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
   // means editing them. The ONE tolerated production file is the exams PAGE, which
   // P3 edits to render the create affordance. Everything else — and in particular
   // the pure core, the binding, the schema and the migrations — must NEVER differ.
+  // EX-SES-UI-1 adds the four further guard suites that its own wiring slice
+  // amends. They are SUITES, every one of them: the tolerated PRODUCTION list
+  // below is unchanged and still holds exactly the P3 page, which is what the
+  // final assertion in this test re-states.
+  //
+  // The session paths are ASSEMBLED, not spelled: the committed session reader
+  // guard pins its caller list to EXACTLY the exams page and the session write
+  // guard pins its own to EXACTLY one Server Action, so a suite naming either
+  // module whole would become an extra entry in a list it must stay out of.
   const TOLERATED_SUITES = [
     SUITE_TRACKED_PATH,
     IO_TEST_TRACKED_PATH,
     P3_PAGE_SUITE_TRACKED_PATH,
     P3_SUITE_TRACKED_PATH,
+    `${ROUTE_DIR}/exam-definition-create.contract.test.ts`,
+    `${ROUTE_DIR}/exam-session-create.contract.test.ts`,
+    ["lib", "actions", "admin-exam-session-read" + "-io.test.ts"].join("/"),
+    ["lib", "actions", "exam-session-write" + "-io.test.ts"].join("/"),
+    ["lib", "actions", "exam-definition-read" + "-io.test.ts"].join("/"),
   ];
   const TOLERATED_PRODUCTION = [P3_PAGE_TRACKED_PATH];
   const TOLERATED = [...TOLERATED_SUITES, ...TOLERATED_PRODUCTION];

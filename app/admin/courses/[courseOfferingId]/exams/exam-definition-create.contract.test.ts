@@ -90,6 +90,12 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  // EX-SES-UI-1, which WIRES that create form — plus the committed session reader
+  // and the pure day-grouping core — into the page this suite also guards.
+  // Assembled for the reason above, and most sharply of all here: the session
+  // reader's committed guard pins its caller list to EXACTLY the page, so spelling
+  // that module name whole would make THIS suite a second entry in it.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
 ];
 
 /** Strip comments so every guard asserts on CODE, not on explanatory prose. */

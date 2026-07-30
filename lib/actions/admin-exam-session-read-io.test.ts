@@ -69,6 +69,44 @@ const NEW_FILES = [
   "lib/exam/admin-exam-session-read-core.test.ts",
 ];
 
+/**
+ * The route that EX-SES-UI-1 wires this reader into — its ONE production caller,
+ * in the OS-native form guard 29's sweep reports.
+ */
+const ROUTE_DIR_REL = join("app", "admin", "courses", "[courseOfferingId]", "exams");
+const APPROVED_CALLER_REL = join(ROUTE_DIR_REL, "page.tsx");
+
+/**
+ * The route directory in git's own form: forward slashes, repository-relative.
+ * Used only by the footprint guards, which read git's output rather than the
+ * filesystem's.
+ */
+const ROUTE_DIR_PREFIX = "app/admin/courses/[courseOfferingId]/exams/";
+
+/**
+ * Every tracked file EX-SES-UI-1 is authorized to have MODIFIED — the wired page,
+ * the four route contract suites whose claims the wiring makes obsolete, this
+ * suite, and the four `lib/` footprint guards whose approved-path sets had to
+ * learn about this slice.
+ *
+ * The four `lib/` guard paths are ASSEMBLED rather than spelled. Each of those
+ * committed suites sweeps `app/`, `lib/` and `components/` for its OWN module
+ * name and pins the result to an exact caller list; a file that spelled one of
+ * them whole would enrol itself in the very list it is trying not to disturb.
+ */
+const APPROVED_MODIFIED_FILES = [
+  `${ROUTE_DIR_PREFIX}page.tsx`,
+  `${ROUTE_DIR_PREFIX}exam-definitions-page.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-plan-create.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-definition-create.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-session-create.contract.test.ts`,
+  "lib/actions/admin-exam-session-read-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+];
+
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
 
 /** Strip comments so the guards assert on CODE, not on explanatory prose. */
@@ -689,7 +727,14 @@ test("28. the module imports exactly the approved specifiers", () => {
 // 29–32. Containment: no caller, no UI, four new files, nothing modified
 // ===========================================================================
 
-test("29. no app/, route, page, Server Action or UI caller exists for this reader", () => {
+test("29. EXACTLY ONE production caller reaches this reader — the course exams page", () => {
+  // EX-SES-UI-1 TRANSITION. This guard previously asserted the caller list was
+  // EMPTY, which was the correct claim while the reader was committed but
+  // unwired. Wiring gives it its first and only consumer, so the list is
+  // RE-POINTED to that ONE exact path rather than dropped or widened to the route
+  // directory: a second page, a component, a layout, a route handler or another
+  // `lib/actions` module still fails here, and so does a `.tsx` other than the
+  // page itself.
   const declaring = new Set(
     [IO_REL, IO_TEST_REL, CORE_REL, CORE_TEST_REL].map((rel) => join(REPO_ROOT, rel)),
   );
@@ -705,7 +750,21 @@ test("29. no app/, route, page, Server Action or UI caller exists for this reade
       );
     })
     .map((file) => file.path.slice(REPO_ROOT.length + 1));
-  assert.deepEqual(callers, [], `an unapproved caller exists: ${callers.join(", ")}`);
+  // `sep`, not a forward slash: these paths come from the filesystem walk above,
+  // so on Windows they arrive back-slashed and a hard-coded "/" literal would
+  // make this guard pass for the wrong reason.
+  assert.deepEqual(
+    callers,
+    [APPROVED_CALLER_REL],
+    `an unapproved caller exists: ${callers.join(", ")}`,
+  );
+  // The one caller really is that page, and the pure core stayed behind the
+  // binding: no consumer reaches it directly.
+  assert.equal(callers.length, 1, "the reader must have exactly one consumer");
+  assert.ok(
+    APPROVED_CALLER_REL.endsWith(`${sep}page.tsx`),
+    "the approved caller must be a page",
+  );
 
   // No exam route directory was created by this slice.
   for (const dir of [
@@ -756,7 +815,36 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
     "--",
     ...scope,
   ]);
-  assert.deepEqual(modified, [], `a tracked file was modified: ${modified.join(", ")}`);
+  // EX-SES-UI-1 TRANSITION. This assertion was `deepEqual(modified, [])` while the
+  // reader was unwired, and that is exactly what wiring it makes obsolete. It is
+  // re-pointed to an EXACT approved path set rather than deleted: every path is
+  // spelled out, none is a directory or a prefix, and the two production modules
+  // that matter are re-asserted byte-identical immediately below.
+  const unapprovedModified = modified.filter(
+    (path) => !APPROVED_MODIFIED_FILES.includes(path),
+  );
+  assert.deepEqual(
+    unapprovedModified,
+    [],
+    `a tracked file was modified: ${unapprovedModified.join(", ")}`,
+  );
+  // Named explicitly, so neither this binding nor its pure core can drift in
+  // under a future widening of the approved list. NOTHING this slice does may
+  // touch the reader's own production code.
+  for (const production of [
+    "lib/actions/admin-exam-session-read-io.ts",
+    "lib/exam/admin-exam-session-read-core.ts",
+  ]) {
+    assert.equal(modified.includes(production), false, `${production} was modified`);
+  }
+  // ...and every approved modification really is a guard suite, except the ONE
+  // approved production file: the page this reader was wired into.
+  for (const path of APPROVED_MODIFIED_FILES) {
+    assert.ok(
+      path.endsWith(".test.ts") || path === `${ROUTE_DIR_PREFIX}page.tsx`,
+      `${path} is neither a suite nor the approved page`,
+    );
+  }
 
   // Nothing was introduced OUTSIDE the approved four — a SUBSET check, and the
   // half of this guard that is true in every ordinary state.
@@ -787,20 +875,45 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
   assert.deepEqual(tracked, [...NEW_FILES].sort(), "an approved file is untracked or missing");
 });
 
-test("32. the slice touches no schema, migration, capability, policy, route or UI file", () => {
-  const touched = gitLines(["status", "--porcelain"]).map((line) => line.slice(3).trim());
+test("32. the slice touches no schema, migration, capability or policy file", () => {
+  // `gitLines` has ALREADY trimmed each line, so the porcelain status field is no
+  // longer a fixed two columns: ` M path` arrives as `M path`, and the previous
+  // `slice(3)` therefore ate the first character of every unstaged path. That went
+  // unnoticed while this slice's own files were all untracked (`?? path` happens to
+  // survive `slice(3)`), and it would have made this guard compare — and silently
+  // pass — a path that does not exist. Strip the status field by SHAPE instead.
+  const touched = gitLines(["status", "--porcelain"]).map((line) =>
+    line.replace(/^\S{1,2}\s+/, ""),
+  );
   for (const path of touched) {
-    assert.equal(path.endsWith(".tsx"), false, `a UI file was touched: ${path}`);
+    // EX-SES-UI-1 TRANSITION. The blanket `.tsx` and `app/` bans described a
+    // reader that no UI reached. Wiring it means exactly ONE `.tsx` under `app/`
+    // may differ — the approved page — so those two bans become an EXACT
+    // allow-list rather than being dropped. A second UI file, or any other route,
+    // still fails here.
+    if (path.endsWith(".tsx") || path.includes("app/")) {
+      assert.ok(
+        APPROVED_MODIFIED_FILES.includes(path),
+        `an unapproved UI or route file was touched: ${path}`,
+      );
+    }
+    // The claims that never had an exception keep none: no schema, no migration,
+    // no course policy and nothing capability-shaped is touched at all.
     for (const forbidden of [
       "prisma/schema.prisma",
       "prisma/migrations/",
       "operation-policy-core",
       "capability",
-      "app/",
     ]) {
       assert.equal(path.includes(forbidden), false, `a forbidden path was touched: ${path}`);
     }
   }
+  // At most ONE `.tsx` may differ across the whole slice, and it is that page.
+  const uiTouched = [...new Set(touched.filter((path) => path.endsWith(".tsx")))];
+  for (const path of uiTouched) {
+    assert.equal(path, `${ROUTE_DIR_PREFIX}page.tsx`, `a second UI file was touched: ${path}`);
+  }
+  assert.ok(uiTouched.length <= 1, "more than one UI file was touched");
   // The committed schema and policy files are untouched in the working tree.
   const schemaChanged = gitLines([
     "diff",
