@@ -88,6 +88,18 @@ const SLICE_PATHS = [
   "lib/exam/" + "update-exam-session" + "-core.test.ts",
   "lib/exam/" + "delete-exam-session" + "-core.ts",
   "lib/exam/" + "delete-exam-session" + "-core.test.ts",
+  // EX-SES-S4, the approved ExamSession CREATE UI, which re-points this suite's
+  // route file set and export list and therefore travels with it.
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  // EX-SES-UI-1, which WIRES that create form — plus the committed session reader
+  // and the pure day-grouping core — into the page, and re-points this suite's
+  // flattened `searchParams` shape from six keys to nine. Assembled for the reason
+  // above, and most sharply of all here: the session reader's committed guard pins
+  // its caller list to EXACTLY the page, so spelling that module name whole would
+  // make THIS suite the second entry in a list that must hold one.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
 ];
 
 /**
@@ -163,6 +175,14 @@ const WRITE_BINDING_SPECIFIER = "@/lib/actions/" + WRITE_BINDING_MODULE;
  */
 const DEFINITION_BINDING_MODULE = "exam-definition-write" + "-io";
 const DEFINITION_BINDING_SPECIFIER = "@/lib/actions/" + DEFINITION_BINDING_MODULE;
+/**
+ * The SESSION write binding, assembled for the same reason and more sharply
+ * still: its committed guard pins the caller list at EXACTLY ONE production
+ * module and requires its EDIT and REMOVAL siblings to have NONE, so spelling it
+ * whole here would register this suite as a second caller.
+ */
+const SESSION_BINDING_MODULE = "exam-session-write" + "-io";
+const SESSION_BINDING_SPECIFIER = "@/lib/actions/" + SESSION_BINDING_MODULE;
 const PUBLIC_WRITE_CALL = new RegExp("\\bcreate" + "ExamPlan\\s*\\(");
 const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
 const GENERATED_CLIENT = ["@prisma", "client"].join("/");
@@ -220,25 +240,30 @@ test("1. the three P3 files exist at the EXACT course-scoped route", () => {
   }
 });
 
-test("2. the action module is a Server Action module exporting EXACTLY the two approved actions", () => {
+test("2. the action module is a Server Action module exporting EXACTLY the three approved actions", () => {
   const firstStatement = ACTION.split("\n").find((line) => line.trim().length > 0);
   assert.equal(firstStatement?.trim(), '"use server";', `first statement: ${firstStatement}`);
 
   // Everything exported from a "use server" module is a public network endpoint, so
-  // the export list IS the attack surface. It is still an EXHAUSTIVE allow-list —
-  // it simply now names both approved actions, because the route legitimately has
-  // two. No helper, no parser, no constant and no type may join them.
+  // the export list IS the attack surface. RE-POINTED by EX-SES-S4 and still an
+  // EXHAUSTIVE allow-list — it simply now names all three approved actions,
+  // because the route legitimately has three. No helper, no parser, no constant
+  // and no type may join them, and no fourth endpoint may appear.
   const exports = [...ACTION.matchAll(/export\s+(?:async\s+)?(?:function|const|class|type)\s+(\w+)/g)]
     .map((match) => match[1])
     .sort();
-  assert.deepEqual(exports, ["createExamDefinitionAction", "createExamPlanAction"]);
+  assert.deepEqual(exports, [
+    "createExamDefinitionAction",
+    "createExamPlanAction",
+    "createExamSessionAction",
+  ]);
   assert.equal(/export\s*\{/.test(ACTION), false, "no re-export list is allowed");
   assert.equal(/export\s+default/.test(ACTION), false, "no default export is allowed");
   assert.equal(/export\s+const/.test(ACTION), false, "no exported constant is allowed");
   assert.equal(/export\s+type/.test(ACTION), false, "no exported type is allowed");
-  // Neither action was folded into a single generic endpoint that would have to
+  // No action was folded into a single generic endpoint that would have to
   // choose its operation from the request.
-  assert.equal((ACTION.match(/export async function /g) ?? []).length, 2);
+  assert.equal((ACTION.match(/export async function /g) ?? []).length, 3);
 });
 
 test("3. the action has the EXACT locked signature, and returns void", () => {
@@ -369,9 +394,11 @@ test("8. success revalidates ONLY this course's exams path, exactly once", () =>
     assert.equal(ACTION.includes(forbidden), false, `the action must not use ${forbidden}`);
   }
   // Every revalidation in the file is of that one bound path, and there is exactly
-  // one per action: neither can quietly refresh a second surface.
-  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 2);
-  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 2);
+  // one per action: none can quietly refresh a second surface. Re-pointed from 2
+  // to 3 by EX-SES-S4 — the PER-ACTION budget is what this asserts, and it is
+  // unchanged.
+  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 3);
+  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 3);
   // The two successes are distinguished, and both land on the exams path.
   assert.ok(
     PLAN_ACTION.includes(
@@ -490,13 +517,15 @@ test("12. the plan-EXISTING branch carries no create affordance whatsoever", () 
 test("13. searchParams carries ONLY closed feedback tokens", () => {
   // A CLOSED, exhaustively declared key set, and no other query key is ever
   // consulted. It grew from P3's three to six when the approved definition-create
-  // feature added its own three outcome tokens; it is still an exact list, every key
-  // is still feedback-only, and not one of them names a course, plan or definition.
+  // feature added its own three outcome tokens, and to NINE when EX-SES-UI-1 wired
+  // the session create form and brought its three. It is still an exact list, every
+  // key is still feedback-only, and not one of them names a course, a plan, a
+  // definition or a session — which the id ban below re-states from the other side.
   assert.ok(
     PAGE_FLAT.includes(
-      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; }>;",
+      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; }>;",
     ),
-    "the searchParams type must be the closed six-key shape",
+    "the searchParams type must be the closed nine-key shape",
   );
   // created/existing are honoured only on the exact string "1"; a repeated key
   // (which arrives as an array) is not a recognized token.
@@ -618,6 +647,13 @@ test("17. no publication, source-date, session, capability or notification work"
     // approved neighbour with its own reviewed contract and its own suite. Every
     // OTHER definition verb stays forbidden, and the two checks below re-establish
     // the narrower claim from both directions.
+    //
+    // RE-POINTED by EX-SES-S4: the blanket `examSession` / `ExamSession` SUBSTRING
+    // bans are replaced by NARROW bans on session management this route does not
+    // perform. The session CREATE is now an approved neighbour on the same terms
+    // the definition CREATE already earned; its EDIT, REMOVAL and reordering are
+    // not, and are banned by name. The Prisma ACCESSOR spelling `examSession.` is
+    // KEPT — the no-Prisma claim is untouched, and is what the trailing dot means.
     for (const forbidden of [
       "publishExamPlan",
       "unpublishExamPlan",
@@ -631,8 +667,12 @@ test("17. no publication, source-date, session, capability or notification work"
       // that no Prisma client is reachable from any of these files is asserted
       // separately, by test 16 and by the sibling route suite.
       "examDefinition.",
-      "examSession",
-      "ExamSession",
+      "examSession.",
+      "examAssignment",
+      "ExamAssignment",
+      "update" + "ExamSession",
+      "delete" + "ExamSession",
+      "reorder" + "ExamSessions",
       "update" + "ExamDefinition",
       "delete" + "ExamDefinition",
       "reorder" + "ExamDefinitions",
@@ -653,7 +693,12 @@ test("17. no publication, source-date, session, capability or notification work"
     "publish",
     "Publish",
     "ExamDefinition",
+    // Added by EX-SES-S4: the plan endpoint gains nothing from the session
+    // endpoint's arrival in the same file, and the SUBSTRING ban is safe HERE —
+    // it is scoped to this one action's body, not to the module.
+    "ExamSession",
     DEFINITION_BINDING_MODULE,
+    SESSION_BINDING_MODULE,
   ]) {
     assert.equal(
       PLAN_ACTION.includes(forbidden),
@@ -661,20 +706,28 @@ test("17. no publication, source-date, session, capability or notification work"
       `P3's action must not reference ${forbidden}`,
     );
   }
-  // Neither create form may reach a write binding of any kind: only the Server
+  // No create form may reach a write binding of any kind: only the Server
   // Action module may.
-  for (const forbidden of [WRITE_BINDING_MODULE, DEFINITION_BINDING_MODULE]) {
+  for (const forbidden of [
+    WRITE_BINDING_MODULE,
+    DEFINITION_BINDING_MODULE,
+    SESSION_BINDING_MODULE,
+  ]) {
     assert.equal(FORM.includes(forbidden), false, `the form must not reference ${forbidden}`);
     assert.equal(PAGE.includes(forbidden), false, `the page must not reference ${forbidden}`);
   }
-  // The module's ENTIRE import surface is the five approved specifiers: the admin
-  // boundary, the two committed write bindings, and the two framework modules.
+  // The module's ENTIRE import surface is the six approved specifiers: the admin
+  // boundary, the three committed write bindings, and the two framework modules.
   // Nothing else — no Prisma, no core, no capability, no notification surface.
+  // RE-POINTED by EX-SES-S4 by ADDING one specifier to an exhaustive list, which
+  // keeps this the strongest available form of the guard: a fourth writer still
+  // fails here.
   const specifiers = [...ACTION.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(specifiers, [
     "@/lib/auth/require-admin",
     WRITE_BINDING_SPECIFIER,
     DEFINITION_BINDING_SPECIFIER,
+    SESSION_BINDING_SPECIFIER,
     "next/cache",
     "next/navigation",
   ].sort());
@@ -697,10 +750,15 @@ test("18. the ExamPlan write binding has EXACTLY one production caller", () => {
   assert.equal(APPROVED_CALLER.endsWith(".tsx"), false);
 });
 
-test("19. the route directory holds EXACTLY the eight approved files", () => {
-  // Tracked AND untracked, so this holds both before and after P3 is committed.
-  // Listing the whole repository and filtering by prefix in JS is deliberate: a
-  // `[courseOfferingId]` pathspec would be read by git as a character class.
+test("19. the route directory holds EXACTLY the eleven approved files", () => {
+  // Tracked AND untracked, so this holds both before and after the slice is
+  // committed. Listing the whole repository and filtering by prefix in JS is
+  // deliberate: a `[courseOfferingId]` pathspec would be read by git as a
+  // character class.
+  //
+  // RE-POINTED by EX-SES-S4, not relaxed: three reviewed session-create files
+  // joined the route, so the exact set grew from eight to eleven. A twelfth file
+  // still fails here.
   const routeFiles = [
     ...new Set([
       ...gitLines(["ls-files"]),
@@ -712,11 +770,14 @@ test("19. the route directory holds EXACTLY the eight approved files", () => {
   assert.deepEqual(routeFiles, [
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/actions.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);
 });

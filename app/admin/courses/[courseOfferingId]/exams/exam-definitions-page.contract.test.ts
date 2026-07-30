@@ -71,6 +71,13 @@ const READER_GUARD_REL = join("lib", "actions", "exam-definition-read-io.test.ts
 const PLAN_CORE_GUARD = "lib/exam/create-exam-plan" + "-core.test.ts";
 const PLAN_WRITE_GUARD = "lib/actions/exam-plan-write" + "-io.test.ts";
 const DEFINITION_WRITE_GUARD = "lib/actions/" + "exam-definition-write" + "-io.test.ts";
+/**
+ * EX-SES-UI-1's own guard suite. Assembled most sharply of all: that committed
+ * guard pins the session reader's caller list to EXACTLY this route's `page.tsx`,
+ * so a file spelling the module name whole would become a second entry in a list
+ * that must hold exactly one.
+ */
+const SESSION_READ_GUARD = "lib/actions/" + "admin-exam-session-read" + "-io.test.ts";
 
 /**
  * The exam SESSION slice's files, which travel in the same integration batch but
@@ -108,11 +115,23 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  // EX-SES-S4 — the approved ExamSession CREATE UI. Three NEW route files, none
+  // of them wired into the page: this slice re-points the route file set below
+  // and nothing else here. `page.tsx` is asserted BYTE-IDENTICAL to HEAD by that
+  // slice's own suite, and it stays in this list only because the earlier batch
+  // legitimately changed it.
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   READER_GUARD_REL.replace(/\\/g, "/"),
   PLAN_CORE_GUARD,
   PLAN_WRITE_GUARD,
   DEFINITION_WRITE_GUARD,
   ...SESSION_SLICE_PATHS,
+  // EX-SES-UI-1 — the slice that WIRES the committed session reader, the day
+  // grouping core and the session create form into this page. It amends this
+  // suite's exact counts and lists; the guard suite it re-points travels with it.
+  SESSION_READ_GUARD,
 ];
 
 /** Strip comments so every guard asserts on CODE, not on explanatory prose. */
@@ -187,11 +206,15 @@ test("2. no top-level exams route exists in any role area", () => {
   }
 });
 
-test("3. the route directory holds exactly the eight approved files", () => {
+test("3. the route directory holds exactly the eleven approved files", () => {
   // Tracked AND untracked, so this holds both before and after the batch is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a `[courseOfferingId]` pathspec would be read by git as a
   // character class and quietly match nothing.
+  //
+  // RE-POINTED by EX-SES-S4, not relaxed: three reviewed session-create files
+  // joined the route. None of them is rendered by the page — the wiring is a
+  // later slice — so every page assertion in this suite is unaffected.
   const routeFiles = [
     ...new Set([
       ...gitLines(["ls-files"]),
@@ -203,11 +226,14 @@ test("3. the route directory holds exactly the eight approved files", () => {
   assert.deepEqual(routeFiles, [
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/actions.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);
 });
@@ -345,22 +371,41 @@ test("8. the route param is the ONLY scope input; the query is feedback only", (
     PAGE.includes("const { createdDefinition, createError, createIssues } = query;"),
     "the definition outcome must come from that one resolved query",
   );
+  // RE-POINTED by EX-SES-UI-1: the session outcome is destructured SEPARATELY from
+  // that same one resolved query. A separate statement rather than a widened one,
+  // so the definition claim above stays exactly as written — and destructuring
+  // rather than `query.x`, which is what keeps the sibling suite's "query is only
+  // touched inside the closed parser" guard true.
+  assert.ok(
+    PAGE.includes("const { createdSession, sessionError, sessionIssues } = query;"),
+    "the session outcome must come from that same one resolved query",
+  );
 
-  // The declared query shape is CLOSED: exactly the six feedback keys, and not one
-  // of them names a course, a plan, a definition or any other id. Every key admits
-  // an ARRAY, which is what a repeated query key arrives as — so the parsers are
-  // forced to reject it rather than coerce it.
+  // The declared query shape is CLOSED: exactly the nine feedback keys, and not one
+  // of them names a course, a plan, a definition, a session or any other id. Every
+  // key admits an ARRAY, which is what a repeated query key arrives as — so the
+  // parsers are forced to reject it rather than coerce it.
   const typeStart = PAGE.indexOf("searchParams: Promise<{");
   assert.ok(typeStart > -1, "the searchParams type must be declared inline");
   const queryType = PAGE.slice(typeStart, PAGE.indexOf("}>;", typeStart));
   const keys = [...queryType.matchAll(/(\w+)\?:/g)].map((match) => match[1]).sort();
   assert.deepEqual(
     keys,
-    ["createError", "createIssues", "createdDefinition", "created", "error", "existing"].sort(),
+    [
+      "createError",
+      "createIssues",
+      "createdDefinition",
+      "created",
+      "error",
+      "existing",
+      "createdSession",
+      "sessionError",
+      "sessionIssues",
+    ].sort(),
   );
   assert.equal(
     (queryType.match(/string \| string\[\]/g) ?? []).length,
-    6,
+    9,
     "every feedback key must admit the array form a repeated key produces",
   );
   for (const forbidden of ["courseOfferingId?", "planId", "definitionId", "offeringId"]) {
@@ -393,23 +438,43 @@ test("9. the page is a server component and declares force-dynamic", () => {
   assert.ok(PAGE.includes('export const dynamic = "force-dynamic"'));
 });
 
-test("10. the page imports EXACTLY the nine approved specifiers", () => {
-  // The four additions over the read-only page are all ROUTE-LOCAL: the shared
-  // Server Action module, the two client create forms, and the local message
-  // table. No new shared module, no core and no second data source entered the
-  // page, and it still reaches NO write binding directly.
+test("10. the page imports EXACTLY the thirteen approved specifiers", () => {
+  // RE-POINTED by EX-SES-UI-1, which adds FOUR: two more route-local files (the
+  // session create form and its message table) and two committed `lib/` modules —
+  // the admin session READ binding and the PURE day-grouping core.
+  //
+  // What did NOT change is the shape of the list. Every entry is still either
+  // route-local or a committed read/policy module: no write binding, no database
+  // client, no second data source and no shared component library entered the
+  // page, and it still reaches NO writer directly. `./actions` is named once, so
+  // the third Server Action arrives through the same module as the other two.
   const specifiers = [...PAGE.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(specifiers, [
     "./ExamDefinitionCreateForm",
     "./ExamPlanCreateForm",
+    "./ExamSessionCreateForm",
     "./actions",
     "./exam-definition-create-error-messages",
+    "./exam-session-create-error-messages",
+    // ASSEMBLED: spelling this specifier whole would make THIS suite match the
+    // committed reader guard's caller sweep, which must report exactly `page.tsx`.
+    "@/lib/actions/" + "admin-exam-session-read" + "-io",
     "@/lib/actions/exam-definition-read-io",
     "@/lib/course/admin-course-context",
     "@/lib/course/operation-policy-core",
+    "@/lib/exam/admin-exam-session-grouping-core",
     "next/link",
     "next/navigation",
   ]);
+  // The two data sources are READ bindings and the grouping module is a PURE core:
+  // no `-write-io` specifier of any kind may appear.
+  for (const specifier of specifiers) {
+    assert.equal(
+      specifier.includes("-write" + "-io"),
+      false,
+      `the page imports a write binding: ${specifier}`,
+    );
+  }
 });
 
 test("11. no database client and no other exam read pipeline is reachable", () => {
@@ -488,8 +553,26 @@ test("13. EXACTLY the two approved Server Actions are reachable from the page", 
     "unpublishExamPlan",
     "sourceDate",
     "SourceDate",
-    "examSession",
-    "ExamSession",
+    // RE-POINTED by EX-SES-UI-1: the blanket `examSession` / `ExamSession`
+    // SUBSTRING bans are replaced by NARROW bans on the session work this page
+    // still does not perform. The session CREATE is now an approved third
+    // affordance on exactly the terms the definition CREATE already earned; its
+    // EDIT, REMOVAL and reordering are not, and are banned by name. The Prisma
+    // ACCESSOR spelling `examSession.` is KEPT — the trailing dot is what makes it
+    // an accessor, and the no-database claim it protects is untouched.
+    "examSession.",
+    "examDefinition.",
+    "update" + "ExamSession",
+    "delete" + "ExamSession",
+    "reorder" + "ExamSessions",
+    // Nothing BELOW a session is reachable either: the page reads a schedule, not
+    // who is on it, and it cannot express publication of an individual session.
+    "examAssignment",
+    "ExamAssignment",
+    "ExamSessionBreak",
+    "ExamSessionSupervisor",
+    "individualPublishedAt",
+    "endTime",
     // The page itself performs no server mutation work: no revalidation and no
     // redirect. Those belong to the actions.
     "revalidatePath",
@@ -498,6 +581,16 @@ test("13. EXACTLY the two approved Server Actions are reachable from the page", 
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not reference ${forbidden}`);
   }
+
+  // The THIRD approved action, stated from both directions: imported once, bound
+  // once, and never to the RAW route param.
+  assert.ok(PAGE.includes("createExamSessionAction.bind(null, context.id)"));
+  assert.equal((PAGE.match(/createExamSessionAction/g) ?? []).length, 2);
+  assert.equal(
+    PAGE.includes("createExamSessionAction.bind(null, courseOfferingId)"),
+    false,
+    "the raw route param must not be bound",
+  );
 });
 
 test("14. the page renders NO control itself and holds no state", () => {
@@ -527,9 +620,14 @@ test("14. the page renders NO control itself and holds no state", () => {
     assert.equal(PAGE.includes(forbidden), false, `the page must not render ${forbidden}`);
   }
 
-  // `action=` appears exactly TWICE — once per approved form — and each one is a
-  // server-bound action prop, never an `action=` on markup the page renders itself.
-  assert.equal((PAGE.match(/action=/g) ?? []).length, 2, "action= must appear exactly twice");
+  // `action=` appears exactly THREE times — once per approved form — and each one
+  // is a server-bound action prop, never an `action=` on markup the page renders
+  // itself. RE-POINTED by EX-SES-UI-1, which adds the third and last of them.
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 3, "action= must appear exactly three times");
+  assert.ok(
+    PAGE_FLAT.includes("action={createExamSessionAction.bind(null, context.id)}"),
+    "the session form must receive exactly the bound session action",
+  );
   assert.ok(
     PAGE_FLAT.includes(
       "<ExamPlanCreateForm action={createExamPlanAction.bind(null, context.id)} />",
@@ -753,8 +851,13 @@ test("24. the amended committed guard suites all exist and are approved paths", 
   assert.deepEqual(appProduction, [
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
+    // RE-POINTED by EX-SES-S4: a third form and a third message table joined the
+    // route. Neither is rendered by the page — the wiring is a later slice — so
+    // this list grew while the page's own affordance matrix did not.
+    "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/actions.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);
 
