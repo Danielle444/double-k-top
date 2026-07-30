@@ -1,34 +1,41 @@
 "use server";
 
 /**
- * EXAM PLAN P3 + EXAM EX-S5B-5C — the Server Action module of the course-scoped
- * exams route, holding EXACTLY TWO approved mutations:
+ * EXAM PLAN P3 + EXAM EX-S5B-5C + EXAM EX-SES-S4 — the Server Action module of
+ * the course-scoped exams route, holding EXACTLY THREE approved mutations:
  *
  *   1. `createExamPlanAction`       — bring ONE empty, unpublished ExamPlan into
  *                                     existence for ONE course offering;
  *   2. `createExamDefinitionAction` — append ONE ExamDefinition to the ALREADY
- *                                     EXISTING plan of ONE course offering.
+ *                                     EXISTING plan of ONE course offering;
+ *   3. `createExamSessionAction`    — append ONE stored session to that same
+ *                                     already-existing plan, under a definition
+ *                                     the plan already holds.
  *
  * ===========================================================================
- * WHY TWO EXPORTS, AND WHY EXACTLY TWO
+ * WHY THREE EXPORTS, AND WHY EXACTLY THREE
  * ===========================================================================
  * Everything exported from a `"use server"` module has a stable, PUBLICLY
- * CALLABLE network id, so the export list IS the attack surface. These two
- * actions were each approved and reviewed on their own, and they are kept as two
+ * CALLABLE network id, so the export list IS the attack surface. These three
+ * actions were each approved and reviewed on their own, and they are kept as
  * SEPARATE endpoints rather than folded into one generic "exams" action: a single
  * action taking a discriminator would have to decide FROM THE REQUEST which
  * operation to run, which is precisely the decision that must not be
- * client-influenced. Two narrow endpoints, each with a fixed operation, cannot be
- * talked into performing the other one.
+ * client-influenced. Three narrow endpoints, each with a fixed operation, cannot
+ * be talked into performing another one.
  *
  * Nothing else leaves this file. No helper, no parser, no constant and no type is
- * exported alongside them: an exported helper here would be a third public
- * endpoint, and a future reader would have no way to tell which of the three was
- * meant to be called. The committed writer modules behind these two also expose
- * definition EDIT, safe REMOVAL and atomic REORDER, plus plan publication and
- * deletion; none of those is re-exported, wrapped or imported here, so this route
- * adds exactly two callable mutations to the app and every other one remains
- * unreachable from any client.
+ * exported alongside them: an exported helper here would be a fourth public
+ * endpoint, and a future reader would have no way to tell which of the four was
+ * meant to be called. The committed writer modules behind these three also expose
+ * definition EDIT, safe REMOVAL and atomic REORDER, session EDIT and safe
+ * REMOVAL, plus plan publication and deletion; none of those is re-exported,
+ * wrapped or imported here, so this route adds exactly three callable mutations
+ * to the app and every other one remains unreachable from any client.
+ *
+ * The session EDIT and REMOVAL bindings in particular stay CALLERLESS on purpose:
+ * only the CREATE was approved for a UI, and importing its two siblings "for
+ * later" would publish two destructive endpoints nothing renders.
  *
  * Neither action contains policy, validation, idempotence rules or Prisma access.
  * The committed pure cores decide every outcome and the committed server-only
@@ -38,7 +45,7 @@
  * ===========================================================================
  * THE OFFERING ID IS SERVER-BOUND, NEVER SUBMITTED — IN BOTH ACTIONS
  * ===========================================================================
- * `courseOfferingId` is the FIRST parameter of both actions because the page
+ * `courseOfferingId` is the FIRST parameter of every action because the caller
  * supplies it with `.bind(null, context.id)` — the offering id that the page's own
  * admin boundary already verified. It therefore travels inside the encrypted
  * Server Action payload, not in the request body, and is not forgeable from the
@@ -50,25 +57,26 @@
  * unique index would catch it — the write would be perfectly valid, just on the
  * wrong course.
  *
- * The bound id is still only a REQUEST. Both committed writers re-run the admin
- * boundary and re-resolve exactly that offering server-side before any exam
- * statement runs — and the definition writer additionally resolves the PLAN id
- * from that verified offering — so this module's binding is a scoping convenience
- * and NOT the trust boundary.
+ * The bound id is still only a REQUEST. All three committed writers re-run the
+ * admin boundary and re-resolve exactly that offering server-side before any exam
+ * statement runs — and the definition and session writers additionally resolve the
+ * PLAN id from that verified offering, and the session writer additionally
+ * verifies the submitted definition WITHIN that server-resolved plan — so this
+ * module's binding is a scoping convenience and NOT the trust boundary.
  *
  * ===========================================================================
- * THE ORDER, IN BOTH ACTIONS
+ * THE ORDER, IN EVERY ACTION
  * ===========================================================================
  *   1. `requireAdmin()` — the FIRST awaited operation in each body. No FormData is
  *      read, no value is coerced and no writer is entered before it resolves. It
  *      fails closed by REDIRECTING (a `NEXT_REDIRECT` throw), so a denial provably
  *      prevents every later step rather than merely being checked. It is defence in
  *      depth, not the enforcement: each binding authorizes independently. What it
- *      buys is that an unauthenticated caller who discovers either action's network
+ *      buys is that an unauthenticated caller who discovers any action's network
  *      id is redirected to the login page without a single exam-related call having
  *      been made on their behalf.
  *   2. the committed binding, given the bound route id (and, for the definition
- *      action, the narrow FormData mapping documented on that action).
+ *      and session actions, the narrow FormData mapping documented on each).
  *   3. `revalidatePath` on THIS course's exams path only, on success. Each action
  *      revalidates exactly once, and only that one path.
  *   4. `redirect(...)` — always the last statement on every branch.
@@ -98,32 +106,46 @@
  *                              enum in its committed pure core;
  *   - `createdDefinition=1`  — the definition create performed the write;
  *   - `createError=<code>`   — the definition writer's stable refusal codes;
- *   - `createIssues=<codes>` — the definition writer's own issue codes, joined.
+ *   - `createIssues=<codes>` — the definition writer's own issue codes, joined;
+ *   - `createdSession=1`     — the session create performed the write;
+ *   - `sessionError=<code>`  — the session writer's stable refusal codes;
+ *   - `sessionIssues=<codes>`— the session writer's own issue codes, joined.
+ *
+ * The session tokens are DISTINCT from the definition ones rather than shared.
+ * Two forms live on one screen, and a shared `createError` would render a
+ * definition diagnostic above a session form (or the reverse) with no way for the
+ * page to tell which submission failed.
  *
  * A refusal that the offering does not exist routes to the safe courses list
- * instead, from BOTH actions: the bound id did not resolve, so no course-scoped
+ * instead, from EVERY action: the bound id did not resolve, so no course-scoped
  * URL may be built from it, and returning to this route would only render a second
  * not-found. The requested id is not reflected back in that destination.
  *
  * Nothing else is ever put in the URL. No submitted value, no id, no plan id, no
- * definition id, no Prisma message, no exception text, no stack and no interpolated
+ * definition id, no session id, no date, no start time, no arena, no title, no
+ * note, no Prisma message, no exception text, no stack and no interpolated
  * status. The only dynamic values that reach a redirect target are `result.code` —
  * a compile-time-known literal from a closed set — and the joined issue codes.
+ * The session create's own success carries NO id either: the writer returns the
+ * new session id and its assigned position, and this module reads neither.
  *
  * ===========================================================================
  * WHAT THIS MODULE DOES NOT DO
  * ===========================================================================
- * It creates ONE empty plan, and it appends ONE definition. It does not publish,
- * unpublish, delete or edit a plan; it does not edit, reorder or delete an
- * ExamDefinition; it does not add a source date or a session; it sends no
- * notification, reads no capability and touches no schema. None of those modules is
- * imported, so none of them can be reached from here.
+ * It creates ONE empty plan, it appends ONE definition, and it appends ONE
+ * session. It does not publish, unpublish, delete or edit a plan; it does not
+ * edit, reorder or delete an ExamDefinition; it does not edit or delete an
+ * ExamSession; it does not reorder sessions, assign anyone, add a break, a
+ * supervisor or a source date; it sends no notification, reads no capability and
+ * touches no schema. None of those modules is imported, so none of them can be
+ * reached from here.
  */
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { createExamPlan } from "@/lib/actions/exam-plan-write-io";
 import { createExamDefinition } from "@/lib/actions/exam-definition-write-io";
+import { createExamSession } from "@/lib/actions/exam-session-write-io";
 
 /**
  * Create ONE empty ExamPlan for the bound course offering.
@@ -264,4 +286,119 @@ export async function createExamDefinitionAction(
 
   // 8. Every other refusal is fully described by its code alone.
   redirect(`${examsPath}?createError=${encodeURIComponent(result.code)}`);
+}
+
+/**
+ * Create ONE stored ExamSession under the bound offering's ALREADY EXISTING plan,
+ * against a definition that plan ALREADY holds.
+ *
+ * Returns `Promise<void>`: every outcome is expressed as a navigation, so the
+ * action holds no client-visible state and its signature cannot grow a `prevState`
+ * parameter (which is what an in-page error renderer would demand). The page
+ * renders the outcome from the stable tokens documented above.
+ *
+ * ===========================================================================
+ * WHAT THE FORM CANNOT SAY
+ * ===========================================================================
+ * The mapping below reads SIX named fields and nothing else. `courseOfferingId`
+ * and `planId` are not among them — not filtered out, but never looked for — so a
+ * hand-crafted submission carrying either is inert. The same is true of every
+ * value this operation must decide for itself or must not accept at all:
+ * `orderIndex` (the committed writer computes it as the next position within the
+ * session's own DAY), `endTime` (derived from the definition, never submitted),
+ * `capacity` and `kind` (properties of the definition, not of a session),
+ * `phase`, `interfaceSessionId`, `sourceTeachingPracticeLessonId` and every other
+ * copy-provenance column, and `individualPublishedAt`. None is read here, and
+ * none is reachable: the committed writer's signature has no parameter for any of
+ * them, and its normalized payload has no field for any of them either.
+ *
+ * ===========================================================================
+ * NO COERCION AT ALL — AND WHY THAT IS THE SAFE CHOICE HERE
+ * ===========================================================================
+ * Every one of the six values is forwarded EXACTLY as `FormData.get` returned it:
+ * a `string`, or `null` for an absent field. There is no `String(...)`, no `??`,
+ * no `.trim()`, no default and no empty-string collapse anywhere in this
+ * function — deliberately, because the committed input core already defines all
+ * of it and a second copy here would be free to drift from the rule the database
+ * actually sees.
+ *
+ * That core accepts `unknown` for every field and FAILS CLOSED on every shape it
+ * does not want, so forwarding raw values is strictly safer than pre-processing
+ * them:
+ *   - the definition id must be a NON-EMPTY string after trimming; absent, `null`
+ *     and a non-string all read as "no definition was chosen";
+ *   - the date must be an EXACT `YYYY-MM-DD` real calendar date — leap years
+ *     honoured, `2026-02-31` refused, surrounding whitespace refused, and today
+ *     never inferred from an absent field;
+ *   - the start time must be an EXACT zero-padded `HH:mm` in `00:00`–`23:59`, so
+ *     `"9:00"` and `"24:00"` are both refused;
+ *   - arena, title and notes are optional text: absent or `null` means "store
+ *     nothing", a blank or whitespace-only string collapses to nothing, and any
+ *     NON-STRING is REFUSED rather than stringified — which is exactly why a
+ *     `File` entry from a multipart submission cannot become the text of an
+ *     arena.
+ *
+ * Coercing here would break that last property: `String(formData.get("arena"))`
+ * on a file upload would persist `"[object File]"` as an arena name.
+ */
+export async function createExamSessionAction(
+  courseOfferingId: string,
+  formData: FormData,
+): Promise<void> {
+  // 1. Authorize the manager BEFORE anything else is read or written.
+  await requireAdmin();
+
+  // 2. The exams path of THIS offering — the only path this action revalidates
+  //    and the only one it redirects back to.
+  const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
+
+  // 3. The explicit, narrow mapping. Exactly six named fields, forwarded raw; no
+  //    course, no plan, no order, no end time, no capacity, no id, and no default
+  //    value for any of them.
+  const rawInput = {
+    definitionId: formData.get("definitionId"),
+    date: formData.get("date"),
+    startTime: formData.get("startTime"),
+    arena: formData.get("arena"),
+    title: formData.get("title"),
+    notes: formData.get("notes"),
+  };
+
+  // 4. The committed writer. The bound offering id is a REQUEST: the writer runs
+  //    the admin boundary and the exact-offering lookup itself, resolves the plan
+  //    from the DB-verified id, and verifies the submitted definition WITHIN that
+  //    plan — so a definition belonging to another course's plan is unreachable.
+  const result = await createExamSession(courseOfferingId, rawInput);
+
+  // 5. Success: revalidate EXACTLY this exams path — no course dashboard, no
+  //    schedule path, no trainee or instructor surface — then return to it. The
+  //    new session is read back from the database by the page; it is never
+  //    inserted optimistically, and neither its id nor its assigned position is
+  //    reflected in the URL.
+  if (result.ok) {
+    revalidatePath(examsPath);
+    redirect(`${examsPath}?createdSession=1`);
+  }
+
+  // 6. The one refusal that is NOT about this page: the offering does not exist,
+  //    so returning to its exams route would render a second not-found. The
+  //    manager goes to the course list, and the requested id is not reflected
+  //    back in the destination.
+  if (result.code === "offering_not_found") {
+    redirect("/admin/courses?error=invalid");
+  }
+
+  // 7. Field diagnostics: the writer's own stable codes, in the writer's own
+  //    order. Only codes travel — never a submitted definition id, date, time,
+  //    arena, title or note, and never a message built from one.
+  if (result.code === "invalid_input") {
+    const codes = result.issues.map((issue) => issue.code).join(",");
+    redirect(
+      `${examsPath}?sessionError=invalid_input&sessionIssues=${encodeURIComponent(codes)}`,
+    );
+  }
+
+  // 8. Every other refusal — the lifecycle denial, the missing plan and the
+  //    missing-or-foreign definition — is fully described by its code alone.
+  redirect(`${examsPath}?sessionError=${encodeURIComponent(result.code)}`);
 }

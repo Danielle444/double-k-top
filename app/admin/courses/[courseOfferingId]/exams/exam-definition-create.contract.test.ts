@@ -85,6 +85,11 @@ const SLICE_PATHS = [
   "lib/exam/" + "update-exam-session" + "-core.test.ts",
   "lib/exam/" + "delete-exam-session" + "-core.ts",
   "lib/exam/" + "delete-exam-session" + "-core.test.ts",
+  // EX-SES-S4, the approved ExamSession CREATE UI, which re-points this suite's
+  // route file set and export list and therefore travels with it.
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
 ];
 
 /** Strip comments so every guard asserts on CODE, not on explanatory prose. */
@@ -139,6 +144,13 @@ const WRITER_CALL = "createExamDefinition" + "(";
  * whole here would register this suite as reaching a binding it never calls.
  */
 const PLAN_WRITE_SPECIFIER = "@/lib/actions/" + "exam-plan-write" + "-io";
+/**
+ * The SESSION write binding's specifier, assembled for the sharpest reason of
+ * all: that binding's committed guard sweeps every file under `app/` for its own
+ * module name and asserts an EXACT caller list of ONE. Spelling it whole here
+ * would register this suite as a second caller of a write binding it never calls.
+ */
+const SESSION_WRITE_SPECIFIER = "@/lib/actions/" + "exam-session-write" + "-io";
 const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
 const GENERATED_CLIENT = ["@prisma", "client"].join("/");
 /** The committed exam cores that no file under `app/` may name. */
@@ -177,7 +189,11 @@ test("1. the four new files exist at the exact course-scoped route", () => {
   assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
 });
 
-test("2. the route directory holds EXACTLY the eight approved files", () => {
+test("2. the route directory holds EXACTLY the eleven approved files", () => {
+  // RE-POINTED by EX-SES-S4, not relaxed: the session-create slice added three
+  // reviewed files to this route (a form, a message table and its own contract
+  // suite), so the exact set grew from eight to eleven. It is still an EXHAUSTIVE
+  // literal list — a twelfth file still fails here.
   const routeFiles = [
     ...new Set([
       ...gitLines(["ls-files"]),
@@ -189,11 +205,14 @@ test("2. the route directory holds EXACTLY the eight approved files", () => {
   assert.deepEqual(routeFiles, [
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/actions.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);
 });
@@ -223,16 +242,21 @@ test("4. the action module declares use server as its FIRST statement", () => {
   assert.equal(ACTIONS.includes("server" + "-only"), false);
 });
 
-test("5. the module exports EXACTLY the two approved actions, with exact signatures", () => {
+test("5. the module exports EXACTLY the three approved actions, with exact signatures", () => {
   const exported = [
     ...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g),
   ].map(([, name]) => name);
-  // Still an EXHAUSTIVE allow-list, and still in a fixed order — it simply names
-  // both approved actions, because the route legitimately has two. Neither was
-  // folded into a single generic endpoint that would choose its operation from the
-  // request, which is precisely the decision that must not be client-influenced.
-  assert.deepEqual(exported, ["createExamPlanAction", "createExamDefinitionAction"]);
-  assert.equal(exported.length, 2, "no third endpoint may exist in this module");
+  // RE-POINTED by EX-SES-S4, not relaxed. Still an EXHAUSTIVE allow-list, and
+  // still in a fixed order — it simply names all three approved actions, because
+  // the route legitimately has three. None was folded into a single generic
+  // endpoint that would choose its operation from the request, which is precisely
+  // the decision that must not be client-influenced.
+  assert.deepEqual(exported, [
+    "createExamPlanAction",
+    "createExamDefinitionAction",
+    "createExamSessionAction",
+  ]);
+  assert.equal(exported.length, 3, "no fourth endpoint may exist in this module");
   // Everything exported from a "use server" module is publicly callable, so the
   // export list is the attack surface: nothing else may leave this file.
   for (const token of ["export const", "export default", "export {", "export type"]) {
@@ -277,6 +301,14 @@ test("7. the offering is the BOUND leading argument and is never read from FormD
     "the page bound the RAW route param",
   );
   // Neither the course nor the plan is ever read from the submission.
+  //
+  // RE-POINTED by EX-SES-S4 from the whole module to THIS action's body, and not
+  // weakened: `definitionId` is a legitimate field of the neighbouring SESSION
+  // create (which must name the definition its session runs under), so a
+  // file-wide ban would now fail for a reason that has nothing to do with this
+  // action. Scoping it to the definition action keeps the original claim exactly
+  // — this action reads none of the five — and the session action's own six-field
+  // budget is proven in its own suite.
   for (const field of [
     'formData.get("courseOfferingId")',
     'formData.get("planId")',
@@ -284,7 +316,11 @@ test("7. the offering is the BOUND leading argument and is never read from FormD
     'formData.get("definitionId")',
     'formData.get("orderIndex")',
   ]) {
-    assert.equal(ACTIONS.includes(field), false, `the action reads ${field}`);
+    assert.equal(DEFINITION_ACTION.includes(field), false, `the action reads ${field}`);
+  }
+  // The two that no action in the module may EVER read stay banned file-wide.
+  for (const field of ['formData.get("courseOfferingId")', 'formData.get("planId")']) {
+    assert.equal(ACTIONS.includes(field), false, `the module reads ${field}`);
   }
   // ...and the form cannot even offer them.
   for (const name of [
@@ -299,7 +335,13 @@ test("7. the offering is the BOUND leading argument and is never read from FormD
 });
 
 test("8. the FormData mapping is EXACTLY the seven fields, coerced exactly", () => {
-  const raw = ACTIONS.slice(ACTIONS.indexOf("const rawInput = {"), ACTIONS.indexOf(WRITER_CALL));
+  // RE-POINTED by EX-SES-S4 from the module to THIS action's body: the module now
+  // holds a third action with its own raw-input object, so a file-wide slice would
+  // span both. Every coercion claim below is unchanged.
+  const raw = DEFINITION_ACTION.slice(
+    DEFINITION_ACTION.indexOf("const rawInput = {"),
+    DEFINITION_ACTION.indexOf(WRITER_CALL),
+  );
 
   assert.ok(/name: formData\.get\("name"\),/.test(raw), "name is not passed through");
   assert.ok(/kind: formData\.get\("kind"\),/.test(raw), "kind is not the exact string");
@@ -322,9 +364,16 @@ test("8. the FormData mapping is EXACTLY the seven fields, coerced exactly", () 
     );
   }
 
-  // EXACTLY seven reads, and Number() is applied to the two numeric fields ONLY.
-  assert.equal((ACTIONS.match(/formData\.get\(/g) ?? []).length, 7);
-  assert.equal((ACTIONS.match(/Number\(/g) ?? []).length, 2);
+  // EXACTLY seven reads in THIS action, and Number() is applied to the two numeric
+  // fields ONLY — scoped for the reason above. `Number(` stays banned MODULE-WIDE
+  // below, because the definition action is the only one that may coerce at all.
+  assert.equal((DEFINITION_ACTION.match(/formData\.get\(/g) ?? []).length, 7);
+  assert.equal((DEFINITION_ACTION.match(/Number\(/g) ?? []).length, 2);
+  assert.equal(
+    (ACTIONS.match(/Number\(/g) ?? []).length,
+    2,
+    "no other action in the module may coerce a submitted value",
+  );
   // The name is NOT trimmed here: trimming is the committed input core's rule.
   assert.equal(raw.includes(".trim()"), false, "the action trims the name itself");
   // Nothing is defaulted into a valid value.
@@ -344,20 +393,32 @@ test("9. the action calls the committed writer with the bound id and the raw inp
     ).test(ACTIONS),
     "the writer is not called with exactly (courseOfferingId, rawInput)",
   );
-  // The module's ENTIRE import surface is the five approved specifiers: the admin
-  // boundary, the two committed write bindings each action wraps, and the two
-  // framework modules. Nothing else — no Prisma, no core, no capability, no
-  // notification surface, and no third writer.
+  // The module's ENTIRE import surface is the six approved specifiers: the admin
+  // boundary, the three committed write bindings the three actions wrap, and the
+  // two framework modules. Nothing else — no Prisma, no core, no capability, no
+  // notification surface, and no FOURTH writer.
+  //
+  // RE-POINTED by EX-SES-S4 by ADDING one specifier to an exhaustive list, which
+  // is the strongest available form of this guard: the session binding is now
+  // named explicitly, so importing any other writer — including that binding's own
+  // EDIT and REMOVAL siblings, which live in the same module and are therefore NOT
+  // separately importable — still fails here.
   const specifiers = [...ACTIONS.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(
     specifiers,
     [
       "@/lib/actions/" + WRITE_IO_MODULE,
       PLAN_WRITE_SPECIFIER,
+      SESSION_WRITE_SPECIFIER,
       "@/lib/auth/require-admin",
       "next/cache",
       "next/navigation",
     ].sort(),
+  );
+  // ...and the session binding is imported for its CREATE alone.
+  assert.ok(
+    new RegExp(`import \\{ ${"create" + "ExamSession"} \\} from`).test(ACTIONS),
+    "the session binding is not imported as a single named create",
   );
 });
 
@@ -395,12 +456,15 @@ test("11. success revalidates ONLY this exams path and redirects with the flag",
   // exactly once, so a file-wide count would now read 2 and prove nothing about
   // either. The module-wide budget is asserted right below.
   assert.equal((DEFINITION_ACTION.match(/revalidatePath\(/g) ?? []).length, 1);
+  // The module-wide budget: one revalidation per action, and every one of them is
+  // the SAME course-scoped exams path. Re-pointed from 2 to 3 by EX-SES-S4 — the
+  // per-action budget is what this asserts, and it did not change.
   assert.equal(
     (ACTIONS.match(/revalidatePath\(/g) ?? []).length,
-    2,
+    3,
     "the module must revalidate exactly once per action and no more",
   );
-  assert.equal((ACTIONS.match(/revalidatePath\(examsPath\);/g) ?? []).length, 2);
+  assert.equal((ACTIONS.match(/revalidatePath\(examsPath\);/g) ?? []).length, 3);
   assert.ok(DEFINITION_ACTION.includes("revalidatePath(examsPath);"), "the wrong path is revalidated");
   assert.ok(
     DEFINITION_ACTION.includes("redirect(`${examsPath}?createdDefinition=1`);"),
@@ -497,6 +561,16 @@ test("15. no edit, delete, reorder, session, source-date or publication path exi
   // suite. Everything else stays forbidden, and the plan tokens are re-asserted
   // against THIS action's body below — so the two endpoints in the shared module
   // provably cannot have become entangled.
+  // RE-POINTED by EX-SES-S4. The session CREATE verb and its binding module have
+  // left this list, because the module now legitimately holds the approved
+  // session-create endpoint — exactly the treatment the definition CREATE verb
+  // already received when it became an approved neighbour.
+  //
+  // Nothing else moved, and the replacement is NARROWER rather than absent: the
+  // session EDIT and REMOVAL writers are banned by name below, so the one
+  // relaxation cannot be stretched into "any session work is fine here". The
+  // session action's own six-field budget, closed result mapping and no-echo
+  // property are proven in its own suite.
   for (const token of [
     "update" + "ExamDefinition",
     "delete" + "ExamDefinition",
@@ -504,8 +578,14 @@ test("15. no edit, delete, reorder, session, source-date or publication path exi
     "publish" + "ExamPlan",
     "unpublish" + "ExamPlan",
     "delete" + "ExamPlan",
-    "create" + "ExamSession",
-    "exam-session-write" + "-io",
+    // The two destructive session writers, which remain reachable from NOTHING.
+    "update" + "ExamSession",
+    "delete" + "ExamSession",
+    "reorder" + "ExamSessions",
+    // Session management this route does not perform at all.
+    "ExamAssignment",
+    "SessionBreak",
+    "Supervisor",
     "sourceDate",
     "publishedAt",
   ]) {
@@ -515,6 +595,15 @@ test("15. no edit, delete, reorder, session, source-date or publication path exi
     ] as const) {
       assert.equal(code.includes(token), false, `the ${label} reaches ${token}`);
     }
+  }
+  // THIS action still reaches no part of the session slice at all: the relaxation
+  // above is for the module, and the definition endpoint gains nothing from it.
+  for (const token of ["create" + "ExamSession", SESSION_WRITE_SPECIFIER, "sessionError="]) {
+    assert.equal(
+      DEFINITION_ACTION.includes(token),
+      false,
+      `the definition action reaches ${token}`,
+    );
   }
 
   // THIS action names no part of the plan-creation slice at all: not the binding,
@@ -533,8 +622,8 @@ test("15. no edit, delete, reorder, session, source-date or publication path exi
     );
   }
 
-  // ...and the form reaches neither write binding: only the Server Action may.
-  for (const token of [WRITE_IO_MODULE, "exam-plan-write" + "-io"]) {
+  // ...and the form reaches NO write binding: only the Server Action may.
+  for (const token of [WRITE_IO_MODULE, "exam-plan-write" + "-io", "exam-session-write" + "-io"]) {
     assert.equal(FORM.includes(token), false, `the form reaches ${token}`);
   }
 });
