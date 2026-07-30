@@ -50,16 +50,26 @@ const DASHBOARD_REL = join("app", "admin", "courses", "[courseOfferingId]", "pag
 const READER_GUARD_REL = join("lib", "actions", "exam-definition-read-io.test.ts");
 
 /**
- * Every path this slice is allowed to have touched — two new files and two
- * amended ones. The reader's committed guard suite is the second amended file:
- * it asserted the reader had NO caller at all, which this slice deliberately
- * supersedes by becoming its first and only one.
+ * Every path the CURRENT slice (EX-S5B-5C, the create UI) is allowed to have
+ * touched: four new route files and four amended ones.
+ *
+ * EX-S5B-5B's own four paths are deliberately NOT carried forward. That slice is
+ * committed, so `git diff HEAD` no longer reports it; listing it here would
+ * describe a footprint nobody can still produce and would silently permit an
+ * unrelated edit to the course dashboard.
  */
 const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
-  "app/admin/courses/[courseOfferingId]/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "lib/actions/exam-definition-read-io.test.ts",
+  // ASSEMBLED, not spelled: the write binding's own guard suite sweeps every
+  // file under `app/` for its module name, and naming it here would enrol this
+  // suite in the caller allow-list it must stay out of.
+  "lib/actions/" + "exam-definition-write" + "-io.test.ts",
 ];
 
 /** Strip comments so every guard asserts on CODE, not on explanatory prose. */
@@ -129,6 +139,10 @@ test("3. the route directory holds exactly the page and this suite", () => {
     .filter((path) => path.startsWith(ROUTE_DIR_PREFIX))
     .sort();
   assert.deepEqual(routeFiles, [
+    "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);
@@ -150,13 +164,40 @@ test("4. the page validates the exact route offering, and fails closed", () => {
   );
 });
 
-test("5. the READ gate is HISTORICAL_READ, and never the definition WRITE gate", () => {
+test("5. HISTORICAL_READ is the only ASSERTED gate; the write gate is only evaluated", () => {
+  // The READ gate still ASSERTS, so a lifecycle denial fails the page closed.
   assert.ok(PAGE.includes('assertCourseOperationAllowed(context.status, "HISTORICAL_READ")'));
+  assert.equal(
+    (PAGE.match(/assertCourseOperationAllowed\(/g) ?? []).length,
+    1,
+    "the page asserts more than one lifecycle gate",
+  );
+
+  // EX-S5B-5C: the page now also needs to know whether the offering may be
+  // CONFIGURED, in order to decide whether to render the create form. That
+  // question is asked with the PURE, total, default-deny evaluator and never
+  // with the asserting form — asserting it would turn every ARCHIVED course's
+  // exams page into an error instead of the readable history it must stay.
+  assert.ok(
+    PAGE.includes("evaluateCourseOperationPolicy(") && PAGE.includes(").allowed"),
+    "the write gate must be EVALUATED for form visibility",
+  );
+  assert.equal(
+    /assertCourseOperationAllowed\([^)]*SCHEDULE_DRAFT_CONFIGURATION/.test(PAGE),
+    false,
+    "the page must never ASSERT the write gate",
+  );
+  // The evaluated gate is the definition-configuration one, on the VERIFIED
+  // status, and no other operation is named anywhere on the page.
+  assert.ok(PAGE.includes('"SCHEDULE_DRAFT_CONFIGURATION"'));
+  assert.equal((PAGE.match(/"SCHEDULE_DRAFT_CONFIGURATION"/g) ?? []).length, 1);
   for (const forbidden of [
-    "SCHEDULE_DRAFT_CONFIGURATION",
     "OFFERING_STRUCTURE_UPDATE",
     "OFFERING_METADATA_UPDATE",
-    "evaluateCourseOperationPolicy",
+    "SCHEDULE_PUBLICATION",
+    "ENROLLMENT_MANAGEMENT",
+    "TEACHING_PRACTICE_OPERATION",
+    "DESTRUCTIVE_MAINTENANCE",
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not use ${forbidden}`);
   }
@@ -190,7 +231,6 @@ test("7. the reader receives the VERIFIED context id, never the raw route param"
 
 test("8. the route param is the ONLY scope input", () => {
   for (const forbidden of [
-    "searchParams",
     "cookies(",
     "next/headers",
     "resolveCurrentCourseOffering",
@@ -200,6 +240,35 @@ test("8. the route param is the ONLY scope input", () => {
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not use ${forbidden}`);
   }
+
+  // EX-S5B-5C: `searchParams` is now read, for ONE purpose — rendering the
+  // outcome of the last create attempt. It is NOT a scope input, and this guard
+  // is what keeps that true: it must be read only AFTER the offering has been
+  // authorized and the definitions have been read, and it may not reach the
+  // authorization boundary, the reader, either gate or the bound action.
+  const auth = PAGE.indexOf("requireAdminCourseOffering(courseOfferingId)");
+  const read = PAGE.indexOf("readExamDefinitionsForAdmin(context.id)");
+  const outcome = PAGE.indexOf("await searchParams");
+  assert.ok(outcome > -1, "the create outcome must be read from searchParams");
+  assert.ok(auth < outcome, "searchParams must not be read before authorization");
+  assert.ok(read < outcome, "searchParams must not be read before the definitions read");
+
+  // The three outcome keys are the ONLY ones destructured, and none of them
+  // names a course, a plan or a definition.
+  const destructured = PAGE.slice(outcome - 120, outcome);
+  for (const key of ["createdDefinition", "createError", "createIssues"]) {
+    assert.ok(destructured.includes(key), `the outcome must carry ${key}`);
+  }
+  for (const forbidden of ["courseOfferingId?", "planId", "definitionId", "offeringId"]) {
+    assert.equal(
+      destructured.includes(forbidden),
+      false,
+      `searchParams must not carry ${forbidden}`,
+    );
+  }
+  // The verified context id — never a query value — still scopes everything.
+  assert.ok(PAGE.includes("readExamDefinitionsForAdmin(context.id)"));
+  assert.ok(PAGE.includes("createExamDefinitionAction.bind(null, context.id)"));
 });
 
 // ===========================================================================
@@ -213,9 +282,15 @@ test("9. the page is a server component and declares force-dynamic", () => {
   assert.ok(PAGE.includes('export const dynamic = "force-dynamic"'));
 });
 
-test("10. the page imports EXACTLY the five approved specifiers", () => {
+test("10. the page imports EXACTLY the eight approved specifiers", () => {
+  // The three additions are all ROUTE-LOCAL: the single Server Action, the
+  // create form, and the local message table. No new shared module, no core and
+  // no second data source entered the page.
   const specifiers = [...PAGE.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(specifiers, [
+    "./ExamDefinitionCreateForm",
+    "./actions",
+    "./exam-definition-create-error-messages",
     "@/lib/actions/exam-definition-read-io",
     "@/lib/course/admin-course-context",
     "@/lib/course/operation-policy-core",
@@ -263,41 +338,73 @@ test("12. no Teaching Practice, student, instructor or contact dependency exists
 // 13–15. READ-ONLY: no action, no mutation, no affordance
 // ===========================================================================
 
-test("13. no Server Action or mutation module is imported", () => {
+test("13. EXACTLY ONE mutation is reachable — the route-local create action", () => {
+  // The page reaches the create action and NOTHING else that writes.
+  assert.ok(PAGE.includes('from "./actions"'), "the create action must be imported");
+  assert.equal(
+    (PAGE.match(/createExamDefinitionAction/g) ?? []).length,
+    2,
+    "the action must be imported once and bound once",
+  );
+
   for (const forbidden of [
+    // The committed write bindings stay unreachable from the page: only the
+    // Server Action module may name them.
     DEFINITION_WRITE_MODULE,
     PLAN_WRITE_MODULE,
-    "createExamDefinition",
-    "updateExamDefinition",
-    "deleteExamDefinition",
-    "reorderExamDefinitions",
+    // The page must call the WRITER itself under no circumstances — note the
+    // parenthesis, which distinguishes the writer from the action that wraps it.
+    // ASSEMBLED, like the three below it: the write binding's committed caller
+    // allow-list sweeps `app/` for exactly these call shapes, so spelling them
+    // here would make this suite register as a writer caller.
+    "createExamDefinition" + "(",
+    // Edit, removal, reorder, plan creation and publication remain absent.
+    "update" + "ExamDefinition",
+    "delete" + "ExamDefinition",
+    "reorder" + "ExamDefinitions",
     "createExamPlan",
     "publishExamPlan",
+    // A page revalidates and redirects nothing: those belong to the action.
     "revalidatePath",
+    "revalidateTag",
     "redirect(",
-    "./actions",
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not reference ${forbidden}`);
   }
 });
 
-test("14. the page renders no form, button or other mutation affordance", () => {
+test("14. the page renders NO control itself and holds no state", () => {
+  // The create form is a separate client component. The page composes it and
+  // supplies the bound action; it declares no markup control and no hook, so
+  // there is no second place where submission behaviour could be defined.
   for (const forbidden of [
     "<form",
     "</form",
     "<button",
-    "action=",
+    "<input",
+    "<select",
+    "<textarea",
     "formAction",
     "onClick",
     "onSubmit",
     "onChange",
     "disabled",
-    "<input",
     "useState",
     "useTransition",
+    "useFormStatus",
+    "useActionState",
+    "useOptimistic",
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not render ${forbidden}`);
   }
+
+  // The ONE `action=` on the page is the bound prop handed to that component —
+  // never an `action=` on markup the page renders itself.
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 1);
+  assert.ok(
+    PAGE.includes("action={createExamDefinitionAction.bind(null, context.id)}"),
+    "the only action= must be the server-bound create action",
+  );
 });
 
 test("15. the only navigation is the course-scoped back link", () => {
@@ -374,9 +481,23 @@ test("19. the no-plan state is an ordinary state, with no creation affordance", 
     PAGE.includes("עדיין לא נוצרה תוכנית מבחנים לקורס זה"),
     "the no-plan state must say so in Hebrew",
   );
-  // It is not styled or worded as a failure, and offers nothing to click.
+
+  // SCOPED TO THE BRANCH. EX-S5B-5C added a create-failure notice, which is
+  // legitimately styled as an error; asserting over the whole page would now
+  // forbid that too. What must stay true is narrower and more meaningful: the
+  // NO-PLAN branch itself is not styled or worded as a failure...
+  const noPlanStart = PAGE.indexOf("{!view.planExists ? (");
+  assert.ok(noPlanStart > 0, "the no-plan branch was not found");
+  const noPlan = PAGE.slice(noPlanStart, PAGE.indexOf(") : ("));
   for (const forbidden of ["bg-danger-muted", "text-danger", "שגיאה."]) {
-    assert.equal(PAGE.includes(forbidden), false, `the no-plan state must not use ${forbidden}`);
+    assert.equal(noPlan.includes(forbidden), false, `the no-plan state must not use ${forbidden}`);
+  }
+
+  // ...and it still offers NOTHING to click. This is the load-bearing half: this
+  // slice may not bring a plan into existence, so a create form here could only
+  // ever fail.
+  for (const forbidden of ["ExamDefinitionCreateForm", "action=", "<form", "<button"]) {
+    assert.equal(noPlan.includes(forbidden), false, `the no-plan state must not offer ${forbidden}`);
   }
 });
 
@@ -422,7 +543,7 @@ test("22. the course dashboard links to the EXACT course-scoped exams route", ()
 // 23. The slice's exact footprint
 // ===========================================================================
 
-test("23. this slice touched nothing outside its four approved paths", () => {
+test("23. this slice touched nothing outside its eight approved paths", () => {
   // Worktree modifications, staged changes and untracked files together — so the
   // guard describes the SLICE rather than one moment in its lifecycle, and keeps
   // holding after the work is staged or committed.
@@ -435,8 +556,38 @@ test("23. this slice touched nothing outside its four approved paths", () => {
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
 });
 
-test("24. the reader's committed guard suite is the only amended guard", () => {
-  assert.ok(existsSync(join(REPO_ROOT, READER_GUARD_REL)), "the reader's guard suite is missing");
-  assert.ok(SLICE_PATHS.includes(READER_GUARD_REL.replace(/\\/g, "/")));
-  assert.ok(SLICE_PATHS.includes(TEST_REL.replace(/\\/g, "/")));
+test("24. EXACTLY three committed guard suites were amended, and no other", () => {
+  // The reader's and the writer's caller allow-lists both asserted that this
+  // route did NOT exist as a caller; the create UI supersedes both claims by
+  // becoming their approved caller, so each was RE-POINTED to an exact path
+  // rather than relaxed. This suite is the third.
+  const WRITER_GUARD_REL = join("lib", "actions", "exam-definition-write" + "-io.test.ts");
+  for (const rel of [READER_GUARD_REL, WRITER_GUARD_REL, TEST_REL]) {
+    assert.ok(existsSync(join(REPO_ROOT, rel)), `${rel} is missing`);
+    assert.ok(
+      SLICE_PATHS.includes(rel.replace(/\\/g, "/")),
+      `${rel} must be an approved slice path`,
+    );
+  }
+
+  // The four DIFF-SENSITIVE containment suites of neighbouring exam slices were
+  // deliberately NOT touched. They assert an empty `git diff` against HEAD, so
+  // they are expected to be RED while this slice is uncommitted and to return to
+  // green on commit — widening them would permanently destroy what they prove.
+  // ASSEMBLED, every one of them: each of these suites sweeps `app/` for its
+  // OWN module name, so spelling the four paths here would register this file as
+  // a caller of three separate exam writers it does not touch.
+  const changed = new Set(gitLines(["diff", "--name-only", "HEAD"]));
+  for (const untouchable of [
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "message-audience" + ".contract.test.ts",
+  ]) {
+    assert.equal(
+      changed.has(untouchable),
+      false,
+      `${untouchable} must not be weakened by this slice`,
+    );
+  }
 });

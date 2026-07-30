@@ -1,27 +1,27 @@
 /**
- * EXAM EX-S5B-5B — the FIRST Exams surface: a READ-ONLY admin view of ONE course
- * offering's ExamDefinition configuration.
+ * EXAM EX-S5B-5B / EX-S5B-5C — the admin Exams surface of ONE course offering:
+ * a read of its ExamDefinition configuration, plus the ONE create affordance.
  *
- * Server Component only. There is no `"use client"` here and no client component
- * in this route: everything on the page is static text derived from one server
- * read, so there is no state to hold, nothing to hydrate and no optimistic
- * update to get wrong.
+ * Server Component. The page itself holds no state and renders no form control:
+ * the create form is a separate client component, and the only mutation it can
+ * reach is the single Server Action bound below.
  *
  * ===========================================================================
- * READ-ONLY BY CONSTRUCTION
+ * WHAT THIS ROUTE MAY MUTATE — AND WHAT IT STILL MAY NOT
  * ===========================================================================
- * This route contains NO Server Action, no `<form>`, no `<button>`, no `action=`
- * and no mutation import of any kind. The committed definition WRITE bindings
- * (create / edit / delete / reorder) and the plan-creation, source-date and
- * session slices are deliberately NOT reachable from here — not disabled, not
- * hidden behind a policy flag, but absent. A "no exam plan yet" offering is
- * therefore reported as an ordinary state and NOT offered a create button: this
- * slice may not bring a plan into existence, and a fake disabled affordance
- * would only claim otherwise.
+ * EXACTLY ONE mutation exists here: appending one definition to an ALREADY
+ * EXISTING exam plan. Editing, removing, reordering, creating the plan itself,
+ * exam sessions, source dates and publication are NOT reachable — not disabled,
+ * not hidden behind a flag, but absent. No such action is imported, and the
+ * committed write bindings for them are never named.
  *
- * That is also why an ARCHIVED offering needs no special handling. The page is
- * readable history for PLANNED, ACTIVE and ARCHIVED alike, and there is no
- * mutation affordance for the lifecycle to have to withdraw.
+ * A "no exam plan yet" offering is therefore still reported as an ordinary state
+ * and is NOT offered a create form: this slice may not bring a plan into
+ * existence, and a form that could only fail would be a lie.
+ *
+ * An ARCHIVED offering stays fully readable and gains no form. That is decided
+ * by the course-lifecycle policy rather than by a hand-written status test — see
+ * the two gates below.
  *
  * ===========================================================================
  * THE ORDER
@@ -31,20 +31,27 @@
  *      and it never reflects the requested id back; the auth redirect and every
  *      unexpected error propagate untouched.
  *   2. `assertCourseOperationAllowed(context.status, "HISTORICAL_READ")` — the
- *      course-lifecycle READ gate, on the VERIFIED status. This is the read gate
+ *      course-lifecycle READ gate, on the VERIFIED status. This is the READ gate
  *      and NOT the definition write gate, so archived exam configuration stays
  *      readable.
  *   3. `readExamDefinitionsForAdmin(context.id)` — with the VERIFIED context id,
  *      never the raw route param.
+ *   4. `evaluateCourseOperationPolicy(context.status, ...)` — the write gate,
+ *      asked as a QUESTION rather than as an assertion, purely to decide whether
+ *      to render the form. It is pure, total and default-deny, so an unknown
+ *      status hides the form instead of exposing it.
  *
- * The reader independently re-runs both the admin/offering boundary and the same
- * lifecycle gate. That repetition is intended: the page must not be the only
- * thing standing between a caller and the data, and the page needs the verified
- * context anyway for its own back link.
+ * The reader independently re-runs both the admin/offering boundary and the read
+ * gate, and the Server Action's committed writer independently re-runs the admin
+ * boundary, the offering lookup AND the write gate. Step 4 is therefore a
+ * DISPLAY decision only: hiding the form prevents a pointless round trip and is
+ * never what makes the write safe.
  *
- * The route's `[courseOfferingId]` is the ONLY scope input. No `searchParams`, no
- * cookie, no current-offering resolver and no form field can influence which
- * course is read.
+ * The route's `[courseOfferingId]` is the ONLY scope input. No cookie, no
+ * current-offering resolver and no form field can influence which course is
+ * read or written. `searchParams` is read for ONE purpose — rendering the
+ * outcome of the last create attempt — and never reaches authorization, the
+ * reader, the gates or the bound action.
  *
  * ===========================================================================
  * WHAT IS SHOWN, AND WHAT IS DELIBERATELY NOT
@@ -52,18 +59,24 @@
  * Each definition renders the manager's own configuration plus how many sessions
  * use it. No database id, no plan id and no `updatedAt` is rendered: the id
  * appears only as a React `key`, which is never text on the page, and the
- * version stamp belongs to a future conditional-edit slice, not to a reader.
+ * version stamp belongs to a future conditional-edit slice, not here.
  *
- * Nothing on this page touches Teaching Practice, a student, an instructor, a
- * child or a parent contact — the reader cannot express any of them, and no such
- * module is imported.
+ * The create outcome is rendered from STABLE TOKENS only. The action never puts
+ * a submitted name, duration or capacity in the URL, and the local message
+ * module renders only codes it recognizes — so the query string cannot place
+ * arbitrary text on this page.
+ *
+ * Nothing on this page touches Teaching Practice, a trainee, a coach, a child or
+ * a parent contact — no such module is imported and the reader cannot express
+ * any of them.
  *
  * The Hebrew exam-kind labels are spelled out LOCALLY rather than imported from
  * the shared label module: that module is still inside the committed EX-C1
- * containment boundary, which forbids a page from importing it. The trade-off is
+ * containment boundary, which forbids a page from naming it. The trade-off is
  * recorded deliberately — a kind added to the enum will render as the explicit
- * unknown text below instead of failing the build here — and both should collapse
- * back onto the shared map when that boundary is lifted.
+ * unknown text below instead of failing the build here — and both this map and
+ * the create form's own option list should collapse back onto the shared table
+ * when that boundary is lifted.
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -72,11 +85,20 @@ import {
   CourseOfferingNotFoundError,
   type AdminCourseContext,
 } from "@/lib/course/admin-course-context";
-import { assertCourseOperationAllowed } from "@/lib/course/operation-policy-core";
+import {
+  assertCourseOperationAllowed,
+  evaluateCourseOperationPolicy,
+} from "@/lib/course/operation-policy-core";
 import {
   readExamDefinitionsForAdmin,
   type AdminExamDefinitionListView,
 } from "@/lib/actions/exam-definition-read-io";
+import { createExamDefinitionAction } from "./actions";
+import { ExamDefinitionCreateForm } from "./ExamDefinitionCreateForm";
+import {
+  examDefinitionCreateErrorText,
+  examDefinitionCreateIssueTexts,
+} from "./exam-definition-create-error-messages";
 
 export const dynamic = "force-dynamic";
 
@@ -117,8 +139,14 @@ function DefinitionFact({ label, value }: { label: string; value: string }) {
 
 export default async function CourseExamsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ courseOfferingId: string }>;
+  searchParams: Promise<{
+    createdDefinition?: string;
+    createError?: string;
+    createIssues?: string;
+  }>;
 }) {
   const { courseOfferingId } = await params;
 
@@ -149,19 +177,54 @@ export default async function CourseExamsPage({
     throw error;
   }
 
+  // 4. The last create attempt's outcome. Read AFTER authorization and the read,
+  //    and used for NOTHING but the two notices below.
+  const { createdDefinition, createError, createIssues } = await searchParams;
+  const createErrorText = examDefinitionCreateErrorText(createError);
+  const createIssueTexts = examDefinitionCreateIssueTexts(createIssues);
+  const showCreatedNotice = createdDefinition === "1";
+
   const dashboardHref = `/admin/courses/${encodeURIComponent(context.id)}`;
   const isPublished = view.publishedAt !== null;
   const hasDefinitions = view.definitions.length > 0;
+
+  // 5. The DISPLAY decision for the create form: the plan must already exist,
+  //    and the offering's lifecycle must permit configuring it. Asked without
+  //    throwing, so an ARCHIVED offering stays readable while losing the form.
+  const mayConfigure = evaluateCourseOperationPolicy(
+    context.status,
+    "SCHEDULE_DRAFT_CONFIGURATION",
+  ).allowed;
+  const showCreateForm = view.planExists && mayConfigure;
 
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-xl border border-border bg-card p-5">
         <h2 className="text-base font-semibold text-card-foreground">מבחנים</h2>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          הגדרות המבחנים של הקורס, לקריאה בלבד. מוצגות ההגדרות עצמן בלבד — ללא
-          מועדי מבחן, ללא שיבוץ נבחנים וללא נתוני חניכים או מדריכים.
+          הגדרות המבחנים של הקורס. מוצגות ההגדרות עצמן בלבד — ללא מועדי מבחן, ללא
+          שיבוץ נבחנים וללא נתוני חניכים או מדריכים.
         </p>
       </div>
+
+      {showCreatedNotice ? (
+        <div className="rounded-xl border border-border bg-success-muted px-5 py-4">
+          <p className="text-sm font-medium text-success">הגדרת המבחן נוספה בהצלחה.</p>
+        </div>
+      ) : null}
+
+      {createErrorText !== null ? (
+        <div className="rounded-xl border border-border bg-danger-muted px-5 py-4">
+          <p className="text-sm font-medium text-danger">{createErrorText}</p>
+          {createIssueTexts.length > 0 ? (
+            <ul className="mt-2 list-inside list-disc text-sm text-danger">
+              {createIssueTexts.map((text) => (
+                <li key={text}>{text}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
 
       {!view.planExists ? (
         <div className="rounded-xl border border-dashed border-border bg-muted p-5">
@@ -170,7 +233,7 @@ export default async function CourseExamsPage({
           </h3>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             אין זו שגיאה — פשוט טרם הוגדרה תוכנית מבחנים עבור הקורס. יצירת תוכנית
-            והגדרת מבחנים אינן מתבצעות במסך זה, שהוא מסך צפייה בלבד.
+            אינה מתבצעת במסך זה, ולכן גם לא ניתן להוסיף כאן מבחנים כרגע.
           </p>
         </div>
       ) : (
@@ -234,11 +297,29 @@ export default async function CourseExamsPage({
                 לא הוגדרו מבחנים בתוכנית זו
               </h3>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                קיימת תוכנית מבחנים לקורס, אך עדיין לא הוגדר בה אף מבחן. הגדרת
-                מבחנים אינה מתבצעת במסך זה.
+                קיימת תוכנית מבחנים לקורס, אך עדיין לא הוגדר בה אף מבחן.
               </p>
             </div>
           )}
+
+          {showCreateForm ? (
+            <div className="rounded-xl border border-border bg-card p-5">
+              <h3 className="text-sm font-semibold text-card-foreground">
+                הוספת הגדרת מבחן
+              </h3>
+              {isPublished ? (
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                  שימו לב: תוכנית המבחנים כבר פורסמה. ניתן להוסיף הגדרת מבחן, והיא
+                  תיכלל בתוכנית שפורסמה.
+                </p>
+              ) : null}
+              <div className="mt-3">
+                <ExamDefinitionCreateForm
+                  action={createExamDefinitionAction.bind(null, context.id)}
+                />
+              </div>
+            </div>
+          ) : null}
         </>
       )}
 

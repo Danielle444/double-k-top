@@ -90,14 +90,42 @@ const APPROVED_PAGE_SUITE = join(
 );
 
 /**
- * Every path EX-S5B-5B was authorized to touch: the two new route files, the
- * course dashboard it adds one link to, and this guard suite.
+ * EX-S5B-5C — the create slice's own contract suite. It names this reader for
+ * ONE reason: to prove the page reads the definitions BEFORE it looks at the
+ * create outcome in the query string. Like the sibling suite above it is a
+ * `.test.ts`, so the "exactly one PRODUCTION caller" assertion below is
+ * unaffected — the shipped caller set is still the single page.
+ */
+const APPROVED_CREATE_SUITE = join(
+  "app",
+  "admin",
+  "courses",
+  "[courseOfferingId]",
+  "exams",
+  "exam-definition-create.contract.test.ts",
+);
+
+/**
+ * Every path the CURRENT slice (EX-S5B-5C, the create UI) was authorized to
+ * touch: four new route files and four amended ones.
+ *
+ * EX-S5B-5B's paths are NOT carried forward. That slice is committed, so
+ * `git diff HEAD` no longer reports it, and keeping its course-dashboard entry
+ * here would silently permit an unrelated edit to a file this slice must not
+ * touch.
  */
 const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
-  "app/admin/courses/[courseOfferingId]/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "lib/actions/exam-definition-read-io.test.ts",
+  // ASSEMBLED, not spelled: the write binding's own guard suite sweeps `lib/`
+  // for its module name, and naming it here would enrol this suite in the
+  // caller allow-list it must stay out of.
+  "lib/actions/" + "exam-definition-write" + "-io.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
@@ -640,11 +668,13 @@ test("20. EXACTLY the one approved admin page reaches this reader", () => {
       }
     }
   }
-  // The COMPLETE caller set — the approved page, plus that route's own contract
-  // suite, which names the specifier only in order to forbid everything else.
+  // The COMPLETE caller set — the approved page, plus the two contract suites of
+  // that same route, which name the specifier only in order to constrain it.
+  // Three EXACT paths; the directory itself is NOT allow-listed, so a fourth
+  // file appearing beside them is still a guard failure.
   assert.deepEqual(
     callers.sort(),
-    [APPROVED_PAGE, APPROVED_PAGE_SUITE].sort(),
+    [APPROVED_PAGE, APPROVED_PAGE_SUITE, APPROVED_CREATE_SUITE].sort(),
     `an unapproved caller exists: ${callers.join(", ")}`,
   );
 
