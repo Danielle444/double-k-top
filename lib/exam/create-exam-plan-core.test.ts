@@ -33,8 +33,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, sep } from "node:path";
 
 import {
   createExamPlanWithDeps,
@@ -1048,10 +1048,27 @@ test("S13. the slice's lib/exam files are exactly the approved pair", () => {
   assert.deepEqual(sliceFiles, [MODULE_NAME, TEST_NAME].sort());
 });
 
-test("S14. the slice modified no tracked file in lib/exam, prisma or app", () => {
-  // Scoped to the paths this slice could plausibly have touched, and compared
-  // against HEAD — so it stays green once the pair is committed, and fires if any
-  // existing file was edited to accommodate them.
+/**
+ * Tracked paths, as `git` spells them (forward slashes on every platform), so the
+ * containment guards below can name them exactly.
+ */
+const CORE_TRACKED_PATH = ["lib", "exam", MODULE_NAME].join("/");
+const SUITE_TRACKED_PATH = ["lib", "exam", TEST_NAME].join("/");
+const IO_TRACKED_PATH = ["lib", "actions", "exam-plan-write-io.ts"].join("/");
+const IO_TEST_TRACKED_PATH = ["lib", "actions", "exam-plan-write-io.test.ts"].join("/");
+
+test("S14. the slice modified NO production file — only this guard suite", () => {
+  // P1 -> P2 TRANSITION, STATED EXPLICITLY. While P1 was the pure core alone, the
+  // approved diff was EMPTY and this guard asserted exactly that. P2 adds the
+  // server-only Prisma binding, which makes two of P1's containment CLAIMS
+  // obsolete — the core now has a consumer, and an IO binding now exists — and
+  // amending those claims means editing THIS FILE. So the expected diff is this
+  // suite and nothing else.
+  //
+  // The guard is NOT relaxed by that: the pure core, the schema, the migrations
+  // and every app/component tree are still asserted to be untouched, and S15/S16
+  // below now pin the consumer and the absence of wiring by exact path rather
+  // than by "there is none".
   const result = spawnSync(
     "git",
     ["diff", "--name-only", "HEAD", "--", "lib", "prisma", "app", "components"],
@@ -1062,16 +1079,39 @@ test("S14. the slice modified no tracked file in lib/exam, prisma or app", () =>
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
-  assert.deepEqual(modified, [], `the slice modified: ${modified.join(", ")}`);
+  // WHAT IS TOLERATED, AND WHY IT IS TOLERATED RATHER THAN REQUIRED. The two GUARD
+  // SUITES of this slice may legitimately differ from HEAD — before the slice is
+  // committed the diff holds them, afterwards it is empty, and a later fix to a
+  // guard puts one back. Pinning the diff to an exact list would make this test
+  // flip red on every one of those perfectly correct states.
+  //
+  // What must NEVER differ is PRODUCTION code, which is the whole point of the
+  // guard: the pure core, the binding, the schema, the migrations and every app or
+  // component tree.
+  const TOLERATED = [SUITE_TRACKED_PATH, IO_TEST_TRACKED_PATH];
+  const unexpected = modified.filter((path) => !TOLERATED.includes(path));
+  assert.deepEqual(
+    unexpected,
+    [],
+    `the slice modified production code: ${unexpected.join(", ")}`,
+  );
+  // Named explicitly, so the two files that matter most cannot drift in under a
+  // future widening of the tolerated list.
+  for (const production of [CORE_TRACKED_PATH, IO_TRACKED_PATH]) {
+    assert.equal(modified.includes(production), false, `${production} was modified`);
+  }
+  // Every tolerated path really is a test suite, never a shipped module.
+  for (const path of TOLERATED) {
+    assert.match(path, /\.test\.ts$/);
+  }
 });
 
-test("S15. nothing in the repository consumes this core yet", () => {
-  // P1 is the pure core only: no Prisma binding, no auth binding, no Server
-  // Action, no route and no UI. The proof is that no file other than this suite
-  // names the module or its orchestration.
-  const ORCHESTRATION = new RegExp("\\bcreate" + "ExamPlanWithDeps\\b");
-  const MODULE_SPECIFIER = "create-exam-plan-core";
-  const offenders: string[] = [];
+/**
+ * Every `.ts`/`.tsx` file of the repository's own source trees, as tracked-style
+ * relative paths. Shared by the two containment guards below.
+ */
+function repoSourceFiles(): { path: string; source: string }[] {
+  const out: { path: string; source: string }[] = [];
 
   function walk(dir: string): void {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -1082,11 +1122,10 @@ test("S15. nothing in the repository consumes this core yet", () => {
         continue;
       }
       if (!/\.tsx?$/.test(entry.name)) continue;
-      if (entry.name === TEST_NAME || entry.name === MODULE_NAME) continue;
-      const source = readFileSync(full, "utf8");
-      if (source.includes(MODULE_SPECIFIER) || ORCHESTRATION.test(source)) {
-        offenders.push(full.slice(REPO_ROOT.length + 1));
-      }
+      out.push({
+        path: full.slice(REPO_ROOT.length + 1).split(sep).join("/"),
+        source: readFileSync(full, "utf8"),
+      });
     }
   }
   for (const root of ["app", "lib", "components", "scripts"]) {
@@ -1096,12 +1135,126 @@ test("S15. nothing in the repository consumes this core yet", () => {
       // An absent optional root is not a failure.
     }
   }
-  assert.deepEqual(offenders, [], `the core is already consumed by: ${offenders.join(", ")}`);
+  return out;
+}
+
+test("S15. the ONLY production consumer of this core is the server-only IO binding", () => {
+  // P1 -> P2 TRANSITION. This guard previously asserted ZERO consumers. P2's whole
+  // purpose is to add exactly ONE, so the claim is now pinned to that one PATH
+  // instead of being dropped: any second consumer — a route, a page, a Server
+  // Action, another lib/actions module or a script — still fails this test.
+  const ORCHESTRATION = new RegExp("\\bcreate" + "ExamPlanWithDeps\\b");
+  const MODULE_SPECIFIER = "create-exam-plan-core";
+
+  const consumers = repoSourceFiles()
+    .filter((file) => file.path !== CORE_TRACKED_PATH && file.path !== SUITE_TRACKED_PATH)
+    .filter(
+      (file) => file.source.includes(MODULE_SPECIFIER) || ORCHESTRATION.test(file.source),
+    )
+    .map((file) => file.path)
+    .sort();
+
+  // The binding, and the binding's OWN suite — which legitimately drives the pure
+  // orchestration with fakes, exactly as this suite does.
+  assert.deepEqual(
+    consumers,
+    [IO_TRACKED_PATH, IO_TEST_TRACKED_PATH].sort(),
+    `the core is consumed by an unapproved file: ${consumers.join(", ")}`,
+  );
+
+  // PRODUCTION code specifically: exactly one shipped module may reach the core.
+  const production = consumers.filter((path) => !/\.test\.tsx?$/.test(path));
+  assert.deepEqual(production, [IO_TRACKED_PATH]);
+
+  // ...and no OTHER module in lib/actions consumes it, by directory listing rather
+  // than by content, so a differently-named binding cannot slip in.
+  const actionsConsumers = readdirSync(join(REPO_ROOT, "lib", "actions"))
+    .filter((name) => /\.tsx?$/.test(name))
+    .filter((name) => {
+      const source = readFileSync(join(REPO_ROOT, "lib", "actions", name), "utf8");
+      return source.includes(MODULE_SPECIFIER) || ORCHESTRATION.test(source);
+    })
+    .sort();
+  assert.deepEqual(actionsConsumers, [
+    "exam-plan-write-io.test.ts",
+    "exam-plan-write-io.ts",
+  ]);
 });
 
-test("S16. no exam route, page or Prisma binding was created for this slice", () => {
-  const created = readdirSync(join(REPO_ROOT, "lib", "actions")).filter((name) =>
-    /exam-plan/.test(name),
+test("S16. the binding is reachable from NO app route, page, UI or Server Action", () => {
+  // P1 -> P2 TRANSITION. This guard previously asserted that no ExamPlan IO
+  // binding existed at all. It now asserts the binding exists as EXACTLY the
+  // approved pair and is still wired to NOTHING: the trust boundary it declares is
+  // only meaningful while no public surface can call it.
+  const created = readdirSync(join(REPO_ROOT, "lib", "actions"))
+    .filter((name) => /exam-plan/.test(name))
+    .sort();
+  assert.deepEqual(created, ["exam-plan-write-io.test.ts", "exam-plan-write-io.ts"]);
+
+  const io = stripComments(readFileSync(join(REPO_ROOT, "lib", "actions", "exam-plan-write-io.ts"), "utf8"));
+
+  // It is server-only, and it is NOT a Server Action module: nothing exported from
+  // it has a callable network id.
+  const firstStatement = io.split("\n").find((line) => line.trim().length > 0);
+  assert.ok(firstStatement);
+  assert.ok(
+    new RegExp('import\\s+"server' + '-only";').test(firstStatement),
+    `the binding's first statement is: ${firstStatement}`,
   );
-  assert.deepEqual(created, [], `an action binding exists: ${created.join(", ")}`);
+  assert.equal(io.includes('"use ' + 'server"'), false, "the binding is a Server Action module");
+  assert.equal(io.includes("'use " + "server'"), false);
+
+  // No app/, components/ or UI file names it, and no UI file of any kind reaches
+  // the core either. THIS suite is excluded because a guard necessarily names the
+  // path it guards; it imports nothing from the binding and calls nothing in it.
+  const reaching = repoSourceFiles().filter(
+    (file) =>
+      file.source.includes("exam-plan-write-io") &&
+      file.path !== IO_TRACKED_PATH &&
+      file.path !== IO_TEST_TRACKED_PATH &&
+      file.path !== SUITE_TRACKED_PATH,
+  );
+  assert.deepEqual(reaching.map((file) => file.path), []);
+  const uiReaching = repoSourceFiles().filter(
+    (file) => file.path.endsWith(".tsx") && file.source.includes("create-exam-plan-core"),
+  );
+  assert.deepEqual(uiReaching.map((file) => file.path), []);
+  for (const dir of [
+    ["app", "admin", "exams"],
+    ["app", "instructor", "exams"],
+    ["app", "student", "exams"],
+  ]) {
+    assert.equal(existsSync(join(REPO_ROOT, ...dir)), false, `${dir.join("/")} was created`);
+  }
+
+  // NO publication, source-date, delete, capability or notification work came with
+  // the binding: the tokens are absent from its code, not merely unused.
+  for (const token of [
+    "publishedAt",
+    "publish",
+    "sourceDate",
+    "SourceDate",
+    "delete",
+    "upsert",
+    "capability",
+    "Capability",
+    "notification",
+    "Notification",
+    "$transaction",
+    "examDefinition",
+    "examSession",
+  ]) {
+    assert.equal(io.includes(token), false, `the binding reaches ${token}`);
+  }
+
+  // NO schema or migration work: the prisma tree is untouched (S14 proves the diff
+  // is this suite alone) and no migration was added for the binding.
+  const migrations = readdirSync(join(REPO_ROOT, "prisma", "migrations"))
+    .filter((name) => /exam/i.test(name))
+    .sort();
+  assert.deepEqual(migrations, [
+    "20260729120000_add_exam_plan_tree",
+    "20260729140000_add_exam_teaching_practice_source_date",
+    "20260730120000_add_exam_definition_and_breaks",
+  ]);
 });
