@@ -186,7 +186,7 @@ export const EXAM_SESSION_WRITE_INPUT_MESSAGES: Readonly<
   "EX-SES-DEFINITION-REQUIRED": "יש לבחור הגדרת בחינה",
   "EX-SES-DATE-INVALID": "תאריך הבחינה אינו תקין",
   "EX-SES-START-TIME-INVALID": "שעת ההתחלה אינה תקינה (HH:MM)",
-  "EX-SES-ARENA-INVALID": "שדה הזירה אינו תקין",
+  "EX-SES-ARENA-INVALID": "שדה המגרש אינו תקין",
   "EX-SES-TITLE-INVALID": "שדה הכותרת אינו תקין",
   "EX-SES-NOTES-INVALID": "שדה ההערות אינו תקין",
 });

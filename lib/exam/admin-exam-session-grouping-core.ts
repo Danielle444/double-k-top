@@ -217,7 +217,7 @@ export const ADMIN_EXAM_SCHEDULE_GROUPING_MESSAGES: Readonly<
   "EX-ASG-DEFINITION-KIND-INVALID": "למפגש בחינה חסר סוג בחינה תקין",
   "EX-ASG-DATE-INVALID": "תאריך מפגש הבחינה אינו תקין",
   "EX-ASG-START-TIME-INVALID": "שעת ההתחלה של מפגש הבחינה אינה תקינה (HH:MM)",
-  "EX-ASG-ARENA-INVALID": "שדה הזירה של מפגש הבחינה אינו תקין",
+  "EX-ASG-ARENA-INVALID": "שדה המגרש של מפגש הבחינה אינו תקין",
   "EX-ASG-TITLE-INVALID": "שדה הכותרת של מפגש הבחינה אינו תקין",
   "EX-ASG-NOTES-INVALID": "שדה ההערות של מפגש הבחינה אינו תקין",
   "EX-ASG-ORDER-INDEX-INVALID": "סדר ההצגה של מפגש הבחינה אינו תקין",

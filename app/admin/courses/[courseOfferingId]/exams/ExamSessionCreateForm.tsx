@@ -208,7 +208,7 @@ export function ExamSessionCreateForm({
 
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-card-foreground">
-            זירה <span className="text-muted-foreground">(רשות)</span>
+            מגרש <span className="text-muted-foreground">(רשות)</span>
           </span>
           <input type="text" name="arena" className={FIELD_CLASS} />
         </label>
