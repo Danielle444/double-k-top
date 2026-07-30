@@ -74,9 +74,18 @@ const FINAL_ROUTE_FILES = [
 ].sort();
 
 /**
- * The EIGHT paths EX-SES-S4 was authorized to touch — three new, five amended.
+ * The THIRTEEN paths in scope once EX-SES-UI-1 wires this form.
  *
- * The session write binding's paths are ASSEMBLED for the reason in the header.
+ * EX-SES-S4 contributed eight — three new route files and five amended guards —
+ * and deliberately excluded `page.tsx`, because that slice committed the form
+ * without connecting it. EX-SES-UI-1 connects it, which adds the page itself and
+ * the three further footprint guards whose approved-path sets had to learn about
+ * this slice.
+ *
+ * The session write binding's path is ASSEMBLED for the reason in the header, and
+ * the session READER's most sharply of all: its committed guard pins the reader's
+ * caller list to EXACTLY `page.tsx`, so a suite spelling that module name whole
+ * would become the second entry in a list that must hold one.
  */
 const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
@@ -87,6 +96,12 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  // EX-SES-UI-1's own five.
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -148,6 +163,15 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
+/**
+ * Collapse every run of whitespace to ONE space, so a guard can assert on a
+ * multi-line declaration without also asserting on how the formatter broke it.
+ * Same helper, same spelling, as the three sibling route suites.
+ */
+function squash(source: string): string {
+  return source.replace(/\s+/g, " ");
+}
+
 function readSource(rel: string): string {
   return readFileSync(join(REPO_ROOT, rel), "utf8");
 }
@@ -159,6 +183,7 @@ const FORM = stripComments(FORM_SOURCE);
 const MESSAGES_SOURCE = readSource(MESSAGES_REL);
 const MESSAGES = stripComments(MESSAGES_SOURCE);
 const PAGE = stripComments(readSource(PAGE_REL));
+const PAGE_FLAT = squash(PAGE);
 
 /**
  * ONE exported action's body, from its declaration to the next one (or to the end
@@ -532,7 +557,12 @@ test("17. the two EXISTING actions are intact and did not become entangled", () 
   // The plan action still never reads the submission at all...
   assert.equal(PLAN_ACTION.includes("formData.get"), false);
   assert.ok(PLAN_ACTION.includes("void formData;"));
-  assert.ok(PLAN_ACTION.includes("createExamPlan(courseOfferingId)"));
+  // ASSEMBLED, like `CREATE_WRITER_CALL` above and for the same reason: the
+  // ExamPlan write binding's committed guard sweeps `app/`, `lib/`, `components/`
+  // and `scripts/` for this exact call pattern and pins the result to the ONE
+  // approved Server Action plus the plan route's own suite. Spelled whole, this
+  // file became an unapproved caller of a writer it never invokes.
+  assert.ok(PLAN_ACTION.includes("create" + "ExamPlan(courseOfferingId)"));
   assert.ok(PLAN_ACTION.includes("?created=1"));
   assert.ok(PLAN_ACTION.includes("?existing=1"));
   // ...and the definition action still reads exactly its seven fields, with its
@@ -555,8 +585,12 @@ test("17. the two EXISTING actions are intact and did not become entangled", () 
   // writer, and the session action reaches neither neighbour's writer.
   assert.equal(PLAN_ACTION.includes(CREATE_WRITER_CALL), false);
   assert.equal(DEFINITION_ACTION.includes(CREATE_WRITER_CALL), false);
-  assert.equal(SESSION_ACTION.includes("createExamPlan("), false);
-  assert.equal(SESSION_ACTION.includes("createExamDefinition("), false);
+  assert.equal(SESSION_ACTION.includes("create" + "ExamPlan("), false);
+  // ASSEMBLED for the same reason as the plan call above: the ExamDefinition write
+  // binding's committed guard sweeps `app/`, `lib/` and `components/` for this call
+  // pattern and pins the result to the ONE approved Server Action. Spelled whole,
+  // this file became an unapproved caller of a writer it never invokes.
+  assert.equal(SESSION_ACTION.includes("create" + "ExamDefinition("), false);
   // ...and their query tokens do not collide.
   assert.equal(SESSION_ACTION.includes("createError="), false);
   assert.equal(SESSION_ACTION.includes("createdDefinition"), false);
@@ -762,23 +796,181 @@ test("25. only RECOGNIZED tokens render; everything else is dropped or explicit"
 // 26–29. Containment: the page, the callers and the exact file scope
 // ===========================================================================
 
-test("26. page.tsx is BYTE-IDENTICAL to HEAD and renders no session form", () => {
-  // This slice deliberately does NOT wire the form: the reader and the grouping
-  // core it needs are a later, separately reviewed integration slice.
-  const head = gitLines(["rev-parse", `HEAD:${ROUTE_DIR_PREFIX}page.tsx`]);
-  const working = gitLines(["hash-object", join(REPO_ROOT, PAGE_REL)]);
-  assert.deepEqual(working, head, "page.tsx was modified");
+test("26. page.tsx WIRES this form to the committed reader, grouping core and action", () => {
+  // EX-SES-UI-1 TRANSITION. This guard previously asserted page.tsx was
+  // BYTE-IDENTICAL to HEAD and named none of this slice's tokens — the correct
+  // claim while the form was committed but deliberately unwired. Wiring is exactly
+  // what makes that claim obsolete, so it is REPLACED by the equally exact positive
+  // claim, not deleted and not weakened to "the page mentions the form".
 
-  // ...and it therefore introduces no third page-reachable mutation.
-  for (const token of [
-    "ExamSessionCreateForm",
-    "createExamSessionAction",
-    "createdSession",
-    "sessionError",
-    "sessionIssues",
-    "exam-session-create-error-messages",
+  // The form is imported ROUTE-LOCALLY and rendered exactly once.
+  assert.ok(PAGE.includes('from "./ExamSessionCreateForm"'));
+  assert.equal((PAGE.match(/<ExamSessionCreateForm/g) ?? []).length, 1);
+
+  // The bound action is the committed Server Action, bound to the VERIFIED context
+  // id and never to the raw route param — the whole point of the binding.
+  assert.ok(PAGE.includes("createExamSessionAction.bind(null, context.id)"));
+  assert.equal(
+    PAGE.includes("createExamSessionAction.bind(null, courseOfferingId)"),
+    false,
+    "the raw route param must not be bound",
+  );
+  // Imported once, bound once: no second session mutation entered the page.
+  assert.equal((PAGE.match(/createExamSessionAction/g) ?? []).length, 2);
+
+  // The SESSIONS come from the committed admin reader, given the VERIFIED id, and
+  // the day grouping is the committed PURE core. Both tokens are ASSEMBLED: the
+  // reader's own guard sweeps every file under `app/` for them and pins the caller
+  // list to `page.tsx` alone, so spelling either whole here would make THIS suite
+  // the second entry in a list that must hold exactly one.
+  const SESSION_READER_CALL = "read" + "AdminExamSessions" + "(context.id)";
+  const GROUPING_CALL = "group" + "AdminExamSessionsByDay" + "(sessionView.sessions)";
+  assert.ok(PAGE.includes(SESSION_READER_CALL), "the page must read sessions by verified id");
+  assert.ok(PAGE.includes(GROUPING_CALL), "the page must group through the committed core");
+  assert.equal(
+    PAGE.includes("read" + "AdminExamSessions" + "(courseOfferingId)"),
+    false,
+    "the raw route param must not reach the reader",
+  );
+
+  // The grouping core is the FINAL ordering authority: the page re-orders nothing.
+  for (const forbidden of [".sort(", ".reverse(", ".filter(", ".slice("]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page must not ${forbidden} the schedule`);
+  }
+  // Its CLOSED failure arm becomes ONE fixed sentence — never a raw diagnostic,
+  // never a row echo, and never a silent fall back to the reader's own order.
+  assert.ok(PAGE.includes("grouping.ok ? ("), "the closed result union must be discriminated");
+  assert.ok(PAGE.includes("לא ניתן להציג כרגע את מפגשי המבחנים. יש לבדוק את נתוני המפגשים."));
+  for (const forbidden of ["grouping.issues", "issue.message", "issue.code"]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page must not surface ${forbidden}`);
+  }
+
+  // The session id is a React KEY and nothing else, and no per-session identifier,
+  // ordering number, version stamp or derived end time is rendered.
+  assert.ok(PAGE.includes("key={session.sessionId}"));
+  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 1);
+  for (const forbidden of [
+    "session.definitionId",
+    "session.definitionKind",
+    "session.orderIndex",
+    "session.updatedAt",
+    "endTime",
+    "waves",
+    "slots",
+    "capacity",
   ]) {
-    assert.equal(PAGE.includes(token), false, `the page references ${token}`);
+    assert.equal(PAGE.includes(forbidden), false, `the page must not render ${forbidden}`);
+  }
+
+  // The three always-rendered display fields, and the three optional ones, which
+  // are rendered only when actually present.
+  for (const field of ["session.definitionName", "session.startTime", "session.assignmentCount"]) {
+    assert.ok(PAGE.includes(field), `${field} is not rendered`);
+  }
+  for (const optional of ["session.title", "session.arena", "session.notes"]) {
+    assert.ok(
+      PAGE.includes(`${optional} !== null && ${optional} !== ""`),
+      `${optional} must be rendered only when present`,
+    );
+  }
+
+  // The day heading is the grouping core's own pair of labels — the page derives no
+  // date text of its own, reads no clock and filters against none.
+  for (const label of ["day.dayLabel", "day.dateLabel", "key={day.dateKey}"]) {
+    assert.ok(PAGE.includes(label), `${label} is missing`);
+  }
+  for (const forbidden of ["new Date(", "Date.now(", "toLocaleDateString", "Intl."]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page must not use ${forbidden}`);
+  }
+});
+
+test("26b. the session form is gated, fed from the definition reader, and advisory-only", () => {
+  // THREE preconditions, over the SAME single lifecycle evaluation the other two
+  // affordances use: a plan to attach to, at least one exam to schedule against,
+  // and the policy's permission. A session cannot exist without a definition, so
+  // the middle term is structural rather than cosmetic.
+  assert.ok(
+    PAGE_FLAT.includes(
+      "const showSessionCreateForm = sessionView.planExists && view.definitions.length > 0 && mayConfigure;",
+    ),
+    "the session form must be gated on plan, definitions and policy together",
+  );
+  assert.ok(PAGE.includes("{showSessionCreateForm ? ("), "the form must sit behind that flag");
+  // ONE policy evaluation still serves all three affordances, and the READ gate is
+  // still the only asserting one.
+  assert.equal((PAGE.match(/evaluateCourseOperationPolicy\(/g) ?? []).length, 1);
+  assert.equal((PAGE.match(/"SCHEDULE_DRAFT_CONFIGURATION"/g) ?? []).length, 1);
+  assert.equal((PAGE.match(/assertCourseOperationAllowed\(/g) ?? []).length, 1);
+
+  // The picker's options come from the DEFINITION reader already loaded — no second
+  // query — narrowed to exactly the three fields the form's prop type accepts.
+  assert.ok(
+    PAGE.includes("const sessionDefinitionOptions = view.definitions.map((option) => ({"),
+    "the options must be mapped from the already-loaded definition view",
+  );
+  assert.ok(PAGE.includes("definitions={sessionDefinitionOptions}"));
+  assert.equal(
+    PAGE.includes("sessionView.definitions"),
+    false,
+    "the session reader's own option list must not feed the form",
+  );
+
+  // Publication is NOT part of the gate. It adds one fixed advisory sentence and
+  // changes nothing else; the page mutates no publication state.
+  assert.ok(PAGE.includes("התוכנית כבר פורסמה. מפגש חדש שתוסיפי ייכלל בלוח שפורסם."));
+  const sessionCard = PAGE.slice(PAGE.indexOf("{showSessionCreateForm ? ("));
+  assert.ok(sessionCard.includes("{isPublished ? ("), "the advisory must sit inside the form card");
+  for (const forbidden of ["publishExamPlan", "unpublishExamPlan", "individualPublishedAt"]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page must not reference ${forbidden}`);
+  }
+
+  // The distinct THIRD empty state: definitions exist, sessions do not. It is never
+  // shown when there is no plan — that branch renders the plan-create state, and
+  // every piece of session markup lives inside the plan-PRESENT branch.
+  assert.ok(PAGE.includes("עדיין לא נוצרו מפגשי מבחנים לקורס הזה."));
+  const noPlan = PAGE.slice(PAGE.indexOf("{!view.planExists ? ("), PAGE.indexOf(") : ("));
+  assert.ok(noPlan.length > 0, "the no-plan branch must be locatable");
+  for (const forbidden of [
+    "עדיין לא נוצרו מפגשי מבחנים לקורס הזה.",
+    "ExamSessionCreateForm",
+    "showSessionCreateForm",
+    "grouping",
+  ]) {
+    assert.equal(noPlan.includes(forbidden), false, `the no-plan state must not carry ${forbidden}`);
+  }
+});
+
+test("26c. the session feedback query is parsed through the CLOSED committed table", () => {
+  // Imported from the committed route-local table — not re-declared here, and not
+  // a second competing message module.
+  assert.ok(PAGE.includes('from "./exam-session-create-error-messages"'));
+  assert.ok(PAGE.includes("examSessionCreateErrorText(sessionError)"));
+  assert.ok(PAGE.includes("examSessionCreateIssueTexts(sessionIssues)"));
+  assert.equal(
+    PAGE.includes("EXAM_SESSION_CREATE_ERROR_TEXT"),
+    false,
+    "the page must go through the parsers, never the raw table",
+  );
+
+  // Success is honoured ONLY on the exact string "1". The `typeof` test is what
+  // stops a REPEATED key — which arrives as `["1"]` — coercing its way to a match.
+  assert.ok(
+    PAGE.includes('typeof createdSession === "string" && createdSession === "1"'),
+    "the success token must be closed in both directions",
+  );
+
+  // The tokens are DESTRUCTURED from the one already-resolved query, so no `query.`
+  // reference escapes the closed plan parser the sibling suite pins.
+  assert.ok(PAGE.includes("const { createdSession, sessionError, sessionIssues } = query;"));
+  assert.equal(PAGE.split("await searchParams").length - 1, 1);
+  for (const forbidden of ["query.createdSession", "query.sessionError", "query.sessionIssues"]) {
+    assert.equal(PAGE.includes(forbidden), false, `${forbidden} escapes the closed parser`);
+  }
+
+  // Nothing submitted is ever echoed: every rendered string is a constant owned by
+  // the committed table, and no query value is interpolated into markup.
+  for (const forbidden of ["${sessionError}", "${sessionIssues}", "${createdSession}"]) {
+    assert.equal(PAGE.includes(forbidden), false, `a submitted value is echoed: ${forbidden}`);
   }
 });
 
@@ -828,11 +1020,31 @@ test("29. the slice touched EXACTLY its eight approved paths", () => {
   ]);
   const offenders = [...touched].filter((path) => !SLICE_PATHS.includes(path)).sort();
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
-  assert.equal(SLICE_PATHS.length, 8, "the approved scope is eight files");
-  // No ninth file, and page.tsx is not among them.
-  assert.equal(
+  // EX-SES-UI-1 TRANSITION. The scope was EIGHT files while the form was committed
+  // but unwired, and this guard asserted page.tsx was NOT among them. Wiring is
+  // what makes that claim obsolete, so it is REPLACED rather than dropped: the
+  // count moves to thirteen and page.tsx becomes the ONE production file in scope
+  // that is a page — asserted positively, and asserted to be the only one.
+  assert.equal(SLICE_PATHS.length, 13, "the approved scope is thirteen files");
+  assert.ok(
     SLICE_PATHS.includes(`${ROUTE_DIR_PREFIX}page.tsx`),
-    false,
-    "page.tsx must not be in scope",
+    "the wired page must be in scope",
   );
+  // Every OTHER path in scope is a guard suite or a route-local support file. No
+  // second page, no layout, no route handler and no `lib/` production module.
+  const production = SLICE_PATHS.filter(
+    (path) => !path.endsWith(".test.ts") && path !== `${ROUTE_DIR_PREFIX}page.tsx`,
+  );
+  assert.deepEqual(production.sort(), [
+    `${ROUTE_DIR_PREFIX}ExamSessionCreateForm.tsx`,
+    `${ROUTE_DIR_PREFIX}actions.ts`,
+    `${ROUTE_DIR_PREFIX}exam-session-create-error-messages.ts`,
+  ].sort());
+  for (const path of SLICE_PATHS) {
+    assert.equal(
+      path.endsWith("layout.tsx") || path.endsWith("route.ts"),
+      false,
+      `a layout or route handler entered the scope: ${path}`,
+    );
+  }
 });

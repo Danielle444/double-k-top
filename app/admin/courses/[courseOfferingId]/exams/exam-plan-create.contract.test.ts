@@ -93,6 +93,13 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  // EX-SES-UI-1, which WIRES that create form — plus the committed session reader
+  // and the pure day-grouping core — into the page, and re-points this suite's
+  // flattened `searchParams` shape from six keys to nine. Assembled for the reason
+  // above, and most sharply of all here: the session reader's committed guard pins
+  // its caller list to EXACTLY the page, so spelling that module name whole would
+  // make THIS suite the second entry in a list that must hold one.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
 ];
 
 /**
@@ -510,13 +517,15 @@ test("12. the plan-EXISTING branch carries no create affordance whatsoever", () 
 test("13. searchParams carries ONLY closed feedback tokens", () => {
   // A CLOSED, exhaustively declared key set, and no other query key is ever
   // consulted. It grew from P3's three to six when the approved definition-create
-  // feature added its own three outcome tokens; it is still an exact list, every key
-  // is still feedback-only, and not one of them names a course, plan or definition.
+  // feature added its own three outcome tokens, and to NINE when EX-SES-UI-1 wired
+  // the session create form and brought its three. It is still an exact list, every
+  // key is still feedback-only, and not one of them names a course, a plan, a
+  // definition or a session — which the id ban below re-states from the other side.
   assert.ok(
     PAGE_FLAT.includes(
-      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; }>;",
+      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; }>;",
     ),
-    "the searchParams type must be the closed six-key shape",
+    "the searchParams type must be the closed nine-key shape",
   );
   // created/existing are honoured only on the exact string "1"; a repeated key
   // (which arrives as an array) is not a recognized token.

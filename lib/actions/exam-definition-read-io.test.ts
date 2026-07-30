@@ -126,6 +126,22 @@ const SLICE_PATHS = [
   // for its module name, and naming it here would enrol this suite in the
   // caller allow-list it must stay out of.
   "lib/actions/" + "exam-definition-write" + "-io.test.ts",
+  // EX-SES-UI-1 — the slice that wires the committed exam SESSION reader, the day
+  // grouping core and the session create form into the very page this reader
+  // already feeds. Those files travel in the same working tree, so they are
+  // listed here for the footprint guard below and for NO other reason: test 20's
+  // claim about who may call the DEFINITION reader is untouched, and the page is
+  // still its only production caller.
+  //
+  // Assembled for the reason above, and for the session reader most sharply of
+  // all: its committed guard pins its own caller list to EXACTLY the exams page,
+  // so a suite spelling that module name whole would become a second entry there.
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
