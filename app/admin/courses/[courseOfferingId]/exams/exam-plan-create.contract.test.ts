@@ -67,6 +67,27 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   "lib/exam/create-exam-plan" + "-core.test.ts",
   "lib/actions/exam-plan-write" + "-io.test.ts",
+  // The rest of the integration batch P3 now travels in: the approved
+  // ExamDefinition create UI, and the ExamSession edit/delete writers. Every one
+  // of these is assembled from pieces for the reason in the header — and the
+  // session paths most sharply of all, because that slice's committed guard
+  // asserts its writers have EXACTLY ZERO callers anywhere under `app/`.
+  "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  // The definition READER's guard suite likewise sweeps `app/` for its own module
+  // name and pins an EXACT three-entry caller list, so this path is assembled too:
+  // spelling it whole would make THIS suite a fourth "caller" of a reader it never
+  // touches, and the only way to make that pass would be to widen the very list the
+  // guard exists to keep narrow.
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/exam/" + "update-exam-session" + "-core.ts",
+  "lib/exam/" + "update-exam-session" + "-core.test.ts",
+  "lib/exam/" + "delete-exam-session" + "-core.ts",
+  "lib/exam/" + "delete-exam-session" + "-core.test.ts",
 ];
 
 /**
@@ -104,9 +125,44 @@ const PAGE = stripComments(readSource(PAGE_REL));
 const ACTION_FLAT = squash(ACTION);
 const PAGE_FLAT = squash(PAGE);
 
+/**
+ * The body of ONE action inside the now-SHARED `"use server"` module.
+ *
+ * WHY THIS EXISTS. `actions.ts` was P3's alone when this suite was written. The
+ * approved ExamDefinition create UI adds a SECOND action beside it, and the two
+ * are deliberately kept as two separate endpoints. Every claim about how P3's
+ * action treats the REQUEST — that it reads nothing from FormData, that it
+ * revalidates exactly one path, that it redirects on exactly three branches — is
+ * therefore re-pointed at P3's own body instead of at the whole file. That is the
+ * same claim, correctly targeted: asserting it file-wide would now be asserting it
+ * about the neighbouring action too, which has its own contract and its own suite.
+ *
+ * Module-WIDE claims stay module-wide: the `"use server"` first statement, the
+ * exact export list, the import surface and the total absence of try/catch are
+ * properties of the file and are checked as such below.
+ */
+function actionBody(source: string, name: string): string {
+  const start = source.indexOf(`export async function ${name}(`);
+  assert.ok(start > -1, `${name} is not declared in the action module`);
+  const rest = source.slice(start + 1);
+  const next = rest.indexOf("export async function ");
+  return next === -1 ? source.slice(start) : source.slice(start, start + 1 + next);
+}
+
+/** P3's OWN action, isolated from the definition-create action beside it. */
+const PLAN_ACTION = actionBody(ACTION, "createExamPlanAction");
+
 // Split specifiers — see the header note on why these are assembled.
 const WRITE_BINDING_MODULE = "exam-plan-write" + "-io";
 const WRITE_BINDING_SPECIFIER = "@/lib/actions/" + WRITE_BINDING_MODULE;
+/**
+ * The NEIGHBOURING slice's write binding. Assembled for a sharper reason than the
+ * rest: that binding's committed guard sweeps every file under `app/` for its own
+ * module name and asserts an EXACT caller list of one, so spelling it whole here
+ * would enrol this suite in a list it must stay out of.
+ */
+const DEFINITION_BINDING_MODULE = "exam-definition-write" + "-io";
+const DEFINITION_BINDING_SPECIFIER = "@/lib/actions/" + DEFINITION_BINDING_MODULE;
 const PUBLIC_WRITE_CALL = new RegExp("\\bcreate" + "ExamPlan\\s*\\(");
 const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
 const GENERATED_CLIENT = ["@prisma", "client"].join("/");
@@ -164,18 +220,25 @@ test("1. the three P3 files exist at the EXACT course-scoped route", () => {
   }
 });
 
-test("2. the action module is a Server Action module exporting EXACTLY one function", () => {
+test("2. the action module is a Server Action module exporting EXACTLY the two approved actions", () => {
   const firstStatement = ACTION.split("\n").find((line) => line.trim().length > 0);
   assert.equal(firstStatement?.trim(), '"use server";', `first statement: ${firstStatement}`);
 
-  // Everything exported from a "use server" module is a public network endpoint,
-  // so the export list IS the attack surface. Exactly one.
+  // Everything exported from a "use server" module is a public network endpoint, so
+  // the export list IS the attack surface. It is still an EXHAUSTIVE allow-list —
+  // it simply now names both approved actions, because the route legitimately has
+  // two. No helper, no parser, no constant and no type may join them.
   const exports = [...ACTION.matchAll(/export\s+(?:async\s+)?(?:function|const|class|type)\s+(\w+)/g)]
     .map((match) => match[1])
     .sort();
-  assert.deepEqual(exports, ["createExamPlanAction"]);
+  assert.deepEqual(exports, ["createExamDefinitionAction", "createExamPlanAction"]);
   assert.equal(/export\s*\{/.test(ACTION), false, "no re-export list is allowed");
   assert.equal(/export\s+default/.test(ACTION), false, "no default export is allowed");
+  assert.equal(/export\s+const/.test(ACTION), false, "no exported constant is allowed");
+  assert.equal(/export\s+type/.test(ACTION), false, "no exported type is allowed");
+  // Neither action was folded into a single generic endpoint that would have to
+  // choose its operation from the request.
+  assert.equal((ACTION.match(/export async function /g) ?? []).length, 2);
 });
 
 test("3. the action has the EXACT locked signature, and returns void", () => {
@@ -192,17 +255,22 @@ test("3. the action has the EXACT locked signature, and returns void", () => {
 // ===========================================================================
 
 test("4. requireAdmin() is the FIRST awaited operation in the action", () => {
-  assert.ok(ACTION.includes("await requireAdmin()"), "requireAdmin() must be awaited");
+  // Scoped to P3's own body — see `actionBody` above.
+  assert.ok(PLAN_ACTION.includes("await requireAdmin()"), "requireAdmin() must be awaited");
   assert.equal(
-    ACTION.indexOf("await "),
-    ACTION.indexOf("await requireAdmin()"),
+    PLAN_ACTION.indexOf("await "),
+    PLAN_ACTION.indexOf("await requireAdmin()"),
     "some other operation is awaited before requireAdmin()",
   );
   // ...and it runs before the write binding is entered.
   assert.ok(
-    ACTION.indexOf("await requireAdmin()") < ACTION.indexOf("createExamPlan(courseOfferingId)"),
+    PLAN_ACTION.indexOf("await requireAdmin()") <
+      PLAN_ACTION.indexOf("createExamPlan(courseOfferingId)"),
     "the write binding is reached before authorization",
   );
+  // Module-wide: the very first awaited operation in the FILE is an admin gate, so
+  // no action in it can have been added with the gate further down.
+  assert.equal(ACTION.indexOf("await "), ACTION.indexOf("await requireAdmin()"));
 });
 
 test("5. the offering id is SERVER-BOUND from the validated route context", () => {
@@ -221,8 +289,10 @@ test("5. the offering id is SERVER-BOUND from the validated route context", () =
 });
 
 test("6. NOTHING is read from FormData — not the offering id, not a plan id", () => {
-  // The parameter exists because React supplies it, and is never inspected.
-  assert.equal(/formData\s*\./.test(ACTION), false, "the action reads from formData");
+  // Scoped to P3's own body: the neighbouring definition-create action reads seven
+  // NAMED fields, which is its own approved contract and its own suite's business.
+  // What must stay true here is that THIS action inspects the submission not at all.
+  assert.equal(/formData\s*\./.test(PLAN_ACTION), false, "the action reads from formData");
   for (const forbidden of [
     "formData.get",
     "formData.has",
@@ -233,7 +303,18 @@ test("6. NOTHING is read from FormData — not the offering id, not a plan id", 
     "courseOfferingId\")",
     "get(",
   ]) {
-    assert.equal(ACTION.includes(forbidden), false, `the action must not use ${forbidden}`);
+    assert.equal(PLAN_ACTION.includes(forbidden), false, `the action must not use ${forbidden}`);
+  }
+  // The parameter exists only because React supplies it, and is discarded.
+  assert.ok(PLAN_ACTION.includes("void formData;"), "the unread parameter must be explicit");
+  // Neither action anywhere in the module may take the COURSE or the PLAN from the
+  // submission — that claim is module-wide, because it is the scoping boundary.
+  for (const forbidden of [
+    'formData.get("courseOfferingId")',
+    'formData.get("planId")',
+    'formData.get("id")',
+  ]) {
+    assert.equal(ACTION.includes(forbidden), false, `no action may read ${forbidden}`);
   }
   // The form itself submits no fields at all, so the FormData is empty by
   // construction rather than merely ignored.
@@ -248,11 +329,11 @@ test("6. NOTHING is read from FormData — not the offering id, not a plan id", 
 
 test("7. the three refusal codes map to their EXACT locked targets", () => {
   // offering_not_found -> the safe courses list; the unresolved id builds no URL.
-  assert.ok(ACTION.includes('if (result.code === "offering_not_found") {'));
-  assert.ok(ACTION.includes('redirect("/admin/courses?error=invalid")'));
+  assert.ok(PLAN_ACTION.includes('if (result.code === "offering_not_found") {'));
+  assert.ok(PLAN_ACTION.includes('redirect("/admin/courses?error=invalid")'));
   // Every other refusal -> this course's exams path, carrying ONLY the stable code.
   assert.ok(
-    ACTION.includes("redirect(`${examsPath}?error=${encodeURIComponent(result.code)}`)"),
+    PLAN_ACTION.includes("redirect(`${examsPath}?error=${encodeURIComponent(result.code)}`)"),
     "a refusal must return to the exams path with the stable code",
   );
   // The code is the ONLY dynamic value in any redirect target: no message, no
@@ -269,38 +350,46 @@ test("7. the three refusal codes map to their EXACT locked targets", () => {
 });
 
 test("8. success revalidates ONLY this course's exams path, exactly once", () => {
+  // Scoped to P3's body: each action revalidates exactly once, so a file-wide count
+  // would now read 2 and prove nothing about either.
   assert.equal(
-    ACTION.split("revalidatePath(").length - 1,
+    PLAN_ACTION.split("revalidatePath(").length - 1,
     1,
     "revalidatePath must be called exactly once",
   );
-  assert.ok(ACTION.includes("revalidatePath(examsPath)"));
+  assert.ok(PLAN_ACTION.includes("revalidatePath(examsPath)"));
   assert.ok(
-    ACTION.includes(
+    PLAN_ACTION.includes(
       "const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`",
     ),
     "the exams path must be built from the bound offering id",
   );
-  // No other route, layout or tag is revalidated.
+  // No other route, layout or tag is revalidated — anywhere in the module.
   for (const forbidden of ['revalidatePath("/', "revalidateTag", '"layout"', '"page"']) {
     assert.equal(ACTION.includes(forbidden), false, `the action must not use ${forbidden}`);
   }
+  // Every revalidation in the file is of that one bound path, and there is exactly
+  // one per action: neither can quietly refresh a second surface.
+  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 2);
+  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 2);
   // The two successes are distinguished, and both land on the exams path.
   assert.ok(
-    ACTION.includes(
+    PLAN_ACTION.includes(
       "redirect(result.created ? `${examsPath}?created=1` : `${examsPath}?existing=1`)",
     ),
     "created/existing must be reported distinctly",
   );
 });
 
-test("9. redirects sit outside any try/catch — the action has none at all", () => {
+test("9. redirects sit outside any try/catch — the module has none at all", () => {
+  // Module-wide, and deliberately so: this is the strongest form of the rule, and it
+  // must hold for every action the file grows.
   for (const forbidden of [/\btry\b/, /\bcatch\b/, /\bfinally\b/]) {
     assert.equal(forbidden.test(ACTION), false, `the action must not use ${forbidden}`);
   }
   // Every redirect is therefore free to throw NEXT_REDIRECT to the framework, as
   // is the login redirect thrown by requireAdmin() and by the binding itself.
-  assert.ok(ACTION.split("redirect(").length - 1 >= 3, "all three branches must redirect");
+  assert.ok(PLAN_ACTION.split("redirect(").length - 1 >= 3, "all three branches must redirect");
 });
 
 // ===========================================================================
@@ -339,18 +428,31 @@ test("10. nothing creates a plan automatically — no effect, no auto-submit", (
 });
 
 test("11. the create affordance appears ONLY in the no-plan + configurable state", () => {
-  // Gated on the course lifecycle, using the non-throwing policy evaluation.
+  // Gated on the course lifecycle, using the non-throwing policy evaluation on the
+  // VERIFIED status. The page now makes that ONE evaluation and derives both this
+  // affordance and the definition form's from it, so the assertion moved from "the
+  // flag IS the evaluation" to "the flag is that evaluation AND plan-absence" —
+  // which is strictly stronger: the plan-create form is now unrenderable when a
+  // plan exists by CONSTRUCTION, not merely by where it sits in the markup.
   assert.ok(
     PAGE_FLAT.includes(
-      'const canCreatePlan = evaluateCourseOperationPolicy( context.status, "SCHEDULE_DRAFT_CONFIGURATION", ).allowed;',
+      'const mayConfigure = evaluateCourseOperationPolicy( context.status, "SCHEDULE_DRAFT_CONFIGURATION", ).allowed;',
     ),
     "the affordance must be gated on SCHEDULE_DRAFT_CONFIGURATION",
   );
+  assert.ok(
+    PAGE.includes("const canCreatePlan = mayConfigure && !view.planExists;"),
+    "the affordance must require BOTH the lifecycle gate and plan-absence",
+  );
+  // Exactly one policy evaluation exists, so this affordance and the neighbouring
+  // definition form cannot drift onto different course operations.
+  assert.equal((PAGE.match(/evaluateCourseOperationPolicy\(/g) ?? []).length, 1);
+  assert.equal((PAGE.match(/"SCHEDULE_DRAFT_CONFIGURATION"/g) ?? []).length, 1);
   assert.ok(PAGE.includes("{canCreatePlan && ("), "the form must be rendered conditionally");
 
   // ...and positioned inside the plan-ABSENT branch: after the `!view.planExists`
-  // test and before the first content of the plan-present branch.
-  const noPlanBranch = PAGE.indexOf("!view.planExists");
+  // JSX test and before the first content of the plan-present branch.
+  const noPlanBranch = PAGE.indexOf("{!view.planExists ? (");
   const form = PAGE.indexOf("<ExamPlanCreateForm");
   const planPresentBranch = PAGE.indexOf("מצב תוכנית המבחנים");
   assert.ok(noPlanBranch > -1 && form > -1 && planPresentBranch > -1, "all three markers exist");
@@ -386,12 +488,15 @@ test("12. the plan-EXISTING branch carries no create affordance whatsoever", () 
 // ===========================================================================
 
 test("13. searchParams carries ONLY closed feedback tokens", () => {
-  // Exactly three declared keys, and no other query key is ever consulted.
+  // A CLOSED, exhaustively declared key set, and no other query key is ever
+  // consulted. It grew from P3's three to six when the approved definition-create
+  // feature added its own three outcome tokens; it is still an exact list, every key
+  // is still feedback-only, and not one of them names a course, plan or definition.
   assert.ok(
     PAGE_FLAT.includes(
-      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; }>;",
+      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; }>;",
     ),
-    "the searchParams type must be the closed three-key shape",
+    "the searchParams type must be the closed six-key shape",
   );
   // created/existing are honoured only on the exact string "1"; a repeated key
   // (which arrives as an array) is not a recognized token.
@@ -433,9 +538,13 @@ test("14. no submitted value is ever echoed — the query selects a message, nev
 
 test("15. NO query value can influence which course is read or written", () => {
   // searchParams appears exactly three times: the destructured prop, its type,
-  // and the single await that hands it straight to the closed parser.
+  // and the SINGLE await that resolves it. One resolution, shared by both closed
+  // parsers — a second `await searchParams` would let a later reader diverge from
+  // the one this suite describes.
   assert.equal(PAGE.split("searchParams").length - 1, 3, "searchParams must appear exactly 3 times");
-  assert.ok(PAGE.includes("const feedback = feedbackFrom(await searchParams);"));
+  assert.equal(PAGE.split("await searchParams").length - 1, 1);
+  assert.ok(PAGE.includes("const query = await searchParams;"));
+  assert.ok(PAGE.includes("const feedback = feedbackFrom(query);"));
 
   // The parsed result is a {tone, message} pair, and `query.` is referenced ONLY
   // inside the parser — never near the context, the reader or a href.
@@ -494,7 +603,7 @@ test("16. no P3 file touches a database client directly", () => {
   }
 });
 
-test("17. no publication, source-date, definition, session, capability or notification work", () => {
+test("17. no publication, source-date, session, capability or notification work", () => {
   for (const [name, source] of [
     ["page", PAGE],
     ["form", FORM],
@@ -503,20 +612,30 @@ test("17. no publication, source-date, definition, session, capability or notifi
     // Mutation VERBS, not the word "publish": the page legitimately RENDERS the
     // committed read-only publication state (`view.publishedAt`), which predates
     // P3 and is proven by the sibling suite. What must be absent is any way to
-    // CHANGE publication, source dates, definitions or sessions from here.
+    // CHANGE publication, source dates or sessions from here.
+    //
+    // The definition CREATE verb is no longer in this list, because it is now an
+    // approved neighbour with its own reviewed contract and its own suite. Every
+    // OTHER definition verb stays forbidden, and the two checks below re-establish
+    // the narrower claim from both directions.
     for (const forbidden of [
       "publishExamPlan",
       "unpublishExamPlan",
       "deleteExamPlan",
       "sourceDate",
       "SourceDate",
-      "examDefinition",
+      // The Prisma model ACCESSORS themselves: no file here may touch a table.
+      // Spelled with the trailing dot, which is what makes it an accessor — the
+      // page legitimately imports route-local message helpers whose names begin
+      // `examDefinition...`, and those read no table at all. The stronger claim
+      // that no Prisma client is reachable from any of these files is asserted
+      // separately, by test 16 and by the sibling route suite.
+      "examDefinition.",
       "examSession",
       "ExamSession",
-      "createExamDefinition",
-      "updateExamDefinition",
-      "deleteExamDefinition",
-      "reorderExamDefinitions",
+      "update" + "ExamDefinition",
+      "delete" + "ExamDefinition",
+      "reorder" + "ExamDefinitions",
       "capabilit",
       "Capabilit",
       "notification",
@@ -527,16 +646,35 @@ test("17. no publication, source-date, definition, session, capability or notifi
       assert.equal(source.includes(forbidden), false, `the ${name} must not reference ${forbidden}`);
     }
   }
-  // The action in particular writes nothing but the plan: publication state is
-  // absent from it entirely, in either spelling.
-  for (const forbidden of ["publish", "Publish"]) {
-    assert.equal(ACTION.includes(forbidden), false, `the action must not reference ${forbidden}`);
+  // P3's OWN action writes nothing but the plan: publication state is absent from
+  // it entirely, in either spelling, and it names no part of the definition slice —
+  // so the two endpoints in this file cannot have become entangled.
+  for (const forbidden of [
+    "publish",
+    "Publish",
+    "ExamDefinition",
+    DEFINITION_BINDING_MODULE,
+  ]) {
+    assert.equal(
+      PLAN_ACTION.includes(forbidden),
+      false,
+      `P3's action must not reference ${forbidden}`,
+    );
   }
-  // The action's ENTIRE import surface is the four approved specifiers.
+  // Neither create form may reach a write binding of any kind: only the Server
+  // Action module may.
+  for (const forbidden of [WRITE_BINDING_MODULE, DEFINITION_BINDING_MODULE]) {
+    assert.equal(FORM.includes(forbidden), false, `the form must not reference ${forbidden}`);
+    assert.equal(PAGE.includes(forbidden), false, `the page must not reference ${forbidden}`);
+  }
+  // The module's ENTIRE import surface is the five approved specifiers: the admin
+  // boundary, the two committed write bindings, and the two framework modules.
+  // Nothing else — no Prisma, no core, no capability, no notification surface.
   const specifiers = [...ACTION.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(specifiers, [
     "@/lib/auth/require-admin",
     WRITE_BINDING_SPECIFIER,
+    DEFINITION_BINDING_SPECIFIER,
     "next/cache",
     "next/navigation",
   ].sort());
@@ -559,7 +697,7 @@ test("18. the ExamPlan write binding has EXACTLY one production caller", () => {
   assert.equal(APPROVED_CALLER.endsWith(".tsx"), false);
 });
 
-test("19. the route directory holds EXACTLY the four approved files", () => {
+test("19. the route directory holds EXACTLY the eight approved files", () => {
   // Tracked AND untracked, so this holds both before and after P3 is committed.
   // Listing the whole repository and filtering by prefix in JS is deliberate: a
   // `[courseOfferingId]` pathspec would be read by git as a character class.
@@ -572,15 +710,18 @@ test("19. the route directory holds EXACTLY the four approved files", () => {
     .filter((path) => path.startsWith(ROUTE_DIR_PREFIX))
     .sort();
   assert.deepEqual(routeFiles, [
+    "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);
 });
 
-test("20. P3 touched nothing outside its seven approved paths", () => {
+test("20. the batch touched nothing outside its approved paths", () => {
   // Worktree, index and untracked together, so the guard describes the SLICE
   // rather than one moment in its lifecycle.
   const touched = new Set([

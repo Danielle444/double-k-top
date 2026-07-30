@@ -51,6 +51,19 @@ const DELETE_CORE_TEST_REL = join("lib", "exam", "delete-exam-definition-core.te
 const REORDER_CORE_REL = join("lib", "exam", "reorder-exam-definitions-core.ts");
 const REORDER_CORE_TEST_REL = join("lib", "exam", "reorder-exam-definitions-core.test.ts");
 
+/**
+ * EX-S5B-5C — the ONE Server Action authorized to reach any writer in this
+ * module, named as an EXACT path. It wraps the CREATE writer only.
+ */
+const APPROVED_ACTION_CALLER = join(
+  "app",
+  "admin",
+  "courses",
+  "[courseOfferingId]",
+  "exams",
+  "actions.ts",
+);
+
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
 
 /** Strip comments so the guards assert on CODE, not on explanatory prose. */
@@ -989,7 +1002,7 @@ test("84. no notification, message or push module is imported", () => {
   }
 });
 
-test("85. no app/, route, page or Server Action caller exists for any of the four writers", () => {
+test("85. EXACTLY ONE Server Action caller exists, and only for the CREATE writer", () => {
   const declaring = new Set(
     [
       IO_REL,
@@ -1033,7 +1046,36 @@ test("85. no app/, route, page or Server Action caller exists for any of the fou
       }
     }
   }
-  assert.deepEqual(callers, [], `an unapproved caller exists: ${callers.join(", ")}`);
+
+  // EX-S5B-5C. This guard previously asserted NO caller at all. That claim is
+  // now superseded by exactly ONE approved Server Action — and it is re-pointed
+  // to that EXACT PATH rather than relaxed: the `app/` tree, the exams route
+  // directory and every other module remain forbidden, so a second caller
+  // (another route, a component, a `lib/actions` helper) still fails here.
+  assert.deepEqual(
+    callers.sort(),
+    [APPROVED_ACTION_CALLER],
+    `an unapproved caller exists: ${callers.join(", ")}`,
+  );
+
+  // The approved caller reaches the CREATE writer and NOTHING else: edit,
+  // removal and reorder have no caller anywhere in the repository.
+  const actionCode = stripComments(readFileSync(join(REPO_ROOT, APPROVED_ACTION_CALLER), "utf8"));
+  assert.ok(
+    /\bcreateExamDefinition\s*\(/.test(actionCode),
+    "the approved caller does not reach the create writer",
+  );
+  for (const forbidden of [
+    "updateExamDefinition",
+    "deleteExamDefinition",
+    "reorderExamDefinitions",
+  ]) {
+    assert.equal(
+      actionCode.includes(forbidden),
+      false,
+      `the approved caller also reaches ${forbidden}`,
+    );
+  }
 
   for (const dir of [
     join("app", "admin", "exams"),

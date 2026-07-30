@@ -1,29 +1,38 @@
 /**
- * EXAM EX-S5B-5B + EXAM PLAN P3 — the Exams surface: a read-only admin view of ONE
- * course offering's ExamDefinition configuration, plus the single explicit
- * affordance that brings an EMPTY exam plan into existence.
+ * EXAM EX-S5B-5B + EXAM PLAN P3 + EXAM EX-S5B-5C — the admin Exams surface of ONE
+ * course offering: a read of its ExamDefinition configuration, plus the TWO
+ * explicit create affordances that belong to it.
  *
- * Server Component. The only client component in this route is the create form,
- * and it exists solely to disable its own submit button while the action is in
- * flight; everything else on the page is static text derived from one server read.
+ * Server Component. The page itself holds no state and renders no form control:
+ * each create form is a separate client component, and the only mutations it can
+ * reach are the two Server Actions bound below.
  *
  * ===========================================================================
- * READ-ONLY EXCEPT FOR ONE EXPLICIT CREATE
+ * WHAT THIS ROUTE MAY MUTATE — AND WHAT IT STILL MAY NOT
  * ===========================================================================
- * This route contains exactly ONE mutation: creating an empty, unpublished
- * ExamPlan. The committed definition WRITE bindings (create / edit / delete /
- * reorder) and the source-date, session, publication and delete-plan slices remain
- * deliberately NOT reachable from here — not disabled, not hidden behind a flag,
- * but absent, with no import that could reach them.
+ * EXACTLY TWO mutations exist here, and they are MUTUALLY EXCLUSIVE by the state
+ * of the plan:
  *
- * The create is ALWAYS an explicit click. The page performs no write, so a plain
- * GET of this route — a refresh, a back button, a prefetch, a bookmark — can never
- * bring a plan into existence. There is no effect, no auto-submit and no redirect
- * that writes.
+ *   - no plan yet  -> create ONE empty, unpublished ExamPlan;
+ *   - plan present -> append ONE ExamDefinition to it.
  *
- * An ARCHIVED offering stays READABLE and gains no affordance: the create button
- * is rendered only when the course lifecycle permits configuration, and the server
- * binding independently refuses regardless of what is on screen.
+ * Editing, removing and reordering definitions, deleting or publishing the plan,
+ * exam sessions and source dates are NOT reachable — not disabled, not hidden
+ * behind a flag, but absent, with no import that could reach them.
+ *
+ * Both creates are ALWAYS an explicit click. The page performs no write, so a
+ * plain GET of this route — a refresh, a back button, a prefetch, a bookmark —
+ * can never bring a plan or a definition into existence. There is no effect, no
+ * auto-submit and no redirect that writes.
+ *
+ * An ARCHIVED offering stays fully READABLE and gains NEITHER affordance. That is
+ * decided by the course-lifecycle policy rather than by a hand-written status
+ * test — see the gates below — and each server binding independently refuses
+ * regardless of what is on screen.
+ *
+ * A PUBLISHED plan does not lose the definition-create form: whether a published
+ * plan may still be configured is the committed lifecycle policy's decision, not
+ * this page's, so publication only adds an advisory notice.
  *
  * ===========================================================================
  * THE ORDER
@@ -33,66 +42,77 @@
  *      and it never reflects the requested id back; the auth redirect and every
  *      unexpected error propagate untouched.
  *   2. `assertCourseOperationAllowed(context.status, "HISTORICAL_READ")` — the
- *      course-lifecycle READ gate, on the VERIFIED status. This is the read gate
- *      and NOT the definition write gate, so archived exam configuration stays
- *      readable.
+ *      course-lifecycle READ gate, on the VERIFIED status. This is the READ gate
+ *      and NOT either write gate, so archived exam configuration stays readable.
+ *      It is the ONLY gate on this page that can deny the page itself.
  *   3. `readExamDefinitionsForAdmin(context.id)` — with the VERIFIED context id,
  *      never the raw route param.
+ *   4. `evaluateCourseOperationPolicy(context.status, ...)` — the write gate,
+ *      asked ONCE as a QUESTION rather than as an assertion, purely to decide
+ *      which form to render. It is pure, total and default-deny, so an unknown
+ *      status hides both forms instead of exposing either.
  *
- * The query string is resolved AFTER the authorization boundary, so a caller who
- * is not an admin never has a query value parsed on their behalf.
- *
- * The reader independently re-runs both the admin/offering boundary and the same
- * lifecycle gate. That repetition is intended: the page must not be the only
- * thing standing between a caller and the data, and the page needs the verified
- * context anyway for its own back link.
+ * The reader independently re-runs both the admin/offering boundary and the read
+ * gate, and each Server Action's committed writer independently re-runs the admin
+ * boundary, the offering lookup AND the write gate. Step 4 is therefore a DISPLAY
+ * decision only: hiding a form prevents a pointless round trip and is never what
+ * makes the write safe.
  *
  * ===========================================================================
  * `searchParams` IS FEEDBACK ONLY — IT IS NOT SCOPE
  * ===========================================================================
  * The route's `[courseOfferingId]` remains the ONLY thing that decides which
- * course is read or written. `searchParams` carries CLOSED feedback tokens and
- * nothing else, and is parsed by `feedbackFrom` below into a fixed set of Hebrew
- * messages:
+ * course is read or written. No cookie, no current-offering resolver and no form
+ * field can influence it. `searchParams` carries CLOSED feedback tokens and
+ * nothing else, resolved ONCE, only after authorization and the read:
  *
- *   - `created=1`  — the plan was created by the previous click;
- *   - `existing=1` — a plan was already there and nothing was touched;
- *   - `error=<one of two known refusal codes>`.
+ *   - `created=1`            — the plan was created by the previous click;
+ *   - `existing=1`           — a plan was already there and nothing was touched;
+ *   - `error=<code>`         — one of two known plan refusal codes;
+ *   - `createdDefinition=1`  — the definition was created;
+ *   - `createError=<code>`   — a known definition refusal code;
+ *   - `createIssues=<codes>` — known definition validation issue codes.
  *
- * The parser is CLOSED in both directions. `created`/`existing` are honoured only
- * on the exact string `"1"`, and `error` only on a key the message table actually
- * owns — checked with `Object.hasOwn`, so an inherited property name such as
- * `constructor` cannot select a message. Every other query value, and every
- * unknown code, is silently IGNORED.
+ * Every parser here is CLOSED in both directions. `created`, `existing` and
+ * `createdDefinition` are honoured only on the exact string `"1"`; `error` only on
+ * a key the message table actually OWNS — checked with `Object.hasOwn`, so an
+ * inherited property name such as `constructor` cannot select a message — and the
+ * two definition parsers recognize only their own committed code sets. Every other
+ * query value, and every unknown code, is silently IGNORED.
  *
- * Nothing read from the query is ever interpolated into the page. The rendered
- * strings are constants chosen by the parser, so a submitted value cannot be
+ * A REPEATED query key arrives as an ARRAY, which is why every key is typed
+ * `string | string[]` and every check is a `typeof === "string"` comparison: an
+ * array must simply not be a recognized token, and a loose comparison would let
+ * `["1"]` coerce its way to a match.
+ *
+ * Nothing read from the query is ever interpolated into the page. Every rendered
+ * string is a constant chosen by a parser, so a submitted value cannot be
  * reflected back — the query can only pick a message, never supply one.
  *
  * Structurally, no query value can influence scope: `courseOfferingId` comes from
  * `params`, everything downstream uses the VERIFIED `context.id`, and the parsed
- * feedback is a `{ tone, message }` pair that reaches nothing but JSX. There is no
- * plan id anywhere on this page — the create action produces one and never
- * reveals it.
+ * feedback reaches nothing but JSX. There is no plan id and no definition id
+ * anywhere on this page — the create actions produce them and never reveal them.
  *
  * ===========================================================================
  * WHAT IS SHOWN, AND WHAT IS DELIBERATELY NOT
  * ===========================================================================
  * Each definition renders the manager's own configuration plus how many sessions
  * use it. No database id, no plan id and no `updatedAt` is rendered: the id
- * appears only as a React `key`, which is never text on the page, and the
- * version stamp belongs to a future conditional-edit slice, not to a reader.
+ * appears only as a React `key`, which is never text on the page, and the version
+ * stamp belongs to a future conditional-edit slice, not to a reader.
  *
- * Nothing on this page touches Teaching Practice, a student, an instructor, a
- * child or a parent contact — the reader cannot express any of them, and no such
- * module is imported.
+ * Nothing on this page touches Teaching Practice, a trainee, a coach, a child or
+ * a parent contact — the reader cannot express any of them, and no such module is
+ * imported.
  *
  * The Hebrew exam-kind labels are spelled out LOCALLY rather than imported from
  * the shared label module: that module is still inside the committed EX-C1
- * containment boundary, which forbids a page from importing it. The trade-off is
+ * containment boundary, which forbids a page from naming it. The trade-off is
  * recorded deliberately — a kind added to the enum will render as the explicit
- * unknown text below instead of failing the build here — and both should collapse
- * back onto the shared map when that boundary is lifted.
+ * unknown text below instead of failing the build here — and both this map and
+ * the create form's own option list should collapse back onto the shared table
+ * when that boundary is lifted.
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -109,16 +129,21 @@ import {
   readExamDefinitionsForAdmin,
   type AdminExamDefinitionListView,
 } from "@/lib/actions/exam-definition-read-io";
-import { createExamPlanAction } from "./actions";
+import { createExamPlanAction, createExamDefinitionAction } from "./actions";
 import { ExamPlanCreateForm } from "./ExamPlanCreateForm";
+import { ExamDefinitionCreateForm } from "./ExamDefinitionCreateForm";
+import {
+  examDefinitionCreateErrorText,
+  examDefinitionCreateIssueTexts,
+} from "./exam-definition-create-error-messages";
 
 export const dynamic = "force-dynamic";
 
 /**
- * The CLOSED refusal-code table. A code the create action can actually produce
- * maps to a fixed Hebrew sentence; anything else is ignored entirely rather than
- * falling back to a generic message, so an attacker-chosen `?error=` value cannot
- * make the page display a banner at all.
+ * The CLOSED plan-refusal table. A code the plan-create action can actually
+ * produce maps to a fixed Hebrew sentence; anything else is ignored entirely
+ * rather than falling back to a generic message, so an attacker-chosen `?error=`
+ * value cannot make the page display a banner at all.
  *
  * `offering_not_found` is deliberately absent: that refusal never returns to this
  * course-scoped route, because an id that did not resolve cannot be used to build
@@ -129,12 +154,12 @@ const EXAM_PLAN_ERROR_MESSAGES: Readonly<Record<string, string>> = Object.freeze
   plan_conflict: "יצירת תוכנית המבחנים לא הושלמה. יש לרענן את הדף ולנסות שוב.",
 });
 
-/** What the page may display as feedback: a tone and a message it chose itself. */
+/** What the page may display as plan feedback: a tone and a message it chose itself. */
 type PlanFeedback = { tone: "success" | "neutral" | "error"; message: string };
 
 /**
- * Parse the CLOSED feedback query. Total, and closed in both directions: every
- * input that is not an exactly-recognized token yields `null`.
+ * Parse the CLOSED plan feedback query. Total, and closed in both directions:
+ * every input that is not an exactly-recognized token yields `null`.
  *
  * The `typeof === "string"` checks matter. A repeated query key arrives as an
  * array, and a loose comparison would let `["1"]` coerce its way to a match; an
@@ -213,6 +238,9 @@ export default async function CourseExamsPage({
     created?: string | string[];
     existing?: string | string[];
     error?: string | string[];
+    createdDefinition?: string | string[];
+    createError?: string | string[];
+    createIssues?: string | string[];
   }>;
 }) {
   const { courseOfferingId } = await params;
@@ -231,11 +259,6 @@ export default async function CourseExamsPage({
   // 2. The course-lifecycle READ gate, on the VERIFIED status.
   assertCourseOperationAllowed(context.status, "HISTORICAL_READ");
 
-  // The CLOSED feedback query, resolved only AFTER authorization. It selects a
-  // constant message and influences nothing else — not the read below, not the
-  // back link, not the create affordance.
-  const feedback = feedbackFrom(await searchParams);
-
   // 3. The read, scoped by the VALIDATED context id only. A typed not-found from
   //    the reader's own re-validation fails closed the same way; every other
   //    failure — including a lifecycle denial — keeps its identity and propagates.
@@ -249,18 +272,35 @@ export default async function CourseExamsPage({
     throw error;
   }
 
+  // 4. The CLOSED feedback query, resolved ONCE and only AFTER authorization and
+  //    the read. It selects constant messages and influences nothing else — not
+  //    the read above, not the back link, not either create affordance.
+  const query = await searchParams;
+  const feedback = feedbackFrom(query);
+  const { createdDefinition, createError, createIssues } = query;
+  const createErrorText = examDefinitionCreateErrorText(createError);
+  const createIssueTexts = examDefinitionCreateIssueTexts(createIssues);
+  const showCreatedNotice = createdDefinition === "1";
+
   const dashboardHref = `/admin/courses/${encodeURIComponent(context.id)}`;
   const isPublished = view.publishedAt !== null;
   const hasDefinitions = view.definitions.length > 0;
 
-  // The create affordance is shown only when this offering's lifecycle permits
-  // configuration (PLANNED/ACTIVE, never ARCHIVED). This gates the VISIBLE button
-  // only — the server binding re-evaluates the same gate and refuses on its own,
-  // so hiding the button is convenience and not enforcement.
-  const canCreatePlan = evaluateCourseOperationPolicy(
+  // 5. ONE lifecycle evaluation, two display decisions derived from it. The gate
+  //    is the non-throwing policy question on the VERIFIED status, so an ARCHIVED
+  //    offering keeps a readable, affordance-free page instead of an error. Each
+  //    server binding re-evaluates the same gate and refuses on its own, so this
+  //    can never be the enforcement.
+  //
+  //    The two affordances are mutually exclusive by CONSTRUCTION and not merely
+  //    by position: a plan either exists or it does not, and publication is not
+  //    consulted by either flag.
+  const mayConfigure = evaluateCourseOperationPolicy(
     context.status,
     "SCHEDULE_DRAFT_CONFIGURATION",
   ).allowed;
+  const canCreatePlan = mayConfigure && !view.planExists;
+  const showCreateForm = view.planExists && mayConfigure;
 
   return (
     <div className="flex flex-col gap-4">
@@ -273,6 +313,25 @@ export default async function CourseExamsPage({
           שיבוץ נבחנים וללא נתוני חניכים או מדריכים.
         </p>
       </div>
+
+      {showCreatedNotice ? (
+        <div className="rounded-xl border border-border bg-success-muted px-5 py-4">
+          <p className="text-sm font-medium text-success">הגדרת המבחן נוספה בהצלחה.</p>
+        </div>
+      ) : null}
+
+      {createErrorText !== null ? (
+        <div className="rounded-xl border border-border bg-danger-muted px-5 py-4">
+          <p className="text-sm font-medium text-danger">{createErrorText}</p>
+          {createIssueTexts.length > 0 ? (
+            <ul className="mt-2 list-inside list-disc text-sm text-danger">
+              {createIssueTexts.map((text) => (
+                <li key={text}>{text}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
 
       {!view.planExists ? (
         <div className="rounded-xl border border-dashed border-border bg-muted p-5">
@@ -356,11 +415,29 @@ export default async function CourseExamsPage({
                 לא הוגדרו מבחנים בתוכנית זו
               </h3>
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                קיימת תוכנית מבחנים לקורס, אך עדיין לא הוגדר בה אף מבחן. הגדרת
-                מבחנים אינה מתבצעת במסך זה.
+                קיימת תוכנית מבחנים לקורס, אך עדיין לא הוגדר בה אף מבחן.
               </p>
             </div>
           )}
+
+          {showCreateForm ? (
+            <div className="rounded-xl border border-border bg-card p-5">
+              <h3 className="text-sm font-semibold text-card-foreground">
+                הוספת הגדרת מבחן
+              </h3>
+              {isPublished ? (
+                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                  שימו לב: תוכנית המבחנים כבר פורסמה. ניתן להוסיף הגדרת מבחן, והיא
+                  תיכלל בתוכנית שפורסמה.
+                </p>
+              ) : null}
+              <div className="mt-3">
+                <ExamDefinitionCreateForm
+                  action={createExamDefinitionAction.bind(null, context.id)}
+                />
+              </div>
+            </div>
+          ) : null}
         </>
       )}
 
