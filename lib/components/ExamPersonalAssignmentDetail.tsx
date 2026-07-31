@@ -15,21 +15,28 @@
  * their lesson — and nothing else. Everyone else's rows stay in "לו״ז כולם".
  *
  * ===========================================================================
- * IT FINDS THE VIEWER BY THE SERVER'S OWN MARKERS, NEVER BY NAME
+ * THE SERVER SAYS WHICH ROW IS THE VIEWER'S
  * ===========================================================================
- * The trainee contract carries the viewer's ROLE and EXACT personal window,
- * computed server-side from the signed session, and carries no id — by design.
- * Those markers are handed to the pure core, which returns the viewer's
- * assignment row ONLY when they identify exactly one, and `null` otherwise.
+ * The trainee contract marks the viewer's own assignment with `isSelf`, decided
+ * server-side by EXACT STUDENT-ID EQUALITY against the identity proven from the
+ * signed session. The id itself never leaves the server. This component hands
+ * the block's rows to the pure core, which returns the ONE row carrying that
+ * boolean.
  *
- * THE AMBIGUOUS CASE IS THE POINT. Two examinees riding in parallel share a
- * personal window, so the markers alone cannot tell them apart. The core returns
- * `null` there, and this component then renders NOTHING rather than a horse that
- * might belong to the other rider. A missing detail is a gap; a guessed one is a
- * wrong schedule.
+ * IT REPLACED A HEURISTIC. An earlier version matched the viewer by `selfRole`
+ * plus the exact personal start and end. That was safe but INCOMPLETE: two
+ * examinees riding in parallel share a personal window, so it could not tell
+ * them apart and gave up — and "לו״ז שלי" lost the horse, topic and discipline
+ * for exactly the trainees most likely to be unsure of them. Nothing of that
+ * heuristic remains: no role, no time, no horse, no topic, no discipline, no
+ * pairing and no array position is consulted to CHOOSE a row. They are only ever
+ * read out of the row the server already chose.
+ *
+ * FAIL CLOSED AT BOTH ENDS. No marked row, or more than one, renders NOTHING —
+ * a missing detail is a gap; a guessed one is a wrong schedule.
  *
  * NO DISPLAY NAME IS EVER COMPARED to decide what is "mine": the viewer's name
- * is not a prop, is not representable in the marker type, and is nowhere in the
+ * is not a prop, is not representable in the props at all, and is nowhere in the
  * pure core either.
  *
  * ===========================================================================
@@ -45,9 +52,8 @@
  * no button, no Server Action and no publication concept.
  */
 import {
-  selectSelfAssignmentDetail,
-  type ExamAssignmentRowView,
-  type ExamSelfMarker,
+  selectSelfAssignmentRow,
+  type TraineeExamAssignmentRowView,
 } from "./exam-schedule-view-core";
 
 /**
@@ -81,22 +87,19 @@ function DetailChip({ label, value }: { label: string; value: string | null }) {
 /**
  * The viewer's own horse, topic, discipline and counterpart — or nothing.
  *
- * `assignments` is the block's whole contract array, handed over verbatim; this
- * component reads it only through the pure core's fail-closed selector, so a
- * row that is not provably the viewer's can never reach the markup.
+ * `assignments` is the block's whole trainee contract array, handed over
+ * verbatim, and it is the ONLY prop: no viewer identity, no marker and no
+ * selection hint is passed in, because the array already carries the server's
+ * answer. The component reads it only through the pure core's fail-closed
+ * selector, so a row that is not provably the viewer's can never reach the
+ * markup.
  */
 export function ExamPersonalAssignmentDetail({
   assignments,
-  role,
-  startTime,
-  endTime,
 }: {
-  readonly assignments: readonly ExamAssignmentRowView[];
-  readonly role: ExamSelfMarker["role"];
-  readonly startTime: string | null;
-  readonly endTime: string | null;
+  readonly assignments: readonly TraineeExamAssignmentRowView[];
 }) {
-  const detail = selectSelfAssignmentDetail(assignments, { role, startTime, endTime });
+  const detail = selectSelfAssignmentRow(assignments);
   if (detail === null) return null;
 
   const counterpartLabel = COUNTERPART_LABELS[detail.role];

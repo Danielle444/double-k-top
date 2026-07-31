@@ -101,16 +101,20 @@ import { formatHebrewDate, formatHebrewWeekday, getLocalDateKey, parseDateKey } 
  * person on the other side of the lesson. No wave, no other examinee, no
  * participant summary.
  *
- * "MINE" IS STILL THE SERVER'S ANSWER. Which rows appear is `view.myRows`, which
- * the committed trainee core computed server-side from the SIGNED SESSION and
- * handed over as the boolean `isSelf`; the row keeps its ring, its "השיבוץ שלי"
- * label, its role and its exact personal window. The viewer's own assignment
- * DETAIL is located by those same server-derived markers through the pure core,
- * which refuses to answer when they do not identify exactly one row — so a
- * parallel pair can never show a rider someone else's horse. NO NAME IS EVER
- * COMPARED to find "mine": the screen holds no name of the viewer to compare
- * with, and adding an id to the contract just to highlight a line is exactly
- * what the contract refuses.
+ * "MINE" IS THE SERVER'S ANSWER, AT BOTH LEVELS. Which ROWS appear is
+ * `view.myRows`, which the committed trainee core computed server-side from the
+ * SIGNED SESSION and handed over as the row-level boolean `isSelf`; the row
+ * keeps its ring, its "השיבוץ שלי" label, its role and its exact personal
+ * window. Which ASSIGNMENT inside a row is the viewer's is the read layer's
+ * answer too — the trainee contract marks it with an assignment-level `isSelf`,
+ * decided by exact student-id equality against that same proven identity, with
+ * the id never leaving the server. The screen passes the array through and reads
+ * that one boolean.
+ *
+ * NO NAME IS EVER COMPARED to find "mine", and no role, time, horse, topic,
+ * discipline, pairing or array position is used to guess it either. The screen
+ * holds no name and no id of the viewer to compare with, and none was added to
+ * the contract: `isSelf` is a boolean, not an identifier.
  *
  * STILL NOT CARRIED, and therefore still not stubbed here: any grade, any
  * feedback and any rating.
@@ -404,15 +408,12 @@ export function StudentExamsSection() {
                 <p className="mt-1 text-sm text-muted-foreground">מקום: {place}</p>
               )}
 
-              {/* The viewer's OWN horse, topic, discipline and counterpart —
-                  located by the server-derived markers alone, and rendered only
-                  when they identify exactly one assignment. */}
-              <ExamPersonalAssignmentDetail
-                assignments={row.assignments}
-                role={row.selfRole}
-                startTime={row.selfStartTime}
-                endTime={row.selfEndTime}
-              />
+              {/* The viewer's OWN horse, topic, discipline and counterpart. The
+                  rows carry the SERVER's own `isSelf` marker, so the whole array
+                  is handed over verbatim and the renderer reads exactly one
+                  boolean to find the viewer — this screen passes no marker, no
+                  role and no time to select with. */}
+              <ExamPersonalAssignmentDetail assignments={row.assignments} />
             </div>
           );
         })}

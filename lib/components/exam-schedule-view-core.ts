@@ -30,10 +30,10 @@
  * Nesting is driven by `pairedParticipantNames`, which the committed read layer
  * RESOLVED server-side from the stored pairing — this module reads that list, it
  * does not reconstruct it, and it never compares one participant's name with
- * another's to decide who belongs to whom. {@link selectSelfAssignmentDetail}
- * likewise matches on the SERVER-DERIVED self markers (role and the exact
- * personal window) and refuses to answer when they do not identify exactly one
- * row. No display name is ever compared for identity anywhere in this file.
+ * another's to decide who belongs to whom. {@link selectSelfAssignmentRow}
+ * likewise reads the SERVER-DERIVED `isSelf` boolean and nothing else, and
+ * refuses to answer unless exactly one row carries it. No display name is ever
+ * compared for identity anywhere in this file.
  */
 
 /**
@@ -304,62 +304,61 @@ export function filterExamRows<T extends ExamNavigableRow>(
 }
 
 // ===========================================================================
-// The viewer's OWN assignment, found by the server-derived markers
+// The viewer's OWN assignment — the server said which one it is
 // ===========================================================================
 
 /**
- * The SERVER-DERIVED markers of the viewer's own place in a block.
+ * ONE participant of a stored block as the TRAINEE contract carries them: the
+ * shared operational row PLUS the server's own answer to "is this me".
  *
- * Every field comes from the trainee contract's `self*` values, which the
- * committed trainee core computed from the SIGNED SESSION. Nothing here is
- * derived in the browser, and there is deliberately no name field: a display
- * name is not an identity.
+ * `isSelf` is decided server-side by EXACT STUDENT-ID EQUALITY, against the
+ * identity proven from the signed session, and the id itself never leaves the
+ * server. It is present on the trainee contract ONLY — the instructor and admin
+ * contracts do not carry it, which is why this is a separate type rather than a
+ * widening of {@link ExamAssignmentRowView}.
  */
-export interface ExamSelfMarker {
-  readonly role: "EXAMINEE" | "INSTRUCTED_TRAINEE" | null;
-  readonly startTime: string | null;
-  readonly endTime: string | null;
+export interface TraineeExamAssignmentRowView extends ExamAssignmentRowView {
+  /** The SERVER's answer, never the browser's guess. */
+  readonly isSelf: boolean;
 }
 
 /**
- * The ONE assignment row that the viewer's own markers identify, or `null`.
+ * The ONE assignment row the SERVER marked as the viewer's, or `null`.
  *
  * ===========================================================================
- * FAIL-CLOSED, AND DELIBERATELY SO
+ * IT DECIDES NOTHING — IT READS ONE BOOLEAN
  * ===========================================================================
- * The trainee contract carries the viewer's role and exact personal window, but
- * no id — by design, because an id in a client contract is exactly what the read
- * layer refuses to add. This function therefore locates the viewer's row by
- * those markers and returns it ONLY when they identify it UNAMBIGUOUSLY:
+ * This replaces an earlier browser-side heuristic that matched the viewer's row
+ * by `selfRole` + the exact personal start and end. That heuristic was safe but
+ * INCOMPLETE: two examinees riding in parallel share a personal window, so it
+ * could not tell them apart and gave up, and "לו״ז שלי" lost the horse, topic
+ * and discipline for exactly the trainees most likely to be confused about them.
  *
- * - any missing marker → `null`;
- * - no matching row → `null`;
- * - MORE THAN ONE matching row → `null`.
+ * The read layer now answers the question itself. So the ONLY input here is
+ * `isSelf`, and nothing else in the row may be consulted to identify the viewer:
+ * not the display name, not the role, not the personal times, not the horse, the
+ * topic, the discipline, the pairing, or the position in the array. Every one of
+ * those is something this function READS OUT of the row it was given — never
+ * something it uses to choose that row.
  *
- * The last case is the one that matters. Two examinees riding in parallel share
- * a personal window, so the markers alone cannot tell them apart — and showing
- * one of them would show a rider SOMEONE ELSE'S horse under the heading "yours".
- * Returning nothing is a missing detail; guessing is a wrong schedule.
+ * ===========================================================================
+ * FAIL CLOSED AT BOTH ENDS
+ * ===========================================================================
+ * - NO row marked `isSelf` → `null`. The viewer is not in this block, or the
+ *   read layer could not prove they are; either way there is nothing to show.
+ * - MORE THAN ONE row marked `isSelf` → `null`. That is a contradiction the
+ *   client cannot resolve and must not paper over: showing the first would show
+ *   a rider a horse that might be someone else's. A missing detail is a gap;
+ *   a guessed one is a wrong schedule.
  *
- * NO NAME IS COMPARED. The viewer's name is not an input and is not
- * representable in {@link ExamSelfMarker}.
+ * NO NAME IS COMPARED, and no viewer identity is an input: the viewer's name and
+ * id are not parameters and are not representable in this signature.
  */
-export function selectSelfAssignmentDetail(
-  rows: readonly ExamAssignmentRowView[] | null | undefined,
-  marker: ExamSelfMarker | null | undefined,
-): ExamAssignmentRowView | null {
-  if (marker === null || marker === undefined) return null;
-  if (marker.role !== "EXAMINEE" && marker.role !== "INSTRUCTED_TRAINEE") return null;
-  if (!isPresent(marker.startTime)) return null;
-  if (!isPresent(marker.endTime)) return null;
-
+export function selectSelfAssignmentRow(
+  rows: readonly TraineeExamAssignmentRowView[] | null | undefined,
+): TraineeExamAssignmentRowView | null {
   const matches = asArray(rows).filter(
-    (row) =>
-      row !== null &&
-      row !== undefined &&
-      row.role === marker.role &&
-      row.personalStartTime === marker.startTime &&
-      row.personalEndTime === marker.endTime,
+    (row) => row !== null && row !== undefined && row.isSelf === true,
   );
   return matches.length === 1 ? matches[0] : null;
 }

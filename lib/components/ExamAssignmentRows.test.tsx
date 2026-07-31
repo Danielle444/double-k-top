@@ -473,6 +473,30 @@ test("7. the renderer imports ONLY the pure sibling core", () => {
   }
 });
 
+test("7a1. the shared renderer is role-blind: it never reads the trainee-only isSelf", () => {
+  // `isSelf` is on the TRAINEE assignment contract only. This renderer is mounted
+  // by the instructor screen too, whose rows do not carry it — so reading it here
+  // would make the instructor's rendering depend on a field its contract lacks.
+  assert.equal(SOURCE_CODE.includes("isSelf"), false, "the shared renderer reads isSelf");
+  for (const token of ["selfRole", "selfLabel", "myRows", "viewerStudentId"]) {
+    assert.equal(SOURCE_CODE.includes(token), false, `the shared renderer names ${token}`);
+  }
+});
+
+test("7a2. INSTRUCTOR rendering is unchanged by the trainee marker", () => {
+  // The same rows, once as the instructor contract carries them and once as the
+  // trainee contract does — with `isSelf` attached, in both values. The markup
+  // must be byte-identical: the extra field changes nothing that is rendered.
+  const rows = [examinee({ participantName: "דנה" }), instructed({ participantName: "יעל לוי" })];
+  const instructorHtml = render(rows);
+  const traineeHtml = render(
+    rows.map((row, index) => ({ ...row, isSelf: index === 0 })) as typeof rows,
+  );
+  assert.equal(traineeHtml, instructorHtml, "the trainee marker changed the shared rendering");
+  const noneSelf = render(rows.map((row) => ({ ...row, isSelf: false })) as typeof rows);
+  assert.equal(noneSelf, instructorHtml, "an unmarked trainee row rendered differently");
+});
+
 test("7b. no display name is compared, anywhere, for any purpose", () => {
   for (const token of [
     "participantName ===",

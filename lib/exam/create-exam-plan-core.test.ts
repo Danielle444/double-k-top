@@ -1155,6 +1155,33 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     // edited, and no schema, migration, auth, session, capability or policy file
     // appears.
     ["lib", "actions", "detailed-exam-assignment-write" + "-io.test.ts"].join("/"),
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+    "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+    "lib/exam/" + "exam-read-" + "dto.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   ];
   // RE-POINTED by EX-SES-UI-2 from ONE tolerated production file to TWO. That
   // slice adds the approved session EDIT and REMOVAL endpoints to the route's
@@ -1182,6 +1209,17 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     P3_ACTIONS_TRACKED_PATH,
     ASSIGNMENT_READ_CORE_PATH,
     ASSIGNMENT_READ_IO_PATH,
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
   ];
   const TOLERATED = [...TOLERATED_SUITES, ...TOLERATED_PRODUCTION];
   const unexpected = modified.filter((path) => !TOLERATED.includes(path));
@@ -1214,10 +1252,27 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     P3_ACTIONS_TRACKED_PATH,
     ASSIGNMENT_READ_CORE_PATH,
     ASSIGNMENT_READ_IO_PATH,
+    // EX-BEGINNER-EXAM-READ, in step with TOLERATED_PRODUCTION above: the Level-1
+    // beginner containment gate plus the trainee-only assignment `isSelf` marker.
+    // All five are lib/ read-pipeline modules, approved BY NAME in the predicate
+    // below, and none of them is this core or its binding.
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-read-dto" + ".ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
   ]);
   for (const path of TOLERATED_PRODUCTION) {
     const isApprovedLibModule =
-      path === ASSIGNMENT_READ_CORE_PATH || path === ASSIGNMENT_READ_IO_PATH;
+      path === ASSIGNMENT_READ_CORE_PATH ||
+      path === ASSIGNMENT_READ_IO_PATH ||
+      // EX-BEGINNER-EXAM-READ - each named EXACTLY, so no other lib/ module
+      // qualifies and a prefix can never widen this predicate by accident.
+      path === "lib/exam/" + "exam-beginner-course-scope" + "-core.ts" ||
+      path === "lib/exam/" + "exam-plan-loader" + "-core.ts" ||
+      path === "lib/exam/" + "exam-read-dto" + ".ts" ||
+      path === "lib/exam/" + "exam-read-scope" + "-core.ts" ||
+      path === "lib/exam/" + "exam-trainee-view" + "-core.ts";
     assert.ok(
       path.startsWith(`${ROUTE_DIR}/`) || isApprovedLibModule,
       `${path} is outside the approved route`,

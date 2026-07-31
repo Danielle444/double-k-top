@@ -22,8 +22,9 @@ import {
   groupExamAssignmentsIntoWaves,
   listExamDates,
   listExamDefinitionNames,
-  selectSelfAssignmentDetail,
+  selectSelfAssignmentRow,
   type ExamAssignmentRowView,
+  type TraineeExamAssignmentRowView,
 } from "./exam-schedule-view-core";
 
 const SOURCE = readFileSync(
@@ -50,6 +51,18 @@ function examinee(overrides: Partial<ExamAssignmentRowView> = {}): ExamAssignmen
     pairedParticipantNames: ["יעל לוי"],
     ...overrides,
   };
+}
+
+/**
+ * The same row as the TRAINEE contract carries it: with the server's own answer
+ * attached. `isSelf` is the ONLY thing that ever decides which row is the
+ * viewer's, so every fixture states it explicitly.
+ */
+function self(
+  row: ExamAssignmentRowView,
+  isSelf: boolean,
+): TraineeExamAssignmentRowView {
+  return { ...row, isSelf };
 }
 
 function instructed(overrides: Partial<ExamAssignmentRowView> = {}): ExamAssignmentRowView {
@@ -308,74 +321,152 @@ test("4h. a null/undefined collection filters to nothing rather than throwing", 
 });
 
 // ===========================================================================
-// 5. The viewer's own row — server markers only, fail-closed
+// 5. The viewer's own row — the SERVER's boolean, and nothing else
 // ===========================================================================
 
-test("5. the viewer's row is found by role and exact personal window", () => {
+test("5. the row the server marked is the row returned", () => {
   const rows = [
-    examinee({ participantName: "דנה", personalStartTime: "09:00", personalEndTime: "09:20" }),
-    examinee({ participantName: "רון", personalStartTime: "10:00", personalEndTime: "10:20" }),
+    self(examinee({ participantName: "דנה", horseName: "רקיע" }), false),
+    self(examinee({ participantName: "רון", horseName: "סופה" }), true),
   ];
-  const detail = selectSelfAssignmentDetail(rows, {
-    role: "EXAMINEE",
-    startTime: "10:00",
-    endTime: "10:20",
-  });
+  const detail = selectSelfAssignmentRow(rows);
   assert.equal(detail?.participantName, "רון");
+  assert.equal(detail?.horseName, "סופה");
 });
 
-test("5b. the role is part of the match: two people can share one window", () => {
-  const rows = [examinee(), instructed()];
-  const detail = selectSelfAssignmentDetail(rows, {
-    role: "INSTRUCTED_TRAINEE",
-    startTime: "09:00",
-    endTime: "09:20",
-  });
-  assert.equal(detail?.role, "INSTRUCTED_TRAINEE");
-  assert.equal(detail?.participantName, "יעל לוי");
-});
-
-test("5c. an AMBIGUOUS match yields nothing — never someone else's horse", () => {
-  // Two examinees riding in parallel share a window, so the markers cannot tell
-  // them apart. A missing detail is a gap; a guessed one is a wrong schedule.
+test("5b. TWO PARALLEL EXAMINEES, identical personal windows — the right one wins", () => {
+  // This is the case the removed heuristic could not answer. Both rows carry the
+  // SAME role and the SAME exact personal start and end; only `isSelf` differs,
+  // and that is enough because the server decided it by student id.
   const rows = [
-    examinee({ participantName: "דנה", horseName: "רקיע" }),
-    examinee({ participantName: "רון", horseName: "סופה" }),
+    self(examinee({ participantName: "דנה", horseName: "רקיע", discipline: "אילוף" }), false),
+    self(
+      examinee({
+        participantName: "רון",
+        horseName: "סופה",
+        instructionTopic: "קפיצה",
+        discipline: "ראווה",
+        pairedParticipantNames: ["נועה ברק"],
+      }),
+      true,
+    ),
   ];
-  assert.equal(
-    selectSelfAssignmentDetail(rows, {
-      role: "EXAMINEE",
-      startTime: "09:00",
-      endTime: "09:20",
-    }),
-    null,
-  );
+  // Sanity: the two rows are indistinguishable by role and by time.
+  assert.equal(rows[0].role, rows[1].role);
+  assert.equal(rows[0].personalStartTime, rows[1].personalStartTime);
+  assert.equal(rows[0].personalEndTime, rows[1].personalEndTime);
+
+  const detail = selectSelfAssignmentRow(rows);
+  assert.equal(detail?.participantName, "רון");
+  assert.equal(detail?.horseName, "סופה", "the other rider's horse was returned");
+  assert.equal(detail?.instructionTopic, "קפיצה");
+  assert.equal(detail?.discipline, "ראווה");
+  assert.deepEqual(detail?.pairedParticipantNames, ["נועה ברק"]);
 });
 
-test("5d. a missing marker yields nothing", () => {
-  const rows = [examinee()];
-  for (const marker of [
-    { role: null, startTime: "09:00", endTime: "09:20" },
-    { role: "EXAMINEE" as const, startTime: null, endTime: "09:20" },
-    { role: "EXAMINEE" as const, startTime: "09:00", endTime: null },
+test("5c. the marked row is returned whatever its role, position or time", () => {
+  // None of those is consulted to CHOOSE it — they are only read out of it.
+  const first = selectSelfAssignmentRow([
+    self(instructed({ participantName: "יעל" }), true),
+    self(examinee({ participantName: "דנה" }), false),
+  ]);
+  assert.equal(first?.participantName, "יעל");
+  assert.equal(first?.role, "INSTRUCTED_TRAINEE");
+
+  const last = selectSelfAssignmentRow([
+    self(examinee({ participantName: "דנה" }), false),
+    self(examinee({ participantName: "רון" }), false),
+    self(instructed({ participantName: "יעל", personalStartTime: null, personalEndTime: null }), true),
+  ]);
+  assert.equal(last?.participantName, "יעל", "a row with no personal window was skipped");
+});
+
+test("5d. ZERO marked rows fail closed", () => {
+  const rows = [
+    self(examinee({ participantName: "דנה" }), false),
+    self(instructed({ participantName: "יעל" }), false),
+  ];
+  assert.equal(selectSelfAssignmentRow(rows), null);
+  // ...and so do the empty and absent collections.
+  assert.equal(selectSelfAssignmentRow([]), null);
+  assert.equal(selectSelfAssignmentRow(null), null);
+  assert.equal(selectSelfAssignmentRow(undefined), null);
+});
+
+test("5e. MORE THAN ONE marked row fails closed — the first is never taken", () => {
+  // A contradiction the client cannot resolve and must not paper over.
+  const rows = [
+    self(examinee({ participantName: "דנה", horseName: "רקיע" }), true),
+    self(examinee({ participantName: "רון", horseName: "סופה" }), true),
+  ];
+  assert.equal(selectSelfAssignmentRow(rows), null);
+});
+
+test("5f. only the boolean TRUE marks a row — nothing truthy stands in for it", () => {
+  const rows = [
+    { ...examinee({ participantName: "דנה" }), isSelf: "true" },
+    { ...examinee({ participantName: "רון" }), isSelf: 1 },
+  ] as unknown as readonly TraineeExamAssignmentRowView[];
+  assert.equal(selectSelfAssignmentRow(rows), null, "a truthy non-boolean marked a row");
+});
+
+test("5g. the REMOVED heuristic is gone: no role or time selection remains", () => {
+  // The selector's whole body must not name a role, a personal time, a horse, a
+  // topic, a discipline, a pairing or an index — the values the old
+  // `selfRole` + `personalStartTime` + `personalEndTime` matching used to
+  // compare. It may only read `isSelf`.
+  const selector = SOURCE_CODE.slice(SOURCE_CODE.indexOf("export function selectSelfAssignmentRow"));
+  for (const token of [
+    "personalStartTime",
+    "personalEndTime",
+    "startTime",
+    "endTime",
+    "marker",
+    "selfRole",
+    "role ===",
+    "horseName",
+    "instructionTopic",
+    "discipline",
+    "pairedParticipantNames",
+    "indexOf",
+    "findIndex",
+    ".find(",
   ]) {
-    assert.equal(selectSelfAssignmentDetail(rows, marker), null);
+    assert.equal(selector.includes(token), false, `the selector still consults ${token}`);
   }
-  assert.equal(selectSelfAssignmentDetail(rows, null), null);
-  assert.equal(selectSelfAssignmentDetail(rows, undefined), null);
+  assert.ok(selector.includes("row.isSelf === true"), "the selector does not read the marker");
+  // The one index it uses is reached ONLY after proving there is exactly one
+  // match — it is never a positional pick among several.
+  assert.ok(
+    selector.includes("matches.length === 1 ? matches[0] : null"),
+    "the selector picks a row by position rather than by uniqueness",
+  );
+  // The old entry point and its marker type are GONE from the module entirely.
+  for (const removed of ["selectSelfAssignmentDetail", "ExamSelfMarker"]) {
+    assert.equal(SOURCE.includes(removed), false, `${removed} still exists`);
+  }
 });
 
-test("5e. no matching row yields nothing, and no nearest match is invented", () => {
-  const rows = [examinee({ personalStartTime: "09:00", personalEndTime: "09:20" })];
-  assert.equal(
-    selectSelfAssignmentDetail(rows, {
-      role: "EXAMINEE",
-      startTime: "09:05",
-      endTime: "09:20",
-    }),
-    null,
+test("5h. no viewer identity is an input, and none is representable", () => {
+  const selector = SOURCE_CODE.slice(SOURCE_CODE.indexOf("export function selectSelfAssignmentRow"));
+  const params = selector.slice(selector.indexOf("(") + 1, selector.indexOf(")"));
+  assert.match(
+    params.replace(/\s+/g, " ").trim(),
+    /^rows: readonly TraineeExamAssignmentRowView\[\] \| null \| undefined,?$/,
+    "the selector accepts something besides the rows",
   );
-  assert.equal(selectSelfAssignmentDetail([], { role: "EXAMINEE", startTime: "09:00", endTime: "09:20" }), null);
+  // The trainee row type adds EXACTLY the one boolean — no id came with it.
+  const contract = SOURCE_CODE.slice(
+    SOURCE_CODE.indexOf("export interface TraineeExamAssignmentRowView"),
+    SOURCE_CODE.indexOf("export function selectSelfAssignmentRow"),
+  );
+  assert.deepEqual(
+    [...contract.matchAll(/readonly (\w+):/g)].map(([, name]) => name),
+    ["isSelf"],
+  );
+  for (const token of ["studentId", "assignmentId", "enrollmentId", "viewerStudentId", "pairingIndex"]) {
+    assert.equal(contract.includes(token), false, `the trainee row carries ${token}`);
+  }
 });
 
 // ===========================================================================
@@ -394,14 +485,15 @@ test("6. no display name is ever compared to decide identity or pairing", () => 
   ]) {
     assert.equal(SOURCE_CODE.includes(token), false, `the core matches identity by ${token}`);
   }
-  // The self marker is an EXPLICIT field list with no name in it.
-  const marker = SOURCE_CODE.slice(
-    SOURCE_CODE.indexOf("export interface ExamSelfMarker"),
-    SOURCE_CODE.indexOf("export function selectSelfAssignmentDetail"),
-  );
-  assert.deepEqual(
-    [...marker.matchAll(/readonly (\w+):/g)].map(([, name]) => name).sort(),
-    ["endTime", "role", "startTime"],
+  // Identity enters this module as ONE boolean the server already decided. There
+  // is no viewer id, no viewer name and no marker type anywhere in it.
+  for (const token of ["viewerStudentId", "studentId", "assignmentId", "enrollmentId"]) {
+    assert.equal(SOURCE_CODE.includes(token), false, `the core names ${token}`);
+  }
+  assert.equal(
+    (SOURCE_CODE.match(/isSelf/g) ?? []).length,
+    2,
+    "isSelf is read somewhere beyond the trainee row type and the selector",
   );
 });
 

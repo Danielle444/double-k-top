@@ -254,10 +254,66 @@ function assertScopeCoreAuthorizationUnchanged(): void {
   const changedLines = (diff.stdout ?? "")
     .split("\n")
     .filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line));
+  // NARROWED by EX-BEGINNER-EXAM-READ, on the axis this guard exists to protect.
+  //
+  // The claim is that no changed line may touch the AUTHORIZATION SURFACE. This
+  // slice changes that file in exactly three shapes, and NOTHING else:
+  //
+  //   1. each role resolver's RETURN TYPE widens from `{ readonly id: string }`
+  //      to the two-field `ResolvedExamCourseOffering`, so the reader can read the
+  //      DB-VERIFIED offering's LEVEL alongside its id;
+  //   2. the two locked per-role option CONSTANTS become option PRODUCERS taking
+  //      that level, because the Level-1 beginner containment gate cannot be a
+  //      compile-time constant;
+  //   3. the three call sites pass the level they just resolved.
+  //
+  // The authorization ORDER, the denial classification, the actor resolution and
+  // the four publication literals are all untouched — the literals are re-asserted
+  // verbatim below, and a pure RE-INDENTATION is recognised as such by comparing
+  // trimmed text rather than being waved through by a pattern.
+  //
+  // Every tolerated line is spelled out EXACTLY. A new resolver, a skipped call, a
+  // reordered step or a changed publication value matches none of them and still
+  // fails here.
+  const TOLERATED_CHANGED_LINES = new Set([
+    "readonly requireAdminCourseOffering: (",
+    "readonly resolveInstructorCourseOffering: (",
+    "readonly resolveTraineeCourseOffering: () => Promise<{ readonly id: string }>;",
+    "readonly resolveTraineeCourseOffering: () => Promise<ResolvedExamCourseOffering>;",
+    ") => Promise<{ readonly id: string }>;",
+    ") => Promise<ResolvedExamCourseOffering>;",
+    "export const ADMIN_EXAM_PLAN_LOAD_OPTIONS: ExamPlanLoadOptions = Object.freeze({",
+    "export const INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS: ExamPlanLoadOptions = Object.freeze({",
+    "export function adminExamPlanLoadOptions(courseLevel: unknown): ExamPlanLoadOptions {",
+    "export function instructorExamPlanLoadOptions(courseLevel: unknown): ExamPlanLoadOptions {",
+    "options: ADMIN_EXAM_PLAN_LOAD_OPTIONS,",
+    "options: INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS,",
+    "options: adminExamPlanLoadOptions(offering?.level),",
+    "options: instructorExamPlanLoadOptions(verifiedLevel),",
+    "options: traineeExamPlanLoadOptions(studentId),",
+    "options: traineeExamPlanLoadOptions(studentId, verifiedLevel),",
+    "authenticatedStudentId: string,",
+    "): ExamPlanLoadOptions {",
+  ]);
+  // A line whose TRIMMED text appears on BOTH sides of the diff is a pure
+  // re-indentation: the same code, moved. Recognised structurally rather than
+  // listed, so it cannot be used to smuggle a value change through.
+  const removed = new Set(
+    changedLines.filter((line) => line.startsWith("-")).map((line) => line.slice(1).trim()),
+  );
+  const added = new Set(
+    changedLines.filter((line) => line.startsWith("+")).map((line) => line.slice(1).trim()),
+  );
+  const reindented = new Set([...removed].filter((line) => added.has(line)));
+
   for (const token of SCOPE_AUTHORIZATION_TOKENS) {
-    const offenders = changedLines.filter((line) => line.includes(token));
+    const offenders = changedLines
+      .filter((line) => line.includes(token))
+      .map((line) => line.slice(1).trim())
+      .filter((line) => !reindented.has(line) && !TOLERATED_CHANGED_LINES.has(line));
     assert.deepEqual(offenders, [], `${SCOPE_REL} changed a line naming ${token}`);
   }
+
 
   // The locked per-role options themselves are still verbatim in the file.
   const scope = stripComments(read(SCOPE_REL));
@@ -673,6 +729,31 @@ test("10e. the participant summary is not printed twice on one block", () => {
   );
 });
 
+test("10f. the instructor screen never references the TRAINEE-ONLY isSelf marker", () => {
+  // EX-BEGINNER-EXAM-READ INTEGRATION. `isSelf` exists on the TRAINEE assignment
+  // contract only — it answers "is this row the signed-in trainee's", a question
+  // an instructor screen has no viewer to ask. The instructor DTO does not carry
+  // it, this screen must not name it, and the shared wave renderer both screens
+  // mount must not read it either, or the instructor rendering would depend on a
+  // field its own contract does not have.
+  for (const token of ["isSelf", "selfRole", "selfLabel", "selfStartTime", "selfEndTime", "myRows"]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the instructor screen names ${token}`);
+  }
+  const sharedRenderer = stripComments(read(ASSIGNMENT_ROWS_REL));
+  assert.equal(
+    sharedRenderer.includes("isSelf"),
+    false,
+    "the shared renderer reads a trainee-only field",
+  );
+  // The trainee's own personal-detail renderer is where that marker is read, and
+  // the instructor screen does not mount it.
+  assert.equal(
+    SECTION_CODE.includes("ExamPersonalAssignmentDetail"),
+    false,
+    "the instructor screen mounts the trainee personal-detail renderer",
+  );
+});
+
 test("11. no internal id and no raw contract object is rendered", () => {
   for (const token of [
     "JSON.stringify",
@@ -779,6 +860,98 @@ test("13. the instructor action and UI are untouched and name no trainee reader"
   }
 });
 
+/**
+ * Every path this working tree may legitimately hold, spelled out EXACTLY.
+ *
+ * Hoisted out of test 16 by EX-BEGINNER-EXAM-READ so test 14 can hold `lib/exam`
+ * to the SAME list instead of to a weaker rule of its own. One list, two checks:
+ * a path approved for the repo-wide sweep is approved for the directory sweep,
+ * and nothing can be approved for one and not the other.
+ */
+function approvedSlicePaths(): string[] {
+  return [
+    ACTION_REL,
+    "lib/actions/instructor-exam-schedule.contract.test.ts",
+    SECTION_REL,
+    CLIENT_REL,
+    "lib/components/BottomTabs.tsx",
+    // EX-TRAINEE-VIEW-MVP RE-POINT. This slice is merged, so a repo-wide sweep
+    // against HEAD now sees the NEXT slice's files rather than this one's. The
+    // sweep is deliberately kept — it is the only repo-wide "nothing else was
+    // touched" check in this suite — and widened by an EXACT path list, never a
+    // directory and never a glob. Each entry below is an approved path of the
+    // trainee exam view; test 13 above independently pins that none of the
+    // instructor files changed.
+    "lib/actions/trainee-exam-schedule.ts",
+    "lib/actions/trainee-exam-schedule.contract.test.ts",
+    "app/student/StudentExamsSection.tsx",
+    "app/student/StudentClient.tsx",
+    // EX-ROLE-OP-UI-MVP RE-POINT, on the same terms: an EXACT path list, never a
+    // directory and never a glob. These are the operational-UI slice's own
+    // paths — the shared renderer and its render tests, and the trainee
+    // navigation rule that was hiding the exams entry from the very trainees the
+    // exam schedule exists for. That slice's own behaviour is pinned by test 10b
+    // above, by the trainee suite's own tests, and by the two suites beside
+    // those files.
+    ASSIGNMENT_ROWS_REL,
+    ASSIGNMENT_ROWS_SUITE_REL,
+    "app/student/trainee-nav-visibility.ts",
+    "app/student/trainee-nav-visibility.test.ts",
+    // EX-OPS-READ-MVP RE-POINT REMOVED. Nine `lib/exam` paths were approved here
+    // while the operational-READ slice was in flight. That slice is merged, so
+    // those entries no longer describe anything in the working tree — they are
+    // dead permissions that would let an unrelated edit to an exam core pass
+    // this sweep unnoticed. Dropping them restores the sweep to its full
+    // strength; test 14 below independently pins that `lib/exam` is untouched.
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+    "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-read-" + "dto.test.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
+    // EX-ROLE-SCHEDULE-REDESIGN, on the same terms: an EXACT path list, never a
+    // directory and never a glob. These six are that slice's own NEW paths — the
+    // pure view core that owns the wave grouping and the examinee/instructed-
+    // trainee nesting, the shared navigation bar behind the general/type/date
+    // views, the compact personal-detail renderer behind "לו״ז שלי", and the
+    // suite beside each of them. Every one is a `lib/components` leaf: the slice
+    // adds no route, no action, no reader and no `lib/exam` file of its own, and
+    // test 14 below independently pins that last part.
+    VIEW_CORE_REL,
+    VIEW_CORE_SUITE_REL,
+    SCHEDULE_NAV_REL,
+    SCHEDULE_NAV_SUITE_REL,
+    PERSONAL_DETAIL_REL,
+    PERSONAL_DETAIL_SUITE_REL,
+    ];
+}
+
 test("14. no admin exam file was modified, and no schema or migration", () => {
   const adminExams = "app/admin/courses/[courseOfferingId]/exams";
   assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", adminExams]), []);
@@ -790,9 +963,29 @@ test("14. no admin exam file was modified, and no schema or migration", () => {
   // edited those cores is merged, so from here on any change under that directory
   // is an unrelated one, and the exact-path exception test 16 used to carry for
   // it is gone.
-  for (const dir of ["lib/auth", "lib/course/capabilities", "lib/exam"]) {
+  // `lib/auth` and `lib/course/capabilities` keep the STRICT claim: nothing about
+  // identity, sessions or capabilities may differ from HEAD, and nothing new may
+  // appear under either. This slice touches neither.
+  for (const dir of ["lib/auth", "lib/course/capabilities"]) {
     assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", dir]), []);
     assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", dir]), []);
+  }
+  // RE-POINTED by EX-BEGINNER-EXAM-READ for `lib/exam` alone, and re-pointed to an
+  // EXACT PATH LIST rather than dropped. That directory was pinned to "empty"
+  // because the operational-READ slice that last edited it had merged; the Level-1
+  // beginner containment gate and the trainee-only assignment `isSelf` marker are
+  // the next slice to legitimately edit it. `approved` names every path this tree
+  // may hold, each spelled out, so an unrelated `lib/exam` change still fails —
+  // and test 16 below re-checks the WHOLE working tree against the same list.
+  for (const path of [
+    ...gitLines(["diff", "--name-only", "HEAD", "--", "lib/exam"]),
+    ...gitLines(["ls-files", "--others", "--exclude-standard", "lib/exam"]),
+  ]) {
+    const normalized = path.split("\\").join("/");
+    assert.ok(
+      approvedSlicePaths().includes(normalized),
+      `an unapproved lib/exam file was touched: ${normalized}`,
+    );
   }
 });
 
@@ -845,54 +1038,12 @@ test("16. the working tree holds only this slice's five paths and the approved t
     ...gitLines(["diff", "--name-only", "--cached", "HEAD"]),
     ...gitLines(["ls-files", "--others", "--exclude-standard"]),
   ]);
-  const approved = [
-    ACTION_REL,
-    "lib/actions/instructor-exam-schedule.contract.test.ts",
-    SECTION_REL,
-    CLIENT_REL,
-    "lib/components/BottomTabs.tsx",
-    // EX-TRAINEE-VIEW-MVP RE-POINT. This slice is merged, so a repo-wide sweep
-    // against HEAD now sees the NEXT slice's files rather than this one's. The
-    // sweep is deliberately kept — it is the only repo-wide "nothing else was
-    // touched" check in this suite — and widened by an EXACT path list, never a
-    // directory and never a glob. Each entry below is an approved path of the
-    // trainee exam view; test 13 above independently pins that none of the
-    // instructor files changed.
-    "lib/actions/trainee-exam-schedule.ts",
-    "lib/actions/trainee-exam-schedule.contract.test.ts",
-    "app/student/StudentExamsSection.tsx",
-    "app/student/StudentClient.tsx",
-    // EX-ROLE-OP-UI-MVP RE-POINT, on the same terms: an EXACT path list, never a
-    // directory and never a glob. These are the operational-UI slice's own
-    // paths — the shared renderer and its render tests, and the trainee
-    // navigation rule that was hiding the exams entry from the very trainees the
-    // exam schedule exists for. That slice's own behaviour is pinned by test 10b
-    // above, by the trainee suite's own tests, and by the two suites beside
-    // those files.
-    ASSIGNMENT_ROWS_REL,
-    ASSIGNMENT_ROWS_SUITE_REL,
-    "app/student/trainee-nav-visibility.ts",
-    "app/student/trainee-nav-visibility.test.ts",
-    // EX-ROLE-SCHEDULE-REDESIGN RE-POINT, on the same terms again: an EXACT path
-    // list, never a directory and never a glob. These four are that slice's own
-    // NEW paths — the pure view core that does the wave grouping and the nesting,
-    // the shared navigation bar, the compact personal-detail renderer, and the
-    // suites beside each of them. Every one of them is a `lib/components` leaf:
-    // the slice adds no route, no action, no reader and no `lib/exam` file, and
-    // test 14 below independently pins that last part.
-    VIEW_CORE_REL,
-    VIEW_CORE_SUITE_REL,
-    SCHEDULE_NAV_REL,
-    SCHEDULE_NAV_SUITE_REL,
-    PERSONAL_DETAIL_REL,
-    PERSONAL_DETAIL_SUITE_REL,
-    // EX-OPS-READ-MVP RE-POINT REMOVED. Nine `lib/exam` paths were approved here
-    // while the operational-READ slice was in flight. That slice is merged, so
-    // those entries no longer describe anything in the working tree — they are
-    // dead permissions that would let an unrelated edit to an exam core pass
-    // this sweep unnoticed. Dropping them restores the sweep to its full
-    // strength; test 14 below independently pins that `lib/exam` is untouched.
-  ];
+  // BOTH SIDES, and neither wholesale: the repo-wide sweep is main's — the
+  // beginner-read slice hoisted this list into `approvedSlicePaths()` so test 14
+  // could re-use it — and the role-schedule slice's own six paths are declared
+  // inside that one helper rather than re-inlined here. One list, one place, and
+  // every path in it still named EXACTLY.
+  const approved = approvedSlicePaths();
   const offenders = [...touched].filter((path) => !approved.includes(path)).sort();
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
   // Nothing was staged.

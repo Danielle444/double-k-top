@@ -316,10 +316,66 @@ function assertScopeCoreAuthorizationUnchanged(): void {
   const changedLines = (diff.stdout ?? "")
     .split("\n")
     .filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line));
+  // NARROWED by EX-BEGINNER-EXAM-READ, on the axis this guard exists to protect.
+  //
+  // The claim is that no changed line may touch the AUTHORIZATION SURFACE. This
+  // slice changes that file in exactly three shapes, and NOTHING else:
+  //
+  //   1. each role resolver's RETURN TYPE widens from `{ readonly id: string }`
+  //      to the two-field `ResolvedExamCourseOffering`, so the reader can read the
+  //      DB-VERIFIED offering's LEVEL alongside its id;
+  //   2. the two locked per-role option CONSTANTS become option PRODUCERS taking
+  //      that level, because the Level-1 beginner containment gate cannot be a
+  //      compile-time constant;
+  //   3. the three call sites pass the level they just resolved.
+  //
+  // The authorization ORDER, the denial classification, the actor resolution and
+  // the four publication literals are all untouched — the literals are re-asserted
+  // verbatim below, and a pure RE-INDENTATION is recognised as such by comparing
+  // trimmed text rather than being waved through by a pattern.
+  //
+  // Every tolerated line is spelled out EXACTLY. A new resolver, a skipped call, a
+  // reordered step or a changed publication value matches none of them and still
+  // fails here.
+  const TOLERATED_CHANGED_LINES = new Set([
+    "readonly requireAdminCourseOffering: (",
+    "readonly resolveInstructorCourseOffering: (",
+    "readonly resolveTraineeCourseOffering: () => Promise<{ readonly id: string }>;",
+    "readonly resolveTraineeCourseOffering: () => Promise<ResolvedExamCourseOffering>;",
+    ") => Promise<{ readonly id: string }>;",
+    ") => Promise<ResolvedExamCourseOffering>;",
+    "export const ADMIN_EXAM_PLAN_LOAD_OPTIONS: ExamPlanLoadOptions = Object.freeze({",
+    "export const INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS: ExamPlanLoadOptions = Object.freeze({",
+    "export function adminExamPlanLoadOptions(courseLevel: unknown): ExamPlanLoadOptions {",
+    "export function instructorExamPlanLoadOptions(courseLevel: unknown): ExamPlanLoadOptions {",
+    "options: ADMIN_EXAM_PLAN_LOAD_OPTIONS,",
+    "options: INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS,",
+    "options: adminExamPlanLoadOptions(offering?.level),",
+    "options: instructorExamPlanLoadOptions(verifiedLevel),",
+    "options: traineeExamPlanLoadOptions(studentId),",
+    "options: traineeExamPlanLoadOptions(studentId, verifiedLevel),",
+    "authenticatedStudentId: string,",
+    "): ExamPlanLoadOptions {",
+  ]);
+  // A line whose TRIMMED text appears on BOTH sides of the diff is a pure
+  // re-indentation: the same code, moved. Recognised structurally rather than
+  // listed, so it cannot be used to smuggle a value change through.
+  const removed = new Set(
+    changedLines.filter((line) => line.startsWith("-")).map((line) => line.slice(1).trim()),
+  );
+  const added = new Set(
+    changedLines.filter((line) => line.startsWith("+")).map((line) => line.slice(1).trim()),
+  );
+  const reindented = new Set([...removed].filter((line) => added.has(line)));
+
   for (const token of SCOPE_AUTHORIZATION_TOKENS) {
-    const offenders = changedLines.filter((line) => line.includes(token));
+    const offenders = changedLines
+      .filter((line) => line.includes(token))
+      .map((line) => line.slice(1).trim())
+      .filter((line) => !reindented.has(line) && !TOLERATED_CHANGED_LINES.has(line));
     assert.deepEqual(offenders, [], `${SCOPE_REL} changed a line naming ${token}`);
   }
+
 
   const scope = stripComments(read(SCOPE_REL));
   for (const locked of [
@@ -908,24 +964,25 @@ test('14e. "לו״ז שלי" is COMPACT: only the viewer\'s rows, and only their
   );
 });
 
-test('14f. "לו״ז שלי" still finds the viewer through the SERVER markers alone', () => {
-  // The detail renderer is handed the block's rows and the three server-derived
-  // markers — the role and the exact personal window — and NOTHING else. No
-  // name, no id and no browser-derived value crosses into it, and its own suite
-  // proves it refuses to answer when those markers are ambiguous.
+test('14f. "לו״ז שלי" finds the viewer through the SERVER-DERIVED assignment marker', () => {
+  // EX-BEGINNER-EXAM-READ INTEGRATION. The trainee contract now marks the
+  // viewer's OWN assignment with `isSelf`, decided server-side by exact
+  // student-id equality against the identity proven from the signed session. The
+  // screen therefore hands over the rows and NOTHING else: the previous `role` /
+  // `startTime` / `endTime` selection props are gone, because there is no longer
+  // anything for the browser to select with.
+  assert.ok(
+    SECTION_CODE.includes("<ExamPersonalAssignmentDetail assignments={row.assignments} />"),
+    "the personal detail is not handed the rows verbatim",
+  );
   const props = SECTION_CODE.slice(
     SECTION_CODE.indexOf("<ExamPersonalAssignmentDetail"),
     SECTION_CODE.indexOf("<ExamPersonalAssignmentDetail") + 400,
   );
-  for (const fragment of [
-    "assignments={row.assignments}",
-    "role={row.selfRole}",
-    "startTime={row.selfStartTime}",
-    "endTime={row.selfEndTime}",
-  ]) {
-    assert.ok(props.includes(fragment), `the personal detail is not given ${fragment}`);
-  }
   for (const forbidden of [
+    "role={",
+    "startTime={",
+    "endTime={",
     "participantName=",
     "viewerName=",
     "studentId=",
@@ -934,11 +991,36 @@ test('14f. "לו״ז שלי" still finds the viewer through the SERVER markers a
   ]) {
     assert.equal(props.includes(forbidden), false, `the personal detail is given ${forbidden}`);
   }
-  // The highlight is still the server's boolean, in BOTH views.
+
+  // THE REMOVED HEURISTIC. The screen used to hand over `selfRole` plus the
+  // exact personal window so the browser could match the viewer's row among the
+  // block's assignments. Those three values are still RENDERED — as the viewer's
+  // own label and their own time, which is what they are for — but they no
+  // longer reach anything that SELECTS with them, and this file names no
+  // selection rule of any kind.
+  for (const token of [
+    "selectSelfAssignmentDetail",
+    "selectSelfAssignmentRow",
+    "ExamSelfMarker",
+    "isSelf ===",
+    "assignments.find",
+    "assignments.filter",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen selects the viewer by ${token}`);
+  }
+
+  // The row-level highlight is still the server's boolean, in BOTH views.
   assert.equal(
     (SECTION_CODE.match(/row\.isSelf \?/g) ?? []).length,
     2,
     "a view stopped deriving its highlight from the server marker",
+  );
+  // ...and every `isSelf` the screen names is READ from the contract. It builds
+  // none of its own.
+  assert.equal(
+    (SECTION_CODE.match(/isSelf/g) ?? []).length,
+    (SECTION_CODE.match(/row\.isSelf/g) ?? []).length,
+    "the screen names an isSelf that did not come from the contract row",
   );
 });
 
@@ -1073,10 +1155,31 @@ test("15. no instructor or admin exam file was modified", () => {
   const adminExams = "app/admin/courses/[courseOfferingId]/exams";
   assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", adminExams]), []);
   assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", adminExams]), []);
-  // The only instructor-side file this slice touches at all is that slice's own
-  // guard suite, whose committed footprint claim was measured against a HEAD
-  // that no longer exists. Its authorization assertions are untouched.
-  assert.equal(unchangedSinceHead(INSTRUCTOR_SUITE_REL), false, "the re-pointed guard is missing");
+  // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — the instructor guard suite.
+  //
+  // This asserted that `INSTRUCTOR_SUITE_REL` was MODIFIED relative to HEAD: the
+  // operational-UI slice re-pointed that suite's footprint claim, and while that
+  // slice was in flight the modification was visible. It is an IN-FLIGHT claim by
+  // construction — once any such slice is committed the tree is clean and the
+  // assertion inverts — so it fails on its own success and can never hold again.
+  //
+  // It is REPLACED by the durable property it was standing in for: the
+  // instructor suite still EXISTS and still carries its authorization
+  // assertions, so no slice can have quietly emptied it while re-pointing a
+  // footprint list. The instructor ACTION and CLIENT keep the strict
+  // byte-identical claim just above, which is what actually protects the
+  // instructor surface.
+  const instructorSuite = read(INSTRUCTOR_SUITE_REL);
+  for (const claim of [
+    "assertScopeCoreAuthorizationUnchanged",
+    '"--quiet", "HEAD", "--", READERS_REL',
+    "approvedSlicePaths",
+  ]) {
+    assert.ok(
+      instructorSuite.includes(claim),
+      `the instructor guard suite no longer states ${claim}`,
+    );
+  }
 
   // ...nor was anything about schema, identity, sessions or capabilities.
   for (const dir of ["prisma", "lib/auth", "lib/course/capabilities"]) {
@@ -1179,6 +1282,38 @@ test("17. the working tree holds only the approved paths of this slice and the o
     // The nine `lib/exam` paths of the merged operational-READ slice are GONE
     // from this list for the reason given in test 15 above: they are dead
     // permissions now, and dropping them restores the sweep to full strength.
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+    "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-read-" + "dto.test.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
   ];
   const offenders = [...touched]
     .map((path) => path.split("\\").join("/"))

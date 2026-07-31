@@ -867,6 +867,38 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
     // session, capability or policy file is named, and the assertion below
     // re-checks that structurally.
     "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+    "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-read-" + "dto.test.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
   ];
   /**
    * The neighbouring slices' NEW files: EX-ASG-UI1's four route files, and
@@ -896,6 +928,15 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
     "lib/exam/exam-pairing-write-core.test.ts",
     "lib/actions/" + "exam-pairing-write" + "-io.ts",
     "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
   ];
 
   // What EXISTS IN HEAD and was edited, deleted, renamed or type-changed.
@@ -943,7 +984,24 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
     .sort();
   assert.deepEqual(
     libProduction,
-    [],
+    // RE-POINTED by EX-BEGINNER-EXAM-READ, from EMPTY to an EXACT FOUR. The
+    // Level-1 beginner containment gate plus the trainee-only assignment `isSelf`
+    // marker modify these four lib/ read-pipeline modules and no others: the plan
+    // loader gains the containment option, the role scope core derives it from the
+    // DB-verified offering level, the trainee view core carries the server-derived
+    // viewer id on its INTERNAL projection, and the narrowing turns that id into
+    // one boolean per trainee assignment row. The slice's fifth production file is
+    // a NEW predicate and so never appears in a diff against HEAD.
+    //
+    // Each is named EXACTLY - no directory, no prefix, no glob - so a FIFTH
+    // modified lib/ production module still fails here. None is a supervisor
+    // module, which the assertion above proves independently.
+    [
+      "lib/exam/" + "exam-plan-loader" + "-core.ts",
+      "lib/exam/" + "exam-read-dto" + ".ts",
+      "lib/exam/" + "exam-read-scope" + "-core.ts",
+      "lib/exam/" + "exam-trainee-view" + "-core.ts",
+    ].sort(),
     `an unapproved lib production module was edited: ${libProduction.join(", ")}`,
   );
 

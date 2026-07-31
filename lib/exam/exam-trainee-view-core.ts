@@ -221,6 +221,20 @@ export interface TraineeExamDayProjection {
   readonly myRows: readonly TraineeExamDayRow[];
   /** Every row excluded because it could not be read safely. */
   readonly issues: readonly TraineeExamViewIssue[];
+  /**
+   * The NORMALIZED viewing trainee's `Student.id`, or `null` for nobody.
+   *
+   * IT IS SERVER-DERIVED AND STAYS SERVER-SIDE. This is the SAME value the core
+   * already received and already used to decide `isSelf` per ROW; it is carried
+   * out so the narrowing layer can decide `isSelf` per ASSIGNMENT by EXACT id
+   * equality rather than re-deriving identity from a display name.
+   *
+   * `TraineeExamDayProjection` is an INTERNAL contract that is never returned to
+   * a client, and the committed narrowing emits the BOOLEAN alone — no builder
+   * projects this field, which the DTO suite asserts against the SERIALIZED
+   * output rather than against the type.
+   */
+  readonly viewerStudentId: string | null;
 }
 
 // ===========================================================================
@@ -363,12 +377,20 @@ function compareIssues(a: TraineeExamViewIssue, b: TraineeExamViewIssue): number
 function freezeProjection(
   rows: readonly TraineeExamDayRow[],
   issues: readonly TraineeExamViewIssue[],
+  viewerStudentId: string | null,
 ): TraineeExamDayProjection {
   const allRows = Object.freeze(rows);
   // THE invariant: the personal view is a filter of the full view, sharing row
   // object identity. Never rebuilt, never re-derived from the input.
   const myRows = Object.freeze(allRows.filter((row) => row.isSelf));
-  return Object.freeze({ allRows, myRows, issues: Object.freeze(issues) });
+  return Object.freeze({
+    allRows,
+    myRows,
+    issues: Object.freeze(issues),
+    // Carried out ALREADY NORMALIZED, so no consumer re-trims, re-cases or
+    // otherwise re-interprets the identity this core matched on.
+    viewerStudentId,
+  });
 }
 
 // ===========================================================================
@@ -417,13 +439,15 @@ export function projectTraineeExamDay(
   const rows: TraineeExamDayRow[] = [];
   const issues: TraineeExamViewIssue[] = [];
 
-  if (!Array.isArray(sessions) || !isPresent(selectedDate)) {
-    return freezeProjection(rows, issues);
-  }
-
   // A blank / whitespace-only / absent viewer marks NOBODY. It is never widened
-  // into "everybody" and never rejected.
+  // into "everybody" and never rejected. Normalized BEFORE the early return so
+  // an empty projection carries the same viewer value a populated one would —
+  // an empty day must not read as "the viewer could not be identified".
   const viewer = normalizedId(viewerStudentId);
+
+  if (!Array.isArray(sessions) || !isPresent(selectedDate)) {
+    return freezeProjection(rows, issues, viewer);
+  }
 
   for (const session of sessions) {
     if (session === null || typeof session !== "object") continue;
@@ -565,5 +589,5 @@ export function projectTraineeExamDay(
 
   rows.sort(compareRows);
   issues.sort(compareIssues);
-  return freezeProjection(rows, issues);
+  return freezeProjection(rows, issues, viewer);
 }
