@@ -2,8 +2,8 @@
 
 /**
  * EXAM PLAN P3 + EXAM EX-S5B-5C + EXAM EX-SES-S4 + EXAM EX-SES-UI-2 + EXAM
- * EX-ASG-UI1 — the Server Action module of the course-scoped exams route, holding
- * EXACTLY SEVEN approved mutations:
+ * EX-ASG-UI1 + EXAM EX-ASG-IT2 — the Server Action module of the course-scoped
+ * exams route, holding EXACTLY EIGHT approved mutations:
  *
  *   1. `createExamPlanAction`       — bring ONE empty, unpublished ExamPlan into
  *                                     existence for ONE course offering;
@@ -19,19 +19,31 @@
  *   6. `createExamAssignmentAction` — assign ONE examinee to ONE stored session
  *                                     of that same plan;
  *   7. `deleteExamAssignmentAction` — remove ONE stored assignment of that same
- *                                     plan.
+ *                                     plan;
+ *   8. `createExamInstructedTraineeAssignmentAction`
+ *                                   — assign ONE INSTRUCTED TRAINEE to ONE stored
+ *                                     session of that same plan, when that
+ *                                     session's exam actually asks for one.
  *
  * ===========================================================================
- * WHY SEVEN EXPORTS, AND WHY EXACTLY SEVEN
+ * WHY EIGHT EXPORTS, AND WHY EXACTLY EIGHT
  * ===========================================================================
  * Everything exported from a `"use server"` module has a stable, PUBLICLY
- * CALLABLE network id, so the export list IS the attack surface. These seven
+ * CALLABLE network id, so the export list IS the attack surface. These eight
  * actions were each approved and reviewed on their own, and they are kept as
  * SEPARATE endpoints rather than folded into one generic "exams" action: a single
  * action taking a discriminator would have to decide FROM THE REQUEST which
  * operation to run, which is precisely the decision that must not be
- * client-influenced. Seven narrow endpoints, each with a fixed operation, cannot
+ * client-influenced. Eight narrow endpoints, each with a fixed operation, cannot
  * be talked into performing another one.
+ *
+ * The eighth is the sharpest illustration of that rule. It writes a DIFFERENT
+ * role from the sixth, and the two are deliberately NOT one create endpoint
+ * carrying a role field: an endpoint that chose its role from the request would
+ * make the instructed-trainee path reachable from a submission that looks like an
+ * examinee save, and vice versa. Each reads its own fields, calls its own
+ * committed writer, and maps its own closed result codes onto its own query
+ * tokens.
  *
  * That applies most sharply to the two added by EX-SES-UI-2 and the two added by
  * EX-ASG-UI1. In each pair the CREATE and the REMOVAL are DELIBERATELY not one
@@ -141,7 +153,17 @@
  *   - `assignmentIssues=<codes>` — that writer's own issue codes, joined;
  *   - `deletedAssignment=1`  — the assignment removal performed the delete;
  *   - `assignmentDeleteError=<code>` — the assignment removal writer's stable
- *                                  refusal codes.
+ *                                  refusal codes;
+ *   - `createdInstructedTrainee=1` — the instructed-trainee create performed the
+ *                                  write;
+ *   - `instructedTraineeError=<code>`  — that writer's stable refusal codes;
+ *   - `instructedTraineeIssues=<codes>`— that writer's own issue codes, joined.
+ *
+ * The instructed-trainee tokens are a FOURTH distinct family, for the same reason
+ * the assignment ones are a third: an instructed-trainee create form and an
+ * examinee create form can be on screen under the SAME session at once, and a
+ * shared token would render one form's diagnostic above the other with no way for
+ * the page to tell which submission failed.
  *
  * The session tokens are DISTINCT from the definition ones rather than shared,
  * and the EDIT and REMOVAL tokens are distinct from the CREATE's for the same
@@ -172,12 +194,19 @@
  * WHAT THIS MODULE DOES NOT DO
  * ===========================================================================
  * It creates ONE empty plan, it appends ONE definition, it appends, edits or
- * removes ONE session, and it assigns or unassigns ONE examinee. It does not
- * publish, unpublish, delete or edit a plan; it does not edit, reorder or delete
- * an ExamDefinition; it does not reorder sessions, edit or reorder an assignment,
- * write an INSTRUCTED_TRAINEE row, add a break, a supervisor or a source date; it
- * sends no notification, reads no capability and touches no schema. None of those
- * modules is imported, so none of them can be reached from here.
+ * removes ONE session, it assigns or unassigns ONE examinee, and it assigns ONE
+ * instructed trainee. It does not publish, unpublish, delete or edit a plan; it
+ * does not edit, reorder or delete an ExamDefinition; it does not reorder
+ * sessions, edit or reorder an assignment, REMOVE an instructed trainee through
+ * any second path, add a break, a supervisor or a source date; it writes no
+ * pairing, no wave and no personal time; it sends no notification, reads no
+ * capability and touches no schema. None of those modules is imported, so none of
+ * them can be reached from here.
+ *
+ * The instructed-trainee row is REMOVED by the SAME assignment removal above:
+ * that writer locates a row by id within the plan and is role-blind, so a
+ * role-specific delete endpoint would be a second way to do one thing and a
+ * second place for its authorization to drift.
  *
  * ===========================================================================
  * THE ASSIGNMENT COUNT IS NEVER AN INPUT
@@ -205,6 +234,7 @@ import {
   createExamAssignment,
   deleteExamAssignment,
 } from "@/lib/actions/exam-assignment-write-io";
+import { createExamInstructedTraineeAssignment } from "@/lib/actions/exam-instructed-trainee-assignment-write-io";
 
 /**
  * Create ONE empty ExamPlan for the bound course offering.
@@ -803,4 +833,103 @@ export async function deleteExamAssignmentAction(
   //    foreign assignment. No diagnostics list exists for a removal, so there is
   //    no issues token.
   redirect(`${examsPath}?assignmentDeleteError=${encodeURIComponent(result.code)}`);
+}
+
+/**
+ * Assign ONE INSTRUCTED TRAINEE to ONE stored ExamSession of the bound offering's
+ * plan.
+ *
+ * Returns `Promise<void>`, like its seven neighbours: every outcome is expressed
+ * as a navigation, so the action holds no client-visible state and its signature
+ * cannot grow a `prevState` parameter.
+ *
+ * ===========================================================================
+ * TWO FIELDS, AND DELIBERATELY NOT A THIRD
+ * ===========================================================================
+ * The mapping below reads `sessionId` and `studentId` and NOTHING else. Absent —
+ * not filtered out, but never looked for — are `courseOfferingId` and `planId`
+ * (the first is bound by the route, the second is derived from it), `role` (the
+ * committed create core fixes the single INSTRUCTED_TRAINEE literal, and its
+ * payload type cannot express another), `horseName` (this role carries none, at
+ * any layer of the committed create path), `orderIndex` (the committed writer
+ * computes it as the next position within the SESSION, inside its own
+ * transaction), `pairingIndex` (this slice writes none), `definitionId` and the
+ * definition's requirement flags (properties of the session's exam, re-read
+ * server-side), `assignmentCount` (a client claim about server state), a date, a
+ * time, an instruction topic, a discipline, a note and a trainee's display NAME.
+ * The committed writer's signature has no parameter for any of them, and its
+ * normalized payload has no field for any of them either.
+ *
+ * ===========================================================================
+ * NO COERCION AT ALL
+ * ===========================================================================
+ * Both values are forwarded EXACTLY as `FormData.get` returned them: a `string`,
+ * or `null` for an absent field. There is no `String(...)`, no `??`, no
+ * `.trim()`, no default and no empty-string collapse anywhere in this function —
+ * deliberately, because the committed input core already defines all of it and a
+ * second copy here would be free to drift from the rule the database actually
+ * sees.
+ *
+ * That core accepts `unknown` for every field and FAILS CLOSED on every shape it
+ * does not want: each of the two must be a NON-BLANK string after trimming, and
+ * a NON-STRING is REFUSED rather than stringified — which is exactly why a `File`
+ * entry from a multipart submission cannot become a session or trainee id.
+ */
+export async function createExamInstructedTraineeAssignmentAction(
+  courseOfferingId: string,
+  formData: FormData,
+): Promise<void> {
+  // 1. Authorize the manager BEFORE anything is read or written.
+  await requireAdmin();
+
+  // 2. The exams path of THIS offering — the only path this action revalidates
+  //    and the only one it redirects back to.
+  const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
+
+  // 3. The committed writer, given the bound route id and the two raw values.
+  //    The bound offering id is a REQUEST: the writer runs the admin boundary and
+  //    the exact-offering lookup itself, resolves the plan from the DB-verified
+  //    id, verifies the submitted session WITHIN that plan, refuses unless that
+  //    session's definition actually requires this role, and matches the trainee
+  //    through ONE fail-closed statement requiring an ACTIVE enrolment in that
+  //    same offering — so a session or a trainee belonging to another course is
+  //    unreachable.
+  const result = await createExamInstructedTraineeAssignment(courseOfferingId, {
+    sessionId: formData.get("sessionId"),
+    studentId: formData.get("studentId"),
+  });
+
+  // 4. Success: revalidate EXACTLY this exams path — no course dashboard, no
+  //    schedule path, no trainee or instructor surface — then return to it. The
+  //    new assignment is read back from the database by the page; it is never
+  //    inserted optimistically, and neither its id nor its assigned position is
+  //    reflected in the URL.
+  if (result.ok) {
+    revalidatePath(examsPath);
+    redirect(`${examsPath}?createdInstructedTrainee=1`);
+  }
+
+  // 5. The one refusal that is NOT about this page: the offering does not exist,
+  //    so returning to its exams route would render a second not-found. The
+  //    manager goes to the course list, and the requested id is not reflected
+  //    back in the destination.
+  if (result.code === "offering_not_found") {
+    redirect("/admin/courses?error=invalid");
+  }
+
+  // 6. Field diagnostics: the writer's own stable codes, in the writer's own
+  //    order. Only codes travel — never a submitted session id or student id, and
+  //    never a message built from one.
+  if (result.code === "invalid_input") {
+    const codes = result.issues.map((issue) => issue.code).join(",");
+    redirect(
+      `${examsPath}?instructedTraineeError=invalid_input&instructedTraineeIssues=${encodeURIComponent(codes)}`,
+    );
+  }
+
+  // 7. Every other refusal is fully described by its code alone: the lifecycle
+  //    denial, the missing plan, the missing-or-foreign session, the definition
+  //    that does not ask for this role at all, the ineligible trainee and the
+  //    role-blind already-assigned conflict.
+  redirect(`${examsPath}?instructedTraineeError=${encodeURIComponent(result.code)}`);
 }

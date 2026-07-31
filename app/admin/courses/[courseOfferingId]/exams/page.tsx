@@ -1,20 +1,20 @@
 /**
  * EXAM EX-S5B-5B + EXAM PLAN P3 + EXAM EX-S5B-5C + EXAM EX-SES-UI-1 + EXAM
- * EX-SES-UI-2 + EXAM EX-ASG-UI1 — the admin Exams surface of ONE course offering:
- * a read of its ExamDefinition configuration, of its scheduled exam sessions AND
- * of the examinees assigned to them, plus the SEVEN explicit mutation affordances
- * that belong to it.
+ * EX-SES-UI-2 + EXAM EX-ASG-UI1 + EXAM EX-ASG-IT2 — the admin Exams surface of ONE
+ * course offering: a read of its ExamDefinition configuration, of its scheduled
+ * exam sessions AND of the people assigned to them, plus the EIGHT explicit
+ * mutation affordances that belong to it.
  *
  * Server Component. The page itself holds no state and renders no form control:
  * every form is a separate client component, and the only mutations it can reach
- * are the seven Server Actions bound below.
+ * are the eight Server Actions bound below.
  *
  * ===========================================================================
  * WHAT THIS ROUTE MAY MUTATE — AND WHAT IT STILL MAY NOT
  * ===========================================================================
- * EXACTLY SEVEN mutations exist here. The first two are MUTUALLY EXCLUSIVE by the
+ * EXACTLY EIGHT mutations exist here. The first two are MUTUALLY EXCLUSIVE by the
  * state of the plan; the third additionally requires something to schedule; the
- * next two are PER SESSION and require a session to already exist; the last two
+ * next two are PER SESSION and require a session to already exist; the last three
  * are PER ASSIGNMENT and require a session to be there to assign anyone to:
  *
  *   - no plan yet     -> create ONE empty, unpublished ExamPlan;
@@ -23,15 +23,17 @@
  *     one definition  -> append ONE ExamSession to it;
  *   - per session     -> edit THAT session, or remove THAT session;
  *   - per session     -> assign ONE examinee to it;
- *   - per assignment  -> remove THAT assignment.
+ *   - per session     -> assign ONE instructed trainee to it, when that session's
+ *                        exam actually asks for one;
+ *   - per assignment  -> remove THAT assignment, whatever role it holds.
  *
  * Editing, removing and reordering definitions, reordering sessions, deleting or
- * publishing the plan, EDITING or REORDERING an assignment, creating an
- * INSTRUCTED_TRAINEE row, breaks, supervisors and source dates are NOT reachable —
- * not disabled, not hidden behind a flag, but absent, with no import that could
- * reach them.
+ * publishing the plan, EDITING or REORDERING an assignment, pairings, waves,
+ * personal times, breaks, supervisors and source dates are NOT reachable — not
+ * disabled, not hidden behind a flag, but absent, with no import that could reach
+ * them.
  *
- * All seven mutations are ALWAYS an explicit click on a POST-ing form. The page
+ * All eight mutations are ALWAYS an explicit click on a POST-ing form. The page
  * performs no write, so a plain GET of this route — a refresh, a back button, a
  * prefetch, a bookmark — can never bring a plan, a definition, a session or an
  * assignment into existence, and can never remove one either. No session id and no
@@ -41,21 +43,27 @@
  * ===========================================================================
  * WHAT THE ASSIGNMENT SURFACE MAY AND MAY NOT SAY
  * ===========================================================================
- * The create form collects EXACTLY three values — the session (hidden, fixed by
- * the row it was rendered under), the trainee and the horse. The ROLE is not among
- * them: the committed create core fixes the single EXAMINEE literal and its
- * payload type cannot express another, so this surface writes examinees and
- * nothing else.
+ * The examinee create form collects EXACTLY three values — the session (hidden,
+ * fixed by the row it was rendered under), the trainee and the horse. The
+ * instructed-trainee create form collects EXACTLY two — the session and the
+ * trainee, and no horse, because that role carries none. The ROLE is not among
+ * either form's fields: each committed create core fixes its own single role
+ * literal and neither payload type can express another, so the form a manager
+ * submits decides the role and no submission can.
  *
- * The LIST, by contrast, is HISTORY and shows every stored row — including an
- * `INSTRUCTED_TRAINEE` row this surface cannot create. Hiding one would make a
- * session look emptier than it is and would disagree with the count beside it.
+ * The LIST is HISTORY and shows every stored row, of every role, exactly as
+ * before. Hiding one would make a session look emptier than it is and would
+ * disagree with the count beside it.
  *
- * A definition that ALSO demands a lesson topic or a discipline gets no create
- * form: this slice collects neither, and the committed writer refuses the whole
- * create rather than storing a half-filled row. `requiresInstructedTrainee` is
- * deliberately NOT consulted — the instructed trainee is a SECOND row written by a
- * later operation, and it never blocks the examinee.
+ * The two create forms are gated INDEPENDENTLY. A definition that ALSO demands a
+ * lesson topic or a discipline gets no EXAMINEE form: that form collects neither,
+ * and the committed writer refuses the whole create rather than storing a
+ * half-filled row. `requiresInstructedTrainee` never enters that gate. The
+ * INSTRUCTED-TRAINEE form asks exactly one question in return — does this
+ * session's exam ask for such a person? — and consults neither topic nor
+ * discipline, because refusing this role over the examinee's missing topic would
+ * block precisely the blocks it exists to complete. Both gates FAIL CLOSED when
+ * the requirements are unknown.
  *
  * Nothing here renders an identity number, a phone, a parent or guardian contact,
  * a group, a subgroup or any enrolment detail. The committed readers do not select
@@ -161,7 +169,17 @@
  *   - `assignmentError=<code>`   — a known assignment-create refusal code;
  *   - `assignmentIssues=<codes>` — known assignment validation issue codes;
  *   - `deletedAssignment=1`  — an assignment was removed;
- *   - `assignmentDeleteError=<code>` — a known assignment-removal refusal code.
+ *   - `assignmentDeleteError=<code>` — a known assignment-removal refusal code;
+ *   - `createdInstructedTrainee=1` — an instructed trainee was assigned;
+ *   - `instructedTraineeError=<code>`  — a known instructed-trainee refusal code;
+ *   - `instructedTraineeIssues=<codes>`— known instructed-trainee issue codes.
+ *
+ * The instructed-trainee family is DISTINCT from the examinee one rather than
+ * shared: both create forms can be on screen under the SAME session at once, and
+ * a shared token would render one form's diagnostic above the other with no way
+ * for the page to tell which submission failed. There is deliberately NO
+ * instructed-trainee DELETE token: removal is the existing, role-blind assignment
+ * removal, and it keeps reporting through the existing tokens.
  *
  * Every parser here is CLOSED in both directions. `created`, `existing`,
  * `createdDefinition`, `createdSession`, `updatedSession`, `unchangedSession`,
@@ -283,6 +301,7 @@ import {
   deleteExamSessionAction,
   createExamAssignmentAction,
   deleteExamAssignmentAction,
+  createExamInstructedTraineeAssignmentAction,
 } from "./actions";
 import { ExamPlanCreateForm } from "./ExamPlanCreateForm";
 import { ExamDefinitionCreateForm } from "./ExamDefinitionCreateForm";
@@ -291,6 +310,7 @@ import { ExamSessionEditForm } from "./ExamSessionEditForm";
 import { ExamSessionDeleteForm } from "./ExamSessionDeleteForm";
 import { CreateExamAssignmentForm } from "./CreateExamAssignmentForm";
 import { DeleteExamAssignmentForm } from "./DeleteExamAssignmentForm";
+import { CreateExamInstructedTraineeAssignmentForm } from "./CreateExamInstructedTraineeAssignmentForm";
 import {
   examDefinitionCreateErrorText,
   examDefinitionCreateIssueTexts,
@@ -307,6 +327,12 @@ import {
   EXAM_ASSIGNMENT_CREATED_TEXT,
   EXAM_ASSIGNMENT_DELETED_TEXT,
 } from "./exam-assignment-messages";
+import {
+  examInstructedTraineeErrorText,
+  examInstructedTraineeIssueTexts,
+  isExamInstructedTraineeSuccessToken,
+  EXAM_INSTRUCTED_TRAINEE_CREATED_TEXT,
+} from "./exam-instructed-trainee-assignment-messages";
 
 export const dynamic = "force-dynamic";
 
@@ -526,11 +552,12 @@ function requirementText(required: boolean): string {
 /**
  * The Hebrew name of each assignment role.
  *
- * `INSTRUCTED_TRAINEE` is listed because the committed assignment reader is
- * HISTORY and reports every stored row: this surface cannot CREATE such a row,
- * but a row created by a future operation must still be shown rather than
- * silently dropped — a hidden row would make a session look emptier than it is
- * and would disagree with the count beside it.
+ * `INSTRUCTED_TRAINEE` was listed here before this surface could create such a
+ * row, because the committed assignment reader is HISTORY and reports every
+ * stored row. IT2 changes nothing about that: the label and the list are the same
+ * ones, and a row of either role must be shown rather than silently dropped — a
+ * hidden row would make a session look emptier than it is and would disagree with
+ * the count beside it.
  */
 const EXAM_ROLE_TEXT: Readonly<Record<string, string>> = Object.freeze({
   EXAMINEE: "נבחן/ת",
@@ -562,14 +589,22 @@ function horseText(horseName: string | null): string {
 const NO_ASSIGNMENTS: readonly AdminExamAssignmentRow[] = Object.freeze([]);
 
 /**
- * The two DEFINITION requirements that decide whether an examinee can be assigned
- * through THIS surface at all. Carried per definition id, from the definition
- * reader the page already loaded — no second query, and no widening of the
- * session reader, which does not report them.
+ * The DEFINITION requirements that decide which assignment affordances a session
+ * may show. Carried per definition id, from the definition reader the page
+ * already loaded — no second query, and no widening of the session reader, which
+ * does not report any of them.
+ *
+ * The first two decide whether an EXAMINEE can be assigned through this surface
+ * at all. The third is IT2's addition and is read only by the instructed-trainee
+ * affordance: the two gates are separate on purpose, because a definition that
+ * demands a lesson topic still legitimately wants its instructed trainee, and
+ * folding them together would hide exactly the control that completes such a
+ * block.
  */
 interface AssignmentDefinitionRequirements {
   readonly requiresLessonTopic: boolean;
   readonly requiresDiscipline: boolean;
+  readonly requiresInstructedTrainee: boolean;
 }
 
 /**
@@ -612,6 +647,9 @@ export default async function CourseExamsPage({
     assignmentIssues?: string | string[];
     deletedAssignment?: string | string[];
     assignmentDeleteError?: string | string[];
+    createdInstructedTrainee?: string | string[];
+    instructedTraineeError?: string | string[];
+    instructedTraineeIssues?: string | string[];
   }>;
 }) {
   const { courseOfferingId } = await params;
@@ -714,14 +752,16 @@ export default async function CourseExamsPage({
     bucket.push(assignment);
   }
 
-  // The two definition requirements that gate the create form, keyed by
+  // The definition requirements that gate the two create affordances, keyed by
   // definition id and taken from the DEFINITION reader already loaded above — no
-  // second query, and no widening of the session reader, which reports neither.
+  // second query, and no widening of the session reader, which reports none of
+  // them. The third flag is copied straight through, exactly like the first two.
   const requirementsByDefinition = new Map<string, AssignmentDefinitionRequirements>();
   for (const definition of view.definitions) {
     requirementsByDefinition.set(definition.id, {
       requiresLessonTopic: definition.requiresLessonTopic,
       requiresDiscipline: definition.requiresDiscipline,
+      requiresInstructedTrainee: definition.requiresInstructedTrainee,
     });
   }
 
@@ -793,6 +833,25 @@ export default async function CourseExamsPage({
   const assignmentIssueTexts = examAssignmentCreateIssueTexts(assignmentIssues);
   const assignmentDeleteErrorText = examAssignmentDeleteErrorText(assignmentDeleteError);
 
+  // The INSTRUCTED-TRAINEE outcome tokens, destructured from that SAME one
+  // resolved query and parsed by their own closed route-local message module —
+  // which owns every sentence, so a query value can only SELECT text and never
+  // supply it. Three more tokens, no more query resolutions, and none of them is
+  // ever interpolated into the page. They are a separate family from the examinee
+  // ones on purpose: both forms can be on screen under the same session at once.
+  const {
+    createdInstructedTrainee,
+    instructedTraineeError,
+    instructedTraineeIssues,
+  } = query;
+  const showInstructedTraineeCreatedNotice = isExamInstructedTraineeSuccessToken(
+    createdInstructedTrainee,
+  );
+  const instructedTraineeErrorTextValue =
+    examInstructedTraineeErrorText(instructedTraineeError);
+  const instructedTraineeIssueTexts =
+    examInstructedTraineeIssueTexts(instructedTraineeIssues);
+
   const dashboardHref = `/admin/courses/${encodeURIComponent(context.id)}`;
   const isPublished = view.publishedAt !== null;
   const hasDefinitions = view.definitions.length > 0;
@@ -838,6 +897,15 @@ export default async function CourseExamsPage({
   // `context`, and never from the raw route param.
   const boundCreateAssignmentAction = createExamAssignmentAction.bind(null, context.id);
   const boundDeleteAssignmentAction = deleteExamAssignmentAction.bind(null, context.id);
+
+  // The INSTRUCTED-TRAINEE create action, bound ONCE to the VERIFIED context id
+  // on exactly the same terms, and reused by every per-session control below.
+  // Hoisted rather than bound inside the session loop, for the reason every other
+  // binding expression appears exactly once in this file: one binding site is one
+  // place to check that the id came from `context`, and never from the raw route
+  // param.
+  const boundCreateInstructedTraineeAssignmentAction =
+    createExamInstructedTraineeAssignmentAction.bind(null, context.id);
 
   return (
     <div className="flex flex-col gap-4">
@@ -956,6 +1024,27 @@ export default async function CourseExamsPage({
       {assignmentDeleteErrorText !== null ? (
         <div className="rounded-xl border border-border bg-danger-muted px-5 py-4">
           <p className="text-sm font-medium text-danger">{assignmentDeleteErrorText}</p>
+        </div>
+      ) : null}
+
+      {showInstructedTraineeCreatedNotice ? (
+        <div className="rounded-xl border border-border bg-success-muted px-5 py-4">
+          <p className="text-sm font-medium text-success">
+            {EXAM_INSTRUCTED_TRAINEE_CREATED_TEXT}
+          </p>
+        </div>
+      ) : null}
+
+      {instructedTraineeErrorTextValue !== null ? (
+        <div className="rounded-xl border border-border bg-danger-muted px-5 py-4">
+          <p className="text-sm font-medium text-danger">{instructedTraineeErrorTextValue}</p>
+          {instructedTraineeIssueTexts.length > 0 ? (
+            <ul className="mt-2 list-inside list-disc text-sm text-danger">
+              {instructedTraineeIssueTexts.map((text) => (
+                <li key={text}>{text}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
       ) : null}
 
@@ -1097,13 +1186,34 @@ export default async function CourseExamsPage({
                             session.definitionId,
                           );
 
+                          // IT2's own affordance, derived FIRST and kept entirely
+                          // separate from the examinee gate below. It asks ONE
+                          // question and no other: does this session's exam
+                          // actually ask for an instructed trainee?
+                          //
+                          // FAIL-CLOSED on unknown requirements, exactly like the
+                          // examinee gate: a session naming a definition the
+                          // definition reader did not report opens no write
+                          // surface. The lesson topic, the discipline, the
+                          // assignment count, the existing rows, the horse and
+                          // every wave or personal-time notion are deliberately
+                          // NOT consulted — they describe the examinee's row, and
+                          // an instructed trainee carries none of them.
+                          //
+                          // Declared ABOVE the examinee gate on purpose: the
+                          // committed guard proves this flag never enters that
+                          // gate by reading the source window that FOLLOWS it.
+                          const showInstructedTraineeForm =
+                            requirements !== undefined &&
+                            requirements.requiresInstructedTrainee;
+
                           // A definition that also demands a lesson topic or a
                           // discipline cannot be assigned from UI1: this form
                           // collects neither, and the committed writer refuses the
                           // whole create rather than storing a half-filled row.
-                          // `requiresInstructedTrainee` is deliberately NOT
-                          // consulted — the instructed trainee is a SECOND row
-                          // written by a later operation, and it never blocks the
+                          // The instructed-trainee requirement is deliberately NOT
+                          // consulted here — that is a SECOND row, written by the
+                          // separate operation above, and it never blocks the
                           // examinee.
                           const requiresUnsupportedFields =
                             requirements === undefined ||
@@ -1206,6 +1316,33 @@ export default async function CourseExamsPage({
                                     />
                                   </div>
                                 )
+                              ) : null}
+
+                              {/*
+                                THE INSTRUCTED-TRAINEE AFFORDANCE.
+
+                                Its own gate, and deliberately not a branch of the
+                                examinee one: an exam that demands a lesson topic
+                                still legitimately wants its instructed trainee,
+                                and the two forms may therefore be on screen
+                                together, separately or not at all.
+
+                                `&&` rather than a second `mayConfigure ?` ternary,
+                                so the existing positional guards over this block
+                                keep meaning what they meant. With `mayConfigure`
+                                false — an ARCHIVED offering, or any status the
+                                default-deny policy does not recognize — the form
+                                is absent while the list above stays readable.
+                              */}
+                              {mayConfigure && showInstructedTraineeForm ? (
+                                <div className="mt-3">
+                                  <CreateExamInstructedTraineeAssignmentForm
+                                    action={boundCreateInstructedTraineeAssignmentAction}
+                                    courseOfferingId={context.id}
+                                    sessionId={session.sessionId}
+                                    eligibleTrainees={eligibleView.trainees}
+                                  />
+                                </div>
                               ) : null}
                             </div>
 

@@ -1124,6 +1124,16 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     ["lib", "actions", "exam-assignment-read" + "-io.test.ts"].join("/"),
     ["lib", "actions", "exam-assignment-write" + "-io.test.ts"].join("/"),
     ["lib", "exam", "exam-supervisor-write" + "-core.test.ts"].join("/"),
+    // EX-ASG-IT2 — the approved INSTRUCTED_TRAINEE assignment CREATE UI, which
+    // travels in the same working tree. It adds the ASSIGNMENT contract suite to
+    // the modified set (that suite's route file set and export list learn about
+    // the eighth endpoint) and the committed instructed-trainee write guard,
+    // whose caller list it re-points from zero to exactly one Server Action
+    // module. Its own three new route files are ADDITIONS. Nothing here changes
+    // which module this guard is about: no reader gained a caller, no writer was
+    // edited, and no schema, migration, auth, capability or policy file is named.
+    `${ROUTE_DIR}/exam-assignment-ui.contract.test.ts`,
+    ["lib", "actions", "exam-instructed-trainee-assignment-write" + "-io.test.ts"].join("/"),
   ];
   // RE-POINTED by EX-SES-UI-2 from ONE tolerated production file to TWO. That
   // slice adds the approved session EDIT and REMOVAL endpoints to the route's

@@ -1,0 +1,1224 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+/**
+ * EXAM EX-ASG-IT2 — the contract of the manager-facing CREATE of one stored
+ * INSTRUCTED_TRAINEE exam assignment, on the course-scoped admin exams route.
+ *
+ * Run (the bracketed route segment is a GLOB to node:test, so the `[` must be
+ * escaped as `[[]` or the file silently matches nothing and zero tests run):
+ *   npx tsx --test "app/admin/courses/[[]courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts"
+ *
+ * ===========================================================================
+ * WHY SO MANY TOKENS IN THIS FILE ARE ASSEMBLED FROM PIECES
+ * ===========================================================================
+ * Several committed guards sweep every file under `app/`, `lib/` and
+ * `components/` for a module name or a CALL SHAPE and pin the result to an exact
+ * caller list. The one that matters most here is the committed Stage A write
+ * binding's: before this slice it pinned its caller list at EXACTLY ZERO, and
+ * after it at exactly the one Server Action module.
+ *
+ * A CONTRACT SUITE IS NOT A CALLER. This file asserts things ABOUT that binding;
+ * it never invokes one. But those guards match RAW SOURCE TEXT — not imports, not
+ * an AST — so a suite that spelled the binding's module name, or its create CALL,
+ * whole anywhere in its source (INCLUDING in a comment such as this one) would
+ * enrol itself in the very allow-list it exists to keep narrow. The only way to
+ * make that pass would be to widen it, which is exactly backwards. This paragraph
+ * therefore describes those tokens rather than reproducing them.
+ *
+ * So every such token below is built by concatenation. The value compared against
+ * the production source is identical; only the literal spelling in THIS file
+ * differs. That is the project's split-literal convention, and it is load-bearing
+ * rather than cosmetic.
+ *
+ * ===========================================================================
+ * WHAT THIS SUITE PROVES, AND WHAT IT DELIBERATELY DOES NOT
+ * ===========================================================================
+ * It proves the SHAPE of the eighth endpoint, its one form, its closed message
+ * module and the page wiring: the exact two-field FormData budget, the absent
+ * horse, role and pairing, the server-bound offering, the authorization order,
+ * the closed result mapping, the independence of the two create gates, and the
+ * fact that no id and no personal detail is ever rendered as text.
+ *
+ * It does NOT re-prove the committed writer. Whether the create assigns the next
+ * order position atomically, whether the definition gate fails closed, whether
+ * the eligibility statement is one fail-closed `where`, and how the role-blind
+ * unique violation is classified are all that binding's own contract, proven in
+ * its own suite. Nothing in this slice changed any of that, which the footprint
+ * guards assert directly.
+ */
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const REPO_ROOT = join(import.meta.dirname, "..", "..", "..", "..", "..");
+
+const ROUTE_DIR_REL = join("app", "admin", "courses", "[courseOfferingId]", "exams");
+/** The same directory in git's own form: forward slashes, repository-relative. */
+const ROUTE_DIR_PREFIX = "app/admin/courses/[courseOfferingId]/exams/";
+
+const ACTIONS_REL = join(ROUTE_DIR_REL, "actions.ts");
+const PAGE_REL = join(ROUTE_DIR_REL, "page.tsx");
+const FORM_REL = join(ROUTE_DIR_REL, "CreateExamInstructedTraineeAssignmentForm.tsx");
+const MESSAGES_REL = join(ROUTE_DIR_REL, "exam-instructed-trainee-assignment-messages.ts");
+const SUITE_REL = join(ROUTE_DIR_REL, "exam-instructed-trainee-assignment-ui.contract.test.ts");
+
+/** The route's EXACT final file set, after this slice's three additions. */
+const FINAL_ROUTE_FILES = [
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+].sort();
+
+/**
+ * The paths this slice may touch: three new route files, two amended route
+ * production files, and the committed guard suites whose exact allow-lists,
+ * export counts, route file counts or caller lists this slice re-points.
+ *
+ * The `lib/` entries are ASSEMBLED for the reason in the header.
+ */
+const SLICE_PATHS = [
+  // The three new files.
+  `${ROUTE_DIR_PREFIX}CreateExamInstructedTraineeAssignmentForm.tsx`,
+  `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-messages.ts`,
+  `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-ui.contract.test.ts`,
+  // The two amended production files.
+  `${ROUTE_DIR_PREFIX}actions.ts`,
+  `${ROUTE_DIR_PREFIX}page.tsx`,
+  // The six route guard suites whose counts this slice re-points.
+  `${ROUTE_DIR_PREFIX}exam-assignment-ui.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-plan-create.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-definition-create.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-definitions-page.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-session-create.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-session-edit-delete.contract.test.ts`,
+  // The committed `lib/` footprint and caller guards.
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+];
+
+// --- Assembled tokens (see the header) -------------------------------------
+const WRITER_MODULE = "exam-instructed-trainee-assignment-write" + "-io";
+const WRITER_SPECIFIER = "@/lib/actions/" + WRITER_MODULE;
+const WRITER_NAME = "create" + "ExamInstructedTraineeAssignment";
+const WRITER_CALL = WRITER_NAME + "(";
+/** The eighth Server Action — safe to spell whole: it is not the writer. */
+const ACTION_NAME = "createExamInstructedTraineeAssignmentAction";
+const ELIGIBLE_READER_CALL = "read" + "EligibleExamTraineesForAdmin" + "(";
+const ASSIGNMENT_READER_CALL = "read" + "AdminExamAssignments" + "(";
+const DEFINITION_READER_CALL = "read" + "ExamDefinitionsForAdmin" + "(";
+const SESSION_READER_CALL = "read" + "AdminExamSessions" + "(";
+const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
+const GENERATED_CLIENT = ["@prisma", "client"].join("/");
+/** The committed exam cores that no file under `app/` may name. */
+const FORBIDDEN_CORES = [
+  "exam-kind" + "-labels",
+  "exam-assignment-write" + "-core",
+  "create-exam-assignment" + "-core",
+  "delete-exam-assignment" + "-core",
+  "create-exam-instructed-trainee-assignment" + "-core",
+  "admin-exam-assignment-read" + "-core",
+  "exam-domain" + "-core",
+  "exam-definition-validation" + "-core",
+];
+
+function gitLines(args: readonly string[]): string[] {
+  const result = spawnSync("git", [...args], { cwd: REPO_ROOT, encoding: "utf8" });
+  assert.equal(result.status, 0, `git ${args.join(" ")} failed`);
+  return (result.stdout ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+/**
+ * Strip comments so every guard asserts on CODE, not on explanatory prose.
+ *
+ * LINE comments are removed FIRST, and the order is load-bearing: the Run line in
+ * the header contains a GLOB whose bracket-and-slash run can read like a block
+ * comment delimiter, and stripping block comments first would let a spurious
+ * match open inside it and eat the constants below.
+ */
+function stripComments(source: string): string {
+  return source.replace(/^\s*\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+/**
+ * Collapse every run of whitespace to ONE space, so a guard can assert on a
+ * multi-line declaration without also asserting on how the formatter broke it.
+ */
+function squash(source: string): string {
+  return source.replace(/\s+/g, " ");
+}
+
+function readSource(rel: string): string {
+  return readFileSync(join(REPO_ROOT, rel), "utf8");
+}
+
+const ACTIONS_SOURCE = readSource(ACTIONS_REL);
+const ACTIONS = stripComments(ACTIONS_SOURCE);
+const PAGE_SOURCE = readSource(PAGE_REL);
+const PAGE = stripComments(PAGE_SOURCE);
+const FORM_SOURCE = readSource(FORM_REL);
+const FORM = stripComments(FORM_SOURCE);
+const MESSAGES_SOURCE = readSource(MESSAGES_REL);
+const MESSAGES = stripComments(MESSAGES_SOURCE);
+
+/**
+ * ONE exported action's body, from its declaration to the next one (or to the end
+ * of the file for the last). The route's eight actions share a module, so every
+ * "this action does X" claim must be scoped to its own body — otherwise a
+ * neighbour's `revalidatePath` or `redirect` would satisfy an assertion about
+ * this one.
+ */
+function actionBody(source: string, name: string): string {
+  const start = source.indexOf(`export async function ${name}(`);
+  assert.ok(start >= 0, `${name} is missing`);
+  const rest = source.slice(start);
+  const next = rest.indexOf("export async function ", 1);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+const ACTION = actionBody(ACTIONS, ACTION_NAME);
+
+/** The TWO fields — and the ONLY two — the action may read. */
+const FIELDS = ["sessionId", "studentId"];
+
+/** The refusal codes the action must map, and no others. */
+const REFUSALS = [
+  "invalid_input",
+  "offering_not_found",
+  "operation_not_allowed",
+  "plan_not_found",
+  "session_not_found",
+  "definition_does_not_require_instructed_trainee",
+  "trainee_not_eligible",
+  "assignment_conflict",
+];
+
+/** The two stable input-issue codes the message module must own — and only two. */
+const ISSUE_CODES = ["EX-ASG-IN-SESSION-REQUIRED", "EX-ASG-IN-STUDENT-REQUIRED"];
+
+// ===========================================================================
+// 1–3. The route's exact file set
+// ===========================================================================
+
+test("1. the three new files exist at the exact course-scoped route", () => {
+  for (const rel of [FORM_REL, MESSAGES_REL, SUITE_REL]) {
+    assert.ok(existsSync(join(REPO_ROOT, rel)), `${rel} is missing`);
+  }
+  // ...and they joined an EXISTING route rather than creating a second one.
+  assert.ok(existsSync(join(REPO_ROOT, ACTIONS_REL)), "the action module is missing");
+  assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
+});
+
+test("2. the route directory holds EXACTLY the twenty-one approved files", () => {
+  // Tracked AND untracked, so this holds both before and after the slice is
+  // committed. Listing the whole repository and filtering by prefix in JS is
+  // deliberate: a bracketed pathspec would be read by git as a character class.
+  const routeFiles = [
+    ...new Set([
+      ...gitLines(["ls-files"]),
+      ...gitLines(["ls-files", "--others", "--exclude-standard"]),
+    ]),
+  ]
+    .filter((path) => path.startsWith(ROUTE_DIR_PREFIX))
+    .sort();
+  assert.deepEqual(routeFiles, FINAL_ROUTE_FILES);
+});
+
+test("3. no second exams route and no instructor or trainee surface was created", () => {
+  for (const dir of [
+    join("app", "admin", "exams"),
+    join("app", "admin", "exam-assignments"),
+    join("app", "instructor", "exams"),
+    join("app", "student", "exams"),
+  ]) {
+    assert.equal(existsSync(join(REPO_ROOT, dir)), false, `${dir} was created`);
+  }
+  for (const file of [
+    join("lib", "actions", "exam-instructed-trainee-assignment-actions.ts"),
+    join("lib", "actions", "exam-instructed-trainees.ts"),
+    join("lib", "actions", "exams.ts"),
+  ]) {
+    assert.equal(existsSync(join(REPO_ROOT, file)), false, `${file} was created`);
+  }
+});
+
+// ===========================================================================
+// 4–9. The Server Action: kind, exports, signature and the ORDER
+// ===========================================================================
+
+test("4. the action module is still a Server Action module and nothing else", () => {
+  const useServer = '"use ' + 'server"';
+  const firstLine = ACTIONS_SOURCE.split("\n").find((line) => line.trim().length > 0);
+  assert.ok(firstLine);
+  assert.equal(firstLine.trim(), `${useServer};`, `the first line is: ${firstLine}`);
+  assert.equal(ACTIONS.includes('"use ' + 'client"'), false);
+  assert.equal(ACTIONS.includes("server" + "-only"), false);
+});
+
+test("5. the module exports EXACTLY eight actions, the new one appended LAST", () => {
+  const exported = [
+    ...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g),
+  ].map(([, name]) => name);
+  // An EXHAUSTIVE allow-list in a FIXED order. Everything exported from a
+  // "use server" module is a public network endpoint, so this list IS the attack
+  // surface: no NINTH endpoint, and no helper, parser, constant or type beside
+  // them. The seven that were here keep their exact relative order — this slice
+  // APPENDS rather than reshuffles.
+  assert.deepEqual(exported, [
+    "createExamPlanAction",
+    "createExamDefinitionAction",
+    "createExamSessionAction",
+    "updateExamSessionAction",
+    "deleteExamSessionAction",
+    "createExamAssignmentAction",
+    "deleteExamAssignmentAction",
+    ACTION_NAME,
+  ]);
+  assert.equal(exported.length, 8, "no ninth endpoint may exist in this module");
+  assert.equal(exported[7], ACTION_NAME, "the new action must be appended after the seven");
+  for (const token of ["export const", "export default", "export {", "export type"]) {
+    assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
+  }
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 8);
+});
+
+test("6. the action has the EXACT locked signature, and returns void", () => {
+  assert.ok(
+    new RegExp(
+      `export async function ${ACTION_NAME}\\(\\s*courseOfferingId: string,\\s*formData: FormData,\\s*\\): Promise<void> \\{`,
+    ).test(ACTIONS_SOURCE),
+    "the signature is not the locked one",
+  );
+  // No `prevState`, no options bag, no third parameter and no non-void return:
+  // every outcome is a navigation, so the action cannot grow client-visible state.
+  assert.equal(ACTION.includes("prevState"), false, "the action takes prevState");
+  assert.equal(/return\s+[^;]/.test(ACTION), false, "the action returns a value");
+});
+
+test("7. requireAdmin() is the FIRST awaited operation in the new body", () => {
+  const firstAwait = ACTION.indexOf("await ");
+  assert.ok(firstAwait > 0, "the action awaits nothing");
+  assert.ok(
+    ACTION.slice(firstAwait).startsWith("await requireAdmin();"),
+    "the first awaited operation is not requireAdmin()",
+  );
+  // Nothing is read from the submission, and the writer is not entered, BEFORE it.
+  const before = ACTION.slice(0, firstAwait);
+  for (const token of ["formData.get", WRITER_CALL, "redirect(", "revalidatePath("]) {
+    assert.equal(before.includes(token), false, `${token} runs before requireAdmin()`);
+  }
+});
+
+test("8. there is STILL no try/catch anywhere, so NEXT_REDIRECT always propagates", () => {
+  // The strongest form of the rule: not "the redirect is outside the block", but
+  // "there is no block". An unexpected writer failure therefore propagates rather
+  // than being flattened into a query code that nobody investigates.
+  for (const token of ["try {", "catch (", "catch(", "finally {"]) {
+    assert.equal(ACTIONS.includes(token), false, `the action module uses ${token}`);
+  }
+});
+
+test("9. the module's import surface gained EXACTLY the one committed writer", () => {
+  const specifiers = [...ACTIONS.matchAll(/from\s+"([^"]+)"/g)].map(([, s]) => s).sort();
+  assert.equal(specifiers.length, 8, "the action module's import surface is not eight");
+  assert.ok(specifiers.includes(WRITER_SPECIFIER), "the committed writer is not imported");
+  // The IMPORT KEYWORD itself is split, not just the specifier: this suite's own
+  // no-database guard below extracts every `from "…"` occurrence in THIS file and
+  // pins the result to five node: builtins, so any spelling that puts a quote
+  // straight after the word would enrol the expectation as an import of its own.
+  const importStatement =
+    "import { " + WRITER_NAME + " } " + "fr" + "om " + JSON.stringify(WRITER_SPECIFIER) + ";";
+  assert.ok(
+    squash(ACTIONS).includes(importStatement),
+    "the writer is not imported by its exact name from its exact module",
+  );
+  // No pure core, no Prisma, no capability and no notification surface entered.
+  for (const specifier of specifiers) {
+    assert.equal(specifier.includes("-core"), false, `the module imports a core: ${specifier}`);
+  }
+  for (const forbidden of [PRISMA_MODULE, GENERATED_CLIENT, "capabilit", "notification"]) {
+    assert.equal(ACTIONS.includes(forbidden), false, `the module references ${forbidden}`);
+  }
+});
+
+// ===========================================================================
+// 10–12. The exact FormData budget
+// ===========================================================================
+
+test("10. the offering is the BOUND leading argument and is NEVER read from FormData", () => {
+  // The id reaches the writer from the bound parameter, in the locked position,
+  // followed by exactly the two raw fields.
+  assert.ok(
+    squash(ACTION).includes(
+      `${WRITER_CALL}courseOfferingId, { sessionId: formData.get("sessionId"), studentId: formData.get("studentId"), });`,
+    ),
+    "the writer is not called with the bound id and the exact two raw fields",
+  );
+  // ...and NEVER from the submission.
+  for (const forbidden of [
+    'formData.get("courseOfferingId")',
+    'formData.get("planId")',
+    'formData.get("offeringId")',
+    'formData.get("definitionId")',
+    'formData.get("role")',
+    'formData.get("horseName")',
+    'formData.get("orderIndex")',
+    'formData.get("pairingIndex")',
+    'formData.get("assignmentCount")',
+    'formData.get("fullName")',
+    'formData.get("instructionTopic")',
+    'formData.get("discipline")',
+    'formData.get("notes")',
+  ]) {
+    assert.equal(ACTION.includes(forbidden), false, `the action reads ${forbidden}`);
+  }
+  // The page binds the VERIFIED context id, never the raw route param — and binds
+  // the action EXACTLY ONCE, hoisted, so there is one place to check the id's
+  // provenance no matter how many per-session controls React renders from it.
+  assert.ok(
+    PAGE.includes(`${ACTION_NAME}.bind(null, context.id)`),
+    "the page must bind the verified context id into the action",
+  );
+  assert.equal(
+    (PAGE.match(new RegExp(`${ACTION_NAME}\\.bind\\(`, "g")) ?? []).length,
+    1,
+    "the action must be bound exactly once",
+  );
+  assert.equal(
+    PAGE.includes(`${ACTION_NAME}.bind(null, courseOfferingId)`),
+    false,
+    "the raw route param must never be bound into the action",
+  );
+});
+
+test("11. the action reads EXACTLY two named fields, and nothing else", () => {
+  const reads = [...ACTION.matchAll(/formData\.get\("([^"]+)"\)/g)].map(([, f]) => f);
+  assert.deepEqual(reads, FIELDS);
+  assert.equal(reads.length, 2, "the action's FormData budget is exactly two");
+  // No iteration API could smuggle a third field past the exact list above.
+  for (const token of [
+    "formData.entries",
+    "formData.forEach",
+    "formData.keys",
+    "formData.getAll",
+  ]) {
+    assert.equal(ACTION.includes(token), false, `the action uses ${token}`);
+  }
+});
+
+test("12. neither value is coerced, defaulted, narrowed or trimmed", () => {
+  // Both are forwarded EXACTLY as FormData.get returned them — a string, or null
+  // for an absent field. The committed input core defines the rest, and a second
+  // copy here would be free to drift from the rule the database actually sees.
+  for (const forbidden of ["String(formData", "Number(formData", "`${formData", ".trim()"]) {
+    assert.equal(ACTION.includes(forbidden), false, `the action coerces with ${forbidden}`);
+  }
+  assert.equal(ACTION.includes("??"), false, "the action defaults a submitted value");
+  assert.equal(
+    /typeof\s+\w+\s*===\s*"string"/.test(ACTION),
+    false,
+    "the action narrows a submitted value instead of forwarding it raw",
+  );
+});
+
+// ===========================================================================
+// 13–15. The closed outcome mapping
+// ===========================================================================
+
+test("13. the action maps its closed refusal union and invents no code", () => {
+  for (const code of REFUSALS) {
+    assert.ok(
+      ACTION.includes(code) || MESSAGES.includes(code),
+      `the outcome ${code} is unmapped`,
+    );
+  }
+  // The offering not-found routes to the SAFE courses list, because an id that did
+  // not resolve cannot be used to build a URL for this course-scoped route — and
+  // the requested id is not reflected back in that destination.
+  assert.ok(ACTION.includes('if (result.code === "offering_not_found")'));
+  assert.ok(ACTION.includes('redirect("/admin/courses?error=invalid")'));
+  // Field diagnostics travel as the writer's own CODES, joined — never a message,
+  // never a submitted value.
+  assert.ok(ACTION.includes('const codes = result.issues.map((issue) => issue.code).join(",")'));
+  assert.ok(
+    ACTION.includes(
+      "`${examsPath}?instructedTraineeError=invalid_input&instructedTraineeIssues=${encodeURIComponent(codes)}`",
+    ),
+  );
+  // Every other refusal is fully described by its code alone.
+  assert.ok(
+    ACTION.includes("`${examsPath}?instructedTraineeError=${encodeURIComponent(result.code)}`"),
+  );
+  // The success arm is checked FIRST, so `result.code` is only ever read on a
+  // refusal — the success arm of the committed union carries no `code` at all.
+  assert.ok(
+    ACTION.indexOf("if (result.ok) {") < ACTION.indexOf("result.code"),
+    "the success arm must be handled before any refusal code is read",
+  );
+});
+
+test("14. the action revalidates EXACTLY this exams path, BEFORE its redirect", () => {
+  assert.ok(
+    ACTION.includes(
+      "const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`",
+    ),
+    "the action must build the path from the BOUND offering id",
+  );
+  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 1, "it revalidates more than once");
+  assert.ok(ACTION.includes("revalidatePath(examsPath)"), "it revalidates some other path");
+  // Ordering: the cache is invalidated BEFORE the navigation, so the page the
+  // manager lands on is re-read rather than served stale.
+  assert.ok(
+    ACTION.indexOf("revalidatePath(examsPath)") < ACTION.indexOf("createdInstructedTrainee=1`"),
+    "the action redirects before it revalidates",
+  );
+  // The fixed success token, and no other.
+  assert.ok(ACTION.includes("`${examsPath}?createdInstructedTrainee=1`"));
+  // No other route, layout or tag is refreshed.
+  for (const forbidden of ['revalidatePath("/', "revalidateTag", '"layout"', '"page"']) {
+    assert.equal(ACTION.includes(forbidden), false, `the action uses ${forbidden}`);
+  }
+});
+
+test("15. NO id, submitted value or raw error ever reaches the query string", () => {
+  // The success arm carries a FLAG and nothing else: the committed writer returns
+  // the new assignment id and its assigned position, and neither is read here.
+  for (const forbidden of [
+    "result.assignmentId",
+    "result.orderIndex",
+    "result.id",
+    "error.message",
+    "String(error",
+    "JSON.stringify",
+  ]) {
+    assert.equal(ACTION.includes(forbidden), false, `the action leaks ${forbidden}`);
+  }
+  // The ONLY dynamic values in any redirect target are `result.code` — a
+  // compile-time-known literal from a closed set — and the joined issue codes.
+  const interpolations = [...ACTION.matchAll(/\$\{([^}]+)\}/g)].map(([, expr]) => expr.trim());
+  for (const expr of interpolations) {
+    assert.ok(
+      [
+        "encodeURIComponent(courseOfferingId)",
+        "examsPath",
+        "encodeURIComponent(result.code)",
+        "encodeURIComponent(codes)",
+      ].includes(expr),
+      `the action interpolates ${expr} into a URL`,
+    );
+  }
+});
+
+// ===========================================================================
+// 16–20. The create form
+// ===========================================================================
+
+test("16. the form is a client component with EXACTLY the approved props", () => {
+  assert.equal(
+    FORM_SOURCE.split("\n").find((line) => line.trim().length > 0)?.trim(),
+    '"use ' + 'client";',
+  );
+  assert.ok(
+    squash(FORM).includes(
+      "export function CreateExamInstructedTraineeAssignmentForm({ action, courseOfferingId, sessionId, eligibleTrainees, }: { action: (formData: FormData) => void | Promise<void>; courseOfferingId: string; sessionId: string; eligibleTrainees: readonly InstructedTraineeChoice[]; })",
+    ),
+    "the form's prop shape is not the locked one",
+  );
+  // The choice type is declared LOCALLY, carries TWO fields, and is NOT exported:
+  // sharing it with the sibling examinee form would tie two separately reviewed
+  // surfaces together so that widening either one silently widens the other.
+  assert.ok(
+    squash(FORM).includes(
+      "interface InstructedTraineeChoice { readonly studentId: string; readonly fullName: string; }",
+    ),
+    "the trainee choice type is not the narrow two-field shape",
+  );
+  assert.equal(
+    FORM.includes("EligibleExamTraineeChoice"),
+    false,
+    "the form imports the sibling form's private type",
+  );
+  // No plan id, definition id, role, order, pairing or count may be handed to it.
+  for (const forbidden of [
+    "planId",
+    "definitionId",
+    "orderIndex",
+    "pairingIndex",
+    "assignmentCount",
+    "role",
+    "horseName",
+  ]) {
+    assert.equal(FORM.includes(forbidden), false, `the form receives ${forbidden}`);
+  }
+});
+
+test("17. the form submits EXACTLY two fields, and binds no scope", () => {
+  // The session travels as a HIDDEN field; the offering does NOT.
+  assert.ok(FORM.includes('<input type="hidden" name="sessionId" value={sessionId} />'));
+  const hidden = [...FORM.matchAll(/type="hidden"\s+name="([^"]+)"/g)].map(([, n]) => n);
+  assert.deepEqual(hidden, ["sessionId"], "the form carries an unapproved hidden field");
+  // The complete submitted field set.
+  const named = [...FORM.matchAll(/\bname="([^"]+)"/g)].map(([, n]) => n).sort();
+  assert.deepEqual(named, [...FIELDS].sort());
+  // The offering is bound into the ACTION on the server, never posted; and the
+  // structural guard prop is referenced, never rendered.
+  for (const forbidden of [
+    'name="courseOfferingId"',
+    'name="planId"',
+    'name="definitionId"',
+    'name="role"',
+    'name="horseName"',
+    'name="pairingIndex"',
+    'name="orderIndex"',
+    'name="assignmentCount"',
+  ]) {
+    assert.equal(FORM.includes(forbidden), false, `the form posts ${forbidden}`);
+  }
+  assert.ok(FORM.includes("void courseOfferingId;"));
+  assert.equal(FORM.includes("{courseOfferingId}"), false, "the offering id is rendered");
+  assert.equal(FORM.includes("href"), false, "the form builds a link");
+});
+
+test("18. the trainee picker is a NATIVE select showing ONLY the display name", () => {
+  assert.ok(FORM.includes('<select name="studentId" required defaultValue=""'));
+  // The option VALUE is the opaque Student.id, and the visible text is the name
+  // alone. Two trainees who share a display name therefore look identical while
+  // remaining DISTINCT options, because their values differ.
+  assert.ok(
+    squash(FORM).includes(
+      "<option key={trainee.studentId} value={trainee.studentId}> {trainee.fullName} </option>",
+    ),
+    "the option must carry the id as its value and render only the full name",
+  );
+  // No identity number is rendered merely to tell two names apart, and no other
+  // personal detail is reachable at all.
+  for (const forbidden of [
+    "identityNumber",
+    "phone",
+    "parent",
+    "guardian",
+    "groupName",
+    "subgroup",
+    "enrollment",
+    "birth",
+  ]) {
+    assert.equal(FORM.includes(forbidden), false, `the form renders ${forbidden}`);
+  }
+  // No searchable-select dependency was introduced.
+  const specifiers = [...FORM.matchAll(/from\s+"([^"]+)"/g)].map(([, s]) => s);
+  assert.deepEqual(specifiers, ["react-dom"]);
+});
+
+test("19. the form has a pending state and a closed empty state", () => {
+  assert.ok(FORM.includes("const { pending } = useFormStatus();"));
+  assert.ok(FORM.includes('{pending ? "שומר..." : "שבץ חניך מודרך"}'));
+  // With no assignable trainee the whole field set is DISABLED — a disabled
+  // fieldset disables every control inside it, and disabled controls submit no
+  // entry at all, so this is not merely a visual state.
+  assert.ok(FORM.includes("const hasNoTrainees = eligibleTrainees.length === 0;"));
+  assert.ok(FORM.includes("<fieldset disabled={hasNoTrainees}"));
+  assert.ok(FORM.includes("<CreateSubmitButton disabled={hasNoTrainees} />"));
+  assert.ok(FORM.includes("אין כרגע חניכים פעילים הזמינים לשיבוץ בקורס הזה."));
+  // There is NO horse control of any kind: this role carries none.
+  assert.equal(FORM.includes('name="horseName"'), false);
+  assert.equal(FORM.includes('type="text"'), false, "the form has a free-text field");
+});
+
+test("20. the form loads no data, duplicates no rule and inserts nothing optimistically", () => {
+  for (const forbidden of [
+    "useEffect",
+    "useState",
+    "useOptimistic",
+    "fetch(",
+    "useRouter",
+    "router.",
+    "confirm(",
+    "onSubmit",
+    "preventDefault",
+    PRISMA_MODULE,
+    GENERATED_CLIENT,
+    WRITER_MODULE,
+    WRITER_CALL,
+    "exam-assignment-write" + "-io",
+    "exam-assignment-read" + "-io",
+  ]) {
+    assert.equal(FORM.includes(forbidden), false, `the form references ${forbidden}`);
+  }
+  // It does not narrow the offered list against what is already assigned, here or
+  // anywhere: the DATABASE's role-blind unique key decides that.
+  for (const forbidden of [".filter(", ".sort(", ".slice(", ".reverse("]) {
+    assert.equal(FORM.includes(forbidden), false, `the form uses ${forbidden}`);
+  }
+});
+
+// ===========================================================================
+// 21–26. The page: requirements, gating, placement and the untouched list
+// ===========================================================================
+
+test("21. the requirements interface gained a THIRD field, copied from the reader", () => {
+  assert.ok(
+    squash(PAGE).includes(
+      "interface AssignmentDefinitionRequirements { readonly requiresLessonTopic: boolean; readonly requiresDiscipline: boolean; readonly requiresInstructedTrainee: boolean; }",
+    ),
+    "the requirements interface is not the locked three-field shape",
+  );
+  assert.ok(
+    squash(PAGE).includes("requiresInstructedTrainee: definition.requiresInstructedTrainee,"),
+    "the map must copy the definition reader's own flag",
+  );
+  assert.ok(PAGE.includes("for (const definition of view.definitions) {"));
+});
+
+test("22. NO new reader and no new database call entered the page", () => {
+  for (const call of [
+    DEFINITION_READER_CALL,
+    SESSION_READER_CALL,
+    ELIGIBLE_READER_CALL,
+    ASSIGNMENT_READER_CALL,
+  ]) {
+    assert.equal(
+      (PAGE.match(new RegExp(call.replace(/[()]/g, "\\$&"), "g")) ?? []).length,
+      1,
+      `${call} is called more than once — that is an N+1 over the session list`,
+    );
+    assert.ok(PAGE.includes(`${call}context.id)`), `${call} is not given the verified id`);
+    assert.equal(
+      PAGE.includes(`${call}courseOfferingId)`),
+      false,
+      `${call} is given the raw route param`,
+    );
+  }
+  // Exactly four reads, and no fifth of any kind.
+  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 4, "a fifth reader entered the page");
+  // ASSEMBLED: this suite's own no-database guard below forbids the whole token.
+  for (const forbidden of [PRISMA_MODULE, GENERATED_CLIENT, "prisma.", "Prisma" + "Client"]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page references ${forbidden}`);
+  }
+});
+
+test("23. the visibility rule is EXACTLY the definition flag, and fails closed", () => {
+  assert.ok(
+    squash(PAGE).includes(
+      "const showInstructedTraineeForm = requirements !== undefined && requirements.requiresInstructedTrainee;",
+    ),
+    "the instructed-trainee gate is not the closed two-part test",
+  );
+  // Unknown requirements fail closed: `requirements !== undefined` is the FIRST
+  // conjunct, so a session naming a definition the reader did not report opens no
+  // write surface.
+  assert.ok(
+    squash(PAGE).includes("requirements !== undefined && requirements.requiresInstructedTrainee"),
+  );
+  // The gate is DECLARED BEFORE the examinee gate, which is what lets the guard
+  // below prove the flag never enters it.
+  assert.ok(
+    PAGE.indexOf("const showInstructedTraineeForm") <
+      PAGE.indexOf("const requiresUnsupportedFields"),
+    "showInstructedTraineeForm must be declared before requiresUnsupportedFields",
+  );
+});
+
+test("24. the two create gates are INDEPENDENT in both directions", () => {
+  // The examinee gate is unchanged in meaning, and the instructed-trainee flag
+  // does not enter it.
+  assert.ok(
+    squash(PAGE).includes(
+      "const requiresUnsupportedFields = requirements === undefined || requirements.requiresLessonTopic || requirements.requiresDiscipline;",
+    ),
+    "the examinee gate is no longer the closed topic/discipline test",
+  );
+  assert.equal(
+    /requiresUnsupportedFields[\s\S]{0,200}requiresInstructedTrainee/.test(squash(PAGE)),
+    false,
+    "requiresInstructedTrainee must not gate the examinee create form",
+  );
+  // ...and the topic and discipline flags do not enter the instructed-trainee one.
+  const gate = squash(PAGE).slice(
+    squash(PAGE).indexOf("const showInstructedTraineeForm"),
+    squash(PAGE).indexOf("const requiresUnsupportedFields"),
+  );
+  for (const forbidden of [
+    "requiresLessonTopic",
+    "requiresDiscipline",
+    "assignmentCount",
+    "horseName",
+    "pairingIndex",
+    "wave",
+    "personalTime",
+    "sessionAssignments",
+  ]) {
+    assert.equal(gate.includes(forbidden), false, `the instructed-trainee gate reads ${forbidden}`);
+  }
+});
+
+test("25. the form sits behind the SAME single lifecycle evaluation, via &&", () => {
+  // ONE lifecycle evaluation for the whole page, still, and the new affordance
+  // hangs off it — so an ARCHIVED offering keeps a readable roster and gains no
+  // control. `&&` rather than a second `mayConfigure ?` ternary, so the committed
+  // positional guards over this block keep meaning what they meant.
+  assert.equal(
+    (PAGE.match(/evaluateCourseOperationPolicy\(/g) ?? []).length,
+    1,
+    "the write gate must be evaluated exactly once",
+  );
+  assert.equal(
+    (PAGE.match(/assertCourseOperationAllowed\(/g) ?? []).length,
+    1,
+    "the read gate must be asserted exactly once",
+  );
+  assert.ok(PAGE.includes("{mayConfigure && showInstructedTraineeForm ? ("));
+  assert.ok(PAGE.includes("<CreateExamInstructedTraineeAssignmentForm"));
+  // Its four props, exactly — the VERIFIED offering id, this session's id, and the
+  // ONE page-wide eligible roster.
+  assert.ok(
+    squash(PAGE).includes(
+      "<CreateExamInstructedTraineeAssignmentForm action={boundCreateInstructedTraineeAssignmentAction} courseOfferingId={context.id} sessionId={session.sessionId} eligibleTrainees={eligibleView.trainees} />",
+    ),
+    "the form is not rendered with exactly the four approved props",
+  );
+  // It is placed AFTER the ordinary examinee create block, inside the same
+  // per-session assignment section.
+  assert.ok(
+    PAGE.indexOf("<CreateExamAssignmentForm") <
+      PAGE.indexOf("<CreateExamInstructedTraineeAssignmentForm"),
+    "the instructed-trainee form must follow the examinee create block",
+  );
+});
+
+test("26. the list, its roles, the count rule and the ONE delete path are untouched", () => {
+  // The stored list still renders every role, including the one this slice now
+  // creates, and still uses the SAME removal form and action — no second delete
+  // path, no role-specific writer.
+  assert.ok(PAGE.includes('EXAMINEE: "נבחן/ת"'));
+  assert.ok(PAGE.includes('INSTRUCTED_TRAINEE: "חניך מודרך"'));
+  assert.ok(PAGE.includes('const NO_HORSE_TEXT = "—";'));
+  assert.ok(PAGE.includes("<DeleteExamAssignmentForm"));
+  assert.equal(
+    (PAGE.match(/<DeleteExamAssignmentForm/g) ?? []).length,
+    1,
+    "a second delete control entered the page",
+  );
+  assert.equal(
+    (PAGE.match(/deleteExamAssignmentAction\.bind\(/g) ?? []).length,
+    1,
+    "a second delete binding entered the page",
+  );
+  for (const forbidden of [
+    "DeleteExamInstructedTraineeAssignmentForm",
+    "deleteExamInstructedTraineeAssignmentAction",
+    'role === "EXAMINEE"',
+    'role === "INSTRUCTED_TRAINEE"',
+  ]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page adds ${forbidden}`);
+  }
+  // The session reader's COUNT stays the authority for the edit/delete decisions.
+  assert.ok(PAGE.includes("hasAssignments={session.assignmentCount > 0}"));
+  assert.equal(
+    (PAGE.match(/hasAssignments=\{session\.assignmentCount > 0\}/g) ?? []).length,
+    2,
+    "the assignment-count rule changed",
+  );
+  // No ordering, filtering or slicing was introduced anywhere on the page.
+  for (const forbidden of [".sort(", ".reverse(", ".filter(", ".slice("]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page uses ${forbidden}`);
+  }
+  // And no id or personal detail became text.
+  assert.equal(PAGE.includes("assignment.orderIndex"), false, "the order position is rendered");
+  assert.equal(PAGE.includes("assignment.studentId"), false, "a Student.id reaches the page");
+  for (const forbidden of ["identityNumber", "parentPhone", "guardian", "subgroup", "enrollment"]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page renders ${forbidden}`);
+  }
+});
+
+// ===========================================================================
+// 27–29. The page's query surface and bindings
+// ===========================================================================
+
+test("27. searchParams carries EXACTLY the closed twenty-three keys", () => {
+  const squashed = squash(PAGE);
+  const start = squashed.indexOf("searchParams: Promise<{");
+  assert.ok(start > -1, "the searchParams type must be declared inline");
+  const queryType = squashed.slice(start, squashed.indexOf("}>;", start) + 3);
+  for (const key of [
+    "createdInstructedTrainee?: string | string[];",
+    "instructedTraineeError?: string | string[];",
+    "instructedTraineeIssues?: string | string[];",
+  ]) {
+    assert.ok(queryType.includes(key), `the searchParams type is missing ${key}`);
+  }
+  assert.equal(
+    (queryType.match(/\?: string \| string\[\];/g) ?? []).length,
+    23,
+    "the searchParams type must be the closed twenty-three-key shape",
+  );
+  // No id, no scope and no submitted value may become a query key...
+  for (const forbidden of [
+    "courseOfferingId?",
+    "planId?",
+    "sessionId?",
+    "studentId?",
+    "assignmentId?",
+    "definitionId?",
+    "horseName?",
+    "pairingIndex?",
+    "deletedInstructedTrainee?",
+  ]) {
+    assert.equal(queryType.includes(forbidden), false, `searchParams must not carry ${forbidden}`);
+  }
+  // ...and the query is still resolved exactly once, after authorization.
+  assert.equal(PAGE.split("await searchParams").length - 1, 1);
+  assert.ok(PAGE.includes("const query = await searchParams;"));
+  assert.ok(
+    PAGE.indexOf("requireAdminCourseOffering(courseOfferingId)") <
+      PAGE.indexOf("await searchParams"),
+    "searchParams is read before authorization",
+  );
+});
+
+test("28. the three new tokens select constants and are never interpolated", () => {
+  assert.ok(
+    squash(PAGE).includes(
+      "const { createdInstructedTrainee, instructedTraineeError, instructedTraineeIssues, } = query;",
+    ),
+    "the three tokens must be destructured from the one resolved query",
+  );
+  assert.ok(
+    PAGE.includes("isExamInstructedTraineeSuccessToken(") &&
+      PAGE.includes("examInstructedTraineeErrorText(") &&
+      PAGE.includes("examInstructedTraineeIssueTexts("),
+    "the tokens must be parsed by the closed message module",
+  );
+  assert.ok(PAGE.includes("{EXAM_INSTRUCTED_TRAINEE_CREATED_TEXT}"));
+  // No raw token is rendered, and none reaches scope or a binding.
+  for (const forbidden of [
+    "{instructedTraineeError}",
+    "{createdInstructedTrainee}",
+    "{instructedTraineeIssues}",
+    ".bind(null, createdInstructedTrainee",
+    ".bind(null, query",
+    "encodeURIComponent(instructedTrainee",
+  ]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page renders or scopes with ${forbidden}`);
+  }
+});
+
+test("29. the page binds EXACTLY eight actions, all to the verified context id", () => {
+  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 8);
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 8);
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 8);
+  // The new binding is HOISTED, not created inside the session loop.
+  assert.ok(
+    squash(PAGE).includes(
+      `const boundCreateInstructedTraineeAssignmentAction = ${ACTION_NAME}.bind( null, context.id, );`,
+    ) ||
+      squash(PAGE).includes(
+        `const boundCreateInstructedTraineeAssignmentAction = ${ACTION_NAME}.bind(null, context.id);`,
+      ),
+    "the new action must be bound once, hoisted, to context.id",
+  );
+  assert.ok(
+    PAGE.indexOf("const boundCreateInstructedTraineeAssignmentAction") <
+      PAGE.indexOf("day.sessions.map"),
+    "the binding must be hoisted above the session loop",
+  );
+  // The page imports EXACTLY the twenty-one approved specifiers, and reaches no
+  // write binding directly: all eight actions arrive through the one `./actions`.
+  const specifiers = [...PAGE.matchAll(/from\s+"([^"]+)"/g)].map(([, s]) => s);
+  assert.equal(specifiers.length, 21, "the page's import surface is not twenty-one");
+  assert.ok(specifiers.includes("./CreateExamInstructedTraineeAssignmentForm"));
+  assert.ok(specifiers.includes("./exam-instructed-trainee-assignment-messages"));
+  for (const specifier of specifiers) {
+    assert.equal(
+      specifier.includes("-write" + "-io"),
+      false,
+      `the page imports a write binding: ${specifier}`,
+    );
+  }
+});
+
+// ===========================================================================
+// 30–33. The closed message module
+// ===========================================================================
+
+test("30. the message module is PURE and imports nothing at all", () => {
+  assert.equal(/(^|\n)\s*import\s/.test(MESSAGES), false, "the message module imports something");
+  for (const token of [
+    PRISMA_MODULE,
+    GENERATED_CLIENT,
+    "server" + "-only",
+    '"use ' + 'server"',
+    '"use ' + 'client"',
+    "next/",
+    "process" + ".env",
+    "react",
+  ]) {
+    assert.equal(MESSAGES.includes(token), false, `the message module references ${token}`);
+  }
+});
+
+test("31. both tables are FROZEN, closed, and own every sentence", () => {
+  for (const table of [
+    "EXAM_INSTRUCTED_TRAINEE_ERROR_TEXT",
+    "EXAM_INSTRUCTED_TRAINEE_ISSUE_TEXT",
+  ]) {
+    assert.ok(MESSAGES.includes(`export const ${table}`), `${table} is missing`);
+  }
+  assert.equal(
+    (MESSAGES.match(/Object\.freeze\(\{/g) ?? []).length,
+    2,
+    "every message table must be frozen",
+  );
+  const errorTable = MESSAGES.slice(
+    MESSAGES.indexOf("export const EXAM_INSTRUCTED_TRAINEE_ERROR_TEXT"),
+    MESSAGES.indexOf("export const EXAM_INSTRUCTED_TRAINEE_ISSUE_TEXT"),
+  );
+  for (const code of REFUSALS) {
+    assert.ok(errorTable.includes(code), `the refusal table is missing ${code}`);
+  }
+  // The issue table holds EXACTLY the two codes this submission can produce. The
+  // horse diagnostic is ABSENT rather than unused: this role carries no horse, the
+  // form has no such field, and a table that could name one would let a future
+  // edit render advice about a control that does not exist.
+  const issueTable = MESSAGES.slice(MESSAGES.indexOf("export const EXAM_INSTRUCTED_TRAINEE_ISSUE_TEXT"));
+  for (const code of ISSUE_CODES) {
+    assert.ok(issueTable.includes(code), `the issue table is missing ${code}`);
+  }
+  assert.equal(
+    MESSAGES.includes("EX-ASG-IN-HORSE" + "-REQUIRED"),
+    false,
+    "the horse diagnostic must not exist here",
+  );
+  for (const forbidden of ["role", "horseName", "pairingIndex", "orderIndex", "instructionTopic"]) {
+    assert.equal(MESSAGES.includes(forbidden), false, `the message module names ${forbidden}`);
+  }
+});
+
+test("32. the fixed Hebrew is exactly the approved wording", () => {
+  assert.ok(
+    MESSAGES.includes(
+      'export const EXAM_INSTRUCTED_TRAINEE_CREATED_TEXT = "החניך המודרך שובץ בהצלחה.";',
+    ),
+    "the success sentence is not the approved one",
+  );
+  for (const sentence of [
+    "סוג המבחן הזה אינו דורש חניך מודרך.",
+    "החניך כבר משובץ ביחידת המבחן הזו.",
+    "החניך אינו זמין לשיבוץ בקורס הזה.",
+    "יחידת המבחן לא נמצאה.",
+    "תוכנית המבחנים לא נמצאה.",
+    "לא ניתן לשנות שיבוצים במצב הקורס הנוכחי.",
+    "הקורס לא נמצא.",
+    "לא ניתן היה לשמור את שיבוץ החניך המודרך. יש לתקן את הפרטים ולנסות שוב.",
+    "לא ניתן היה לשמור את שיבוץ החניך המודרך.",
+    "יש לבחור יחידת מבחן.",
+    "יש לבחור חניך.",
+  ]) {
+    assert.ok(MESSAGES.includes(sentence), `the approved sentence is missing: ${sentence}`);
+  }
+  // The horse advice is nowhere in the module.
+  assert.equal(MESSAGES.includes("יש להזין שם סוס."), false, "the horse advice exists here");
+});
+
+test("33. every parser is CLOSED, and no query value is ever echoed", () => {
+  // Own-property lookup only, so `toString`, `constructor` and every other
+  // prototype member read as unknown rather than as a message.
+  assert.equal(
+    (MESSAGES.match(/Object\.prototype\.hasOwnProperty\.call\(/g) ?? []).length,
+    2,
+    "every table lookup must be an own-property check",
+  );
+  // A repeated query key arrives as an ARRAY: every parser must reject a
+  // non-string rather than letting `["1"]` coerce its way to a match.
+  assert.equal(
+    (MESSAGES.match(/typeof raw !== "string"/g) ?? []).length,
+    2,
+    "every parser must reject a non-string",
+  );
+  assert.ok(MESSAGES.includes('return typeof raw === "string" && raw === "1";'));
+  // The HEADLINE parser falls back to a fixed sentence — a refusal that rendered
+  // as a blank page would read as a successful save. The per-field parser DROPS
+  // unknown tokens, which is what keeps arbitrary text off the page.
+  assert.ok(MESSAGES.includes("UNRECOGNIZED_ERROR_TEXT"));
+  assert.ok(
+    MESSAGES.includes("if (code.length === 0 || seen.has(code) || !isKnownIssueCode(code))"),
+  );
+  // Nothing from the query reaches a returned string: there is no interpolation
+  // and no concatenation of a raw token into a message anywhere in the module.
+  assert.equal(MESSAGES.includes("${raw}"), false, "a raw token is interpolated into a message");
+  assert.equal(MESSAGES.includes("+ raw"), false, "a raw token is concatenated into a message");
+});
+
+// ===========================================================================
+// 34–38. Containment and footprint
+// ===========================================================================
+
+test("34. no file this slice added or amended names a committed exam CORE", () => {
+  // The committed containment guards forbid any file under `app/` from naming an
+  // exam core module — by import OR in prose, because those guards match raw
+  // source text. That is why the Hebrew is spelled out route-locally.
+  for (const [label, source] of [
+    ["actions", ACTIONS_SOURCE],
+    ["page", PAGE_SOURCE],
+    ["form", FORM_SOURCE],
+    ["messages", MESSAGES_SOURCE],
+  ] as const) {
+    for (const core of FORBIDDEN_CORES) {
+      assert.equal(source.includes(core), false, `the ${label} names the core ${core}`);
+    }
+  }
+  // Only the Server Action module reaches the committed write binding — not the
+  // page, not the form, not the message module.
+  assert.ok(ACTIONS.includes(WRITER_SPECIFIER));
+  for (const [label, source] of [
+    ["page", PAGE],
+    ["form", FORM],
+    ["messages", MESSAGES],
+  ] as const) {
+    assert.equal(source.includes(WRITER_MODULE), false, `the ${label} reaches the write binding`);
+    assert.equal(source.includes(WRITER_CALL), false, `the ${label} calls the writer`);
+  }
+});
+
+test("35. this slice adds NO publication, notification, pairing, wave or supervisor", () => {
+  for (const [label, source] of [
+    ["actions", ACTIONS],
+    ["page", PAGE],
+    ["form", FORM],
+    ["messages", MESSAGES],
+  ] as const) {
+    for (const forbidden of [
+      "publishExamPlan",
+      "unpublishExamPlan",
+      "deleteExamPlan",
+      "reorderExamAssignments",
+      "updateExamAssignment",
+      "pairingIndex",
+      "personalTime",
+      "wave",
+      "supervisor",
+      "Supervisor",
+      "sourceDate",
+      "SourceDate",
+      "TeachingPractice",
+      "beginnerChild",
+      "capabilit",
+      "Capabilit",
+      "notification",
+      "Notification",
+      "sendPush",
+      "webpush",
+      "instructionTopic",
+    ]) {
+      assert.equal(source.includes(forbidden), false, `the ${label} references ${forbidden}`);
+    }
+  }
+});
+
+test("36. no instructor, trainee or supervisor surface was modified", () => {
+  for (const dir of [join("app", "instructor"), join("app", "student")]) {
+    if (!existsSync(join(REPO_ROOT, dir))) continue;
+    const touched = gitLines(["diff", "--name-only", "HEAD", "--", dir]);
+    assert.deepEqual(touched, [], `${dir} was modified: ${touched.join(", ")}`);
+  }
+});
+
+test("37. the slice touched EXACTLY its approved paths, and no schema or migration", () => {
+  // Worktree, index and untracked together, so the guard describes the SLICE
+  // rather than one moment in its lifecycle.
+  const touched = new Set([
+    ...gitLines(["diff", "--name-only", "HEAD"]),
+    ...gitLines(["diff", "--name-only", "--cached", "HEAD"]),
+    ...gitLines(["ls-files", "--others", "--exclude-standard"]),
+  ]);
+  const offenders = [...touched].filter((path) => !SLICE_PATHS.includes(path)).sort();
+  assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
+
+  // Every working-tree entry under `prisma/` — untracked included — is empty, so
+  // no schema edit and no migration directory came with this slice.
+  const prismaStatus = gitLines(["status", "--porcelain", "--", "prisma"]);
+  assert.deepEqual(prismaStatus, [], `prisma/ changed: ${prismaStatus.join(", ")}`);
+
+  // The committed binding this slice WIRES was not edited, and neither was any
+  // other production module under `lib/`.
+  const libTouched = gitLines(["diff", "--name-only", "HEAD", "--", "lib"]).filter(
+    (path) => !path.endsWith(".test.ts"),
+  );
+  assert.deepEqual(libTouched, [], `a committed lib binding was edited: ${libTouched.join(", ")}`);
+
+  // No dependency, environment, auth, middleware or MCP surface came with it.
+  //
+  // Each entry is a PATH-EXACT fragment rather than a bare word: this route's own
+  // approved suites legitimately carry "session" and "auth" inside their FILE
+  // NAMES, and a bare-substring ban would report `exam-session-create.contract.test.ts`
+  // as an authentication change. The directories and file names below are the
+  // actual surfaces, so the guard still fails on a real one.
+  for (const path of touched) {
+    for (const forbidden of [
+      "package.json",
+      "package-lock.json",
+      ".env",
+      ".mcp.json",
+      "middleware.",
+      "next.config",
+      "capability-keys",
+      "capabilities/",
+      "permission",
+      "lib/auth/",
+      "lib/session",
+      "migrations/",
+      "prisma/",
+    ]) {
+      assert.equal(
+        path.includes(forbidden),
+        false,
+        `the slice touched a forbidden surface: ${path}`,
+      );
+    }
+  }
+});
+
+test("38. this suite opens no database and reads no environment", () => {
+  const own = stripComments(readSource(SUITE_REL));
+  for (const token of [
+    PRISMA_MODULE,
+    GENERATED_CLIENT,
+    "process" + ".env",
+    "DATABASE" + "_URL",
+    "Prisma" + "Client",
+  ]) {
+    assert.equal(own.includes(token), false, `the suite references ${token}`);
+  }
+  const specifiers = [...own.matchAll(/from\s+"([^"]+)"/g)].map(([, s]) => s);
+  assert.deepEqual(
+    [...new Set(specifiers)].sort(),
+    ["node:assert/strict", "node:child_process", "node:fs", "node:path", "node:test"],
+  );
+});

@@ -133,6 +133,19 @@ const APPROVED_MODIFIED_FILES = [
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  // EX-ASG-IT2 — the approved INSTRUCTED_TRAINEE assignment CREATE UI, which
+  // travels in the same working tree. It adds the ASSIGNMENT contract suite to
+  // the modified set (that suite's route file set and export list learn about
+  // the eighth endpoint) and the committed instructed-trainee write guard,
+  // whose caller list it re-points from zero to exactly one Server Action
+  // module. Its own three new route files are ADDITIONS. Nothing here changes
+  // which module this guard is about: no reader gained a caller, no writer was
+  // edited, and no schema, migration, auth, capability or policy file is named.
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
