@@ -846,6 +846,14 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
     "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
     "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
+    // EX-PAIR-BE-MVP — the approved instructed-trainee/examinee PAIRING backend,
+    // which travels in the same working tree. Its four new `lib/` files re-point
+    // the footprint lists of five neighbouring guard SUITES, this one included,
+    // so those five join the modified set. Every entry is a `.test.ts` suite; no
+    // supervisor module, no `lib/` production module, no schema, migration, auth,
+    // session, capability or policy file is named, and the assertion below
+    // re-checks that structurally.
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
   ];
   /**
    * The neighbouring slices' NEW files: EX-ASG-UI1's four route files, and
@@ -866,6 +874,15 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
     "lib/exam/exam-publication-write-core.test.ts",
     "lib/actions/" + "exam-publication-write" + "-io.ts",
     "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    // EX-PAIR-BE-MVP's four `lib/` files — the instructed-trainee/examinee
+    // pairing pure core, its binding, and a suite for each. Named EXACTLY for the
+    // same reason, and assembled for the same reason: that slice's own guard pins
+    // its caller list at EXACTLY ZERO. It touches no supervisor module, adds no
+    // caller and modifies no production file.
+    "lib/exam/exam-pairing-write-core.ts",
+    "lib/exam/exam-pairing-write-core.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
   ];
 
   // What EXISTS IN HEAD and was edited, deleted, renamed or type-changed.

@@ -76,11 +76,23 @@ const APPROVED_NEW_ROUTE_FILES = [
  * from pieces: its own guard sweeps `app/`, `lib/`, `components/` and `scripts/`
  * for that module name and pins the caller list at EXACTLY ZERO.
  */
+/*
+ * RE-POINTED by EX-PAIR-BE-MVP, the instructed-trainee/examinee PAIRING backend,
+ * which travels in the same working tree and has exactly the same shape: a pure
+ * core, a binding, and a suite for each. It writes ONE ExamAssignment column —
+ * `pairingIndex`, never `orderIndex` — adds no caller anywhere, and modifies no
+ * tracked production file. Four more EXACT paths, assembled for the same reason,
+ * so a ninth `lib/` addition still fails guards 25 and 26.
+ */
 const APPROVED_NEW_LIB_FILES = [
   "lib/exam/exam-publication-write-core.ts",
   "lib/exam/exam-publication-write-core.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/exam/exam-pairing-write-core.ts",
+  "lib/exam/exam-pairing-write-core.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
 ];
 
 /**
@@ -150,6 +162,13 @@ const APPROVED_MODIFIED_FILES = [
   `${ROUTE_DIR_PREFIX}CreateExamAssignmentForm.tsx`,
   `${ROUTE_DIR_PREFIX}exam-assignment-messages.ts`,
   "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
+  // EX-PAIR-BE-MVP — the approved instructed-trainee/examinee PAIRING backend,
+  // which travels in the same working tree. Its four `lib/` additions re-point
+  // the footprint list of the neighbouring publication backend's guard SUITE, so
+  // that suite joins the modified set. It is a `.test.ts`; no production file, no
+  // route, no Server Action, no schema, migration, auth, session, capability or
+  // policy file comes with it, and THIS binding's caller list is untouched.
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
 ];
 
 /** Every path either slice is allowed to have touched, in any state. */

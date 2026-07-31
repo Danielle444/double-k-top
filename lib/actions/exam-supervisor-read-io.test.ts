@@ -638,6 +638,14 @@ test("r18. the slice modified NO tracked file: no schema, migration, auth or pol
     `${ROUTE}CreateExamAssignmentForm.tsx`,
     `${ROUTE}exam-assignment-messages.ts`,
     "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
+    // EX-PAIR-BE-MVP — the approved instructed-trainee/examinee PAIRING backend,
+    // which travels in the same working tree. Its four `lib/` additions re-point
+    // the footprint list of the neighbouring publication backend's guard SUITE,
+    // so that suite joins the modified set. It is a `.test.ts`; no production
+    // file, no route, no Server Action and no schema, migration, auth, session,
+    // capability or policy file comes with it, and no supervisor module is
+    // touched by it.
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
   ];
   const unapproved = modified.filter((path) => !APPROVED_MODIFICATIONS.includes(path)).sort();
   assert.deepEqual(unapproved, [], `the slice modified: ${unapproved.join(", ")}`);

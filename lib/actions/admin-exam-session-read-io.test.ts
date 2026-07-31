@@ -176,6 +176,13 @@ const APPROVED_MODIFIED_FILES = [
   `${ROUTE_DIR_PREFIX}CreateExamAssignmentForm.tsx`,
   `${ROUTE_DIR_PREFIX}exam-assignment-messages.ts`,
   "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
+  // EX-PAIR-BE-MVP — the approved instructed-trainee/examinee PAIRING backend,
+  // which travels in the same working tree. Its four `lib/` additions re-point
+  // the footprint list of the neighbouring publication backend's guard SUITE, so
+  // that suite joins the modified set. It is a `.test.ts`; no production file,
+  // no route, no Server Action and no schema, migration, auth, session,
+  // capability or policy file comes with it, and THIS reader gained no caller.
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
 ];
 
 /**
@@ -993,11 +1000,21 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
   // fails. The two `lib/actions` paths are ASSEMBLED, not spelled: that slice's
   // own guard pins its caller list at EXACTLY ZERO, so naming one whole here
   // would become its first entry.
+  //
+  // RE-POINTED AGAIN by EX-PAIR-BE-MVP, the instructed-trainee/examinee PAIRING
+  // backend, which travels in the same working tree and has exactly the same
+  // shape: a pure core, a binding and a suite for each, all four under `lib/`.
+  // Four more EXACT paths, assembled for the same reason, and a ninth addition
+  // still fails.
   const APPROVED_NEW_LIB_FILES = [
     "lib/exam/exam-publication-write-core.ts",
     "lib/exam/exam-publication-write-core.test.ts",
     "lib/actions/" + "exam-publication-write" + "-io.ts",
     "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/exam/exam-pairing-write-core.ts",
+    "lib/exam/exam-pairing-write-core.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
   ];
   const INTRODUCED_FILES = [
     ...NEW_FILES,
