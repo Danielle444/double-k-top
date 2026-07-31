@@ -63,6 +63,31 @@ const PAGE_REL = join(ROUTE_DIR_REL, "page.tsx");
  * allow-list it exists to keep at exactly one entry.
  */
 const SLICE_PATHS = [
+  // ===========================================================================
+  // RE-POINTED by EX-PUB-UI-MVP, which wires the committed exam-plan publication
+  // backend to this route. It re-points the export list, the binding count and
+  // the feedback-key count of every suite below, so every one of them travels
+  // with it and is named HERE, by exact path — never by a directory and never by
+  // a glob. Its two PRODUCTION files are this route's Server Action module and
+  // its page, both already on this list; the rest are guard suites and the one
+  // new contract suite.
+  //
+  // The `lib/` entry is assembled from pieces for the reason in the header: that
+  // suite sweeps every source file for the publication binding's module name and
+  // pins the result to EXACTLY ONE production caller, so a path written whole
+  // here would enrol this suite in the very list it exists to keep narrow.
+  // ===========================================================================
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
@@ -296,6 +321,7 @@ test("2. the route directory holds EXACTLY the twenty-one approved files", () =>
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
@@ -349,8 +375,9 @@ test("5. the module exports EXACTLY the eight approved actions, with exact signa
     "createExamAssignmentAction",
     "deleteExamAssignmentAction",
     "createExamInstructedTraineeAssignmentAction",
+    "setExamPlanPublicationAction",
   ]);
-  assert.equal(exported.length, 8, "no ninth endpoint may exist in this module");
+  assert.equal(exported.length, 9, "no tenth endpoint may exist in this module");
   // Everything exported from a "use server" module is publicly callable, so the
   // export list is the attack surface: nothing else may leave this file.
   for (const token of ["export const", "export default", "export {", "export type"]) {
@@ -521,6 +548,12 @@ test("9. the action calls the committed writer with the bound id and the raw inp
     // it. It is an ADDITION and not a swap — the three-field binding above is
     // still imported, for the assignment REMOVAL.
     "@/lib/actions/" + "detailed-exam-assignment-write" + "-io",
+    // ADDED by EX-PUB-UI-MVP, and assembled for the sharpest reason of all: the
+    // committed publication write binding is what makes an exam plan visible to
+    // trainees, and its own guard pinned its caller list at EXACTLY ZERO before
+    // this slice and at exactly this one Server Action module after it — so a
+    // suite that spelled the module whole would enrol itself in that list.
+    "@/lib/actions/" + "exam-publication-write" + "-io",
       "@/lib/auth/require-admin",
       "next/cache",
       "next/navigation",
@@ -579,16 +612,19 @@ test("11. success revalidates ONLY this exams path and redirects with the flag",
   assert.equal((DEFINITION_ACTION.match(/revalidatePath\(/g) ?? []).length, 1);
   // The module-wide budget: at most one revalidation per action, and every one of
   // them is the SAME course-scoped exams path. Re-pointed from 2 to 3 by EX-SES-S4,
-  // from 3 to 5 by EX-SES-UI-2 and from 5 to 7 by EX-ASG-UI1 — the per-action
+  // from 3 to 5 by EX-SES-UI-2 and from 5 to 7 by EX-ASG-UI1 and from 8 to 9 by EX-PUB-UI-MVP — the per-action
   // budget is what this asserts, and it did not change. The edit's single
   // occurrence sits on its CHANGED branch only, so a no-op edit revalidates nothing
   // at all, which its own suite pins.
   assert.equal(
     (ACTIONS.match(/revalidatePath\(/g) ?? []).length,
-    8,
+    9,
     "the module must revalidate at most once per action and no more",
   );
-  assert.equal((ACTIONS.match(/revalidatePath\(examsPath\);/g) ?? []).length, 8);
+  // RE-POINTED from 8 to 9 by EX-PUB-UI-MVP. The per-action budget is unchanged,
+  // and the publication endpoint's single occurrence sits on its CHANGED branch
+  // alone, so a NO_CHANGE publication revalidates nothing at all.
+  assert.equal((ACTIONS.match(/revalidatePath\(examsPath\);/g) ?? []).length, 9);
   assert.ok(DEFINITION_ACTION.includes("revalidatePath(examsPath);"), "the wrong path is revalidated");
   assert.ok(
     DEFINITION_ACTION.includes("redirect(`${examsPath}?createdDefinition=1`);"),

@@ -943,6 +943,19 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
     // edited, and no schema, migration, auth, capability or policy file is named.
     `${P3_ROUTE_DIR}/exam-assignment-ui.contract.test.ts`,
     `${P3_ROUTE_DIR}/exam-instructed-trainee-assignment-ui.contract.test.ts`,
+    // EX-PUB-UI-MVP — the approved slice that wires the committed exam-plan
+    // PUBLICATION backend to this same route. It travels in the same working tree,
+    // adds ONE new contract suite, and re-points that backend's own footprint and
+    // caller guards, so both paths join this list BY NAME. Nothing it does touches
+    // this module: no schema, no migration, no auth, no capability, and no `lib/`
+    // production file of any kind.
+    //
+    // The `lib/` entry is ASSEMBLED from pieces: that suite sweeps every source
+    // file for the publication binding's module name and pins the result to
+    // EXACTLY ONE production caller, so a path written whole here would enrol this
+    // suite in the very list it exists to keep narrow.
+    `${P3_ROUTE_DIR}/exam-publication-ui.contract.test.ts`,
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
     ["lib", "actions", "exam-instructed-trainee-assignment-write" + "-io.test.ts"].join("/"),
     // EX-ASG-LTD2-B1 — the approved ADMIN READ DETAIL slice, which travels in the
     // same working tree. It publishes two stored columns the assignment READ pair

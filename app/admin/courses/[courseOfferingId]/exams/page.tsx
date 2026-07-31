@@ -1,21 +1,26 @@
 /**
  * EXAM EX-S5B-5B + EXAM PLAN P3 + EXAM EX-S5B-5C + EXAM EX-SES-UI-1 + EXAM
- * EX-SES-UI-2 + EXAM EX-ASG-UI1 + EXAM EX-ASG-IT2 + EXAM EX-ASG-LTD2-B1 — the admin
- * Exams surface of ONE course offering: a read of its ExamDefinition configuration,
- * of its scheduled exam sessions AND of the people assigned to them, plus the EIGHT
- * explicit mutation affordances that belong to it.
+ * EX-SES-UI-2 + EXAM EX-ASG-UI1 + EXAM EX-ASG-IT2 + EXAM EX-ASG-LTD2-B1 + EXAM
+ * EX-PUB-UI-MVP — the admin Exams surface of ONE course offering: a read of its
+ * ExamDefinition configuration, of its scheduled exam sessions AND of the people
+ * assigned to them, plus the NINE explicit mutation affordances that belong to it.
  *
- * Server Component. The page itself holds no state and renders no form control:
- * every form is a separate client component, and the only mutations it can reach
- * are the eight Server Actions bound below.
+ * Server Component. The page holds NO state and runs NO client code of its own.
+ * Eight of the nine forms are separate client components; the NINTH — the
+ * publication form EX-PUB-UI-MVP adds — is rendered INLINE, because it needs no
+ * client behaviour at all: it has one fixed hidden value, no pending UX, no
+ * validation and no confirmation, so a `"use client"` component for it would add a
+ * bundle entry and a second file for nothing. It is still an ordinary POST-ing
+ * form on a Server Action, submitted the same way every other mutation here is.
  *
  * ===========================================================================
  * WHAT THIS ROUTE MAY MUTATE — AND WHAT IT STILL MAY NOT
  * ===========================================================================
- * EXACTLY EIGHT mutations exist here. The first two are MUTUALLY EXCLUSIVE by the
+ * EXACTLY NINE mutations exist here. The first two are MUTUALLY EXCLUSIVE by the
  * state of the plan; the third additionally requires something to schedule; the
- * next two are PER SESSION and require a session to already exist; the last three
- * are PER ASSIGNMENT and require a session to be there to assign anyone to:
+ * next two are PER SESSION and require a session to already exist; the next three
+ * are PER ASSIGNMENT and require a session to be there to assign anyone to; the
+ * ninth is PER PLAN and is itself mutually exclusive by publication state:
  *
  *   - no plan yet     -> create ONE empty, unpublished ExamPlan;
  *   - plan present    -> append ONE ExamDefinition to it;
@@ -25,20 +30,24 @@
  *   - per session     -> assign ONE examinee to it;
  *   - per session     -> assign ONE instructed trainee to it, when that session's
  *                        exam actually asks for one;
- *   - per assignment  -> remove THAT assignment, whatever role it holds.
+ *   - per assignment  -> remove THAT assignment, whatever role it holds;
+ *   - draft plan      -> PUBLISH it to the trainees;
+ *   - published plan  -> UNPUBLISH it.
  *
- * Editing, removing and reordering definitions, reordering sessions, deleting or
- * publishing the plan, EDITING or REORDERING an assignment, pairings, waves,
- * personal times, breaks, supervisors and source dates are NOT reachable — not
- * disabled, not hidden behind a flag, but absent, with no import that could reach
- * them.
+ * Editing, removing and reordering definitions, reordering sessions, DELETING the
+ * plan, EDITING or REORDERING an assignment, publishing an INDIVIDUAL session,
+ * pairings, waves, personal times, breaks, supervisors and source dates are NOT
+ * reachable — not disabled, not hidden behind a flag, but absent, with no import
+ * that could reach them. Neither is a publication NOTIFICATION or a publication
+ * HISTORY: the ninth action flips one column and does nothing else.
  *
- * All eight mutations are ALWAYS an explicit click on a POST-ing form. The page
+ * All nine mutations are ALWAYS an explicit click on a POST-ing form. The page
  * performs no write, so a plain GET of this route — a refresh, a back button, a
  * prefetch, a bookmark — can never bring a plan, a definition, a session or an
- * assignment into existence, and can never remove one either. No session id and no
- * assignment id appears in any href on this page. There is no effect, no
- * auto-submit and no redirect that writes.
+ * assignment into existence, can never remove one, and can never publish or
+ * unpublish anything either. No session id and no assignment id appears in any
+ * href on this page, and neither does a publication operation. There is no effect,
+ * no auto-submit and no redirect that writes.
  *
  * ===========================================================================
  * WHAT THE ASSIGNMENT SURFACE MAY AND MAY NOT SAY
@@ -99,7 +108,10 @@
  *
  * A PUBLISHED plan does not lose the definition-create form: whether a published
  * plan may still be configured is the committed lifecycle policy's decision, not
- * this page's, so publication only adds an advisory notice.
+ * this page's, so publication only adds an advisory notice. EX-PUB-UI-MVP keeps
+ * that rule EXACTLY as it was and adds a third advisory of the same kind on the
+ * publication card itself: publishing tells the manager that trainees can now see
+ * what they change, and blocks no edit whatsoever.
  *
  * ===========================================================================
  * THE ORDER
@@ -174,7 +186,20 @@
  *   - `assignmentDeleteError=<code>` — a known assignment-removal refusal code;
  *   - `createdInstructedTrainee=1` — an instructed trainee was assigned;
  *   - `instructedTraineeError=<code>`  — a known instructed-trainee refusal code;
- *   - `instructedTraineeIssues=<codes>`— known instructed-trainee issue codes.
+ *   - `instructedTraineeIssues=<codes>`— known instructed-trainee issue codes;
+ *   - `publication=<token>`  — the publication outcome, success or refusal alike.
+ *
+ * The publication family is ONE key rather than a success/error pair, because a
+ * publication has exactly one outcome per submission and only one publication
+ * control can be on screen at a time — so there is no second form whose diagnostic
+ * could be rendered above it. Its parser is closed like every other one, and the
+ * TONE it renders with is carried in the table beside the sentence rather than
+ * derived from the token's shape.
+ *
+ * It is FEEDBACK and never an OPTION. Nothing derives the publication STATE from
+ * it: the card's two mutually-exclusive forms are chosen from the committed
+ * reader's `publishedAt`, so a hand-typed `?publication=PUBLISHED` changes what
+ * one banner says and nothing else — no read, no affordance and no write.
  *
  * The instructed-trainee family is DISTINCT from the examinee one rather than
  * shared: both create forms can be on screen under the SAME session at once, and
@@ -321,6 +346,7 @@ import {
   createExamAssignmentAction,
   deleteExamAssignmentAction,
   createExamInstructedTraineeAssignmentAction,
+  setExamPlanPublicationAction,
 } from "./actions";
 import { ExamPlanCreateForm } from "./ExamPlanCreateForm";
 import { ExamDefinitionCreateForm } from "./ExamDefinitionCreateForm";
@@ -643,6 +669,92 @@ const MISSING_DISCIPLINE_TEXT = "חסר ענף בשיבוץ ההיסטורי ה�
 /** The frozen list a session with no assignment renders from. */
 const NO_ASSIGNMENTS: readonly AdminExamAssignmentRow[] = Object.freeze([]);
 
+// ===========================================================================
+// EX-PUB-UI-MVP — the publication surface
+// ===========================================================================
+
+/**
+ * The CLOSED publication outcome table: every token the publication action can
+ * put in the query, mapped to a TONE and to ONE fixed Hebrew sentence this module
+ * owns.
+ *
+ * ONE table rather than a success table and an error table, because the action
+ * uses ONE query key: a publication has exactly one outcome per submission, and
+ * only one publication control can be on screen at a time, so there is no second
+ * form whose diagnostic could be rendered above it. The tone is carried here
+ * rather than derived from the token's shape, so nothing has to guess whether an
+ * unfamiliar literal is a success.
+ *
+ * `offering_not_found` is deliberately absent, for the same reason it is absent
+ * from the plan and session tables above: that refusal never returns to this
+ * course-scoped route, because an id that did not resolve cannot be used to build
+ * a URL for it. It routes to the courses list instead.
+ *
+ * The Hebrew is spelled out LOCALLY rather than imported from the committed
+ * domain tables, for the containment reason recorded in the header: the committed
+ * guards forbid any file under `app/` from naming an exam core module, by import
+ * OR in prose.
+ */
+const EXAM_PUBLICATION_MESSAGES: Readonly<Record<string, PlanFeedback>> = Object.freeze({
+  PUBLISHED: { tone: "success", message: "לוח המבחנים פורסם לחניכים." },
+  UNPUBLISHED: { tone: "success", message: "פרסום לוח המבחנים בוטל." },
+  NO_CHANGE: { tone: "neutral", message: "מצב הפרסום כבר מעודכן." },
+  plan_not_found: { tone: "error", message: "לא נמצאה תוכנית מבחנים לפרסום." },
+  operation_not_allowed: {
+    tone: "error",
+    message: "לא ניתן לשנות את מצב הפרסום של הקורס כעת.",
+  },
+  stale_write: {
+    tone: "error",
+    message: "מצב הפרסום השתנה בינתיים. יש לרענן ולנסות שוב.",
+  },
+  unknown_operation: { tone: "error", message: "בקשת הפרסום אינה תקינה." },
+});
+
+/**
+ * ONE publication banner for one raw token, chosen from the frozen table above.
+ *
+ * Closed in BOTH directions and total over every input: a non-string (which is
+ * what a repeated query key produces), an empty string and any token the table
+ * does not OWN all yield `null`, which renders nothing. `Object.hasOwn` rather
+ * than a plain lookup, so an inherited property name such as `constructor` cannot
+ * select a message. Nothing from the query reaches the returned object — both
+ * fields are constants owned by this module, so a submitted value can never be
+ * echoed back.
+ */
+function publicationFeedbackFrom(
+  raw: string | string[] | undefined,
+): PlanFeedback | null {
+  if (typeof raw !== "string" || raw.length === 0) {
+    return null;
+  }
+  return Object.hasOwn(EXAM_PUBLICATION_MESSAGES, raw)
+    ? EXAM_PUBLICATION_MESSAGES[raw]
+    : null;
+}
+
+/** The two publication states, as the manager is told them. */
+const PUBLICATION_DRAFT_TEXT = "טיוטה";
+const PUBLICATION_PUBLISHED_TEXT = "פורסם";
+
+/** The two publication controls. */
+const PUBLISH_BUTTON_TEXT = "פרסום לחניכים";
+const UNPUBLISH_BUTTON_TEXT = "ביטול פרסום";
+
+/**
+ * The advisory a PUBLISHED plan carries.
+ *
+ * INFORMATIONAL ONLY. It disables no control, hides no form and blocks no edit:
+ * whether a published plan may still be configured is the committed lifecycle
+ * policy's decision and not this page's, exactly as the two existing published-
+ * plan advisories on the definition and session forms already record.
+ */
+const PUBLISHED_WARNING_TEXT =
+  "הלוח כבר פורסם לחניכים. שינויים שתבצעי כעת עשויים לשנות את המידע שהם רואים.";
+
+/** What a manager is told when there is no plan to publish yet. */
+const NO_PLAN_PUBLICATION_TEXT = "יש ליצור תוכנית מבחנים לפני הפרסום.";
+
 /**
  * The DEFINITION requirements that decide which assignment affordances a session
  * may show. Carried per definition id, from the definition reader the page
@@ -705,6 +817,7 @@ export default async function CourseExamsPage({
     createdInstructedTrainee?: string | string[];
     instructedTraineeError?: string | string[];
     instructedTraineeIssues?: string | string[];
+    publication?: string | string[];
   }>;
 }) {
   const { courseOfferingId } = await params;
@@ -907,6 +1020,15 @@ export default async function CourseExamsPage({
   const instructedTraineeIssueTexts =
     examInstructedTraineeIssueTexts(instructedTraineeIssues);
 
+  // The PUBLICATION outcome token, destructured from that SAME one resolved query
+  // and parsed by the closed route-local table above. ONE more token, no more
+  // query resolutions, and it is never interpolated into the page: it can only
+  // SELECT a constant sentence and a constant tone, never supply either. It
+  // influences NO read above, no affordance and no scope — the publication STATE
+  // the controls below are derived from comes from the database, never from here.
+  const { publication } = query;
+  const publicationFeedback = publicationFeedbackFrom(publication);
+
   const dashboardHref = `/admin/courses/${encodeURIComponent(context.id)}`;
   const isPublished = view.publishedAt !== null;
   const hasDefinitions = view.definitions.length > 0;
@@ -961,6 +1083,14 @@ export default async function CourseExamsPage({
   // param.
   const boundCreateInstructedTraineeAssignmentAction =
     createExamInstructedTraineeAssignmentAction.bind(null, context.id);
+
+  // The PUBLICATION action, bound ONCE to the VERIFIED context id on exactly the
+  // same terms as every other binding expression in this file: one binding site
+  // is one place to check that the id came from `context`, and never from the raw
+  // route param. The offering id therefore travels inside the encrypted Server
+  // Action payload and is never a form field.
+  const boundSetExamPlanPublicationAction =
+    setExamPlanPublicationAction.bind(null, context.id);
 
   return (
     <div className="flex flex-col gap-4">
@@ -1103,6 +1233,12 @@ export default async function CourseExamsPage({
         </div>
       ) : null}
 
+      {publicationFeedback !== null ? (
+        <div className={FEEDBACK_CLASS[publicationFeedback.tone]}>
+          {publicationFeedback.message}
+        </div>
+      ) : null}
+
       {!view.planExists ? (
         <div className="rounded-xl border border-dashed border-border bg-muted p-5">
           <h3 className="text-sm font-semibold text-card-foreground">
@@ -1110,6 +1246,17 @@ export default async function CourseExamsPage({
           </h3>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             אין זו שגיאה — פשוט טרם הוגדרה תוכנית מבחנים עבור הקורס.
+          </p>
+          {/*
+            THE NO-PLAN PUBLICATION STATE.
+
+            A sentence and nothing else. There is no publication form, no button
+            and no hidden field in this branch — publishing a plan that does not
+            exist is not a refusal to explain but an action that cannot be
+            offered, and the committed writer would refuse it anyway.
+          */}
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            {NO_PLAN_PUBLICATION_TEXT}
           </p>
           {canCreatePlan && (
             <div className="mt-4 border-t border-border pt-4">
@@ -1137,6 +1284,74 @@ export default async function CourseExamsPage({
             >
               {isPublished ? "פורסמה" : "טיוטה"}
             </span>
+          </div>
+
+          {/*
+            EX-PUB-UI-MVP — THE PUBLICATION CARD.
+
+            The one surface from which a manager makes the exam plan visible to
+            trainees, or takes it back out of sight. It renders the state in the
+            two exact words this slice owns, and — behind the SAME single
+            lifecycle evaluation every other affordance on this page uses — ONE
+            form carrying ONE fixed hidden `operation` value.
+
+            The two forms are MUTUALLY EXCLUSIVE by the stored state: a draft plan
+            gets the publish form and no unpublish control, and a published plan
+            gets the unpublish form and no publish control. Neither is a toggle
+            whose meaning depends on what the client believes, and neither reads
+            the query string: `isPublished` comes from the committed reader's
+            `publishedAt` and from nothing else.
+
+            NO CLIENT COMPONENT. These are plain POST-ing forms on a Server
+            Action, so a GET of this route — a refresh, a back button, a prefetch,
+            a bookmark — can never change publication. There is no effect, no
+            auto-submit and no publication link anywhere on this page.
+
+            The warning is INFORMATIONAL. It disables nothing: the definition and
+            session forms above stay exactly as available after publication as
+            before, which is the committed lifecycle policy's decision and not
+            this page's.
+          */}
+          <div className="rounded-xl border border-border bg-card p-5">
+            <h3 className="text-sm font-semibold text-card-foreground">
+              פרסום לוח המבחנים
+            </h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              מצב נוכחי:{" "}
+              <span className="font-medium text-card-foreground">
+                {isPublished ? PUBLICATION_PUBLISHED_TEXT : PUBLICATION_DRAFT_TEXT}
+              </span>
+            </p>
+
+            {isPublished ? (
+              <p className="mt-3 rounded-lg bg-warning-muted px-4 py-3 text-sm leading-relaxed text-warning">
+                {PUBLISHED_WARNING_TEXT}
+              </p>
+            ) : null}
+
+            {mayConfigure ? (
+              isPublished ? (
+                <form action={boundSetExamPlanPublicationAction} className="mt-4">
+                  <input type="hidden" name="operation" value="UNPUBLISH" readOnly />
+                  <button
+                    type="submit"
+                    className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-card-foreground"
+                  >
+                    {UNPUBLISH_BUTTON_TEXT}
+                  </button>
+                </form>
+              ) : (
+                <form action={boundSetExamPlanPublicationAction} className="mt-4">
+                  <input type="hidden" name="operation" value="PUBLISH" readOnly />
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+                  >
+                    {PUBLISH_BUTTON_TEXT}
+                  </button>
+                </form>
+              )
+            ) : null}
           </div>
 
           {hasDefinitions ? (

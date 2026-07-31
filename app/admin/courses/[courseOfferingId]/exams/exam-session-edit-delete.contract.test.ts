@@ -89,6 +89,7 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
@@ -103,6 +104,31 @@ const FINAL_ROUTE_FILES = [
  * The `lib/` entries are ASSEMBLED for the reason in the header.
  */
 const SLICE_PATHS = [
+  // ===========================================================================
+  // RE-POINTED by EX-PUB-UI-MVP, which wires the committed exam-plan publication
+  // backend to this route. It re-points the export list, the binding count and
+  // the feedback-key count of every suite below, so every one of them travels
+  // with it and is named HERE, by exact path — never by a directory and never by
+  // a glob. Its two PRODUCTION files are this route's Server Action module and
+  // its page, both already on this list; the rest are guard suites and the one
+  // new contract suite.
+  //
+  // The `lib/` entry is assembled from pieces for the reason in the header: that
+  // suite sweeps every source file for the publication binding's module name and
+  // pins the result to EXACTLY ONE production caller, so a path written whole
+  // here would enrol this suite in the very list it exists to keep narrow.
+  // ===========================================================================
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
   // The three new files.
   `${ROUTE_DIR_PREFIX}ExamSessionEditForm.tsx`,
   `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
@@ -334,12 +360,13 @@ test("5. the module exports EXACTLY the eight approved actions, in order", () =>
     "createExamAssignmentAction",
     "deleteExamAssignmentAction",
     "createExamInstructedTraineeAssignmentAction",
+    "setExamPlanPublicationAction",
   ]);
-  assert.equal(exported.length, 8, "no ninth endpoint may exist in this module");
+  assert.equal(exported.length, 9, "no tenth endpoint may exist in this module");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 8);
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 9);
 });
 
 test("6. both new actions have the EXACT locked signature, and return void", () => {
@@ -721,6 +748,12 @@ test("18. the module's import surface did NOT grow a new binding", () => {
     // it. It is an ADDITION and not a swap — the three-field binding above is
     // still imported, for the assignment REMOVAL.
     "@/lib/actions/" + "detailed-exam-assignment-write" + "-io",
+    // ADDED by EX-PUB-UI-MVP, and assembled for the sharpest reason of all: the
+    // committed publication write binding is what makes an exam plan visible to
+    // trainees, and its own guard pinned its caller list at EXACTLY ZERO before
+    // this slice and at exactly this one Server Action module after it — so a
+    // suite that spelled the module whole would enrol itself in that list.
+    "@/lib/actions/" + "exam-publication-write" + "-io",
     "@/lib/auth/require-admin",
     "next/cache",
     "next/navigation",
@@ -978,10 +1011,27 @@ test("24. the page binds BOTH new actions to the VERIFIED context id, once each"
   for (const token of [SESSION_WRITE_MODULE, UPDATE_WRITER_CALL, DELETE_WRITER_CALL]) {
     assert.equal(PAGE.includes(token), false, `the page reaches ${token}`);
   }
-  // ...and it still renders no control of its own: every form is a component.
-  for (const forbidden of ["<form", "<button", "<input", "<select", "<textarea", "onClick", "onSubmit"]) {
+  // ...and NEITHER session control is a control of the page's own: both remain
+  // client components. RE-POINTED by EX-PUB-UI-MVP, which renders its publication
+  // form INLINE because that form needs no client behaviour at all — one fixed
+  // hidden value, no pending UX, no validation, no confirmation.
+  //
+  // The CLIENT-behaviour tokens stay absolutely forbidden. The MARKUP tokens
+  // become an exact inventory, which is what proves the two session forms did NOT
+  // acquire inline markup: every one of these counts belongs to the publication
+  // card, which sits outside the session list entirely and is pinned by name in
+  // the page's own suite.
+  for (const forbidden of ["<select", "<textarea", "onClick", "onSubmit", "onChange"]) {
     assert.equal(PAGE.includes(forbidden), false, `the page renders ${forbidden}`);
   }
+  assert.equal((PAGE.match(/<form /g) ?? []).length, 2);
+  assert.equal((PAGE.match(/<button/g) ?? []).length, 2);
+  assert.equal((PAGE.match(/<input/g) ?? []).length, 2);
+  assert.equal((PAGE.match(/name="operation"/g) ?? []).length, 2);
+  // No inline markup sits anywhere near a session: neither the edit nor the
+  // delete form gained a hidden field, a button or an input of the page's own.
+  assert.equal(/<(form|button|input)[\s>][\s\S]{0,400}?ExamSessionEditForm/.test(PAGE), false);
+  assert.equal(/ExamSessionDeleteForm[\s\S]{0,400}?<(form|button|input)[\s>]/.test(PAGE), false);
 });
 
 test("25. NO edit or delete control exists when mayConfigure is false", () => {
@@ -1124,10 +1174,13 @@ test("28. the six new feedback keys are declared, closed, and array-tolerant", (
     "createdInstructedTrainee",
     "instructedTraineeError",
     "instructedTraineeIssues",
+    // ADDED by EX-PUB-UI-MVP: ONE closed publication FEEDBACK token, which this
+    // suite pins only to prove the session family did not change shape.
+    "publication",
   ].sort());
   // Every key admits the ARRAY form a repeated query key produces, which is what
   // forces every parser to reject it rather than coerce it.
-  assert.equal((queryType.match(/string \| string\[\]/g) ?? []).length, 23);
+  assert.equal((queryType.match(/string \| string\[\]/g) ?? []).length, 24);
   // Not one of them names a course, a plan, a definition, a session, a trainee, an
   // assignment or a version.
   for (const forbidden of [
@@ -1288,13 +1341,21 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
   // assignment UI wiring edits only files this list ALREADY holds and adds exactly
   // ONE path — the detailed writer's own committed guard, whose caller list it
   // re-points from zero to one — so the exact scope is thirty-three.
-  assert.equal(SLICE_PATHS.length, 33, "the approved scope is thirty-three files");
+  // RE-POINTED by EX-PUB-UI-MVP, which names ONE new contract suite and re-adds
+  // paths this list already holds. Counted as a SET rather than as an array: the
+  // list is an allow-list consulted with `includes`, so a repeated entry permits
+  // nothing extra, and a raw length would report a scope that does not exist.
+  assert.equal(new Set(SLICE_PATHS).size, 33, "the approved scope is thirty-three files");
 
   // EXACTLY TWO production files in scope are not new: the shared Server Action
   // module and the page. Everything else is either one of the new route files or a
   // guard suite — no layout, no route handler, no `lib/` production module, and no
   // second page.
-  const production = SLICE_PATHS.filter((path) => !path.endsWith(".test.ts"));
+  // DE-DUPLICATED as of EX-PUB-UI-MVP, which re-adds paths this list already
+  // holds. `SLICE_PATHS` is an allow-list consulted with `includes`, so a repeated
+  // entry permits nothing extra — but this assertion turns it into a SET, and a
+  // duplicate would otherwise read as a production file that does not exist.
+  const production = [...new Set(SLICE_PATHS)].filter((path) => !path.endsWith(".test.ts"));
   assert.deepEqual(production.sort(), [
     `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
     `${ROUTE_DIR_PREFIX}ExamSessionEditForm.tsx`,

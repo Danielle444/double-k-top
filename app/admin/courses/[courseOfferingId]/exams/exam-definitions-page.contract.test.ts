@@ -107,6 +107,31 @@ const SESSION_SLICE_PATHS = [
  * relaxed, so a second caller still fails there.
  */
 const SLICE_PATHS = [
+  // ===========================================================================
+  // RE-POINTED by EX-PUB-UI-MVP, which wires the committed exam-plan publication
+  // backend to this route. It re-points the export list, the binding count and
+  // the feedback-key count of every suite below, so every one of them travels
+  // with it and is named HERE, by exact path — never by a directory and never by
+  // a glob. Its two PRODUCTION files are this route's Server Action module and
+  // its page, both already on this list; the rest are guard suites and the one
+  // new contract suite.
+  //
+  // The `lib/` entry is assembled from pieces for the reason in the header: that
+  // suite sweeps every source file for the publication binding's module name and
+  // pins the result to EXACTLY ONE production caller, so a path written whole
+  // here would enrol this suite in the very list it exists to keep narrow.
+  // ===========================================================================
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
@@ -307,6 +332,7 @@ test("3. the route directory holds exactly the twenty-one approved files", () =>
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
@@ -495,11 +521,15 @@ test("8. the route param is the ONLY scope input; the query is feedback only", (
       "createdInstructedTrainee",
       "instructedTraineeError",
       "instructedTraineeIssues",
+      // ADDED by EX-PUB-UI-MVP: ONE closed publication FEEDBACK token. It names no
+      // course, plan, session, trainee or version, and nothing derives scope or
+      // publication STATE from it.
+      "publication",
     ].sort(),
   );
   assert.equal(
     (queryType.match(/string \| string\[\]/g) ?? []).length,
-    23,
+    24,
     "every feedback key must admit the array form a repeated key produces",
   );
   for (const forbidden of [
@@ -778,25 +808,30 @@ test("13. EXACTLY the two approved Server Actions are reachable from the page", 
   }
   // No EIGHTH mutation entered the page: exactly seven bindings, all to the
   // verified context id and none to anything else.
-  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 8);
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 8);
+  // RE-POINTED from 8 to 9 by EX-PUB-UI-MVP, which binds ONE more reviewed
+  // action — still to `context.id`, the DB-VERIFIED offering, and never to the
+  // raw route param. `action=` counts TWO more, because the publication card's
+  // two mutually exclusive forms are written out separately so each can carry a
+  // LITERAL hidden operation value rather than a computed one.
+  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 9);
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 9);
 });
 
-test("14. the page renders NO control itself and holds no state", () => {
-  // Each create form is a separate client component. The page composes them and
-  // supplies the bound actions; it declares no markup control and no hook, so
-  // there is no second place where submission behaviour could be defined.
+test("14. the page holds NO client state, and its only inline control is the publication form", () => {
+  // THE CLAIM THIS GUARD OWNS, and it is UNCHANGED: the page defines no
+  // submission BEHAVIOUR. No hook, no event handler, no `formAction` override and
+  // no `"use client"` — so there is no second place where what happens on submit
+  // could be decided, and nothing on this page can run in a browser.
+  //
+  // Every one of these stays absolutely forbidden. EX-PUB-UI-MVP does not weaken
+  // a single entry on this list.
   for (const forbidden of [
-    "<form",
-    "</form",
-    "<button",
-    "<input",
-    "<select",
-    "<textarea",
     "formAction",
     "onClick",
     "onSubmit",
     "onChange",
+    "onInput",
+    "onBlur",
     "disabled",
     "useState",
     "useTransition",
@@ -804,20 +839,59 @@ test("14. the page renders NO control itself and holds no state", () => {
     "useFormStatus",
     "useActionState",
     "useOptimistic",
+    "useRef",
     '"use client"',
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not render ${forbidden}`);
   }
 
-  // `action=` appears exactly SEVEN times — once per approved form — and each one
-  // is a server-bound action prop, never an `action=` on markup the page renders
-  // itself. RE-POINTED by EX-SES-UI-1, which added the third, again by
-  // EX-SES-UI-2, which adds the fourth and fifth, and again by EX-ASG-UI1, which
-  // adds the sixth and seventh.
+  // RE-POINTED by EX-PUB-UI-MVP, and NARROWED to an exact inventory rather than a
+  // blanket ban. The publication control needs no client behaviour at all — one
+  // fixed hidden value, no pending UX, no validation, no confirmation — so a
+  // `"use client"` component for it would be a bundle entry and a second file for
+  // nothing. It is therefore written INLINE, which is the only reason the four
+  // markup tokens below are no longer at zero.
+  //
+  // An inventory is strictly stronger here than the old ban was: it pins WHICH
+  // markup exists and HOW MUCH, so a third form, a second text input or a stray
+  // control still fails, and it does so with a count rather than with a substring
+  // that a single legitimate use would have to disable entirely.
+  assert.equal((PAGE.match(/<form /g) ?? []).length, 2, "exactly two inline forms");
+  assert.equal((PAGE.match(/<\/form>/g) ?? []).length, 2, "both inline forms are closed");
+  assert.equal((PAGE.match(/<button/g) ?? []).length, 2, "exactly two inline buttons");
+  assert.equal((PAGE.match(/<input/g) ?? []).length, 2, "exactly two inline inputs");
+  // ...and the two inputs are BOTH hidden, both named `operation`, and each
+  // carries one of the two LITERAL values — never a computed one, never a value
+  // read from the query string, and never a second field.
+  assert.equal((PAGE.match(/type="hidden"/g) ?? []).length, 2);
+  assert.equal((PAGE.match(/name="operation"/g) ?? []).length, 2);
+  assert.equal((PAGE.match(/value="PUBLISH"/g) ?? []).length, 1);
+  assert.equal((PAGE.match(/value="UNPUBLISH"/g) ?? []).length, 1);
+  assert.equal((PAGE.match(/name="/g) ?? []).length, 2, "no third named field exists");
+  // No FREE-TEXT control of any kind entered the page: the publication form
+  // collects nothing a manager can type.
+  for (const forbidden of ["<select", "<textarea", 'type="text"', 'type="checkbox"']) {
+    assert.equal(PAGE.includes(forbidden), false, `the page must not render ${forbidden}`);
+  }
+
+  // `action=` appears exactly TEN times — once per approved form — and each one
+  // is a server-bound action prop, never an `action=` on markup that could reach
+  // anything but a Server Action. RE-POINTED by EX-SES-UI-1, which added the
+  // third, again by EX-SES-UI-2, which adds the fourth and fifth, again by
+  // EX-ASG-UI1, which adds the sixth and seventh, and again by EX-PUB-UI-MVP,
+  // whose publication card contributes TWO — its two mutually exclusive forms are
+  // written out separately so each can carry a LITERAL hidden operation value.
   assert.equal(
     (PAGE.match(/action=/g) ?? []).length,
-    8,
-    "action= must appear exactly eight times",
+    10,
+    "action= must appear exactly ten times",
+  );
+  // Both publication forms receive EXACTLY the hoisted bound action, and no other
+  // expression reaches either one's `action` prop.
+  assert.equal(
+    (PAGE.match(/<form action=\{boundSetExamPlanPublicationAction\}/g) ?? []).length,
+    2,
+    "both publication forms must receive exactly the hoisted bound action",
   );
   // The two assignment forms receive the HOISTED bound actions — the binding
   // itself is asserted above, and what matters here is that no OTHER expression
@@ -1103,9 +1177,18 @@ test("24. the amended committed guard suites all exist and are approved paths", 
   // The production files of this route are an EXACT set: the page, the shared
   // Server Action module, the two forms and the local message table. Nothing else
   // under `app/` is an approved path for this batch.
-  const appProduction = SLICE_PATHS.filter(
-    (path) => path.startsWith("app/") && !/\.test\.tsx?$/.test(path),
-  ).sort();
+  // DE-DUPLICATED as of EX-PUB-UI-MVP, which re-adds this route's Server Action
+  // module and page to the approved list by name. `SLICE_PATHS` is an allow-list
+  // consulted with `includes`, so a repeated entry changes nothing about what it
+  // permits — but this assertion turns it into a SET, and a duplicate would
+  // otherwise read as a second production file that does not exist.
+  const appProduction = [
+    ...new Set(
+      SLICE_PATHS.filter(
+        (path) => path.startsWith("app/") && !/\.test\.tsx?$/.test(path),
+      ),
+    ),
+  ].sort();
   assert.deepEqual(appProduction, [
     // RE-POINTED by EX-ASG-UI1: an assignment create form, an assignment delete
     // form and a fourth message module joined the route, and all three are reached

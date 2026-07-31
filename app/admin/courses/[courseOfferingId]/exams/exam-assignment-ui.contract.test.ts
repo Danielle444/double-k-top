@@ -90,6 +90,7 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
@@ -104,6 +105,31 @@ const FINAL_ROUTE_FILES = [
  * The `lib/` entries are ASSEMBLED for the reason in the header.
  */
 const SLICE_PATHS = [
+  // ===========================================================================
+  // RE-POINTED by EX-PUB-UI-MVP, which wires the committed exam-plan publication
+  // backend to this route. It re-points the export list, the binding count and
+  // the feedback-key count of every suite below, so every one of them travels
+  // with it and is named HERE, by exact path — never by a directory and never by
+  // a glob. Its two PRODUCTION files are this route's Server Action module and
+  // its page, both already on this list; the rest are guard suites and the one
+  // new contract suite.
+  //
+  // The `lib/` entry is assembled from pieces for the reason in the header: that
+  // suite sweeps every source file for the publication binding's module name and
+  // pins the result to EXACTLY ONE production caller, so a path written whole
+  // here would enrol this suite in the very list it exists to keep narrow.
+  // ===========================================================================
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
   // The four new files.
   `${ROUTE_DIR_PREFIX}CreateExamAssignmentForm.tsx`,
   `${ROUTE_DIR_PREFIX}DeleteExamAssignmentForm.tsx`,
@@ -394,12 +420,13 @@ test("5. the module exports EXACTLY the eight approved actions, in order", () =>
     "createExamAssignmentAction",
     "deleteExamAssignmentAction",
     "createExamInstructedTraineeAssignmentAction",
+    "setExamPlanPublicationAction",
   ]);
-  assert.equal(exported.length, 8, "no ninth endpoint may exist in this module");
+  assert.equal(exported.length, 9, "no tenth endpoint may exist in this module");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 8);
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 9);
 });
 
 test("6. both new actions have the EXACT locked signature, and return void", () => {
@@ -1446,12 +1473,21 @@ test("37. the slice touched EXACTLY its approved paths, and no schema or migrati
 // ===========================================================================
 
 test("43. the ONE create endpoint calls the DETAILED writer and nothing else", () => {
-  // The endpoint is the SAME one: no ninth export, no second create action and no
-  // second bound action entered the route. (Guard 5 pins the exhaustive ordered
+  // The endpoint is the SAME one: no second create action and no second bound
+  // action entered the route for THIS role. (Guard 5 pins the exhaustive ordered
   // export list; these restate the count from the two other directions.)
-  assert.equal((ACTIONS.match(/^export async function /gm) ?? []).length, 8);
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 8);
-  assert.equal((PAGE.match(/action=/g) ?? []).length, 8);
+  //
+  // RE-POINTED from 8 to 9 by EX-PUB-UI-MVP, which appends ONE reviewed endpoint
+  // and ONE bound form. What this guard is responsible for is that the EXAMINEE
+  // create did not gain a sibling, which the assertions below still pin BY NAME;
+  // the three totals move together, so a tenth export with no form — or a tenth
+  // form with no export — still fails here.
+  assert.equal((ACTIONS.match(/^export async function /gm) ?? []).length, 9);
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 9);
+  // `action=` counts TWO for the publication card, because its two mutually
+  // exclusive forms are written out separately so each can carry a LITERAL hidden
+  // operation value rather than a computed one.
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 10);
 
   // The create action reaches the DETAILED writer EXACTLY ONCE...
   assert.equal(
@@ -1552,7 +1588,10 @@ test("45. this slice adds no route, no query key, no schema and no capability", 
   const squashed = squash(PAGE);
   const queryStart = squashed.indexOf("searchParams: Promise<{");
   const queryType = squashed.slice(queryStart, squashed.indexOf("}>;", queryStart) + 3);
-  assert.equal((queryType.match(/\?: string \| string\[\];/g) ?? []).length, 23);
+  // RE-POINTED from 23 to 24 by EX-PUB-UI-MVP, which adds ONE closed publication
+  // FEEDBACK token and nothing else. The existing families are untouched, and the
+  // new key carries no id, no submitted value and no scope.
+  assert.equal((queryType.match(/\?: string \| string\[\];/g) ?? []).length, 24);
   for (const forbidden of ["instructionTopic?", "discipline?", "detailedAssignment"]) {
     assert.equal(queryType.includes(forbidden), false, `searchParams gained ${forbidden}`);
   }
@@ -1717,12 +1756,10 @@ test("41. a MISSING required value is a fixed diagnostic that FAILS CLOSED", () 
 });
 
 test("42. the diagnostics add NO write, no route, no query key and no client state", () => {
-  // Not one affordance came with them: no form, no control, no handler, no state
-  // and no eighth action binding.
+  // Not one affordance came with the DIAGNOSTICS: no control, no handler, no
+  // state. Every CLIENT-BEHAVIOUR token stays absolutely forbidden — EX-PUB-UI-MVP
+  // weakens none of them, because its publication form needs no client code at all.
   for (const forbidden of [
-    "<form",
-    "<button",
-    "<input",
     "<select",
     "<textarea",
     "onClick",
@@ -1735,15 +1772,29 @@ test("42. the diagnostics add NO write, no route, no query key and no client sta
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page renders ${forbidden}`);
   }
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 8);
-  assert.equal((PAGE.match(/action=/g) ?? []).length, 8);
+  // The MARKUP tokens leave the blanket ban and become an exact INVENTORY, because
+  // EX-PUB-UI-MVP renders its publication form inline. An inventory is stronger
+  // than the ban was: a third form or a stray control still fails, and the two
+  // hidden inputs are pinned to their two literal values by the page's own suite.
+  // What matters HERE is that the diagnostic ROWS gained none of them — all four
+  // counts belong to the publication card alone, which sits outside the session
+  // list entirely.
+  assert.equal((PAGE.match(/<form /g) ?? []).length, 2);
+  assert.equal((PAGE.match(/<button/g) ?? []).length, 2);
+  assert.equal((PAGE.match(/<input/g) ?? []).length, 2);
+  assert.equal((PAGE.match(/name="operation"/g) ?? []).length, 2);
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 9);
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 10);
 
   // No new query key, and the query is still resolved once.
   const squashed = squash(PAGE);
   const queryStart = squashed.indexOf("searchParams: Promise<{");
   assert.ok(queryStart > -1, "the searchParams type must be declared inline");
   const queryType = squashed.slice(queryStart, squashed.indexOf("}>;", queryStart) + 3);
-  assert.equal((queryType.match(/\?: string \| string\[\];/g) ?? []).length, 23);
+  // RE-POINTED from 23 to 24 by EX-PUB-UI-MVP, which adds ONE closed publication
+  // FEEDBACK token and nothing else. The existing families are untouched, and the
+  // new key carries no id, no submitted value and no scope.
+  assert.equal((queryType.match(/\?: string \| string\[\];/g) ?? []).length, 24);
   for (const forbidden of ["instructionTopic?", "discipline?", "missingTopic?", "assignmentId?"]) {
     assert.equal(queryType.includes(forbidden), false, `searchParams gained ${forbidden}`);
   }
@@ -1759,8 +1810,11 @@ test("42. the diagnostics add NO write, no route, no query key and no client sta
     .sort();
   assert.deepEqual(routeFiles, FINAL_ROUTE_FILES, "the route file set changed");
   assert.equal(
+  // RE-POINTED from 8 to 9 by EX-PUB-UI-MVP, which appends ONE reviewed
+  // endpoint. What this guard owns is that the ASSIGNMENT slice added none, and
+  // the exhaustive ordered export list at guard 5 is what pins which nine exist.
     (ACTIONS.match(/^export async function /gm) ?? []).length,
-    8,
+    9,
     "the action module gained an export",
   );
 });
