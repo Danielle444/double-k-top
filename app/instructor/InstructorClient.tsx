@@ -33,6 +33,7 @@ import {
 } from "@/app/instructor/RidingStudentsModalController";
 import type { InstructorSlotMode } from "@/app/instructor/instructor-riding-shared-types";
 import { InstructorTeachingPracticeSection } from "@/app/instructor/InstructorTeachingPracticeSection";
+import { InstructorExamsSection } from "@/app/instructor/InstructorExamsSection";
 import { InstructorChildSignaturesSection } from "@/app/instructor/InstructorChildSignaturesSection";
 import { InstructorTraineeProgressSection } from "@/app/instructor/InstructorTraineeProgressSection";
 import { canAccessTraineeProgress } from "@/lib/trainee-progress-permissions";
@@ -101,6 +102,13 @@ const INSTRUCTOR_MORE_ITEMS: { id: MainTabId; label: string }[] = [
   { id: "materials", label: "חומרי קורס" },
   { id: "notifications", label: "עדכונים" },
   { id: "teachingPractice", label: "התנסויות מתחילים" },
+  // EX-INST-VIEW-MVP - the ONE instructor navigation entry for the exam
+  // schedule. It is added here and nowhere else: not to INSTRUCTOR_MAIN_TABS,
+  // not to either shortcut list below, so "מבחנים" appears exactly once in the
+  // instructor shell. Every existing entry keeps its position. The screen it
+  // opens is read-only, and the reader behind it re-derives the instructor from
+  // the signed session regardless of how this list was built.
+  { id: "exams", label: "מבחנים" },
   { id: "help", label: "עזרה" },
 ];
 
@@ -1093,6 +1101,12 @@ export function InstructorClient({
             instructors={instructors}
           />
         )}
+
+        {/* EX-INST-VIEW-MVP - read-only exam schedule. It takes NO props: no
+            instructor id, no course id and no permission flag, because the
+            section owns its own course selection and the server reader owns the
+            identity and the authorization for every read it issues. */}
+        {activeTab === "exams" && <InstructorExamsSection />}
 
         {activeTab === "childSignatures" && session.canManageChildSignatures && (
           <InstructorChildSignaturesSection instructorId={session.id} />

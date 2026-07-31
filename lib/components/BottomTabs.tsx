@@ -20,6 +20,11 @@ export type MainTabId =
   | "teachingPractice"
   | "childSignatures"
   | "traineeProgress"
+  // EX-INST-VIEW-MVP - the instructor "מבחנים" screen. Added to the shared union
+  // (and to the exhaustive icon record below) because both are closed by design;
+  // MAIN_TABS - the TRAINEE bottom bar - is deliberately untouched, so no trainee
+  // or admin navigation gains an entry from this.
+  | "exams"
   | "more";
 
 export const MAIN_TABS: { id: MainTabId; label: string }[] = [
@@ -142,6 +147,13 @@ const TAB_ICON_PATHS: Record<MainTabId, ReactNode> = {
     <>
       <path d="M4 19V5M4 19h16" />
       <path d="M8 15l3-4 3 2.5L18 8" />
+    </>
+  ),
+  exams: (
+    <>
+      <rect x="4" y="3" width="16" height="13" rx="2" />
+      <path d="M8 8h8M8 12h5" />
+      <path d="M9 21l3-2 3 2v-5H9z" />
     </>
   ),
   more: (
