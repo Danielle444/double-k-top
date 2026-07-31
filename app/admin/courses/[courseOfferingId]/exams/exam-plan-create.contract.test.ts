@@ -60,6 +60,31 @@ const APPROVED_CALLER = "app/admin/courses/[courseOfferingId]/exams/actions.ts";
  * beyond the one production caller they exist to pin.
  */
 const SLICE_PATHS = [
+  // ===========================================================================
+  // RE-POINTED by EX-PUB-UI-MVP, which wires the committed exam-plan publication
+  // backend to this route. It re-points the export list, the binding count and
+  // the feedback-key count of every suite below, so every one of them travels
+  // with it and is named HERE, by exact path — never by a directory and never by
+  // a glob. Its two PRODUCTION files are this route's Server Action module and
+  // its page, both already on this list; the rest are guard suites and the one
+  // new contract suite.
+  //
+  // The `lib/` entry is assembled from pieces for the reason in the header: that
+  // suite sweeps every source file for the publication binding's module name and
+  // pins the result to EXACTLY ONE production caller, so a path written whole
+  // here would enrol this suite in the very list it exists to keep narrow.
+  // ===========================================================================
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
@@ -307,16 +332,16 @@ test("1. the three P3 files exist at the EXACT course-scoped route", () => {
   }
 });
 
-test("2. the action module is a Server Action module exporting EXACTLY the eight approved actions", () => {
+test("2. the action module is a Server Action module exporting EXACTLY the nine approved actions", () => {
   const firstStatement = ACTION.split("\n").find((line) => line.trim().length > 0);
   assert.equal(firstStatement?.trim(), '"use server";', `first statement: ${firstStatement}`);
 
   // Everything exported from a "use server" module is a public network endpoint, so
   // the export list IS the attack surface. RE-POINTED by EX-SES-S4, again by
-  // EX-SES-UI-2 and again by EX-ASG-UI1, and still an EXHAUSTIVE allow-list — it
-  // simply now names all seven approved actions, because the route legitimately
-  // has seven. No helper, no parser, no constant and no type may join them, and no
-  // eighth endpoint may appear.
+  // EX-SES-UI-2, again by EX-ASG-UI1 and again by EX-PUB-UI-MVP, and still an
+  // EXHAUSTIVE allow-list — it simply now names all nine approved actions, because
+  // the route legitimately has nine. No helper, no parser, no constant and no type
+  // may join them, and no TENTH endpoint may appear.
   const exports = [...ACTION.matchAll(/export\s+(?:async\s+)?(?:function|const|class|type)\s+(\w+)/g)]
     .map((match) => match[1])
     .sort();
@@ -328,6 +353,7 @@ test("2. the action module is a Server Action module exporting EXACTLY the eight
     "createExamSessionAction",
     "deleteExamAssignmentAction",
     "deleteExamSessionAction",
+    "setExamPlanPublicationAction",
     "updateExamSessionAction",
   ]);
   assert.equal(/export\s*\{/.test(ACTION), false, "no re-export list is allowed");
@@ -336,7 +362,13 @@ test("2. the action module is a Server Action module exporting EXACTLY the eight
   assert.equal(/export\s+type/.test(ACTION), false, "no exported type is allowed");
   // No action was folded into a single generic endpoint that would have to
   // choose its operation from the request.
-  assert.equal((ACTION.match(/export async function /g) ?? []).length, 8);
+  //
+  // The NINTH is the one place a submitted value names a transition, and it is
+  // deliberately not the thing this rule forbids: publish and unpublish reach ONE
+  // committed writer through ONE authorization boundary and ONE lifecycle gate, so
+  // no request can steer between two different operations. Guard 22 pins that
+  // field to its two literals from both directions.
+  assert.equal((ACTION.match(/export async function /g) ?? []).length, 9);
 });
 
 test("3. the action has the EXACT locked signature, and returns void", () => {
@@ -477,8 +509,13 @@ test("8. success revalidates ONLY this course's exams path, exactly once", () =>
   // Re-pointed again from 5 to 7 by EX-ASG-UI1, which adds the assignment CREATE
   // and REMOVAL endpoints. The per-action budget is unchanged: one each, on the
   // success branch alone.
-  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 8);
-  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 8);
+  // Re-pointed again from 8 to 9 by EX-PUB-UI-MVP, which adds the plan PUBLICATION
+  // endpoint. The per-action budget is still one, and — like the session edit —
+  // that single occurrence sits on the CHANGED branch alone, so a NO_CHANGE
+  // publication revalidates nothing, because the committed writer issued no
+  // statement and a cache invalidation would be a lie about what happened.
+  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 9);
+  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 9);
   // The two successes are distinguished, and both land on the exams path.
   assert.ok(
     PLAN_ACTION.includes(
@@ -606,7 +643,7 @@ test("13. searchParams carries ONLY closed feedback tokens", () => {
   // version stamp — which the id ban below re-states from the other side.
   assert.ok(
     PAGE_FLAT.includes(
-      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; updatedSession?: string | string[]; unchangedSession?: string | string[]; sessionEditError?: string | string[]; sessionEditIssues?: string | string[]; deletedSession?: string | string[]; sessionDeleteError?: string | string[]; createdAssignment?: string | string[]; assignmentError?: string | string[]; assignmentIssues?: string | string[]; deletedAssignment?: string | string[]; assignmentDeleteError?: string | string[]; createdInstructedTrainee?: string | string[]; instructedTraineeError?: string | string[]; instructedTraineeIssues?: string | string[]; }>;",
+      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; updatedSession?: string | string[]; unchangedSession?: string | string[]; sessionEditError?: string | string[]; sessionEditIssues?: string | string[]; deletedSession?: string | string[]; sessionDeleteError?: string | string[]; createdAssignment?: string | string[]; assignmentError?: string | string[]; assignmentIssues?: string | string[]; deletedAssignment?: string | string[]; assignmentDeleteError?: string | string[]; createdInstructedTrainee?: string | string[]; instructedTraineeError?: string | string[]; instructedTraineeIssues?: string | string[]; publication?: string | string[]; }>;",
     ),
     "the searchParams type must be the closed twenty-three-key shape",
   );
@@ -821,12 +858,12 @@ test("17. no publication, source-date, session, capability or notification work"
     assert.equal(FORM.includes(forbidden), false, `the form must not reference ${forbidden}`);
     assert.equal(PAGE.includes(forbidden), false, `the page must not reference ${forbidden}`);
   }
-  // The module's ENTIRE import surface is the seven approved specifiers: the admin
-  // boundary, the four committed write bindings, and the two framework modules.
+  // The module's ENTIRE import surface is the approved specifiers: the admin
+  // boundary, the committed write bindings, and the two framework modules.
   // Nothing else — no Prisma, no core, no capability, no notification surface.
-  // RE-POINTED by EX-SES-S4 and again by EX-ASG-UI1 by ADDING one specifier to an
-  // exhaustive list, which keeps this the strongest available form of the guard: a
-  // fifth writer still fails here.
+  // RE-POINTED by EX-SES-S4, by EX-ASG-UI1 and again by EX-PUB-UI-MVP by ADDING
+  // one specifier to an exhaustive list, which keeps this the strongest available
+  // form of the guard: an unapproved writer still fails here.
   const specifiers = [...ACTION.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(specifiers, [
     "@/lib/auth/require-admin",
@@ -844,6 +881,13 @@ test("17. no publication, source-date, session, capability or notification work"
     // it. It is an ADDITION and not a swap — the three-field binding above is
     // still imported, for the assignment REMOVAL.
     "@/lib/actions/" + "detailed-exam-assignment-write" + "-io",
+    // ADDED by EX-PUB-UI-MVP, assembled on exactly the same terms and for the
+    // sharpest version of the reason in the header: the committed publication
+    // write binding's guard pinned its caller list at ZERO before this slice, and
+    // at exactly this one Server Action module after it — so spelling the module
+    // whole HERE would enrol this guard suite in the very list it exists to keep
+    // at one production caller.
+    "@/lib/actions/" + "exam-publication-write" + "-io",
     "next/cache",
     "next/navigation",
   ].sort());
@@ -905,6 +949,7 @@ test("19. the route directory holds EXACTLY the fourteen approved files", () => 
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",

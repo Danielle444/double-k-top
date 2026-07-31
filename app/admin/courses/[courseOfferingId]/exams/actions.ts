@@ -2,8 +2,8 @@
 
 /**
  * EXAM PLAN P3 + EXAM EX-S5B-5C + EXAM EX-SES-S4 + EXAM EX-SES-UI-2 + EXAM
- * EX-ASG-UI1 + EXAM EX-ASG-IT2 — the Server Action module of the course-scoped
- * exams route, holding EXACTLY EIGHT approved mutations:
+ * EX-ASG-UI1 + EXAM EX-ASG-IT2 + EXAM EX-PUB-UI-MVP — the Server Action module of
+ * the course-scoped exams route, holding EXACTLY NINE approved mutations:
  *
  *   1. `createExamPlanAction`       — bring ONE empty, unpublished ExamPlan into
  *                                     existence for ONE course offering;
@@ -25,13 +25,17 @@
  *   8. `createExamInstructedTraineeAssignmentAction`
  *                                   — assign ONE INSTRUCTED TRAINEE to ONE stored
  *                                     session of that same plan, when that
- *                                     session's exam actually asks for one.
+ *                                     session's exam actually asks for one;
+ *   9. `setExamPlanPublicationAction`
+ *                                   — PUBLISH or UNPUBLISH that same plan, which
+ *                                     is what decides whether trainees can see it
+ *                                     at all.
  *
  * ===========================================================================
- * WHY EIGHT EXPORTS, AND WHY EXACTLY EIGHT
+ * WHY NINE EXPORTS, AND WHY EXACTLY NINE
  * ===========================================================================
  * Everything exported from a `"use server"` module has a stable, PUBLICLY
- * CALLABLE network id, so the export list IS the attack surface. These eight
+ * CALLABLE network id, so the export list IS the attack surface. These nine
  * actions were each approved and reviewed on their own, and they are kept as
  * SEPARATE endpoints rather than folded into one generic "exams" action: a single
  * action taking a discriminator would have to decide FROM THE REQUEST which
@@ -55,13 +59,20 @@
  * result codes and are wired to different forms.
  *
  * Nothing else leaves this file. No helper, no parser, no constant and no type is
- * exported alongside them: an exported helper here would be an eighth public
- * endpoint, and a future reader would have no way to tell which of the eight was
- * meant to be called. The committed writer modules behind these seven also expose
- * definition EDIT, safe REMOVAL and atomic REORDER, session REORDERING, plus plan
- * publication and deletion; none of those is re-exported, wrapped or imported
- * here, so this route adds exactly seven callable mutations to the app and every
- * other one remains unreachable from any client.
+ * exported alongside them: an exported helper here would be a tenth public
+ * endpoint, and a future reader would have no way to tell which of the nine was
+ * meant to be called. The committed writer modules behind these nine also expose
+ * definition EDIT, safe REMOVAL and atomic REORDER, session REORDERING and plan
+ * DELETION; none of those is re-exported, wrapped or imported here, so this route
+ * adds exactly nine callable mutations to the app and every other one remains
+ * unreachable from any client.
+ *
+ * The NINTH is the one exception to the "no discriminator" rule stated below, and
+ * the reason it is not really an exception at all is spelled out on the function
+ * itself: publish and unpublish are two VALUES of one symmetric transition
+ * reaching ONE committed writer, ONE authorization boundary and ONE lifecycle
+ * gate, which is not the same thing as letting a request choose between a write
+ * and a delete.
  *
  * The assignment pair is narrower still than its neighbours: it writes only the
  * EXAMINEE role — the single literal the committed create core fixes, which no
@@ -159,7 +170,18 @@
  *   - `createdInstructedTrainee=1` — the instructed-trainee create performed the
  *                                  write;
  *   - `instructedTraineeError=<code>`  — that writer's stable refusal codes;
- *   - `instructedTraineeIssues=<codes>`— that writer's own issue codes, joined.
+ *   - `instructedTraineeIssues=<codes>`— that writer's own issue codes, joined;
+ *   - `publication=<token>`  — the publication outcome: the writer's own
+ *                              `PUBLISHED`, `UNPUBLISHED` and `NO_CHANGE`
+ *                              successes, its stable refusal codes, and this
+ *                              module's own fail-closed `unknown_operation`.
+ *
+ * The publication family is ONE key rather than a success/error pair, because a
+ * publication has exactly ONE outcome per submission and only one publication
+ * control can be on screen at a time — so there is no second form whose
+ * diagnostic could be rendered above it. The token is still CLOSED: every value
+ * it can carry is a compile-time-known literal from the committed writer's own
+ * union, or the one literal this module writes itself.
  *
  * The instructed-trainee tokens are a FOURTH distinct family, for the same reason
  * the assignment ones are a third: an instructed-trainee create form and an
@@ -196,14 +218,16 @@
  * WHAT THIS MODULE DOES NOT DO
  * ===========================================================================
  * It creates ONE empty plan, it appends ONE definition, it appends, edits or
- * removes ONE session, it assigns or unassigns ONE examinee, and it assigns ONE
- * instructed trainee. It does not publish, unpublish, delete or edit a plan; it
- * does not edit, reorder or delete an ExamDefinition; it does not reorder
- * sessions, edit or reorder an assignment, REMOVE an instructed trainee through
- * any second path, add a break, a supervisor or a source date; it writes no
- * pairing, no wave and no personal time; it sends no notification, reads no
- * capability and touches no schema. None of those modules is imported, so none of
- * them can be reached from here.
+ * removes ONE session, it assigns or unassigns ONE examinee, it assigns ONE
+ * instructed trainee, and it flips the plan's ONE general publication column. It
+ * does not DELETE or edit a plan; it does not edit, reorder or delete an
+ * ExamDefinition; it does not reorder sessions, edit or reorder an assignment,
+ * REMOVE an instructed trainee through any second path, add a break, a supervisor
+ * or a source date; it publishes no INDIVIDUAL session and writes no
+ * `individualPublishedAt`; it writes no pairing, no wave and no personal time; it
+ * sends no notification, records no publication history, reads no capability and
+ * touches no schema. None of those modules is imported, so none of them can be
+ * reached from here.
  *
  * The instructed-trainee row is REMOVED by the SAME assignment removal above:
  * that writer locates a row by id within the plan and is role-blind, so a
@@ -235,6 +259,7 @@ import {
 import { deleteExamAssignment } from "@/lib/actions/exam-assignment-write-io";
 import { createDetailedExamAssignment } from "@/lib/actions/detailed-exam-assignment-write-io";
 import { createExamInstructedTraineeAssignment } from "@/lib/actions/exam-instructed-trainee-assignment-write-io";
+import { setExamPlanPublication } from "@/lib/actions/exam-publication-write-io";
 
 /**
  * Create ONE empty ExamPlan for the bound course offering.
@@ -968,4 +993,112 @@ export async function createExamInstructedTraineeAssignmentAction(
   //    that does not ask for this role at all, the ineligible trainee and the
   //    role-blind already-assigned conflict.
   redirect(`${examsPath}?instructedTraineeError=${encodeURIComponent(result.code)}`);
+}
+
+/**
+ * EX-PUB-UI-MVP — PUBLISH or UNPUBLISH the bound offering's ExamPlan.
+ *
+ * Returns `Promise<void>`, like its eight neighbours: every outcome is expressed
+ * as a navigation, so the action holds no client-visible state and its signature
+ * cannot grow a `prevState` parameter.
+ *
+ * ===========================================================================
+ * ONE ENDPOINT, ONE FIELD, TWO LITERALS
+ * ===========================================================================
+ * This is deliberately ONE action carrying an `operation` field rather than a
+ * separate publish endpoint and unpublish endpoint — and that is NOT a violation
+ * of the "no discriminator" rule the eight neighbours above are built on. That
+ * rule forbids a request from choosing which OPERATION KIND runs (a create versus
+ * a delete, an examinee versus an instructed trainee), because each of those
+ * reaches a different writer with a different authorization story. Here there is
+ * exactly ONE writer, ONE authorization boundary and ONE lifecycle gate; publish
+ * and unpublish are the two VALUES of a single, symmetric state transition that
+ * the committed backend's own signature already models as one parameter. Splitting
+ * them would add a second public network id that reaches the same function.
+ *
+ * The field is CLOSED to the two exact literals, HERE, before the writer is
+ * entered. That narrowing is not a re-implementation of the backend's rule but a
+ * fail-closed restatement of THIS endpoint's own contract, and it is what makes
+ * the writer's `ExamPublicationOperation` parameter type honest at the network
+ * boundary — a `"use server"` module receives whatever was posted, and a
+ * TypeScript annotation is erased. The committed core re-checks the same thing
+ * independently and would refuse anything else on its own.
+ *
+ * ===========================================================================
+ * WHAT THE FORM CANNOT SAY
+ * ===========================================================================
+ * The mapping below reads `operation` and NOTHING else. Absent — not filtered
+ * out, but never looked for — are `courseOfferingId` (bound by the route),
+ * `planId` (server-derived from the verified offering, and the committed writer's
+ * signature has no parameter for one), `publishedAt` and every other timestamp
+ * (the committed binding reads the SERVER clock in exactly one place, so no field
+ * exists through which a client could decide when a plan was published), an actor
+ * id, an `individualPublishedAt`, a session id and a definition id.
+ *
+ * NO COERCION AT ALL. The submitted value is compared to the two literals
+ * directly: there is no `String(...)`, no `??`, no `.trim()`, no case folding and
+ * no default. A `File` entry from a multipart submission equals neither literal
+ * and is refused, exactly as an absent field is.
+ *
+ * ===========================================================================
+ * WHAT THIS ACTION DOES NOT DO
+ * ===========================================================================
+ * It flips ONE plan-level column through ONE committed writer. It sends no
+ * notification, records no publication history, publishes no INDIVIDUAL session,
+ * validates no pairing, no supervisor, no duplicate and no timetable
+ * completeness, and reads no capability. None of those modules is imported, so
+ * none is reachable from here. A plan that is incomplete when a manager publishes
+ * it is published incomplete; adding a readiness gate is a separate, reviewed
+ * slice.
+ */
+export async function setExamPlanPublicationAction(
+  courseOfferingId: string,
+  formData: FormData,
+): Promise<void> {
+  // 1. Authorize the manager BEFORE anything is read or written.
+  await requireAdmin();
+
+  // 2. The exams path of THIS offering — the only path this action revalidates
+  //    and the only one it redirects back to.
+  const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
+
+  // 3. The ONE field, closed to the two exact literals. `redirect` throws, so the
+  //    submitted value is narrowed to the writer's own union on every path that
+  //    survives — no cast, and no widening of the committed signature.
+  const submitted = formData.get("operation");
+  if (submitted !== "PUBLISH" && submitted !== "UNPUBLISH") {
+    redirect(`${examsPath}?publication=unknown_operation`);
+  }
+
+  // 4. The committed writer. The bound offering id is a REQUEST: the writer runs
+  //    the admin boundary and the exact-offering lookup itself, applies the course
+  //    lifecycle gate on the VERIFIED status, resolves the plan from that verified
+  //    id, reads the SERVER clock and issues ONE conditional write. Every
+  //    concurrency, no-op and stale-write decision is its own.
+  const result = await setExamPlanPublication(courseOfferingId, submitted);
+
+  // 5. Success, in its THREE distinguishable forms. A real transition revalidates
+  //    this one exams path and says which way it went; a NO_CHANGE revalidates
+  //    NOTHING, because the writer issued no statement at all and a cache
+  //    invalidation would be a lie about what happened. Neither carries the plan
+  //    id or the stored publication instant.
+  if (result.ok) {
+    if (result.status !== "NO_CHANGE") {
+      revalidatePath(examsPath);
+    }
+    redirect(`${examsPath}?publication=${result.status}`);
+  }
+
+  // 6. The one refusal that is NOT about this page: the offering does not exist,
+  //    so returning to its exams route would render a second not-found. The
+  //    manager goes to the course list, and the requested id is not reflected
+  //    back in the destination.
+  if (result.code === "offering_not_found") {
+    redirect("/admin/courses?error=invalid");
+  }
+
+  // 7. Every other refusal is fully described by its code alone: the lifecycle
+  //    denial, the missing plan and the stale write. No diagnostics list exists
+  //    for a publication, so there is no issues token.
+  redirect(`${examsPath}?publication=${encodeURIComponent(result.code)}`);
 }

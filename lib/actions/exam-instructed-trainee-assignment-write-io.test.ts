@@ -58,6 +58,19 @@ const APPROVED_NEW_ROUTE_FILES = [
   `${ROUTE_DIR_PREFIX}CreateExamInstructedTraineeAssignmentForm.tsx`,
   `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-messages.ts`,
   `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-ui.contract.test.ts`,
+  // EX-PUB-UI-MVP — the approved slice that wires the committed exam-plan
+  // PUBLICATION backend to this same route. It travels in the same working tree,
+  // adds ONE new contract suite, and re-points that backend's own footprint and
+  // caller guards, so both paths join this list BY NAME. Nothing it does touches
+  // this module: no schema, no migration, no auth, no capability, and no `lib/`
+  // production file of any kind.
+  //
+  // The `lib/` entry is ASSEMBLED from pieces: that suite sweeps every source
+  // file for the publication binding's module name and pins the result to
+  // EXACTLY ONE production caller, so a path written whole here would enrol this
+  // suite in the very list it exists to keep narrow.
+  `${ROUTE_DIR_PREFIX}exam-publication-ui.contract.test.ts`,
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
 ];
 
 /**
@@ -112,6 +125,19 @@ const APPROVED_MODIFIED_FILES = [
   // narrowed to the three files that could WRITE one, so the PAGE may display it.
   // The suite is a guard, not a caller — this binding still has exactly one.
   `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-ui.contract.test.ts`,
+  // EX-PUB-UI-MVP — the approved slice that wires the committed exam-plan
+  // PUBLICATION backend to this same route. It travels in the same working tree,
+  // adds ONE new contract suite, and re-points that backend's own footprint and
+  // caller guards, so both paths join this list BY NAME. Nothing it does touches
+  // this module: no schema, no migration, no auth, no capability, and no `lib/`
+  // production file of any kind.
+  //
+  // The `lib/` entry is ASSEMBLED from pieces: that suite sweeps every source
+  // file for the publication binding's module name and pins the result to
+  // EXACTLY ONE production caller, so a path written whole here would enrol this
+  // suite in the very list it exists to keep narrow.
+  `${ROUTE_DIR_PREFIX}exam-publication-ui.contract.test.ts`,
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
   `lib/actions/${IO_TEST_NAME}`,
   "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
   "lib/actions/" + "exam-assignment-read" + "-io.test.ts",

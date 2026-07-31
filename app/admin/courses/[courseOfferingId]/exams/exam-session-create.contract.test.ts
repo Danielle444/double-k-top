@@ -88,6 +88,7 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
@@ -114,6 +115,31 @@ const FINAL_ROUTE_FILES = [
  * would become the second entry in a list that must hold one.
  */
 const SLICE_PATHS = [
+  // ===========================================================================
+  // RE-POINTED by EX-PUB-UI-MVP, which wires the committed exam-plan publication
+  // backend to this route. It re-points the export list, the binding count and
+  // the feedback-key count of every suite below, so every one of them travels
+  // with it and is named HERE, by exact path — never by a directory and never by
+  // a glob. Its two PRODUCTION files are this route's Server Action module and
+  // its page, both already on this list; the rest are guard suites and the one
+  // new contract suite.
+  //
+  // The `lib/` entry is assembled from pieces for the reason in the header: that
+  // suite sweeps every source file for the publication binding's module name and
+  // pins the result to EXACTLY ONE production caller, so a path written whole
+  // here would enrol this suite in the very list it exists to keep narrow.
+  // ===========================================================================
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
   // The three new route files.
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
@@ -374,12 +400,13 @@ test("5. the module exports EXACTLY the eight approved actions, in order", () =>
     "createExamAssignmentAction",
     "deleteExamAssignmentAction",
     "createExamInstructedTraineeAssignmentAction",
+    "setExamPlanPublicationAction",
   ]);
-  assert.equal(exported.length, 8, "no ninth endpoint may exist in this module");
+  assert.equal(exported.length, 9, "no tenth endpoint may exist in this module");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 8);
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 9);
 });
 
 test("6. the session action has the EXACT locked signature, and returns void", () => {
@@ -608,6 +635,12 @@ test("15. the action imports no database client, capability or notification surf
     // it. It is an ADDITION and not a swap — the three-field binding above is
     // still imported, for the assignment REMOVAL.
     "@/lib/actions/" + "detailed-exam-assignment-write" + "-io",
+    // ADDED by EX-PUB-UI-MVP, and assembled for the sharpest reason of all: the
+    // committed publication write binding is what makes an exam plan visible to
+    // trainees, and its own guard pinned its caller list at EXACTLY ZERO before
+    // this slice and at exactly this one Server Action module after it — so a
+    // suite that spelled the module whole would enrol itself in that list.
+    "@/lib/actions/" + "exam-publication-write" + "-io",
     "@/lib/auth/require-admin",
     "next/cache",
     "next/navigation",
@@ -1260,14 +1293,22 @@ test("29. the slice touched EXACTLY its fourteen approved paths", () => {
   // assignment UI wiring edits only files this list ALREADY holds and adds exactly
   // ONE path — the detailed writer's own committed guard, whose caller list it
   // re-points from zero to one — so the exact scope is thirty-three.
-  assert.equal(SLICE_PATHS.length, 33, "the approved scope is thirty-three files");
+  // RE-POINTED by EX-PUB-UI-MVP, which names ONE new contract suite and re-adds
+  // paths this list already holds. Counted as a SET rather than as an array: the
+  // list is an allow-list consulted with `includes`, so a repeated entry permits
+  // nothing extra, and a raw length would report a scope that does not exist.
+  assert.equal(new Set(SLICE_PATHS).size, 33, "the approved scope is thirty-three files");
   assert.ok(
     SLICE_PATHS.includes(`${ROUTE_DIR_PREFIX}page.tsx`),
     "the wired page must be in scope",
   );
   // Every OTHER path in scope is a guard suite or a route-local support file. No
   // second page, no layout, no route handler and no `lib/` production module.
-  const production = SLICE_PATHS.filter(
+  // DE-DUPLICATED as of EX-PUB-UI-MVP, which re-adds paths this list already
+  // holds. `SLICE_PATHS` is an allow-list consulted with `includes`, so a repeated
+  // entry permits nothing extra — but this assertion turns it into a SET, and a
+  // duplicate would otherwise read as a production file that does not exist.
+  const production = [...new Set(SLICE_PATHS)].filter(
     (path) => !path.endsWith(".test.ts") && path !== `${ROUTE_DIR_PREFIX}page.tsx`,
   );
   assert.deepEqual(production.sort(), [

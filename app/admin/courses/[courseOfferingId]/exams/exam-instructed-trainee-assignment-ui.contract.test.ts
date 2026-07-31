@@ -82,6 +82,7 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
@@ -96,6 +97,31 @@ const FINAL_ROUTE_FILES = [
  * The `lib/` entries are ASSEMBLED for the reason in the header.
  */
 const SLICE_PATHS = [
+  // ===========================================================================
+  // RE-POINTED by EX-PUB-UI-MVP, which wires the committed exam-plan publication
+  // backend to this route. It re-points the export list, the binding count and
+  // the feedback-key count of every suite below, so every one of them travels
+  // with it and is named HERE, by exact path — never by a directory and never by
+  // a glob. Its two PRODUCTION files are this route's Server Action module and
+  // its page, both already on this list; the rest are guard suites and the one
+  // new contract suite.
+  //
+  // The `lib/` entry is assembled from pieces for the reason in the header: that
+  // suite sweeps every source file for the publication binding's module name and
+  // pins the result to EXACTLY ONE production caller, so a path written whole
+  // here would enrol this suite in the very list it exists to keep narrow.
+  // ===========================================================================
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
   // The three new files.
   `${ROUTE_DIR_PREFIX}CreateExamInstructedTraineeAssignmentForm.tsx`,
   `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-messages.ts`,
@@ -309,15 +335,21 @@ test("4. the action module is still a Server Action module and nothing else", ()
   assert.equal(ACTIONS.includes("server" + "-only"), false);
 });
 
-test("5. the module exports EXACTLY eight actions, the new one appended LAST", () => {
+test("5. the module exports EXACTLY nine actions, IT2's appended EIGHTH", () => {
   const exported = [
     ...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g),
   ].map(([, name]) => name);
   // An EXHAUSTIVE allow-list in a FIXED order. Everything exported from a
   // "use server" module is a public network endpoint, so this list IS the attack
-  // surface: no NINTH endpoint, and no helper, parser, constant or type beside
+  // surface: no TENTH endpoint, and no helper, parser, constant or type beside
   // them. The seven that were here keep their exact relative order — this slice
   // APPENDS rather than reshuffles.
+  //
+  // RE-POINTED by EX-PUB-UI-MVP on exactly the terms IT2 earned: ONE reviewed
+  // endpoint APPENDED to an exhaustive, ORDERED list. IT2's own action keeps its
+  // EIGHTH position, which is what this suite is actually responsible for, and the
+  // publication action is pinned by name in the ninth slot so an unapproved tenth
+  // still fails here.
   assert.deepEqual(exported, [
     "createExamPlanAction",
     "createExamDefinitionAction",
@@ -327,13 +359,14 @@ test("5. the module exports EXACTLY eight actions, the new one appended LAST", (
     "createExamAssignmentAction",
     "deleteExamAssignmentAction",
     ACTION_NAME,
+    "setExamPlanPublicationAction",
   ]);
-  assert.equal(exported.length, 8, "no ninth endpoint may exist in this module");
+  assert.equal(exported.length, 9, "no tenth endpoint may exist in this module");
   assert.equal(exported[7], ACTION_NAME, "the new action must be appended after the seven");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 8);
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 9);
 });
 
 test("6. the action has the EXACT locked signature, and returns void", () => {
@@ -378,7 +411,11 @@ test("9. the module's import surface gained EXACTLY the one committed writer", (
   // examinee write binding, which the existing create endpoint now calls in place
   // of the three-field one. The three-field binding is STILL imported, for the
   // removal, so this is a ninth specifier and not a swap.
-  assert.equal(specifiers.length, 9, "the action module's import surface is not nine");
+  // RE-POINTED from 9 to 10 by EX-PUB-UI-MVP, which adds the committed
+  // publication write binding. The three positive assertions below still pin the
+  // specifiers THIS suite is responsible for, and the core/Prisma/capability/
+  // notification bans below are untouched.
+  assert.equal(specifiers.length, 10, "the action module's import surface is not ten");
   assert.ok(specifiers.includes(WRITER_SPECIFIER), "the committed writer is not imported");
   assert.ok(
     specifiers.includes("@/lib/actions/" + "detailed-exam-assignment-write" + "-io"),
@@ -922,7 +959,7 @@ test("26. the list, its roles, the count rule and the ONE delete path are untouc
 // 27–29. The page's query surface and bindings
 // ===========================================================================
 
-test("27. searchParams carries EXACTLY the closed twenty-three keys", () => {
+test("27. searchParams carries EXACTLY the closed twenty-four keys", () => {
   const squashed = squash(PAGE);
   const start = squashed.indexOf("searchParams: Promise<{");
   assert.ok(start > -1, "the searchParams type must be declared inline");
@@ -935,9 +972,12 @@ test("27. searchParams carries EXACTLY the closed twenty-three keys", () => {
     assert.ok(queryType.includes(key), `the searchParams type is missing ${key}`);
   }
   assert.equal(
+  // RE-POINTED from 23 to 24 by EX-PUB-UI-MVP, which adds ONE closed publication
+  // FEEDBACK token. This slice's own three keys are pinned by name above and are
+  // untouched, and the id ban below still refuses every scope-shaped key.
     (queryType.match(/\?: string \| string\[\];/g) ?? []).length,
-    23,
-    "the searchParams type must be the closed twenty-three-key shape",
+    24,
+    "the searchParams type must be the closed twenty-four-key shape",
   );
   // No id, no scope and no submitted value may become a query key...
   for (const forbidden of [
@@ -991,9 +1031,14 @@ test("28. the three new tokens select constants and are never interpolated", () 
 });
 
 test("29. the page binds EXACTLY eight actions, all to the verified context id", () => {
-  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 8);
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 8);
-  assert.equal((PAGE.match(/action=/g) ?? []).length, 8);
+  // RE-POINTED from 8 to 9 by EX-PUB-UI-MVP, which binds ONE more reviewed
+  // action — still to `context.id`, the DB-VERIFIED offering, and never to the
+  // raw route param. `action=` counts TWO more, because the publication card's
+  // two mutually exclusive forms are written out separately so each can carry a
+  // LITERAL hidden operation value rather than a computed one.
+  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 9);
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 9);
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 10);
   // The new binding is HOISTED, not created inside the session loop.
   assert.ok(
     squash(PAGE).includes(

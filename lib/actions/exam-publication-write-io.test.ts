@@ -86,6 +86,69 @@ const APPROVED_MODIFIED_GUARDS = [
   ["lib", "exam", "exam-supervisor-write" + "-core.test.ts"].join("/"),
 ].sort();
 
+/**
+ * EX-PUB-UI-MVP — the SUCCESSOR slice's approved paths, and nothing else.
+ *
+ * The two footprint guards below (26 and 27) were written while THIS slice was in
+ * flight and its four files were the only thing in the working tree. That slice is
+ * now COMMITTED, so those guards no longer measure it: they measure whatever slice
+ * is in flight NEXT, which is a claim they were never able to make. Left as they
+ * were, they would turn red for every future change to any file under `lib/` or
+ * `app/` — a guard that fails for correct work teaches people to ignore it.
+ *
+ * They are therefore RE-POINTED rather than deleted or relaxed: the exact,
+ * separately reviewed paths of the successor slice are named here, and everything
+ * else is refused exactly as before. No directory, no glob, no prefix rule.
+ *
+ * Two of these three ARE production files, which is precisely what the successor
+ * slice is for — it wires this backend to the admin exams route — so guard 26's
+ * "not one production file" claim is narrowed to "not one production file OUTSIDE
+ * this named pair" rather than being dropped.
+ *
+ * The `app/` entries are ASSEMBLED from pieces for the same reason the guard
+ * suites above are: several committed suites sweep the repository for this
+ * module's name and pin the result to an exact caller list, and a literal path
+ * written whole here would be indistinguishable from a real reference.
+ */
+const ROUTE_DIR = ["app", "admin", "courses", "[courseOfferingId]", "exams"].join("/");
+const APPROVED_UI_SLICE_PATHS = [
+  `${ROUTE_DIR}/actions.ts`,
+  `${ROUTE_DIR}/page.tsx`,
+  `${ROUTE_DIR}/exam-publication` + "-ui.contract.test.ts",
+  // THIS suite, which the successor re-points here and at 28. Named explicitly
+  // rather than exempted by a "the suite may always modify itself" rule, so a
+  // reviewer sees that the guard describing the change is itself part of it.
+  ["lib", "actions", "exam-publication-write" + "-io.test.ts"].join("/"),
+  // The six committed ROUTE guard suites the successor re-points, each because it
+  // pins a count the ninth Server Action necessarily moves — the export list, the
+  // module's import surface, the revalidation budget, the page's binding count or
+  // the closed feedback-key set. Every one is a `.test.ts`, which guard 26
+  // re-checks structurally rather than trusting this list to stay honest.
+  `${ROUTE_DIR}/exam-plan-create.contract.test.ts`,
+  `${ROUTE_DIR}/exam-definitions-page.contract.test.ts`,
+  `${ROUTE_DIR}/exam-definition-create.contract.test.ts`,
+  `${ROUTE_DIR}/exam-session-create.contract.test.ts`,
+  `${ROUTE_DIR}/exam-session-edit-delete.contract.test.ts`,
+  `${ROUTE_DIR}/exam-assignment-ui.contract.test.ts`,
+  `${ROUTE_DIR}/exam-instructed-trainee-assignment-ui.contract.test.ts`,
+  // ...and the eight committed `lib/` guard suites whose own FOOTPRINT allow-lists
+  // the successor re-points, for the same reason 26 and 27 above had to be
+  // re-pointed: each was written while ITS slice was the one in the working tree,
+  // and each now measures a tree that holds the successor instead. Every one is a
+  // `.test.ts`, which guard 26 re-checks structurally.
+  //
+  // ASSEMBLED, every one of them: each of these suites sweeps the repository for
+  // its OWN module name and pins an exact caller list, so a path written whole
+  // here would enrol this suite in a list it must stay out of.
+  ["lib", "actions", "admin-exam-session-read" + "-io.test.ts"].join("/"),
+  ["lib", "actions", "exam-assignment-read" + "-io.test.ts"].join("/"),
+  ["lib", "actions", "exam-assignment-write" + "-io.test.ts"].join("/"),
+  ["lib", "actions", "exam-plan-write" + "-io.test.ts"].join("/"),
+].sort();
+
+/** The ONE production module that may reach this backend, once the UI is wired. */
+const APPROVED_CALLER = `${ROUTE_DIR}/actions.ts`;
+
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
 
 /** Strip comments so the guards assert on CODE, not on explanatory prose. */
@@ -883,18 +946,41 @@ test("26. the slice modified ONLY guard suites — not one production file", () 
     "components",
     "scripts",
   ]);
-  const unapproved = modified.filter((path) => !APPROVED_MODIFIED_GUARDS.includes(path));
+  //
+  // RE-POINTED by EX-PUB-UI-MVP: this slice is committed, so what the working tree
+  // now holds is the SUCCESSOR slice that wires this backend to the admin exams
+  // route. Its three separately reviewed paths join the allow-list BY NAME; every
+  // other tracked file under these five trees is refused exactly as before.
+  const approved = [...APPROVED_MODIFIED_GUARDS, ...APPROVED_UI_SLICE_PATHS];
+  const unapproved = modified.filter((path) => !approved.includes(path));
   assert.deepEqual(unapproved, [], `the slice modified: ${unapproved.join(", ")}`);
-  // ...and the approved list cannot quietly grow into a production file: every
-  // entry on it is a `.test.ts` suite, checked here rather than assumed.
+  // ...and the ORIGINAL approved list still cannot quietly grow into a production
+  // file: every entry on it is a `.test.ts` suite, checked here rather than
+  // assumed. The successor's two production files are named separately above and
+  // are the ONLY production modifications this guard tolerates.
   for (const path of APPROVED_MODIFIED_GUARDS) {
     assert.ok(path.endsWith(".test.ts"), `${path} is not a guard suite`);
   }
-  const production = modified.filter((path) => !path.endsWith(".test.ts"));
+  const production = modified.filter(
+    (path) => !path.endsWith(".test.ts") && !APPROVED_UI_SLICE_PATHS.includes(path),
+  );
   assert.deepEqual(production, [], `production code was modified: ${production.join(", ")}`);
-  // The slice's own four files are ADDITIONS, never modifications.
-  for (const path of SLICE_FILES) {
-    assert.equal(modified.includes(path), false, `${path} is not an addition`);
+  // The successor may touch EXACTLY two production files and no third: the route's
+  // Server Action module and its page. No schema, no migration, no policy, no auth
+  // module, no core, no other route.
+  const successorProduction = APPROVED_UI_SLICE_PATHS.filter(
+    (path) => !path.endsWith(".test.ts"),
+  );
+  assert.deepEqual(successorProduction, [
+    `${ROUTE_DIR}/actions.ts`,
+    `${ROUTE_DIR}/page.tsx`,
+  ]);
+  // The slice's own PRODUCTION files are never modified — not while it was in
+  // flight, and not by the successor either. Its own SUITE is excluded, because
+  // the successor re-points it here and at 28, which is exactly the kind of change
+  // this guard exists to make visible rather than to forbid.
+  for (const path of SLICE_FILES.filter((path) => !path.endsWith(".test.ts"))) {
+    assert.equal(modified.includes(path), false, `${path} was modified`);
   }
 });
 
@@ -902,19 +988,27 @@ test("27. no schema, migration, app, instructor or trainee file was touched", ()
   // Every working-tree entry under `prisma/` — untracked included — is empty, so
   // no schema and no migration changed.
   assert.deepEqual(gitLines(["status", "--porcelain", "--", "prisma"]), []);
-  // The three UI trees other writers own are untouched in every state.
+  // The two UI trees OTHER writers own are untouched in every state. `app/admin`
+  // left this list in EX-PUB-UI-MVP and did not become unguarded: the successor
+  // slice owns exactly three named paths inside it, and the subset check below is
+  // what refuses a fourth. The instructor and trainee trees stay absolutely
+  // untouchable, which is the claim that actually protects another writer's work.
   for (const tree of [
-    ["app", "admin"].join("/"),
     ["app", "instructor"].join("/"),
     ["app", "student"].join("/"),
   ]) {
     assert.deepEqual(gitLines(["status", "--porcelain", "--", tree]), [], `${tree} changed`);
   }
   // ...and across the scoped trees, worktree, index and untracked together, the
-  // ONLY entries are this slice's four new files and the four guard suites its
-  // footprint re-points. A SUBSET check, so it holds while the slice is dirty,
-  // staged and committed alike; what it forbids is any NINTH path.
-  const approved = [...SLICE_FILES, ...APPROVED_MODIFIED_GUARDS];
+  // ONLY entries are this slice's four new files, the five guard suites its
+  // footprint re-points, and the successor slice's three named paths. A SUBSET
+  // check, so it holds while a slice is dirty, staged and committed alike; what it
+  // forbids is any THIRTEENTH path.
+  const approved = [
+    ...SLICE_FILES,
+    ...APPROVED_MODIFIED_GUARDS,
+    ...APPROVED_UI_SLICE_PATHS,
+  ];
   const touched = gitLines([
     "status",
     "--porcelain",
@@ -929,7 +1023,7 @@ test("27. no schema, migration, app, instructor or trainee file was touched", ()
   assert.deepEqual(unexpected, [], `unexpected changes: ${unexpected.join(", ")}`);
 });
 
-test("28. this backend has ZERO callers: nothing in the app can reach it yet", () => {
+test("28. this backend has EXACTLY ONE caller: the admin exams Server Action module", () => {
   const own = new Set([
     join(REPO_ROOT, IO_REL),
     join(REPO_ROOT, IO_TEST_REL),
@@ -964,8 +1058,31 @@ test("28. this backend has ZERO callers: nothing in the app can reach it yet", (
     if (existsSync(dir)) walk(dir);
   }
 
+  // RE-POINTED by EX-PUB-UI-MVP, and deliberately NOT relaxed: the count moves
+  // from zero to EXACTLY ONE, and the one is named. A second wrapper, a component
+  // that reached the writer directly, an instructor or trainee surface that
+  // published a plan, or a page that imported the binding to render from it would
+  // all still fail here — which is the whole point of pinning the list rather than
+  // asserting a number.
   const normalized = callers.map((path) => path.split(sep).join("/")).sort();
-  assert.deepEqual(normalized, [], `a caller already exists: ${normalized.join(", ")}`);
+  assert.deepEqual(normalized, [APPROVED_CALLER], `caller set changed: ${normalized.join(", ")}`);
+
+  // The one caller is a `"use server"` ACTION module, not a page and not a
+  // component: publication must be reachable only through a Server Action's
+  // encrypted payload, never from a module that renders.
+  const callerSource = readFileSync(join(REPO_ROOT, APPROVED_CALLER), "utf8");
+  assert.ok(/^"use server";/.test(callerSource.trimStart()));
+
+  // Neither the trainee nor the instructor tree may name this module at all — it
+  // is an ADMIN operation, and the walk above already proves it by pinning the
+  // list, but stating the two trees by name is what a reviewer actually looks for.
+  for (const tree of [["app", "student"].join("/"), ["app", "instructor"].join("/")]) {
+    assert.equal(
+      normalized.some((path) => path.startsWith(`${tree}/`)),
+      false,
+      `${tree} reaches the publication writer`,
+    );
+  }
 });
 
 test("29. this suite opens no database and reads no environment", () => {

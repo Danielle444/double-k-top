@@ -599,6 +599,19 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
     "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+    // EX-PUB-UI-MVP — the approved slice that wires the committed exam-plan
+    // PUBLICATION backend to this same route. It travels in the same working tree,
+    // adds ONE new contract suite, and re-points that backend's own footprint and
+    // caller guards, so both paths join this list BY NAME. Nothing it does touches
+    // this module: no schema, no migration, no auth, no capability, and no `lib/`
+    // production file of any kind.
+    //
+    // The `lib/` entry is ASSEMBLED from pieces: that suite sweeps every source
+    // file for the publication binding's module name and pins the result to
+    // EXACTLY ONE production caller, so a path written whole here would enrol this
+    // suite in the very list it exists to keep narrow.
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
     "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
     "lib/exam/" + "create-exam-plan" + "-core.test.ts",
     // EX-ASG-LTD2-B1 — the ADMIN READ DETAIL slice, which travels in the same
