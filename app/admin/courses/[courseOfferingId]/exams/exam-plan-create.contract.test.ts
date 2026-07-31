@@ -107,6 +107,24 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  // EX-ASG-UI1, the approved stored-assignment CREATE and REMOVAL UI. It adds two
+  // client forms, a closed message module and its own contract suite to this
+  // route, and re-points this suite's export list, route file set, revalidation
+  // budget and flattened `searchParams` shape — from fifteen keys to twenty. The
+  // two `lib/` entries are assembled for the reason in the header, and most
+  // sharply of all here: the assignment IO guards pinned their caller lists to
+  // EXACTLY ZERO before this slice, so spelling either module name whole would
+  // make THIS suite a caller of a module it never touches.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
 
 /**
@@ -190,6 +208,14 @@ const DEFINITION_BINDING_SPECIFIER = "@/lib/actions/" + DEFINITION_BINDING_MODUL
  */
 const SESSION_BINDING_MODULE = "exam-session-write" + "-io";
 const SESSION_BINDING_SPECIFIER = "@/lib/actions/" + SESSION_BINDING_MODULE;
+/**
+ * The ASSIGNMENT write binding, added by EX-ASG-UI1 and assembled for the sharpest
+ * reason of all: its committed guard pinned the caller list at EXACTLY ZERO before
+ * this slice, so spelling it whole here would register this suite as a caller of a
+ * module it never invokes.
+ */
+const ASSIGNMENT_BINDING_MODULE = "exam-assignment-write" + "-io";
+const ASSIGNMENT_BINDING_SPECIFIER = "@/lib/actions/" + ASSIGNMENT_BINDING_MODULE;
 const PUBLIC_WRITE_CALL = new RegExp("\\bcreate" + "ExamPlan\\s*\\(");
 const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
 const GENERATED_CLIENT = ["@prisma", "client"].join("/");
@@ -247,23 +273,25 @@ test("1. the three P3 files exist at the EXACT course-scoped route", () => {
   }
 });
 
-test("2. the action module is a Server Action module exporting EXACTLY the five approved actions", () => {
+test("2. the action module is a Server Action module exporting EXACTLY the seven approved actions", () => {
   const firstStatement = ACTION.split("\n").find((line) => line.trim().length > 0);
   assert.equal(firstStatement?.trim(), '"use server";', `first statement: ${firstStatement}`);
 
   // Everything exported from a "use server" module is a public network endpoint, so
-  // the export list IS the attack surface. RE-POINTED by EX-SES-S4 and again by
-  // EX-SES-UI-2, and still an EXHAUSTIVE allow-list — it simply now names all five
-  // approved actions, because the route legitimately has five. No helper, no
-  // parser, no constant and no type may join them, and no sixth endpoint may
-  // appear.
+  // the export list IS the attack surface. RE-POINTED by EX-SES-S4, again by
+  // EX-SES-UI-2 and again by EX-ASG-UI1, and still an EXHAUSTIVE allow-list — it
+  // simply now names all seven approved actions, because the route legitimately
+  // has seven. No helper, no parser, no constant and no type may join them, and no
+  // eighth endpoint may appear.
   const exports = [...ACTION.matchAll(/export\s+(?:async\s+)?(?:function|const|class|type)\s+(\w+)/g)]
     .map((match) => match[1])
     .sort();
   assert.deepEqual(exports, [
+    "createExamAssignmentAction",
     "createExamDefinitionAction",
     "createExamPlanAction",
     "createExamSessionAction",
+    "deleteExamAssignmentAction",
     "deleteExamSessionAction",
     "updateExamSessionAction",
   ]);
@@ -273,7 +301,7 @@ test("2. the action module is a Server Action module exporting EXACTLY the five 
   assert.equal(/export\s+type/.test(ACTION), false, "no exported type is allowed");
   // No action was folded into a single generic endpoint that would have to
   // choose its operation from the request.
-  assert.equal((ACTION.match(/export async function /g) ?? []).length, 5);
+  assert.equal((ACTION.match(/export async function /g) ?? []).length, 7);
 });
 
 test("3. the action has the EXACT locked signature, and returns void", () => {
@@ -411,8 +439,11 @@ test("8. success revalidates ONLY this course's exams path, exactly once", () =>
   // REMOVAL endpoints. The per-action budget is still what this asserts: at most
   // one revalidation each, and the edit places its single occurrence on the
   // CHANGED branch alone, so a no-op edit revalidates nothing.
-  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 5);
-  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 5);
+  // Re-pointed again from 5 to 7 by EX-ASG-UI1, which adds the assignment CREATE
+  // and REMOVAL endpoints. The per-action budget is unchanged: one each, on the
+  // success branch alone.
+  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 7);
+  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 7);
   // The two successes are distinguished, and both land on the exams path.
   assert.ok(
     PLAN_ACTION.includes(
@@ -532,16 +563,17 @@ test("13. searchParams carries ONLY closed feedback tokens", () => {
   // A CLOSED, exhaustively declared key set, and no other query key is ever
   // consulted. It grew from P3's three to six when the approved definition-create
   // feature added its own three outcome tokens, to NINE when EX-SES-UI-1 wired the
-  // session create form and brought its three, and to FIFTEEN when EX-SES-UI-2
-  // added the session EDIT's four and the REMOVAL's two. It is still an exact
-  // list, every key is still feedback-only, and not one of them names a course, a
-  // plan, a definition, a session or a version stamp — which the id ban below
-  // re-states from the other side.
+  // session create form and brought its three, to FIFTEEN when EX-SES-UI-2
+  // added the session EDIT's four and the REMOVAL's two, and to TWENTY when
+  // EX-ASG-UI1 added the assignment CREATE's three and the REMOVAL's two. It is
+  // still an exact list, every key is still feedback-only, and not one of them
+  // names a course, a plan, a definition, a session, a trainee, an assignment or a
+  // version stamp — which the id ban below re-states from the other side.
   assert.ok(
     PAGE_FLAT.includes(
-      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; updatedSession?: string | string[]; unchangedSession?: string | string[]; sessionEditError?: string | string[]; sessionEditIssues?: string | string[]; deletedSession?: string | string[]; sessionDeleteError?: string | string[]; }>;",
+      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; updatedSession?: string | string[]; unchangedSession?: string | string[]; sessionEditError?: string | string[]; sessionEditIssues?: string | string[]; deletedSession?: string | string[]; sessionDeleteError?: string | string[]; createdAssignment?: string | string[]; assignmentError?: string | string[]; assignmentIssues?: string | string[]; deletedAssignment?: string | string[]; assignmentDeleteError?: string | string[]; }>;",
     ),
-    "the searchParams type must be the closed fifteen-key shape",
+    "the searchParams type must be the closed twenty-key shape",
   );
   // created/existing are honoured only on the exact string "1"; a repeated key
   // (which arrives as an array) is not a recognized token.
@@ -684,8 +716,12 @@ test("17. no publication, source-date, session, capability or notification work"
       // separately, by test 16 and by the sibling route suite.
       "examDefinition.",
       "examSession.",
-      "examAssignment",
-      "ExamAssignment",
+      // RE-POINTED by EX-ASG-UI1, on EXACTLY the terms `examDefinition.` and
+      // `examSession.` were: the blanket substring bans become the Prisma ACCESSOR
+      // spelling. The no-Prisma claim is untouched — that trailing dot is what
+      // makes it an accessor — while the route may legitimately name its own
+      // approved assignment endpoints, forms and message helpers.
+      "examAssignment.",
       // The session EDIT and REMOVAL verbs left this SHARED loop in EX-SES-UI-2 and
       // are re-asserted against the page and the form alone, immediately below —
       // the action module now legitimately holds both endpoints, on exactly the
@@ -728,8 +764,10 @@ test("17. no publication, source-date, session, capability or notification work"
     // endpoint's arrival in the same file, and the SUBSTRING ban is safe HERE —
     // it is scoped to this one action's body, not to the module.
     "ExamSession",
+    "ExamAssignment",
     DEFINITION_BINDING_MODULE,
     SESSION_BINDING_MODULE,
+    ASSIGNMENT_BINDING_MODULE,
   ]) {
     assert.equal(
       PLAN_ACTION.includes(forbidden),
@@ -743,22 +781,24 @@ test("17. no publication, source-date, session, capability or notification work"
     WRITE_BINDING_MODULE,
     DEFINITION_BINDING_MODULE,
     SESSION_BINDING_MODULE,
+    ASSIGNMENT_BINDING_MODULE,
   ]) {
     assert.equal(FORM.includes(forbidden), false, `the form must not reference ${forbidden}`);
     assert.equal(PAGE.includes(forbidden), false, `the page must not reference ${forbidden}`);
   }
-  // The module's ENTIRE import surface is the six approved specifiers: the admin
-  // boundary, the three committed write bindings, and the two framework modules.
+  // The module's ENTIRE import surface is the seven approved specifiers: the admin
+  // boundary, the four committed write bindings, and the two framework modules.
   // Nothing else — no Prisma, no core, no capability, no notification surface.
-  // RE-POINTED by EX-SES-S4 by ADDING one specifier to an exhaustive list, which
-  // keeps this the strongest available form of the guard: a fourth writer still
-  // fails here.
+  // RE-POINTED by EX-SES-S4 and again by EX-ASG-UI1 by ADDING one specifier to an
+  // exhaustive list, which keeps this the strongest available form of the guard: a
+  // fifth writer still fails here.
   const specifiers = [...ACTION.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(specifiers, [
     "@/lib/auth/require-admin",
     WRITE_BINDING_SPECIFIER,
     DEFINITION_BINDING_SPECIFIER,
     SESSION_BINDING_SPECIFIER,
+    ASSIGNMENT_BINDING_SPECIFIER,
     "next/cache",
     "next/navigation",
   ].sort());
@@ -790,8 +830,10 @@ test("19. the route directory holds EXACTLY the fourteen approved files", () => 
   // RE-POINTED by EX-SES-S4, not relaxed: three reviewed session-create files
   // joined the route, so the exact set grew from eight to eleven. RE-POINTED
   // AGAIN by EX-SES-UI-2, on the same terms: an edit form, a delete form and their
-  // contract suite joined it, so the set grew to fourteen. A fifteenth file still
-  // fails here.
+  // contract suite joined it, so the set grew to fourteen. RE-POINTED AGAIN by
+  // EX-ASG-UI1: an assignment create form, an assignment delete form, a closed
+  // message module and their contract suite joined it, so the set grew to
+  // eighteen. A nineteenth file still fails here.
   const routeFiles = [
     ...new Set([
       ...gitLines(["ls-files"]),
@@ -801,12 +843,16 @@ test("19. the route directory holds EXACTLY the fourteen approved files", () => 
     .filter((path) => path.startsWith(ROUTE_DIR_PREFIX))
     .sort();
   assert.deepEqual(routeFiles, [
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",

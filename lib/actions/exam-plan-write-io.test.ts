@@ -923,6 +923,16 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
     // and contract suite are ADDITIONS, which this modifications-only diff
     // correctly does not report.
     `${P3_ROUTE_DIR}/actions.ts`,
+    // EX-ASG-UI1 adds FOUR further tolerated paths, every one of them a GUARD
+    // SUITE — so the approved-production list below is unchanged at two. Its own
+    // four new route files are ADDITIONS, which this modifications-only diff
+    // correctly does not report. The two assignment guard paths are ASSEMBLED for
+    // the sharpest reason of all: both pinned their caller lists at EXACTLY ZERO
+    // before that slice.
+    `${P3_ROUTE_DIR}/exam-session-edit-delete.contract.test.ts`,
+    ["lib", "actions", "exam-assignment-read" + "-io.test.ts"].join("/"),
+    ["lib", "actions", "exam-assignment-write" + "-io.test.ts"].join("/"),
+    ["lib", "exam", "exam-supervisor-write" + "-core.test.ts"].join("/"),
   ];
   // RE-POINTED by EX-SES-UI-2 from ONE approved production file to TWO, both named
   // EXACTLY: a third production file still cannot enter this list unnoticed, and

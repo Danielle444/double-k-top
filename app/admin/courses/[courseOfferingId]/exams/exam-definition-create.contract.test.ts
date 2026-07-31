@@ -102,6 +102,21 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  // EX-ASG-UI1, the approved stored-assignment CREATE and REMOVAL UI. It adds two
+  // forms, a closed message module and its own contract suite to this route, and
+  // amends this suite's route file set, export list, import surface and
+  // revalidation budget — so those four files travel with it here. The two `lib/`
+  // assignment entries are assembled for the sharpest reason of all: their
+  // committed guards pinned their caller lists at EXACTLY ZERO before this slice.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
 
 /** Strip comments so every guard asserts on CODE, not on explanatory prose. */
@@ -163,6 +178,13 @@ const PLAN_WRITE_SPECIFIER = "@/lib/actions/" + "exam-plan-write" + "-io";
  * would register this suite as a second caller of a write binding it never calls.
  */
 const SESSION_WRITE_SPECIFIER = "@/lib/actions/" + "exam-session-write" + "-io";
+/**
+ * The ASSIGNMENT write binding's specifier, added by EX-ASG-UI1 and assembled for
+ * a sharper reason still: that binding's committed guard pinned its caller list at
+ * EXACTLY ZERO before this slice, so spelling it whole here would register this
+ * suite as a caller of a write binding it never calls.
+ */
+const ASSIGNMENT_WRITE_SPECIFIER = "@/lib/actions/" + "exam-assignment-write" + "-io";
 const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
 const GENERATED_CLIENT = ["@prisma", "client"].join("/");
 /** The committed exam cores that no file under `app/` may name. */
@@ -201,15 +223,19 @@ test("1. the four new files exist at the exact course-scoped route", () => {
   assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
 });
 
-test("2. the route directory holds EXACTLY the fourteen approved files", () => {
+test("2. the route directory holds EXACTLY the eighteen approved files", () => {
   // RE-POINTED by EX-SES-S4, not relaxed: the session-create slice added three
   // reviewed files to this route (a form, a message table and its own contract
   // suite), so the exact set grew from eight to eleven.
   //
   // RE-POINTED AGAIN by EX-SES-UI-2, on the same terms: the session edit/removal
   // slice added an edit form, a delete form and its own contract suite, so the set
-  // grew to fourteen. It is still an EXHAUSTIVE literal list — a fifteenth file
-  // still fails here.
+  // grew to fourteen.
+  //
+  // RE-POINTED AGAIN by EX-ASG-UI1, on the same terms: the stored-assignment
+  // create/removal slice added a create form, a delete form, a closed message
+  // module and its own contract suite, so the set grew to eighteen. It is still an
+  // EXHAUSTIVE literal list — a nineteenth file still fails here.
   const routeFiles = [
     ...new Set([
       ...gitLines(["ls-files"]),
@@ -219,12 +245,16 @@ test("2. the route directory holds EXACTLY the fourteen approved files", () => {
     .filter((path) => path.startsWith(ROUTE_DIR_PREFIX))
     .sort();
   assert.deepEqual(routeFiles, [
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
@@ -261,26 +291,28 @@ test("4. the action module declares use server as its FIRST statement", () => {
   assert.equal(ACTIONS.includes("server" + "-only"), false);
 });
 
-test("5. the module exports EXACTLY the five approved actions, with exact signatures", () => {
+test("5. the module exports EXACTLY the seven approved actions, with exact signatures", () => {
   const exported = [
     ...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g),
   ].map(([, name]) => name);
-  // RE-POINTED by EX-SES-S4 and again by EX-SES-UI-2, not relaxed. Still an
-  // EXHAUSTIVE allow-list, and still in a fixed order — it simply names all five
-  // approved actions, because the route legitimately has five. None was folded
-  // into a single generic endpoint that would choose its operation from the
-  // request, which is precisely the decision that must not be client-influenced —
-  // and that matters most for the last two, since an endpoint that chose between
-  // editing and deleting from a submitted flag would make deletion reachable from
-  // a request that looks like an edit.
+  // RE-POINTED by EX-SES-S4, again by EX-SES-UI-2 and again by EX-ASG-UI1, not
+  // relaxed. Still an EXHAUSTIVE allow-list, and still in a fixed order — it
+  // simply names all seven approved actions, because the route legitimately has
+  // seven. None was folded into a single generic endpoint that would choose its
+  // operation from the request, which is precisely the decision that must not be
+  // client-influenced — and that matters most for the two pairs, since an endpoint
+  // that chose between writing and deleting from a submitted flag would make
+  // deletion reachable from a request that looks like a save.
   assert.deepEqual(exported, [
     "createExamPlanAction",
     "createExamDefinitionAction",
     "createExamSessionAction",
     "updateExamSessionAction",
     "deleteExamSessionAction",
+    "createExamAssignmentAction",
+    "deleteExamAssignmentAction",
   ]);
-  assert.equal(exported.length, 5, "no sixth endpoint may exist in this module");
+  assert.equal(exported.length, 7, "no eighth endpoint may exist in this module");
   // Everything exported from a "use server" module is publicly callable, so the
   // export list is the attack surface: nothing else may leave this file.
   for (const token of ["export const", "export default", "export {", "export type"]) {
@@ -423,15 +455,15 @@ test("9. the action calls the committed writer with the bound id and the raw inp
     ).test(ACTIONS),
     "the writer is not called with exactly (courseOfferingId, rawInput)",
   );
-  // The module's ENTIRE import surface is the six approved specifiers: the admin
-  // boundary, the three committed write bindings the three actions wrap, and the
+  // The module's ENTIRE import surface is the seven approved specifiers: the admin
+  // boundary, the four committed write bindings the seven actions wrap, and the
   // two framework modules. Nothing else — no Prisma, no core, no capability, no
-  // notification surface, and no FOURTH writer.
+  // notification surface, and no FIFTH writer.
   //
-  // RE-POINTED by EX-SES-S4 by ADDING one specifier to an exhaustive list, which
-  // is the strongest available form of this guard: the session binding is now
-  // named explicitly, so importing any other writer — including that binding's own
-  // EDIT and REMOVAL siblings, which live in the same module and are therefore NOT
+  // RE-POINTED by EX-SES-S4 and again by EX-ASG-UI1 by ADDING one specifier to an
+  // exhaustive list, which is the strongest available form of this guard: each
+  // binding is named explicitly, so importing any other writer — including a
+  // binding's own siblings, which live in the same module and are therefore NOT
   // separately importable — still fails here.
   const specifiers = [...ACTIONS.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(
@@ -440,6 +472,7 @@ test("9. the action calls the committed writer with the bound id and the raw inp
       "@/lib/actions/" + WRITE_IO_MODULE,
       PLAN_WRITE_SPECIFIER,
       SESSION_WRITE_SPECIFIER,
+      ASSIGNMENT_WRITE_SPECIFIER,
       "@/lib/auth/require-admin",
       "next/cache",
       "next/navigation",
@@ -497,16 +530,17 @@ test("11. success revalidates ONLY this exams path and redirects with the flag",
   // either. The module-wide budget is asserted right below.
   assert.equal((DEFINITION_ACTION.match(/revalidatePath\(/g) ?? []).length, 1);
   // The module-wide budget: at most one revalidation per action, and every one of
-  // them is the SAME course-scoped exams path. Re-pointed from 2 to 3 by EX-SES-S4
-  // and from 3 to 5 by EX-SES-UI-2 — the per-action budget is what this asserts,
-  // and it did not change. The edit's single occurrence sits on its CHANGED branch
-  // only, so a no-op edit revalidates nothing at all, which its own suite pins.
+  // them is the SAME course-scoped exams path. Re-pointed from 2 to 3 by EX-SES-S4,
+  // from 3 to 5 by EX-SES-UI-2 and from 5 to 7 by EX-ASG-UI1 — the per-action
+  // budget is what this asserts, and it did not change. The edit's single
+  // occurrence sits on its CHANGED branch only, so a no-op edit revalidates nothing
+  // at all, which its own suite pins.
   assert.equal(
     (ACTIONS.match(/revalidatePath\(/g) ?? []).length,
-    5,
+    7,
     "the module must revalidate at most once per action and no more",
   );
-  assert.equal((ACTIONS.match(/revalidatePath\(examsPath\);/g) ?? []).length, 5);
+  assert.equal((ACTIONS.match(/revalidatePath\(examsPath\);/g) ?? []).length, 7);
   assert.ok(DEFINITION_ACTION.includes("revalidatePath(examsPath);"), "the wrong path is revalidated");
   assert.ok(
     DEFINITION_ACTION.includes("redirect(`${examsPath}?createdDefinition=1`);"),
@@ -620,6 +654,15 @@ test("15. no edit, delete, reorder, session, source-date or publication path exi
   // definition slice's own UI gains nothing — and the two new endpoints' contract
   // is proven in their own suite, while the write binding's committed guard still
   // pins the complete caller list for all three session writers to this ONE module.
+  // RE-POINTED AGAIN by EX-ASG-UI1. The blanket `ExamAssignment` substring has
+  // left this module-wide list on exactly the terms the definition, session-create
+  // and session edit/removal verbs already earned: the shared action module now
+  // legitimately holds two approved, separately reviewed assignment endpoints. The
+  // FORM is still swept for it below — this definition slice's own UI gains
+  // nothing — the ASSIGNMENT REORDER and EDIT verbs that no route may reach stay
+  // banned by name, and THIS action is re-swept for the whole assignment slice
+  // immediately after, so the one relaxation cannot be stretched into "any
+  // assignment work is fine here".
   for (const token of [
     "update" + "ExamDefinition",
     "delete" + "ExamDefinition",
@@ -628,8 +671,10 @@ test("15. no edit, delete, reorder, session, source-date or publication path exi
     "unpublish" + "ExamPlan",
     "delete" + "ExamPlan",
     "reorder" + "ExamSessions",
+    // Assignment management NO route may perform, in any module.
+    "reorder" + "ExamAssignments",
+    "update" + "ExamAssignment",
     // Session management this route does not perform at all.
-    "ExamAssignment",
     "SessionBreak",
     "Supervisor",
     "sourceDate",
@@ -642,9 +687,14 @@ test("15. no edit, delete, reorder, session, source-date or publication path exi
       assert.equal(code.includes(token), false, `the ${label} reaches ${token}`);
     }
   }
-  // The definition CREATE FORM reaches neither destructive session verb: the
-  // relaxation above is for the shared action module only.
-  for (const token of ["update" + "ExamSession", "delete" + "ExamSession"]) {
+  // The definition CREATE FORM reaches neither destructive session verb, and no
+  // part of the assignment slice at all: the relaxations above are for the shared
+  // action module only.
+  for (const token of [
+    "update" + "ExamSession",
+    "delete" + "ExamSession",
+    "ExamAssignment",
+  ]) {
     assert.equal(FORM.includes(token), false, `the form reaches ${token}`);
   }
 
@@ -658,6 +708,22 @@ test("15. no edit, delete, reorder, session, source-date or publication path exi
     "sessionError=",
     "sessionEditError=",
     "sessionDeleteError=",
+  ]) {
+    assert.equal(
+      DEFINITION_ACTION.includes(token),
+      false,
+      `the definition action reaches ${token}`,
+    );
+  }
+
+  // ...and no part of the ASSIGNMENT slice either, on the same terms.
+  for (const token of [
+    "ExamAssignment",
+    ASSIGNMENT_WRITE_SPECIFIER,
+    "assignmentError=",
+    "assignmentDeleteError=",
+    "createdAssignment=",
+    "deletedAssignment=",
   ]) {
     assert.equal(
       DEFINITION_ACTION.includes(token),

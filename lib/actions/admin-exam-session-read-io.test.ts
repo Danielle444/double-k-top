@@ -113,21 +113,43 @@ const APPROVED_MODIFIED_FILES = [
   // is still the only consumer, and neither new form reads a session — both are
   // handed their values as props by that one page.
   `${ROUTE_DIR_PREFIX}actions.ts`,
+  // EX-ASG-UI1 — the approved stored-assignment CREATE and REMOVAL UI, which
+  // travels in the same working tree. It adds the session edit/delete contract
+  // suite to the MODIFIED set (that suite's per-session id counts learn about the
+  // assignment create form's hidden field), plus the two committed assignment
+  // guards and the supervisor core guard whose footprint lists it re-points. Its
+  // four new route files join the list below.
+  //
+  // Guard 29's claim about who may call THIS reader is untouched by it: the page is
+  // still the only consumer, and neither new form reads a session — both are handed
+  // their values as props by that one page. The assignment slice reads its own rows
+  // through its OWN committed binding and groups them against the session ids this
+  // reader already returned, so it adds no caller here.
+  `${ROUTE_DIR_PREFIX}exam-session-edit-delete.contract.test.ts`,
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
 
 /**
- * The three files EX-SES-UI-2 ADDS under `app/`, as git reports them.
+ * The files EX-SES-UI-2 and EX-ASG-UI1 ADD under `app/`, as git reports them.
  *
  * Kept apart from both lists above: they are neither this reader's own files nor
  * modifications, and the two guards below need them for different reasons — one
  * checks what was introduced, the other checks which UI paths may differ at all.
- * Every entry is a route-local file; no `lib/` module is among them, because this
- * slice reuses the committed writers rather than adding one.
+ * Every entry is a route-local file; no `lib/` module is among them, because both
+ * slices reuse the committed bindings rather than adding one.
  */
 const APPROVED_NEW_ROUTE_FILES = [
   `${ROUTE_DIR_PREFIX}ExamSessionEditForm.tsx`,
   `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
   `${ROUTE_DIR_PREFIX}exam-session-edit-delete.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}CreateExamAssignmentForm.tsx`,
+  `${ROUTE_DIR_PREFIX}DeleteExamAssignmentForm.tsx`,
+  `${ROUTE_DIR_PREFIX}exam-assignment-messages.ts`,
+  `${ROUTE_DIR_PREFIX}exam-assignment-ui.contract.test.ts`,
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
@@ -960,12 +982,18 @@ test("32. the slice touches no schema, migration, capability or policy file", ()
   // it is that page" — correct while the only UI change was wiring this reader in.
   // A safe edit and a safe removal need a form each, so the bound moves from one
   // to THREE and every one of them is named EXACTLY: the page, plus the two new
-  // client forms. It is still a closed set, not a directory: a fourth UI file, or
-  // any `.tsx` outside these three, still fails.
+  // client forms.
+  //
+  // RE-POINTED AGAIN by EX-ASG-UI1, on identical terms: the stored-assignment
+  // create and removal need a form each, so the bound moves from three to FIVE.
+  // It is still a closed set, not a directory: a sixth UI file, or any `.tsx`
+  // outside these five, still fails — and every entry is under this one route.
   const APPROVED_UI_FILES = [
     `${ROUTE_DIR_PREFIX}page.tsx`,
     `${ROUTE_DIR_PREFIX}ExamSessionEditForm.tsx`,
     `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
+    `${ROUTE_DIR_PREFIX}CreateExamAssignmentForm.tsx`,
+    `${ROUTE_DIR_PREFIX}DeleteExamAssignmentForm.tsx`,
   ];
   const uiTouched = [...new Set(touched.filter((path) => path.endsWith(".tsx")))];
   for (const path of uiTouched) {

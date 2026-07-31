@@ -67,6 +67,15 @@ const APPROVED_NEW_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  // EX-ASG-UI1's four NEW route files: the assignment create form, the assignment
+  // delete form, their closed message module and their contract suite. Every one is
+  // under `app/` — that slice adds no `lib/` module either, and it reaches none of
+  // THIS binding's writers: guard 33 still pins all three session writers to the
+  // one Server Action module.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
 ];
 
 /**
@@ -111,6 +120,19 @@ const APPROVED_MODIFIED_FILES = [
   // The three NEW route files that slice adds are covered by the untracked half of
   // guard 35 through APPROVED_NEW_FILES below.
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  // EX-ASG-UI1 adds THREE further tracked files to this list — the session
+  // edit/delete contract suite, whose per-session id counts learn about the
+  // assignment create form's hidden field, and the two committed assignment guard
+  // suites plus the supervisor core guard whose footprint lists it re-points.
+  // Guard 33 below is untouched by it: that slice reaches none of THIS binding's
+  // three writers, and this binding's own production module and all three pure
+  // cores stay byte-identical to HEAD.
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");

@@ -652,8 +652,23 @@ test("20. the classifier is PRIVATE and is the module's ONLY P2002 handling", ()
 // 21–24. Containment: no caller, no UI, six new files, nothing modified
 // ===========================================================================
 
-test("21. NOTHING calls either writer: the module is deliberately unwired", () => {
+test("21. EXACTLY the approved Server Action module calls either writer", () => {
+  // EX-ASG-UI1 TRANSITION. This guard asserted the caller list was EMPTY, which was
+  // the correct claim while the write binding was committed but deliberately
+  // unwired. Wiring it is exactly what makes that claim obsolete, so the guard is
+  // RE-POINTED to an equally exact positive claim rather than deleted or weakened
+  // to "some caller exists": the ONE course-scoped admin exams Server Action
+  // module, and nothing else anywhere under `app/`, `lib/` or `components/`.
+  //
+  // A SECOND caller still fails here, and that is the whole point. These are the
+  // WRITE bindings: every caller is a new publicly reachable path to creating or
+  // removing an exam assignment, and no page, form, component or other route may
+  // reach one directly — only a reviewed Server Action may.
   const declaring = new Set([join(REPO_ROOT, IO_REL), join(REPO_ROOT, IO_TEST_REL)]);
+  /** The ONE production module authorized to reach either writer. */
+  const APPROVED_CALLERS = [
+    join("app", "admin", "courses", "[courseOfferingId]", "exams", "actions.ts"),
+  ];
   // The committed pure cores DECLARE these symbols, and their own suites
   // legitimately drive the injectable orchestrations with fakes — as does the
   // sibling input core's suite, whose directory-listing guard necessarily names
@@ -688,9 +703,13 @@ test("21. NOTHING calls either writer: the module is deliberately unwired", () =
       if (reaches) callers.push(path.slice(REPO_ROOT.length + 1));
     }
   }
-  // Sanity: the clean result below is a PASS, not an empty search.
+  // Sanity: the exact result below is a PASS, not an empty search.
   assert.ok(scanned > 100, `expected the repository, scanned ${scanned} files`);
-  assert.deepEqual(callers, [], `an unapproved caller exists: ${callers.join(", ")}`);
+  assert.deepEqual(
+    callers.sort(),
+    APPROVED_CALLERS,
+    `the caller list is not exactly the approved Server Action module: ${callers.join(", ")}`,
+  );
 });
 
 test("22. no exam route, page, form or Server Action was created", () => {
@@ -748,11 +767,39 @@ test("23. each approved file-prefix set contains EXACTLY its approved pair", () 
   );
 });
 
-test("24. the slice modified NO tracked file: no schema, migration, auth or policy", () => {
-  // `--diff-filter=MDRT` excludes additions on purpose: a brand-new file is what
-  // this slice is allowed to produce, and including additions would make the
-  // check flip to red the moment the new files are staged and back to green
-  // after they are committed.
+test("24. only the approved wiring paths are modified: no schema, migration, auth or policy", () => {
+  // `--diff-filter=MDRT` excludes additions on purpose: a brand-new file is what a
+  // slice is allowed to produce, and including additions would make the check flip
+  // to red the moment the new files are staged and back to green after they are
+  // committed.
+  //
+  // EX-ASG-UI1 TRANSITION. This guard asserted the working tree modified NOTHING,
+  // which was correct while EX-ASG-IO1 was the uncommitted slice and added only new
+  // files. The wiring slice necessarily modifies the route's Server Action module,
+  // its page and the committed guard suites whose exact counts it re-points, so the
+  // guard is RE-POINTED to an EXACT allow-list rather than deleted.
+  //
+  // What it always protected is unchanged and is what the list proves: no schema,
+  // no migration, no auth module, no session module, no capability catalog, no
+  // course-policy core, and no `lib/` PRODUCTION file of any kind.
+  const APPROVED_MODIFICATIONS = [
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+    "lib/actions/exam-assignment-write-io.test.ts",
+    "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  ].sort();
+
   const modified = gitLines([
     "diff",
     "--name-only",
@@ -764,7 +811,19 @@ test("24. the slice modified NO tracked file: no schema, migration, auth or poli
     "app",
     "components",
   ]);
-  assert.deepEqual(modified, [], `the slice modified: ${modified.join(", ")}`);
+  const offenders = modified.filter((path) => !APPROVED_MODIFICATIONS.includes(path)).sort();
+  assert.deepEqual(offenders, [], `the slice modified: ${offenders.join(", ")}`);
+
+  // No `lib/` PRODUCTION module was touched: the committed bindings and pure cores
+  // this slice WIRES were reused, not edited.
+  const libProduction = modified.filter(
+    (path) => path.startsWith("lib/") && !path.endsWith(".test.ts"),
+  );
+  assert.deepEqual(
+    libProduction,
+    [],
+    `a lib production module was edited: ${libProduction.join(", ")}`,
+  );
 
   // ...and every working-tree entry under `prisma/` — untracked included — is
   // empty, so no migration directory was added either.

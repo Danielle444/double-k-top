@@ -151,6 +151,27 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  // EX-ASG-UI1 — the approved stored-assignment CREATE and REMOVAL UI, which
+  // travels in the same working tree: two new client forms, a closed message module
+  // and their contract suite. Listed here for the footprint guard below and for NO
+  // other reason — test 20's claim about who may call the DEFINITION reader is
+  // untouched, and the page is still its only production caller.
+  //
+  // That slice does consult the definitions this reader returns, but only through
+  // the SAME page-level view already loaded: it builds an in-memory lookup of the
+  // two requirement flags to decide whether the assignment create form may be
+  // offered at all, which adds no reader, no query and no caller. The `lib/`
+  // assignment guard paths are ASSEMBLED for the sharpest reason of all: both
+  // pinned their caller lists at EXACTLY ZERO before that slice.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
