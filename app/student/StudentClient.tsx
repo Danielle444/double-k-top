@@ -36,6 +36,7 @@ import { StudentPushSection } from "@/app/student/StudentPushSection";
 import { StudentMessagesSummary } from "@/app/student/StudentMessagesSummary";
 import { StudentAttendanceNotice } from "@/app/student/StudentAttendanceNotice";
 import { StudentTeachingPracticeSection } from "@/app/student/StudentTeachingPracticeSection";
+import { StudentExamsSection } from "@/app/student/StudentExamsSection";
 import { ContactsSection } from "@/lib/components/ContactsSection";
 import { HelpContent } from "@/lib/components/HelpContent";
 import { NotificationsList, type MessagePreviewItem } from "@/lib/components/NotificationsList";
@@ -84,6 +85,12 @@ const STUDENT_MORE_ITEMS: { id: MainTabId; label: string }[] = [
   { id: "contacts", label: "אנשי קשר" },
   { id: "materials", label: "חומרי קורס" },
   { id: "teachingPractice", label: "התנסויות מתחילים" },
+  // EX-TRAINEE-VIEW-MVP - the trainee "מבחנים" screen. A "עוד" menu entry, not a
+  // sixth bottom tab and not a home shortcut. It is deliberately absent from
+  // LEVEL2_ONLY_VISIBLE_NAV_IDS and from LOADING_SAFE_NAV_IDS above, so a
+  // Level-2-only trainee never sees it and nobody sees it before the course
+  // options resolve - the existing fail-closed allow-list needed no change.
+  { id: "exams", label: "מבחנים" },
   { id: "notifications", label: "עדכונים" },
   { id: "weeklyFeedback", label: "משוב שבועי" },
   { id: "help", label: "עזרה" },
@@ -1513,6 +1520,10 @@ export function StudentClient() {
         {activeTab === "materials" && <CourseMaterialsSection role="student" />}
 
         {activeTab === "teachingPractice" && <StudentTeachingPracticeSection studentId={session.id} />}
+
+        {/* No studentId prop, and no course prop: the exam reader behind this
+            screen derives both server-side from the signed session. */}
+        {activeTab === "exams" && <StudentExamsSection />}
 
         {activeTab === "weeklyFeedback" && (
           <StudentWeeklyFeedbackSection studentId={session.id} onOpenChange={setHasOpenWeeklyFeedback} />
