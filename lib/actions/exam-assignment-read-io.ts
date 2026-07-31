@@ -106,8 +106,17 @@
  * NARROW SELECTS — NOTHING TO STRIP EVER LEAVES THE DATABASE
  * ===========================================================================
  * The enrolment query selects the trainee's id and full name. The plan query
- * selects the plan's id. The assignment query selects seven of its own columns
+ * selects the plan's id. The assignment query selects eight of its own columns
  * plus the trainee's full name.
+ *
+ * The EIGHTH is EX-PAIR-UI-MVP's `pairingIndex`, and it is read for exactly one
+ * reason: WHO an instructed trainee is paired with is undecidable without it.
+ * It is an internal allocation label rather than a fact about a person, and it
+ * is SERVER-INTERNAL in the strongest available sense — it is handed to the pure
+ * core, which consumes it to resolve the pairing and publishes the ANSWER (the
+ * partner's assignment id and display name) instead. No published row in this
+ * read carries a `pairingIndex`, and no `Student` column, relation or statement
+ * came with it.
  *
  * TWO of those seven are the DETAIL values the detailed create writer stores on an
  * examinee's row. They are the assignment's OWN columns — free text a manager
@@ -119,7 +128,7 @@
  * NOT selected anywhere, and therefore not leakable by any later mapper: the
  * trainee's identity number, phone, activity flag, group, subgroup, horse
  * fields and every parent, guardian or child contact; the enrolment's id,
- * status, `isPrimary`, dates and horse cache; the assignment's `pairingIndex`,
+ * status, `isPrimary`, dates and horse cache; the assignment's
  * `sourcePracticeRole`, `notes`, `createdAt` and `updatedAt`; and `Student.id` on
  * the assignment path specifically — the list DISPLAYS who is assigned, and the
  * removal path already identifies its target by the ASSIGNMENT id. No
@@ -325,6 +334,7 @@ export async function readAdminExamAssignments(
       instructionTopic: true,
       discipline: true,
       orderIndex: true,
+      pairingIndex: true,
       student: { select: { fullName: true } },
     },
     orderBy: [{ sessionId: "asc" }, { orderIndex: "asc" }, { id: "asc" }],
@@ -340,6 +350,7 @@ export async function readAdminExamAssignments(
       instructionTopic: row.instructionTopic,
       discipline: row.discipline,
       orderIndex: row.orderIndex,
+      pairingIndex: row.pairingIndex,
     })),
   );
 }

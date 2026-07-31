@@ -1,26 +1,29 @@
 /**
  * EXAM EX-S5B-5B + EXAM PLAN P3 + EXAM EX-S5B-5C + EXAM EX-SES-UI-1 + EXAM
  * EX-SES-UI-2 + EXAM EX-ASG-UI1 + EXAM EX-ASG-IT2 + EXAM EX-ASG-LTD2-B1 + EXAM
- * EX-PUB-UI-MVP — the admin Exams surface of ONE course offering: a read of its
- * ExamDefinition configuration, of its scheduled exam sessions AND of the people
- * assigned to them, plus the NINE explicit mutation affordances that belong to it.
+ * EX-PUB-UI-MVP + EXAM EX-PAIR-UI-MVP — the admin Exams surface of ONE course
+ * offering: a read of its ExamDefinition configuration, of its scheduled exam
+ * sessions AND of the people assigned to them, plus the TEN explicit mutation
+ * affordances that belong to it.
  *
  * Server Component. The page holds NO state and runs NO client code of its own.
- * Eight of the nine forms are separate client components; the NINTH — the
- * publication form EX-PUB-UI-MVP adds — is rendered INLINE, because it needs no
- * client behaviour at all: it has one fixed hidden value, no pending UX, no
- * validation and no confirmation, so a `"use client"` component for it would add a
- * bundle entry and a second file for nothing. It is still an ordinary POST-ing
- * form on a Server Action, submitted the same way every other mutation here is.
+ * Eight of the ten forms are separate client components; the NINTH — the
+ * publication form EX-PUB-UI-MVP adds — and the TENTH — the pairing form
+ * EX-PAIR-UI-MVP adds — are rendered INLINE, because neither needs client
+ * behaviour at all: each has fixed values, no pending UX, no validation and no
+ * confirmation, so a `"use client"` component would add a bundle entry and a
+ * second file for nothing. Both are still ordinary POST-ing forms on Server
+ * Actions, submitted the same way every other mutation here is.
  *
  * ===========================================================================
  * WHAT THIS ROUTE MAY MUTATE — AND WHAT IT STILL MAY NOT
  * ===========================================================================
- * EXACTLY NINE mutations exist here. The first two are MUTUALLY EXCLUSIVE by the
+ * EXACTLY TEN mutations exist here. The first two are MUTUALLY EXCLUSIVE by the
  * state of the plan; the third additionally requires something to schedule; the
  * next two are PER SESSION and require a session to already exist; the next three
  * are PER ASSIGNMENT and require a session to be there to assign anyone to; the
- * ninth is PER PLAN and is itself mutually exclusive by publication state:
+ * ninth is PER PLAN and is itself mutually exclusive by publication state; the
+ * tenth is PER INSTRUCTED-TRAINEE ASSIGNMENT and requires such a row to exist:
  *
  *   - no plan yet     -> create ONE empty, unpublished ExamPlan;
  *   - plan present    -> append ONE ExamDefinition to it;
@@ -32,16 +35,21 @@
  *                        exam actually asks for one;
  *   - per assignment  -> remove THAT assignment, whatever role it holds;
  *   - draft plan      -> PUBLISH it to the trainees;
- *   - published plan  -> UNPUBLISH it.
+ *   - published plan  -> UNPUBLISH it;
+ *   - per instructed
+ *     trainee         -> PAIR it with ONE examinee of ITS OWN session, or clear
+ *                        that one pairing.
  *
  * Editing, removing and reordering definitions, reordering sessions, DELETING the
  * plan, EDITING or REORDERING an assignment, publishing an INDIVIDUAL session,
- * pairings, waves, personal times, breaks, supervisors and source dates are NOT
- * reachable — not disabled, not hidden behind a flag, but absent, with no import
- * that could reach them. Neither is a publication NOTIFICATION or a publication
- * HISTORY: the ninth action flips one column and does nothing else.
+ * waves, personal times, breaks, supervisors and source dates are NOT reachable —
+ * not disabled, not hidden behind a flag, but absent, with no import that could
+ * reach them. Neither is a publication NOTIFICATION or a publication HISTORY: the
+ * ninth action flips one column and does nothing else, and the tenth writes one
+ * nullable column on one row through the committed pairing backend, which owns
+ * every allocation, reuse, ambiguity and staleness decision.
  *
- * All nine mutations are ALWAYS an explicit click on a POST-ing form. The page
+ * All ten mutations are ALWAYS an explicit click on a POST-ing form. The page
  * performs no write, so a plain GET of this route — a refresh, a back button, a
  * prefetch, a bookmark — can never bring a plan, a definition, a session or an
  * assignment into existence, can never remove one, and can never publish or
@@ -187,7 +195,15 @@
  *   - `createdInstructedTrainee=1` — an instructed trainee was assigned;
  *   - `instructedTraineeError=<code>`  — a known instructed-trainee refusal code;
  *   - `instructedTraineeIssues=<codes>`— known instructed-trainee issue codes;
- *   - `publication=<token>`  — the publication outcome, success or refusal alike.
+ *   - `publication=<token>`  — the publication outcome, success or refusal alike;
+ *   - `pairing=<token>`      — the pairing outcome, success or refusal alike.
+ *
+ * The pairing family is ONE key for the same reason the publication family is,
+ * and its banner is deliberately PAGE-LEVEL rather than per row: a per-row
+ * diagnostic would need an assignment id in the URL, and this page puts none
+ * there. It is FEEDBACK and never STATE — which examinee each picker pre-selects
+ * comes from the committed reader's resolved answer, so a hand-typed
+ * `?pairing=PAIRED` changes what one banner says and nothing else.
  *
  * The publication family is ONE key rather than a success/error pair, because a
  * publication has exactly one outcome per submission and only one publication
@@ -276,6 +292,15 @@
  * not even SELECT a `Student.id`, so the only one on this page comes from the
  * eligible-trainee picker, which exists precisely to be submitted back.
  *
+ * EX-PAIR-UI-MVP adds NO new kind of id and widens the rule for none. It reuses
+ * the ASSIGNMENT id twice more — as the pairing form's one hidden field, and as
+ * the `<option>` VALUE of each examinee the picker offers — both of which are
+ * submitted values rather than text, and neither of which appears in an href.
+ * What it deliberately does NOT bring onto this page is the `pairingIndex`: the
+ * committed reader resolves the pairing server-side and publishes the PARTNER
+ * (an assignment id and a display name) instead, so the internal allocation
+ * label has no field on this page to arrive in.
+ *
  * Each assignment row renders the trainee's display name, the horse — or the ONE
  * fixed placeholder when it is absent, which historical rows may be — and the role
  * label. The order position is read but never shown: it decides sequence, and a
@@ -347,6 +372,7 @@ import {
   deleteExamAssignmentAction,
   createExamInstructedTraineeAssignmentAction,
   setExamPlanPublicationAction,
+  setExamPairingAction,
 } from "./actions";
 import { ExamPlanCreateForm } from "./ExamPlanCreateForm";
 import { ExamDefinitionCreateForm } from "./ExamDefinitionCreateForm";
@@ -755,6 +781,112 @@ const PUBLISHED_WARNING_TEXT =
 /** What a manager is told when there is no plan to publish yet. */
 const NO_PLAN_PUBLICATION_TEXT = "יש ליצור תוכנית מבחנים לפני הפרסום.";
 
+// ===========================================================================
+// EX-PAIR-UI-MVP — the pairing surface
+// ===========================================================================
+
+/**
+ * The CLOSED pairing outcome table: every token the pairing action can put in
+ * the query, mapped to a TONE and to ONE fixed Hebrew sentence this module owns.
+ *
+ * ONE table rather than a success table and an error table, for exactly the
+ * reason the publication table above gives: a pairing has ONE outcome per
+ * submission, and the banner is PAGE-LEVEL rather than per row — a per-row
+ * diagnostic would need an assignment id in the query string, and this page puts
+ * none there.
+ *
+ * `offering_not_found` is deliberately absent, for the same reason it is absent
+ * from every other table here: that refusal never returns to this course-scoped
+ * route, because an id that did not resolve cannot be used to build a URL for it.
+ *
+ * Every sentence is this module's own, states the RULE that was applied, and
+ * names NO trainee, NO examinee, NO session and NO id — the manager can see the
+ * row they submitted from, and an id in a banner would be noise at best.
+ *
+ * The Hebrew is spelled out LOCALLY rather than imported from the committed
+ * domain tables, for the containment reason recorded in the header.
+ */
+const EXAM_PAIRING_MESSAGES: Readonly<Record<string, PlanFeedback>> = Object.freeze({
+  PAIRED: { tone: "success", message: "השיוך לנבחן/ת נשמר." },
+  UNPAIRED: { tone: "success", message: "השיוך לנבחן/ת הוסר." },
+  NO_CHANGE: { tone: "neutral", message: "לא בוצע שינוי בשיוך." },
+  plan_not_found: {
+    tone: "error",
+    message: "לא קיימת תוכנית מבחנים לקורס זה, ולכן אין מה לשייך. יש לרענן את הדף.",
+  },
+  operation_not_allowed: {
+    tone: "error",
+    message: "לא ניתן לשנות שיוכים במצב הנוכחי של הקורס.",
+  },
+  invalid_input: {
+    tone: "error",
+    message: "בקשת השיוך אינה תקינה. יש לרענן את הדף ולנסות שוב.",
+  },
+  instructed_assignment_not_found: {
+    tone: "error",
+    message: "החניך המודרך שנבחר אינו קיים עוד בתוכנית המבחנים של קורס זה. יש לרענן את הדף.",
+  },
+  examinee_assignment_not_found: {
+    tone: "error",
+    message: "הנבחן/ת שנבחר/ה אינו/ה קיים/ת עוד בתוכנית המבחנים של קורס זה. יש לרענן את הדף.",
+  },
+  instructed_role_mismatch: {
+    tone: "error",
+    message: "לא ניתן לשייך: השיבוץ שנשלח אינו של חניך מודרך. יש לרענן את הדף.",
+  },
+  examinee_role_mismatch: {
+    tone: "error",
+    message: "לא ניתן לשייך: השיבוץ שנבחר אינו של נבחן/ת. יש לרענן את הדף.",
+  },
+  different_sessions: {
+    tone: "error",
+    message: "ניתן לשייך רק לנבחן/ת מאותו מפגש מבחן. יש לרענן את הדף ולבחור שוב.",
+  },
+  ambiguous_pairing_index: {
+    tone: "error",
+    message: "לא ניתן לקבוע את השיוך: קיימים שיוכים כפולים במפגש הזה. יש לתקן את השיבוצים.",
+  },
+  stale_write: {
+    tone: "error",
+    message: "השיוך השתנה מאז שהדף נטען, ולכן לא נשמר. יש לרענן את הדף ולנסות שוב.",
+  },
+});
+
+/**
+ * ONE pairing banner for one raw token, chosen from the frozen table above.
+ *
+ * Closed in BOTH directions and total over every input, exactly like the
+ * publication parser beside it: a non-string (which is what a repeated query key
+ * produces), an empty string and any token the table does not OWN all yield
+ * `null`, which renders nothing. `Object.hasOwn` rather than a plain lookup, so
+ * an inherited property name such as `constructor` cannot select a message.
+ * Nothing from the query reaches the returned object.
+ */
+function pairingFeedbackFrom(raw: string | string[] | undefined): PlanFeedback | null {
+  if (typeof raw !== "string" || raw.length === 0) {
+    return null;
+  }
+  return Object.hasOwn(EXAM_PAIRING_MESSAGES, raw) ? EXAM_PAIRING_MESSAGES[raw] : null;
+}
+
+/**
+ * The submitted value that means "no partner".
+ *
+ * It MUST equal the sentinel the Server Action compares against. The two are
+ * spelled separately rather than shared through a module, because this route's
+ * action file is a `"use server"` module and may export nothing but its actions —
+ * an exported constant there would be an additional public network id. The
+ * contract suite asserts both literals, so they cannot drift apart silently.
+ */
+const EXAM_PAIRING_NONE_VALUE = "";
+
+/** The pairing control's own fixed Hebrew, owned entirely by this module. */
+const PAIRING_SECTION_LABEL = "שיוך לנבחן/ת";
+const PAIRING_NONE_OPTION_TEXT = "ללא שיוך";
+const PAIRING_SUBMIT_TEXT = "שמירת שיוך";
+const PAIRING_UNPAIRED_TEXT = "אין שיוך לנבחן/ת.";
+const PAIRING_NO_EXAMINEES_TEXT = "אין נבחנים במפגש הזה, ולכן אין למי לשייך.";
+
 /**
  * The DEFINITION requirements that decide which assignment affordances a session
  * may show. Carried per definition id, from the definition reader the page
@@ -818,6 +950,7 @@ export default async function CourseExamsPage({
     instructedTraineeError?: string | string[];
     instructedTraineeIssues?: string | string[];
     publication?: string | string[];
+    pairing?: string | string[];
   }>;
 }) {
   const { courseOfferingId } = await params;
@@ -910,14 +1043,32 @@ export default async function CourseExamsPage({
   //    No row is dropped. An `INSTRUCTED_TRAINEE` row that this surface cannot
   //    create is bucketed exactly like an examinee, because hiding it would make
   //    a session disagree with its own count.
+  //
+  //    EX-PAIR-UI-MVP adds a SECOND bucket in the SAME single pass, holding the
+  //    EXAMINEE rows alone. It is what the pairing picker offers, and building it
+  //    HERE — keyed by `sessionId`, from rows the reader already ordered — is
+  //    what makes "only examinees of THIS session" a property of the DATA
+  //    STRUCTURE rather than of a comparison somebody could later delete. The
+  //    page still never sorts, filters, slices or reverses: this is one more
+  //    `for...of` that APPENDS in arrival order, exactly like the first bucket.
   const assignmentsBySession = new Map<string, AdminExamAssignmentRow[]>();
+  const examineesBySession = new Map<string, AdminExamAssignmentRow[]>();
   for (const assignment of assignmentView.assignments) {
     const bucket = assignmentsBySession.get(assignment.sessionId);
     if (bucket === undefined) {
       assignmentsBySession.set(assignment.sessionId, [assignment]);
+    } else {
+      bucket.push(assignment);
+    }
+    if (assignment.role !== "EXAMINEE") {
       continue;
     }
-    bucket.push(assignment);
+    const examinees = examineesBySession.get(assignment.sessionId);
+    if (examinees === undefined) {
+      examineesBySession.set(assignment.sessionId, [assignment]);
+      continue;
+    }
+    examinees.push(assignment);
   }
 
   // The definition requirements that gate the two create affordances, keyed by
@@ -1029,6 +1180,18 @@ export default async function CourseExamsPage({
   const { publication } = query;
   const publicationFeedback = publicationFeedbackFrom(publication);
 
+  // The PAIRING outcome token, destructured from that SAME one resolved query
+  // and parsed by the closed route-local table above. ONE more token, no more
+  // query resolutions, and it is never interpolated into the page: it can only
+  // SELECT a constant sentence and a constant tone, never supply either.
+  //
+  // It is FEEDBACK and never STATE. Nothing derives a pairing from it: which
+  // examinee each control pre-selects comes from the committed reader's own
+  // resolved answer, so a hand-typed `?pairing=PAIRED` changes what one banner
+  // says and nothing else — no read, no selection, no affordance and no write.
+  const { pairing } = query;
+  const pairingFeedback = pairingFeedbackFrom(pairing);
+
   const dashboardHref = `/admin/courses/${encodeURIComponent(context.id)}`;
   const isPublished = view.publishedAt !== null;
   const hasDefinitions = view.definitions.length > 0;
@@ -1091,6 +1254,15 @@ export default async function CourseExamsPage({
   // Action payload and is never a form field.
   const boundSetExamPlanPublicationAction =
     setExamPlanPublicationAction.bind(null, context.id);
+
+  // The PAIRING action, bound ONCE to the VERIFIED context id on exactly the
+  // same terms, and reused by every per-assignment control below. Hoisted rather
+  // than bound inside the session loop, for the reason every other binding
+  // expression appears exactly once in this file: one binding site is one place
+  // to check that the id came from `context`, and never from the raw route
+  // param. The offering id therefore travels inside the encrypted Server Action
+  // payload and is never a form field.
+  const boundSetExamPairingAction = setExamPairingAction.bind(null, context.id);
 
   return (
     <div className="flex flex-col gap-4">
@@ -1236,6 +1408,12 @@ export default async function CourseExamsPage({
       {publicationFeedback !== null ? (
         <div className={FEEDBACK_CLASS[publicationFeedback.tone]}>
           {publicationFeedback.message}
+        </div>
+      ) : null}
+
+      {pairingFeedback !== null ? (
+        <div className={FEEDBACK_CLASS[pairingFeedback.tone]}>
+          {pairingFeedback.message}
         </div>
       ) : null}
 
@@ -1446,6 +1624,14 @@ export default async function CourseExamsPage({
                           const sessionAssignments =
                             assignmentsBySession.get(session.sessionId) ?? NO_ASSIGNMENTS;
 
+                          // EX-PAIR-UI-MVP — the EXAMINEE rows of THIS session
+                          // and of no other, looked up by the SAME key the list
+                          // above uses. The pairing picker offers exactly these,
+                          // so an examinee of another session is not filtered
+                          // out here: it was never in this bucket.
+                          const sessionExaminees =
+                            examineesBySession.get(session.sessionId) ?? NO_ASSIGNMENTS;
+
                           // The definition's two extra requirements, from the
                           // definition reader. `undefined` means the session names
                           // a definition the definition reader did not report,
@@ -1628,6 +1814,104 @@ export default async function CourseExamsPage({
                                           courseOfferingId={context.id}
                                           assignmentId={assignment.assignmentId}
                                         />
+                                      ) : null}
+
+                                      {/*
+                                        EX-PAIR-UI-MVP — THE PAIRING CONTROL.
+
+                                        Rendered for an INSTRUCTED_TRAINEE row and
+                                        for NO other role: an examinee's partners
+                                        are the trainees pointing at it, which is a
+                                        different question with a different
+                                        cardinality, and the committed reader
+                                        publishes `null` for both fields there
+                                        anyway.
+
+                                        WHO IS CURRENTLY PAIRED is read from the
+                                        committed reader's resolved answer and from
+                                        nothing else — never from the query string,
+                                        never from array position and never from a
+                                        pairing index, which this page cannot see.
+                                        An ambiguous, unmatched or absent pairing
+                                        resolves to `null` there, so the sentence
+                                        below says plainly that there is none and
+                                        the picker below pre-selects the unpair
+                                        option rather than an arbitrary examinee.
+
+                                        The OPTIONS are this session's own examinee
+                                        bucket. A session with none gets a sentence
+                                        instead of an empty picker — offering only
+                                        "no partner" would look like a control that
+                                        does nothing.
+
+                                        NO CLIENT COMPONENT. A plain POST-ing form
+                                        on a Server Action, so a GET of this route
+                                        can never change a pairing; there is no
+                                        effect, no auto-submit and no pairing link
+                                        anywhere on this page. Both ids travel only
+                                        as submitted values and neither is ever
+                                        rendered as text.
+
+                                        Behind `mayConfigure`, the SAME single
+                                        lifecycle evaluation every other affordance
+                                        here uses — and never behind publication,
+                                        which is not authorization: a manager may
+                                        still edit a published plan, and the
+                                        existing advisory says so.
+                                      */}
+                                      {assignment.role === "INSTRUCTED_TRAINEE" ? (
+                                        <div className="w-full border-t border-border pt-2">
+                                          <p className="text-xs text-muted-foreground">
+                                            {PAIRING_SECTION_LABEL}:{" "}
+                                            <span className="font-medium text-card-foreground">
+                                              {assignment.pairedExamineeName ??
+                                                PAIRING_UNPAIRED_TEXT}
+                                            </span>
+                                          </p>
+                                          {mayConfigure ? (
+                                            sessionExaminees.length > 0 ? (
+                                              <form action={boundSetExamPairingAction} className="mt-2 flex flex-wrap items-center gap-2">
+                                                <input
+                                                  type="hidden"
+                                                  name="instructedTraineeAssignmentId"
+                                                  value={assignment.assignmentId}
+                                                  readOnly
+                                                />
+                                                <select
+                                                  name="examineeAssignmentId"
+                                                  aria-label={PAIRING_SECTION_LABEL}
+                                                  defaultValue={
+                                                    assignment.pairedExamineeAssignmentId ??
+                                                    EXAM_PAIRING_NONE_VALUE
+                                                  }
+                                                  className="rounded-lg border border-border bg-card px-2 py-1 text-xs text-card-foreground"
+                                                >
+                                                  <option value={EXAM_PAIRING_NONE_VALUE}>
+                                                    {PAIRING_NONE_OPTION_TEXT}
+                                                  </option>
+                                                  {sessionExaminees.map((examinee) => (
+                                                    <option
+                                                      key={examinee.assignmentId}
+                                                      value={examinee.assignmentId}
+                                                    >
+                                                      {examinee.traineeName}
+                                                    </option>
+                                                  ))}
+                                                </select>
+                                                <button
+                                                  type="submit"
+                                                  className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-card-foreground"
+                                                >
+                                                  {PAIRING_SUBMIT_TEXT}
+                                                </button>
+                                              </form>
+                                            ) : (
+                                              <p className="mt-1 text-xs text-muted-foreground">
+                                                {PAIRING_NO_EXAMINEES_TEXT}
+                                              </p>
+                                            )
+                                          ) : null}
+                                        </div>
                                       ) : null}
                                     </li>
                                     );

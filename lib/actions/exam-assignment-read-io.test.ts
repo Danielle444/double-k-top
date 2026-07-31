@@ -408,7 +408,24 @@ test("14. the assignment read is plan-scoped, unfiltered and student-id-free", (
   // them, which the exact list here, the unchanged `student` select and guard 10's
   // three-statement inventory each prove independently.
   //
-  // This is an EXACT list in EXACT source order, so an EIGHTH column still fails
+  // RE-POINTED AGAIN by EX-PAIR-UI-MVP, and GROWN by EXACTLY ONE column:
+  // `pairingIndex`. WHICH examinee an instructed trainee is paired with is
+  // undecidable without it, and the alternative — a SECOND reader with its own
+  // admin boundary, its own plan resolution and its own statements — would be
+  // strictly worse for every property this suite protects.
+  //
+  // It is the ASSIGNMENT's OWN column and an INTERNAL allocation label rather
+  // than a fact about a person, and it stays SERVER-INTERNAL in the strongest
+  // available sense: it is handed to the pure core, which CONSUMES it to resolve
+  // the pairing and publishes the ANSWER — a partner assignment id and a display
+  // name — instead. The core's own suite proves AT RUNTIME that no published row
+  // carries it and that it appears in no serialized payload; the ban below is
+  // therefore re-pointed onto the MAPPING rather than dropped. NOT ONE additional
+  // `Student` column, NOT ONE additional relation and NOT ONE additional
+  // statement came with it, which the exact list here, the unchanged `student`
+  // select and guard 10's three-statement inventory each prove independently.
+  //
+  // This is an EXACT list in EXACT source order, so a NINTH column still fails
   // here, and the personal, scoping and audit bans below are untouched.
   const select = entry.slice(entry.indexOf("select: {"), entry.indexOf("orderBy:"));
   const columns = [...select.matchAll(/^\s+(\w+): true,/gm)].map((match) => match[1]);
@@ -420,6 +437,7 @@ test("14. the assignment read is plan-scoped, unfiltered and student-id-free", (
     "instructionTopic",
     "discipline",
     "orderIndex",
+    "pairingIndex",
   ]);
   assert.ok(select.includes("student: { select: { fullName: true } },"));
   // The two new columns are selected as themselves and mapped straight through:
@@ -431,9 +449,9 @@ test("14. the assignment read is plan-scoped, unfiltered and student-id-free", (
     false,
     "a detail value is defaulted rather than carried",
   );
+  assert.ok(entry.includes("pairingIndex: row.pairingIndex,"));
   for (const forbidden of [
     "studentId: true",
-    "pairingIndex",
     "sourcePracticeRole",
     "notes",
     "createdAt",
@@ -441,6 +459,24 @@ test("14. the assignment read is plan-scoped, unfiltered and student-id-free", (
     "session: {",
   ]) {
     assert.equal(select.includes(forbidden), false, `the assignment read selects ${forbidden}`);
+  }
+
+  // THE INDEX IS CONSUMED, NEVER RE-PUBLISHED. This binding hands it to the pure
+  // core and does nothing else with it: it is not compared, not counted, not
+  // grouped, not renamed and not turned into a partner here. Every pairing
+  // decision — which roles may pair, that both rows share one session, which
+  // index identifies exactly one examinee, and which fails closed — belongs to
+  // the committed rule the core consults, and a second copy in this shell would
+  // be free to drift from it.
+  // THREE mentions and no fourth: the select column, and the two halves of the
+  // straight `pairingIndex: row.pairingIndex,` mapping.
+  assert.equal(
+    (entry.match(/pairingIndex/g) ?? []).length,
+    3,
+    "the index is used for something beyond the select and the straight mapping",
+  );
+  for (const forbidden of ["pairedExaminee", "resolveExamPairings", "INSTRUCTED_TRAINEE"]) {
+    assert.equal(entry.includes(forbidden), false, `the binding resolves pairing itself: ${forbidden}`);
   }
 
   // The nullable relation is mapped to null, which the pure core resolves to its
@@ -544,7 +580,31 @@ test("17. the pure core stays DB-free, and the read pair is exactly two files", 
   ]) {
     assert.equal(core.includes(token), false, `the pure core references ${token}`);
   }
-  assert.equal(/(^|\n)\s*import\s/.test(core), false, "the pure core imports something");
+  // RE-POINTED by EX-PAIR-UI-MVP, and NARROWED to an EXACT count rather than
+  // dropped. The claim was "the pure core imports NOTHING", which was correct
+  // while it answered questions about one row at a time. Resolving WHICH
+  // examinee an instructed trainee is paired with is a question about a
+  // RELATIONSHIP, and the repository already owns ONE committed answer to it;
+  // restating that rule inside the core would give this screen a second copy
+  // free to drift from the one the operational readers use.
+  //
+  // What this guard always protected is asserted UNCHANGED above and holds: the
+  // core still reaches no database, no `server-only`, no framework, no auth and
+  // no course policy. The one import is a pure sibling in the core's OWN
+  // directory, named by a RELATIVE specifier — so it can reach nothing this
+  // guard forbids either — and its own suite proves it. A SECOND import still
+  // fails here, and the core's own guard 21 pins WHICH single specifier it is.
+  assert.equal(
+    (core.match(/(^|\n)\s*import\s/g) ?? []).length,
+    1,
+    "the pure core imports more than the one approved sibling",
+  );
+  const coreSpecifiers = [...core.matchAll(/\bfrom\s+"([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(coreSpecifiers.length, 1, "the pure core has more than one specifier");
+  assert.ok(
+    coreSpecifiers[0].startsWith("./"),
+    "the pure core reaches outside its own directory",
+  );
 
   assert.deepEqual(
     readdirSync(join(REPO_ROOT, "lib", "actions"))
@@ -659,6 +719,23 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
     // capability or policy file comes with it, and THIS reader is neither edited
     // nor given a caller by it.
     "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    // EX-PAIR-UI-MVP — the approved ADMIN PAIRING UI, which wires that same
+    // committed pairing backend to this route. It is the FIRST slice since
+    // EX-ASG-LTD2-B1 to edit THIS read pair's own production modules, and it does
+    // so for one reason: the pairing cannot be displayed without reading the
+    // index behind it. The pair and the pure core's suite therefore rejoin the
+    // list BY NAME, together with the route's action module and page (already
+    // above) and the ONE contract suite the slice adds — an ADDITION rather than
+    // a modification, so it does not appear here at all.
+    //
+    // What this guard has always refused is unchanged: no schema, no migration,
+    // no auth module, no session module, no capability catalog and no
+    // course-policy core is named, and the assertion below still pins WHICH
+    // `lib/` production modules may appear.
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
   ].sort();
 
   const modified = gitLines([
@@ -689,12 +766,22 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
   // than a rule. The wiring slice that followed edits no `lib/` production module
   // at all - every binding it reaches is already committed, and the wiring lives
   // entirely under `app/` - so the original claim is restored in full.
+  //
+  // RE-POINTED ONCE MORE by EX-PAIR-UI-MVP, back to the EXACT PAIR. That slice
+  // must display a pairing, which is undecidable without reading the index behind
+  // it, so it edits the two modules THIS SUITE IS ABOUT — the pure read-shaping
+  // core and its own binding — and nothing else under `lib/`. A THIRD `lib/`
+  // production module, of ANY kind, still fails here: no writer, no policy core,
+  // no auth module and no session module may appear.
   const libProduction = modified
     .filter((path) => path.startsWith("lib/") && !path.endsWith(".test.ts"))
     .sort();
   assert.deepEqual(
     libProduction,
-    [],
+    [
+      "lib/actions/" + "exam-assignment-read" + "-io.ts",
+      "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    ].sort(),
     `an unapproved lib production module was edited: ${libProduction.join(", ")}`,
   );
 

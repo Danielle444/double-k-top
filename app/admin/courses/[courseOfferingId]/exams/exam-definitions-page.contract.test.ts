@@ -124,6 +124,8 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
@@ -132,11 +134,17 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  // ...and the committed PAIRING backend guard, whose caller list EX-PAIR-UI-MVP
+  // re-points from zero to exactly one Server Action module. A `.test.ts`, so no
+  // production module joins this list.
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
@@ -287,7 +295,7 @@ test("2. no top-level exams route exists in any role area", () => {
   }
 });
 
-test("3. the route directory holds exactly the twenty-one approved files", () => {
+test("3. the route directory holds exactly the twenty-three approved files", () => {
   // Tracked AND untracked, so this holds both before and after the batch is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a `[courseOfferingId]` pathspec would be read by git as a
@@ -331,6 +339,8 @@ test("3. the route directory holds exactly the twenty-one approved files", () =>
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+    // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
@@ -524,12 +534,14 @@ test("8. the route param is the ONLY scope input; the query is feedback only", (
       // ADDED by EX-PUB-UI-MVP: ONE closed publication FEEDBACK token. It names no
       // course, plan, session, trainee or version, and nothing derives scope or
       // publication STATE from it.
+      // EX-PAIR-UI-MVP adds ONE more closed feedback token, and no other key.
+      "pairing",
       "publication",
     ].sort(),
   );
   assert.equal(
     (queryType.match(/string \| string\[\]/g) ?? []).length,
-    24,
+    25,
     "every feedback key must admit the array form a repeated key produces",
   );
   for (const forbidden of [
@@ -813,8 +825,8 @@ test("13. EXACTLY the two approved Server Actions are reachable from the page", 
   // raw route param. `action=` counts TWO more, because the publication card's
   // two mutually exclusive forms are written out separately so each can carry a
   // LITERAL hidden operation value rather than a computed one.
-  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 9);
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 9);
+  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 10);
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 10);
 });
 
 test("14. the page holds NO client state, and its only inline control is the publication form", () => {
@@ -856,21 +868,37 @@ test("14. the page holds NO client state, and its only inline control is the pub
   // markup exists and HOW MUCH, so a third form, a second text input or a stray
   // control still fails, and it does so with a count rather than with a substring
   // that a single legitimate use would have to disable entirely.
-  assert.equal((PAGE.match(/<form /g) ?? []).length, 2, "exactly two inline forms");
-  assert.equal((PAGE.match(/<\/form>/g) ?? []).length, 2, "both inline forms are closed");
-  assert.equal((PAGE.match(/<button/g) ?? []).length, 2, "exactly two inline buttons");
-  assert.equal((PAGE.match(/<input/g) ?? []).length, 2, "exactly two inline inputs");
+  // RE-POINTED from two to THREE by EX-PAIR-UI-MVP, which renders its pairing
+  // control INLINE for the same reason the publication one is: fixed values, no
+  // pending UX, no validation and no confirmation. An inventory stays stronger
+  // than a ban: a FOURTH form, button or input still fails here.
+  assert.equal((PAGE.match(/<form /g) ?? []).length, 3, "exactly three inline forms");
+  assert.equal((PAGE.match(/<\/form>/g) ?? []).length, 3, "all three inline forms are closed");
+  assert.equal((PAGE.match(/<button/g) ?? []).length, 3, "exactly three inline buttons");
+  // RE-POINTED from two to THREE by EX-PAIR-UI-MVP: the pairing form carries ONE
+  // hidden field naming the instructed-trainee row it belongs to. A FOURTH still
+  // fails, and the two `name="operation"` inputs are pinned separately below.
+  assert.equal((PAGE.match(/<input/g) ?? []).length, 3, "exactly three inline inputs");
   // ...and the two inputs are BOTH hidden, both named `operation`, and each
   // carries one of the two LITERAL values — never a computed one, never a value
   // read from the query string, and never a second field.
-  assert.equal((PAGE.match(/type="hidden"/g) ?? []).length, 2);
+  // RE-POINTED from 2 to 3 by EX-PAIR-UI-MVP: its hidden field is the THIRD, and
+  // the two publication inputs keep their exact literal values. The named-field
+  // inventory grows to the two the pairing form submits, and no fifth.
+  assert.equal((PAGE.match(/type="hidden"/g) ?? []).length, 3);
   assert.equal((PAGE.match(/name="operation"/g) ?? []).length, 2);
   assert.equal((PAGE.match(/value="PUBLISH"/g) ?? []).length, 1);
   assert.equal((PAGE.match(/value="UNPUBLISH"/g) ?? []).length, 1);
-  assert.equal((PAGE.match(/name="/g) ?? []).length, 2, "no third named field exists");
+  assert.equal((PAGE.match(/name="/g) ?? []).length, 4, "no fifth named field exists");
+  assert.equal((PAGE.match(/name="instructedTraineeAssignmentId"/g) ?? []).length, 1);
+  assert.equal((PAGE.match(/name="examineeAssignmentId"/g) ?? []).length, 1);
   // No FREE-TEXT control of any kind entered the page: the publication form
   // collects nothing a manager can type.
-  for (const forbidden of ["<select", "<textarea", 'type="text"', 'type="checkbox"']) {
+  // RE-POINTED by EX-PAIR-UI-MVP: the pairing picker is a `<select>` and there is
+  // exactly ONE on this page. A SECOND still fails, and every other control token
+  // stays banned outright.
+  assert.equal((PAGE.match(/<select/g) ?? []).length, 1, "exactly one inline picker");
+  for (const forbidden of ["<textarea", 'type="text"', 'type="checkbox"']) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not render ${forbidden}`);
   }
 
@@ -881,10 +909,12 @@ test("14. the page holds NO client state, and its only inline control is the pub
   // EX-ASG-UI1, which adds the sixth and seventh, and again by EX-PUB-UI-MVP,
   // whose publication card contributes TWO — its two mutually exclusive forms are
   // written out separately so each can carry a LITERAL hidden operation value.
+  // RE-POINTED from ten to ELEVEN by EX-PAIR-UI-MVP: ONE more inline form, bound
+  // to the SAME verified context id, which the bind counts above pin.
   assert.equal(
     (PAGE.match(/action=/g) ?? []).length,
-    10,
-    "action= must appear exactly ten times",
+    11,
+    "action= must appear exactly eleven times",
   );
   // Both publication forms receive EXACTLY the hoisted bound action, and no other
   // expression reaches either one's `action` prop.

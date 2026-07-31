@@ -77,6 +77,8 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
@@ -85,8 +87,14 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  // ...and the committed PAIRING backend guard, whose caller list EX-PAIR-UI-MVP
+  // re-points from zero to exactly one Server Action module. A `.test.ts`, so no
+  // production module joins this list.
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
@@ -353,6 +361,8 @@ test("2. the action module is a Server Action module exporting EXACTLY the nine 
     "createExamSessionAction",
     "deleteExamAssignmentAction",
     "deleteExamSessionAction",
+    // EX-PAIR-UI-MVP appended a TENTH: the admin pairing endpoint. Still EXHAUSTIVE.
+    "setExamPairingAction",
     "setExamPlanPublicationAction",
     "updateExamSessionAction",
   ]);
@@ -368,7 +378,7 @@ test("2. the action module is a Server Action module exporting EXACTLY the nine 
   // committed writer through ONE authorization boundary and ONE lifecycle gate, so
   // no request can steer between two different operations. Guard 22 pins that
   // field to its two literals from both directions.
-  assert.equal((ACTION.match(/export async function /g) ?? []).length, 9);
+  assert.equal((ACTION.match(/export async function /g) ?? []).length, 10);
 });
 
 test("3. the action has the EXACT locked signature, and returns void", () => {
@@ -514,8 +524,8 @@ test("8. success revalidates ONLY this course's exams path, exactly once", () =>
   // that single occurrence sits on the CHANGED branch alone, so a NO_CHANGE
   // publication revalidates nothing, because the committed writer issued no
   // statement and a cache invalidation would be a lie about what happened.
-  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 9);
-  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 9);
+  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 10);
+  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 10);
   // The two successes are distinguished, and both land on the exams path.
   assert.ok(
     PLAN_ACTION.includes(
@@ -643,9 +653,9 @@ test("13. searchParams carries ONLY closed feedback tokens", () => {
   // version stamp — which the id ban below re-states from the other side.
   assert.ok(
     PAGE_FLAT.includes(
-      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; updatedSession?: string | string[]; unchangedSession?: string | string[]; sessionEditError?: string | string[]; sessionEditIssues?: string | string[]; deletedSession?: string | string[]; sessionDeleteError?: string | string[]; createdAssignment?: string | string[]; assignmentError?: string | string[]; assignmentIssues?: string | string[]; deletedAssignment?: string | string[]; assignmentDeleteError?: string | string[]; createdInstructedTrainee?: string | string[]; instructedTraineeError?: string | string[]; instructedTraineeIssues?: string | string[]; publication?: string | string[]; }>;",
+      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; updatedSession?: string | string[]; unchangedSession?: string | string[]; sessionEditError?: string | string[]; sessionEditIssues?: string | string[]; deletedSession?: string | string[]; sessionDeleteError?: string | string[]; createdAssignment?: string | string[]; assignmentError?: string | string[]; assignmentIssues?: string | string[]; deletedAssignment?: string | string[]; assignmentDeleteError?: string | string[]; createdInstructedTrainee?: string | string[]; instructedTraineeError?: string | string[]; instructedTraineeIssues?: string | string[]; publication?: string | string[]; pairing?: string | string[]; }>;",
     ),
-    "the searchParams type must be the closed twenty-three-key shape",
+    "the searchParams type must be the closed twenty-five-key shape",
   );
   // created/existing are honoured only on the exact string "1"; a repeated key
   // (which arrives as an array) is not a recognized token.
@@ -888,6 +898,12 @@ test("17. no publication, source-date, session, capability or notification work"
     // whole HERE would enrol this guard suite in the very list it exists to keep
     // at one production caller.
     "@/lib/actions/" + "exam-publication-write" + "-io",
+    // ADDED by EX-PAIR-UI-MVP, and assembled on exactly the same terms: the
+    // committed PAIRING write binding's own guard pinned its caller list at
+    // EXACTLY ZERO before this slice and at exactly this one Server Action
+    // module after it, so a suite that spelled the module whole would enrol
+    // itself in that list.
+    "@/lib/actions/" + "exam-pairing-write" + "-io",
     "next/cache",
     "next/navigation",
   ].sort());
@@ -910,7 +926,7 @@ test("18. the ExamPlan write binding has EXACTLY one production caller", () => {
   assert.equal(APPROVED_CALLER.endsWith(".tsx"), false);
 });
 
-test("19. the route directory holds EXACTLY the fourteen approved files", () => {
+test("19. the route directory holds EXACTLY the twenty-three approved files", () => {
   // Tracked AND untracked, so this holds both before and after the slice is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a `[courseOfferingId]` pathspec would be read by git as a
@@ -948,6 +964,8 @@ test("19. the route directory holds EXACTLY the fourteen approved files", () => 
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+    // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
