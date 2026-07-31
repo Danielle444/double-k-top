@@ -141,6 +141,12 @@ function options(over: Partial<ExamPlanLoadOptions> = {}): ExamPlanLoadOptions {
     requirePlanPublication: false,
     requireLessonPublication: false,
     viewerStudentId: null,
+    // EX-BEGINNER-EXAM-READ. The default is the LEVEL-1 reading, so every test
+    // written before the containment gate existed keeps exercising exactly the
+    // Teaching-Practice path it was written for. The gate's own behaviour — that
+    // anything but a literal `true` reads no source date at all — is proven by
+    // the tests that pass it explicitly, never by this default.
+    beginnerSourceEnabled: true,
     ...over,
   };
 }

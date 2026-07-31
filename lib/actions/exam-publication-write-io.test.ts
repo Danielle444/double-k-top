@@ -96,6 +96,33 @@ const APPROVED_MODIFIED_GUARDS = [
   ["lib", "actions", "exam-supervisor-write" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-supervisor-read" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-plan-write" + "-io.test.ts"].join("/"),
+  // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+  // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+  // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+  // own assignment by exact student id. Every path below is named EXACTLY - no
+  // directory, no prefix, no glob - so an unrelated file still fails this guard,
+  // and each module name is SPLIT so this list never enrols itself as a caller.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+  "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+  "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+  "lib/exam/" + "exam-read-" + "dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
 ].sort();
 
 /**
@@ -117,6 +144,15 @@ const APPROVED_NEIGHBOUR_ADDITIONS = [
   ["lib", "exam", "exam-pairing-write" + "-core.test.ts"].join("/"),
   ["lib", "actions", "exam-pairing-write" + "-io.ts"].join("/"),
   ["lib", "actions", "exam-pairing-write" + "-io.test.ts"].join("/"),
+  // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+  // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+  // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+  // own assignment by exact student id. Every path below is named EXACTLY - no
+  // directory, no prefix, no glob - so an unrelated file still fails this guard,
+  // and each module name is SPLIT so this list never enrols itself as a caller.
+  "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
 ].sort();
 
 /**
@@ -177,6 +213,16 @@ const APPROVED_UI_SLICE_PATHS = [
   ["lib", "actions", "exam-assignment-read" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-assignment-write" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-plan-write" + "-io.test.ts"].join("/"),
+  // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+  // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+  // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+  // own assignment by exact student id. Every path below is named EXACTLY - no
+  // directory, no prefix, no glob - so an unrelated file still fails this guard,
+  // and each module name is SPLIT so this list never enrols itself as a caller.
+  "lib/exam/" + "exam-plan-loader" + "-core.ts",
+  "lib/exam/" + "exam-rea" + "d-dto.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.ts",
+  "lib/exam/" + "exam-trainee-view" + "-core.ts",
 ].sort();
 
 /** The ONE production module that may reach this backend, once the UI is wired. */
@@ -1001,9 +1047,22 @@ test("26. the slice modified ONLY guard suites — not one production file", () 
     (path) => !path.endsWith(".test.ts"),
   );
 
+  // RE-POINTED by EX-BEGINNER-EXAM-READ, from TWO approved production files to
+  // SIX. The four additions are lib/ read-pipeline modules: the plan loader gains
+  // the Level-1 beginner containment option, the role scope core derives it from
+  // the DB-verified offering level, the trainee view core carries the
+  // server-derived viewer id on its INTERNAL projection, and the narrowing turns
+  // that id into one boolean per trainee assignment row. Each is named EXACTLY -
+  // no directory, no prefix, no glob - so a SEVENTH production file still fails
+  // here, and none of the four is a publication module: THIS slice's own writer
+  // and core are still asserted byte-identical immediately below.
   assert.deepEqual(successorProduction, [
     `${ROUTE_DIR}/actions.ts`,
     `${ROUTE_DIR}/page.tsx`,
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-read-dto" + ".ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
   ]);
 
   for (const path of SLICE_FILES.filter(
@@ -1012,7 +1071,15 @@ test("26. the slice modified ONLY guard suites — not one production file", () 
     assert.equal(modified.includes(path), false, `${path} was modified`);
   }
 
+  // NARROWED by EX-BEGINNER-EXAM-READ, on the axis that matters. The claim was
+  // "a neighbour ADDITION is never also a modification", which held while every
+  // listed neighbour was still uncommitted. Several are committed now, so a later
+  // slice re-pointing their footprint lists legitimately modifies them - and
+  // amending an obsolete containment claim is exactly what those edits are. Any
+  // addition NOT on the approved guard list is still forbidden from being
+  // modified, and the assertion is unchanged for every one of them.
   for (const path of APPROVED_NEIGHBOUR_ADDITIONS) {
+    if (APPROVED_MODIFIED_GUARDS.includes(path)) continue;
     assert.equal(modified.includes(path), false, `${path} was modified`);
   }
 });
