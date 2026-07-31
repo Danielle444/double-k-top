@@ -36,6 +36,16 @@ const INSTRUCTOR_ACTION_REL = "lib/actions/instructor-exam-schedule.ts";
 const INSTRUCTOR_SECTION_REL = "app/instructor/InstructorExamsSection.tsx";
 const INSTRUCTOR_CLIENT_REL = "app/instructor/InstructorClient.tsx";
 const INSTRUCTOR_SUITE_REL = "lib/actions/instructor-exam-schedule.contract.test.ts";
+/**
+ * EX-ROLE-OP-UI-MVP — the ONE shared renderer for a block's operational
+ * assignment rows, mounted by the trainee screen and the instructor screen
+ * alike. Its own behaviour is proven by real render tests beside it
+ * (lib/components/ExamAssignmentRows.test.tsx); what this suite pins is that the
+ * trainee screen delegates to it rather than growing a second copy.
+ */
+const ASSIGNMENT_ROWS_REL = "lib/components/ExamAssignmentRows.tsx";
+const ASSIGNMENT_ROWS_SUITE_REL = "lib/components/ExamAssignmentRows.test.tsx";
+const NAV_SUITE_REL = "app/student/trainee-nav-visibility.test.ts";
 
 function read(relative: string): string {
   return readFileSync(join(REPO_ROOT, relative), "utf8");
@@ -54,28 +64,6 @@ function gitLines(args: string[]): string[] {
     .map((line) => line.trim())
     .filter(Boolean);
 }
-
-/**
- * The EXACT files of the separately reviewed EX-OPS-READ-MVP slice, which
- * extends the role-neutral read pipeline so the complete operational schedule
- * can be displayed. Listed once, used by the two re-pointed sweeps below.
- */
-const EXAM_OPERATIONAL_READ_PATHS: readonly string[] = [
-  "exam-block-timetable-core.ts",
-  "exam-block-timetable-core.test.ts",
-  "exam-stored-adapter-core.ts",
-  "exam-stored-adapter-core.test.ts",
-  "exam-plan-loader-core.ts",
-  "exam-read-dto.ts",
-  "exam-read-dto.test.ts",
-  "exam-read-scope-core.ts",
-  "exam-read.contract.test.ts",
-  // The DIRECTORY PREFIX IS JOINED rather than spelled into each literal. The
-  // committed `exam-schema-structure` containment guard scans every file outside
-  // `lib/exam` for the exact token `<dir>/<core-name>`, and a fully-written path
-  // here would read to it as this suite wiring itself to an exam core. The paths
-  // this list produces are identical either way.
-].map((name) => ["lib", "exam", name].join("/"));
 
 /** Is this path byte-identical to HEAD, staged and unstaged alike? */
 function unchangedSinceHead(relative: string): boolean {
@@ -328,12 +316,67 @@ function assertScopeCoreAuthorizationUnchanged(): void {
   }
 }
 
+/**
+ * EX-ROLE-OP-UI-MVP RE-POINT — `app/student/trainee-nav-visibility.ts`.
+ *
+ * This suite asserted the navigation rule was BYTE-IDENTICAL to HEAD. That
+ * described the trainee-view slice, which needed no navigation change; the
+ * operational-UI slice does, because the fail-closed level allow-list was hiding
+ * the "מבחנים" entry from Level-2-only trainees — precisely the trainees the exam
+ * schedule exists for, and whom the committed reader was already willing to
+ * serve.
+ *
+ * The claim is REPLACED, not dropped, by a strictly EXACT one: the ONLY code
+ * change permitted in that file is the addition of the single `"exams"` id. No
+ * code line may be REMOVED, and no other line may be ADDED. A slice that touched
+ * the cardinality rule, the allow-list's other entries, the additive
+ * `serverUnlockedNavIds` seam or either exported function's body would change or
+ * delete a code line and fail here — as would one that quietly widened the
+ * allow-list with a second module.
+ */
+function assertNavVisibilityOnlyGainedExamsId(): void {
+  const diff = spawnSync("git", ["diff", "-U0", "HEAD", "--", NAV_REL], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(diff.status, 0, `git diff ${NAV_REL} failed: ${diff.stderr ?? ""}`);
+  const changed = (diff.stdout ?? "")
+    .split("\n")
+    .filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line));
+
+  // COMMENT-ONLY lines are exempt: a rule whose reasoning changed must be
+  // allowed to say so. Everything else is held to the exact claim.
+  const isPureComment = (body: string): boolean =>
+    body.trim() === "" || /^\s*(\/\/|\/\*|\*|\*\/)/.test(body);
+
+  const removed = changed.filter((line) => line.startsWith("-")).map((line) => line.slice(1));
+  assert.deepEqual(
+    removed.filter((body) => !isPureComment(body)),
+    [],
+    `${NAV_REL} removed or rewrote a code line`,
+  );
+
+  const added = changed.filter((line) => line.startsWith("+")).map((line) => line.slice(1));
+  assert.deepEqual(
+    added.filter((body) => !isPureComment(body)).map((body) => body.trim()),
+    ['"exams",'],
+    `${NAV_REL} added a code line beyond the one approved id`,
+  );
+
+  // The module is still PURE — its own suite proves this structurally, and it is
+  // restated here because THIS suite's subject is what a trainee may reach.
+  const nav = stripComments(read(NAV_REL));
+  for (const token of ["prisma", "cookies(", "headers(", "getEffectiveCapabilities", "use server"]) {
+    assert.equal(nav.includes(token), false, `the navigation rule now performs ${token}`);
+  }
+}
+
 test("6b. the reader is untouched, server-only, and the wrapper is its only app-reachable caller", () => {
   // Byte-identical to HEAD: this slice changed no authorization, no course
   // resolution and no publication logic.
-  for (const relative of [READERS_REL, NAV_REL]) {
-    assert.ok(unchangedSinceHead(relative), `${relative} was modified by this slice`);
-  }
+  assert.ok(unchangedSinceHead(READERS_REL), `${READERS_REL} was modified by this slice`);
+  // ...and the navigation rule gained the one approved id and nothing else.
+  assertNavVisibilityOnlyGainedExamsId();
   // ...and no changed line of the pure scope core touches authorization.
   assertScopeCoreAuthorizationUnchanged();
 
@@ -393,17 +436,43 @@ test('7. the "מבחנים" trainee entry exists EXACTLY once', () => {
   const quickActions = clientSlice("const STUDENT_QUICK_ACTIONS", "interface StoredSession");
   assert.equal(quickActions.includes("exams"), false, "a second entry point was added");
 
-  // The Level 2 rules are FAIL-CLOSED allow-lists, and neither was relaxed: a
-  // Level-2-only trainee never sees the entry, and nobody sees it before the
-  // course options resolve.
+  // NOBODY sees the entry before the course options resolve. This half of the
+  // rule is UNCHANGED: while the options are unknown we cannot tell a Level 2
+  // trainee from anyone else, and the safe direction while unknown is to show
+  // less, so the entry appears only once the options arrive.
   const loadingSafe = clientSlice("const LOADING_SAFE_NAV_IDS", "function toMessagePreview");
   assert.equal(loadingSafe.includes("exams"), false, "the loading-safe allow-list was widened");
+
+  // EX-ROLE-OP-UI-MVP RE-POINT — the Level 2 allow-list. This asserted that a
+  // Level-2-only trainee NEVER sees the entry. That was the trainee-view slice's
+  // deliberate conservative default, and it turned out to hide the exam schedule
+  // from exactly the trainees it is for: the reader already serves them, so the
+  // allow-list was the only thing in the way.
+  //
+  // The claim is REPLACED by the EXACT membership of that list, which is a
+  // strictly stronger statement than the one it replaces — the previous version
+  // said nothing at all about the other seven ids, so a slice that added
+  // "duties" would have passed it. The fail-closed shape is intact: any id NOT
+  // spelled below is still hidden without needing to be enumerated, and
+  // `assertNavVisibilityOnlyGainedExamsId` above independently pins that this
+  // list gained "exams" and nothing else.
   const nav = stripComments(read(NAV_REL));
   const level2 = nav.slice(
     nav.indexOf("const LEVEL2_ONLY_VISIBLE_NAV_IDS"),
     nav.indexOf("export function isTraineeNavEntryVisible"),
   );
-  assert.equal(level2.includes("exams"), false, "the Level 2 allow-list was widened");
+  assert.deepEqual(
+    [...level2.matchAll(/"(\w+)"/g)].map(([, id]) => id),
+    ["today", "schedule", "contacts", "exams", "profile", "help", "more"],
+    "the Level 2 allow-list is not exactly the approved membership",
+  );
+
+  // AND IT UNLOCKS NOTHING. Being reachable is not being shown a schedule: the
+  // committed reader still proves the session, resolves the trainee's own course
+  // and requires a PUBLISHED plan and PUBLISHED lessons. That is the property
+  // this navigation change must not have moved, so it is re-checked here.
+  assertScopeCoreAuthorizationUnchanged();
+  assert.ok(unchangedSinceHead(READERS_REL), "the reader changed alongside the navigation");
 });
 
 test("8. every existing trainee navigation entry is still present", () => {
@@ -628,8 +697,12 @@ test("14b. the approved trainee display fields are the ones rendered", () => {
   assert.ok(SECTION_CODE.includes("view.myRows") && SECTION_CODE.includes("view.allRows"));
   assert.ok(SECTION.includes('const ALL_MODE_LABEL = "לו״ז כולם";'));
   assert.ok(SECTION.includes('const SELF_MODE_LABEL = "לו״ז שלי";'));
-  // ...and no field the trainee contract does not carry is stubbed out.
-  for (const absent of ["horse", "topic", "discipline", "pairing", "grade", "feedback", "rating"]) {
+  // ...and no field the trainee contract does not carry is stubbed out. This
+  // list was RE-POINTED by EX-ROLE-OP-UI-MVP: the contract now carries the horse,
+  // the instruction topic, the discipline and the resolved pairing for every
+  // participant, so asserting their absence would pin a claim that is no longer
+  // true. Grade, feedback and rating are still absent, so they stay pinned.
+  for (const absent of ["grade", "feedback", "rating"]) {
     assert.equal(
       new RegExp(absent, "i").test(SECTION_CODE),
       false,
@@ -638,14 +711,103 @@ test("14b. the approved trainee display fields are the ones rendered", () => {
   }
 });
 
+test('14c. "לו״ז כולם" renders the COMPLETE operational schedule, through the shared renderer', () => {
+  // Every visible row's assignment rows are handed to the shared renderer
+  // VERBATIM — the whole array, in the contract's own order, with no filter,
+  // slice, sort or re-map in between.
+  assert.ok(
+    SECTION_CODE.includes("<ExamAssignmentRows assignments={row.assignments} />"),
+    "the trainee screen does not render the operational assignment rows",
+  );
+  assert.ok(
+    SECTION_CODE.includes('from "@/lib/components/ExamAssignmentRows"'),
+    "the trainee screen does not mount the shared renderer",
+  );
+
+  // ONE hand-off, inside the ONE row loop that BOTH views share. That is what
+  // makes "לו״ז כולם" complete and "לו״ז שלי" identical in content: the two
+  // views differ by which ROWS reach the loop (`view.myRows` vs `view.allRows`),
+  // never by what a row is allowed to show.
+  assert.equal(
+    (SECTION_CODE.match(/row\.assignments/g) ?? []).length,
+    1,
+    "the assignment rows are read somewhere beyond the one approved hand-off",
+  );
+  assert.equal(
+    (SECTION_CODE.match(/<ExamAssignmentRows/g) ?? []).length,
+    1,
+    "a second, view-specific renderer was added",
+  );
+  assert.ok(
+    SECTION_CODE.includes('mode === "self" ? view.myRows : view.allRows'),
+    "the two views are no longer the same rows, filtered",
+  );
+
+  // THE SCREEN ITSELF DECIDES NOTHING ABOUT THEM, so it cannot grow a second,
+  // disagreeing copy of the role labels, the personal window, the horse, the
+  // topic, the discipline or the pairing.
+  for (const token of [
+    "horseName",
+    "instructionTopic",
+    "discipline",
+    "personalStartTime",
+    "personalEndTime",
+    "pairedParticipantName",
+    "pairedParticipantNames",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen re-implements ${token}`);
+  }
+  for (const token of ["pairingIndex", "resolvePairing", "computePairing", "addMinutes", "parseInt"]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen duplicates ${token}`);
+  }
+});
+
+test('14d. "לו״ז שלי" still identifies "mine" by the server-computed marker, never by name', () => {
+  // The personal view is `view.myRows`, which the committed trainee core derived
+  // server-side from the SIGNED SESSION and handed over as the boolean `isSelf`.
+  // The highlight, the label and the personal window all hang off that same
+  // marker — no id crosses the boundary, and none is needed.
+  assert.ok(SECTION_CODE.includes("view.myRows"), "the personal view is no longer the server filter");
+  assert.ok(SECTION_CODE.includes("row.isSelf ?"), "the viewer's own row is no longer highlighted");
+  assert.ok(SECTION_CODE.includes("row.selfLabel !== null &&"), "the self label was dropped");
+  assert.ok(SECTION_CODE.includes("row.selfRole"), "the viewer's own role was dropped");
+  assert.ok(SECTION_CODE.includes("row.selfStartTime !== null &&"), "the personal window was dropped");
+
+  // NO NAME IS EVER COMPARED to decide what is "mine". A display name is not an
+  // identity: two trainees may share one, and the screen holds no name of the
+  // viewer to compare against in the first place.
+  for (const token of [
+    "participantName ===",
+    "=== row.participantName",
+    "participantName ==",
+    "selfLabel ===",
+    ".includes(row.participantName",
+    "localeCompare",
+    "viewerName",
+    "myName",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the UI matches identity by ${token}`);
+  }
+  // ...and no id was added to the client contract to highlight a line either.
+  for (const token of ["viewerStudentId", "selfAssignmentId", "selfStudentId"]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the UI reaches ${token}`);
+  }
+});
+
 // ===========================================================================
 // 15–17. Containment
 // ===========================================================================
 
 test("15. no instructor or admin exam file was modified", () => {
+  // EX-ROLE-OP-UI-MVP RE-POINT — `INSTRUCTOR_SECTION_REL` LEAVES THIS LIST. The
+  // operational-UI slice renders the same newly available assignment rows on
+  // BOTH role screens, so the instructor section is a file it necessarily edits;
+  // keeping it here would pin a claim the approved work contradicts. Its change
+  // is pinned in full by the instructor suite's own tests 8-11, 10b and 15. The
+  // instructor ACTION and CLIENT, and the shared bottom bar, keep the strictly
+  // byte-identical claim, because this slice touches none of them.
   for (const relative of [
     INSTRUCTOR_ACTION_REL,
-    INSTRUCTOR_SECTION_REL,
     INSTRUCTOR_CLIENT_REL,
     "lib/components/BottomTabs.tsx",
   ]) {
@@ -664,19 +826,13 @@ test("15. no instructor or admin exam file was modified", () => {
     assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", dir]), []);
     assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", dir]), []);
   }
-  // EX-OPS-READ-MVP RE-POINT. `lib/exam` was in the list above as a blanket "no
-  // exam core changed" claim describing THIS slice while it was in flight. The
-  // slice is merged, so the claim now measures whichever slice sits in the tree.
-  // It is replaced by an EXACT path allow-list of the separately reviewed
-  // operational-read slice, so any OTHER exam core change still fails here, and
-  // NO new file may appear in that directory at all.
-  assert.deepEqual(
-    gitLines(["diff", "--name-only", "HEAD", "--", "lib/exam"])
-      .map((path) => path.split("\\").join("/"))
-      .filter((path) => !EXAM_OPERATIONAL_READ_PATHS.includes(path))
-      .sort(),
-    [],
-  );
+  // EX-ROLE-OP-UI-MVP RE-POINT. An EXACT path allow-list of nine `lib/exam`
+  // files was carried here while the operational-READ slice was in flight. That
+  // slice is merged, so the exception describes nothing in the working tree any
+  // more — it is a dead permission that would let an unrelated exam-core edit
+  // through. The blanket claim is RESTORED at full strength: no file under that
+  // directory may change, and no new file may appear in it.
+  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", "lib/exam"]), []);
   assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", "lib/exam"]), []);
 });
 
@@ -721,7 +877,7 @@ test("16. no write, publish, supervisor or pairing control was added", () => {
   }
 });
 
-test("17. the slice's footprint is exactly its five approved paths", () => {
+test("17. the working tree holds only the approved paths of this slice and the operational-UI slice", () => {
   const touched = new Set([
     ...gitLines(["diff", "--name-only", "HEAD"]),
     ...gitLines(["diff", "--name-only", "--cached", "HEAD"]),
@@ -733,13 +889,21 @@ test("17. the slice's footprint is exactly its five approved paths", () => {
     SECTION_REL,
     CLIENT_REL,
     INSTRUCTOR_SUITE_REL,
-    // EX-OPS-READ-MVP RE-POINT, on the same terms as the re-point in test 16 of
-    // the instructor suite: this repo-wide sweep is deliberately KEPT — it is
-    // the only "nothing else was touched" check here — and widened by an EXACT
-    // path list, never a directory and never a glob. That slice's own footprint
-    // is pinned by lib/exam/exam-read.contract.test.ts, and test 15 above pins
-    // that no OTHER exam core changed.
-    ...EXAM_OPERATIONAL_READ_PATHS,
+    // EX-ROLE-OP-UI-MVP RE-POINT, on the same terms as the re-point in test 16 of
+    // the instructor suite: this repo-wide sweep is deliberately KEPT — it is the
+    // only "nothing else was touched" check here — and widened by an EXACT path
+    // list, never a directory and never a glob. These four are the
+    // operational-UI slice's own paths: the shared renderer, its render tests,
+    // the trainee navigation rule that was hiding the exams entry, and that
+    // rule's own suite.
+    INSTRUCTOR_SECTION_REL,
+    ASSIGNMENT_ROWS_REL,
+    ASSIGNMENT_ROWS_SUITE_REL,
+    NAV_REL,
+    NAV_SUITE_REL,
+    // The nine `lib/exam` paths of the merged operational-READ slice are GONE
+    // from this list for the reason given in test 15 above: they are dead
+    // permissions now, and dropping them restores the sweep to full strength.
   ];
   const offenders = [...touched]
     .map((path) => path.split("\\").join("/"))

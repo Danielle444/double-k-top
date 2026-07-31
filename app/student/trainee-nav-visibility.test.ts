@@ -98,6 +98,80 @@ test("Level-2-only keeps profile, help and the 'more' container visible", () => 
 });
 
 // ---------------------------------------------------------------------------
+// EX-ROLE-OP-UI-MVP - the Level 2 EXAM SCHEDULE entry.
+//
+// The exam schedule is an ADVANCED-COURSE module, so the Level-2-only trainee is
+// precisely the trainee it exists for. The allow-list previously hid the only
+// entry point to a screen the committed reader was already willing to serve
+// them, which is why "exams" is now on it.
+//
+// IT UNLOCKS NOTHING, and these tests are not a claim that it does: this module
+// is navigation cleanup only (see the tests at the bottom of this file, which
+// prove it performs no server, auth or capability work at all). Whether a
+// schedule actually comes back is decided by the trainee reader, which requires
+// a published plan and published lessons.
+// ---------------------------------------------------------------------------
+
+const EXAMS: MainTabId = "exams";
+
+test("Level-2-only KEEPS the exams entry visible, with no unlock needed", () => {
+  const opts = [option("a", 2)];
+  assert.equal(isTraineeNavEntryVisible(EXAMS, opts), true);
+  assert.equal(isTraineeNavEntryVisible(EXAMS, opts, []), true, "no server unlock is required");
+});
+
+test("the exams entry is visible to every other trainee too (navigation unfiltered)", () => {
+  for (const opts of [[option("a", 1)], [option("l1", 1), option("l2", 2)], []]) {
+    assert.equal(isTraineeNavEntryVisible(EXAMS, opts), true, "exams must stay visible");
+  }
+});
+
+test("allowing exams reveals ONLY exams - every hidden Level 2 module stays hidden", () => {
+  // The allow-list is still fail-closed: an id it does not name is hidden
+  // without needing to be enumerated.
+  const opts = [option("a", 2)];
+  for (const id of LEVEL_RULE_ONLY_MODULE_IDS) {
+    assert.equal(isTraineeNavEntryVisible(id, opts), false, `${id} must stay hidden`);
+  }
+  assert.equal(isTraineeNavEntryVisible(MATERIALS, opts), false, "materials still needs its unlock");
+});
+
+test("the exams entry keeps its place in the 'עוד' menu for a Level-2-only trainee", () => {
+  const moreItems: { id: MainTabId; label: string }[] = [
+    { id: "profile", label: "פרופיל" },
+    { id: "contacts", label: "אנשי קשר" },
+    { id: "materials", label: "חומרי קורס" },
+    { id: "teachingPractice", label: "התנסויות מתחילים" },
+    { id: "exams", label: "מבחנים" },
+    { id: "notifications", label: "עדכונים" },
+    { id: "weeklyFeedback", label: "משוב שבועי" },
+    { id: "help", label: "עזרה" },
+  ];
+  assert.deepEqual(
+    filterTraineeNavEntries(moreItems, [option("a", 2)]).map((i) => i.id),
+    ["profile", "contacts", "exams", "help"],
+    "exams appears where the menu defines it, after teaching practice was dropped",
+  );
+});
+
+test("filtering still cannot INJECT the exams entry into a surface that omits it", () => {
+  // The bottom bar and the home shortcuts do not define an exams entry, so no
+  // allow-list membership can put one there.
+  const mainTabs: { id: MainTabId; label: string }[] = [
+    { id: "today", label: "היום" },
+    { id: "schedule", label: 'לו"ז' },
+    { id: "duties", label: "תורנויות" },
+    { id: "messages", label: "הודעות" },
+    { id: "more", label: "עוד" },
+  ];
+  assert.deepEqual(
+    filterTraineeNavEntries(mainTabs, [option("a", 2)]).map((t) => t.id),
+    ["today", "schedule", "more"],
+    "the bottom bar must be unchanged",
+  );
+});
+
+// ---------------------------------------------------------------------------
 // SERVER CAPABILITY UNLOCK (serverUnlockedNavIds) - the Level 2 Course Materials
 // entry point. The unlock is ADDITIVE: it may reveal an entry the level rule
 // would hide, and may do nothing else.

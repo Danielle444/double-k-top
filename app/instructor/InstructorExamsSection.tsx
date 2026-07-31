@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { InstructorScheduleCourseSelector } from "@/app/instructor/InstructorScheduleCourseSelector";
+import { ExamAssignmentRows } from "@/lib/components/ExamAssignmentRows";
 import {
   getInstructorExamSchedule,
   type InstructorExamScheduleView,
@@ -51,13 +52,24 @@ import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates
  * renderer, so a field that is not spelled out below cannot appear on screen.
  *
  * ===========================================================================
- * WHAT THE MVP CONTRACT DOES NOT CARRY
+ * THE COMPLETE OPERATIONAL SCHEDULE (EX-ROLE-OP-UI-MVP)
  * ===========================================================================
- * The instructor contract has no horse, no instruction topic, no discipline, no
- * pairing identity, no grade and no feedback. None of them is stubbed, labelled
- * "—" or given an empty row here: inventing a placeholder would tell an
- * instructor that a value exists and is blank, when in truth this read does not
- * carry it at all.
+ * The read pipeline now hands every visible block its assignment-level rows —
+ * who is in it, in which role, at exactly which minutes, on which horse, on
+ * which topic and discipline, and paired with whom. They are rendered by the ONE
+ * shared renderer, `lib/components/ExamAssignmentRows`, which the trainee screen
+ * mounts too: the contract is the same for both roles, so the layout is one file
+ * rather than two copies that could drift apart.
+ *
+ * NOTHING ABOUT THEM IS DECIDED HERE. This screen passes `row.assignments`
+ * straight through, in the order it arrived. There is no pairing rule, no
+ * timetable arithmetic and no sort in this file or in that renderer — every one
+ * of those values arrives already decided by the committed cores.
+ *
+ * STILL NOT CARRIED, and therefore still not stubbed here: any grade, any
+ * feedback and any rating. None is labelled "—" or given an empty row, because
+ * inventing a placeholder would tell an instructor that a value exists and is
+ * blank, when in truth this read does not carry it at all.
  */
 
 const LOADING_TEXT = "טוען לוח מבחנים...";
@@ -258,6 +270,12 @@ export function InstructorExamsSection() {
                         count={row.supervisorCount}
                       />
                     </div>
+
+                    {/* The block's COMPLETE operational schedule, verbatim and
+                        in the contract's own order. An empty list renders
+                        nothing, so a beginner row and a block with no stored
+                        assignment stay exactly as they were. */}
+                    <ExamAssignmentRows assignments={row.assignments} />
 
                     {statusLabel !== null && (
                       <p className="mt-2 text-xs text-muted-foreground">{statusLabel}</p>

@@ -61,10 +61,11 @@ export function isLevel2OnlyTrainee(options: readonly TraineeCourseOptionView[])
 }
 
 /**
- * The nav/menu entries a Level-2-only trainee may see: the two Level 2 course
- * modules (SCHEDULE via `schedule`, CONTACTS via `contacts`) plus non-course
- * utility entries - the home dashboard (`today`), the `profile`/logout screen,
- * `help`, and the `more` container that reaches contacts/profile/help/logout.
+ * The nav/menu entries a Level-2-only trainee may see: the Level 2 course
+ * modules (SCHEDULE via `schedule`, CONTACTS via `contacts`, and the exam
+ * schedule via `exams`) plus non-course utility entries - the home dashboard
+ * (`today`), the `profile`/logout screen, `help`, and the `more` container that
+ * reaches contacts/profile/help/logout.
  *
  * This is an ALLOW-LIST, so it is fail-closed: any trainee nav id not listed
  * here (duties, messages/tasks, materials, teaching practice, weekly feedback,
@@ -72,15 +73,32 @@ export function isLevel2OnlyTrainee(options: readonly TraineeCourseOptionView[])
  * without needing to be enumerated. For every other trainee the list is ignored
  * and navigation is unchanged.
  *
- * Deliberately NOT extended with "materials": the level allow-list must keep
- * saying only what a LEVEL implies. Materials is unlocked per-trainee through
- * `serverUnlockedNavIds` on the real capability decision, so a Level 2 offering
- * that does NOT enable COURSE_MATERIALS still correctly hides the entry.
+ * WHY "exams" IS ON THE LIST (EX-ROLE-OP-UI-MVP). The exam schedule is an
+ * ADVANCED-COURSE module: the Level-2-only trainee is precisely the trainee it
+ * exists for, and the allow-list was hiding the one entry point to a screen the
+ * server was already willing to serve them. The level rule says only what a
+ * LEVEL implies, and "a Level 2 trainee may reach their exam schedule" is
+ * exactly such a statement.
+ *
+ * IT UNLOCKS NOTHING. Reaching the screen is not being shown a schedule: the
+ * committed trainee reader proves the session, resolves the trainee's own course
+ * and requires a PUBLISHED plan and PUBLISHED lessons, and every denial comes
+ * back as the same empty day. A Level 2 trainee whose course has no exam plan
+ * therefore sees the neutral empty sentence, exactly as before - what changes is
+ * only that they can now get to it.
+ *
+ * Deliberately NOT extended with "materials": Materials is unlocked per-trainee
+ * through `serverUnlockedNavIds` on the real capability decision, so a Level 2
+ * offering that does NOT enable COURSE_MATERIALS still correctly hides it. Exams
+ * has no capability of its own to consult - there is no EXAMS capability - so
+ * there is no server decision here to defer to, and inventing a placeholder one
+ * would read as enforcement to the next reader.
  */
 const LEVEL2_ONLY_VISIBLE_NAV_IDS: readonly MainTabId[] = [
   "today",
   "schedule",
   "contacts",
+  "exams",
   "profile",
   "help",
   "more",

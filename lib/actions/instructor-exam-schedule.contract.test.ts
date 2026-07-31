@@ -30,6 +30,15 @@ const SECTION_REL = "app/instructor/InstructorExamsSection.tsx";
 const CLIENT_REL = "app/instructor/InstructorClient.tsx";
 const READERS_REL = "lib/actions/exam-role-readers.ts";
 const SCOPE_REL = "lib/exam/exam-read-scope-core.ts";
+/**
+ * EX-ROLE-OP-UI-MVP — the ONE shared renderer for a block's operational
+ * assignment rows, mounted by the instructor screen and the trainee screen
+ * alike. Its own behaviour is proven by real render tests beside it
+ * (lib/components/ExamAssignmentRows.test.tsx); what this suite pins is that the
+ * instructor screen delegates to it rather than growing a second copy.
+ */
+const ASSIGNMENT_ROWS_REL = "lib/components/ExamAssignmentRows.tsx";
+const ASSIGNMENT_ROWS_SUITE_REL = "lib/components/ExamAssignmentRows.test.tsx";
 
 function read(relative: string): string {
   return readFileSync(join(REPO_ROOT, relative), "utf8");
@@ -436,13 +445,58 @@ test("10. the approved session display fields are the ones rendered", () => {
   // The operational messages are the committed canonical Hebrew ones, taken by
   // `message` alone — never a raw code and never the ids beside it.
   assert.ok(SECTION_CODE.includes("issue.message") && SECTION_CODE.includes("warning.message"));
-  // And no field the instructor contract does not carry is stubbed out.
-  for (const absent of ["horse", "topic", "discipline", "pairing", "grade", "feedback", "rating"]) {
+  // And no field the instructor contract does not carry is stubbed out. This
+  // list was RE-POINTED by EX-ROLE-OP-UI-MVP: the contract now carries the horse,
+  // the instruction topic, the discipline and the resolved pairing, so asserting
+  // their absence would pin a claim that is simply no longer true. Grade,
+  // feedback and rating are still absent from the contract, so they stay pinned.
+  for (const absent of ["grade", "feedback", "rating"]) {
     assert.equal(
       new RegExp(absent, "i").test(SECTION_CODE),
       false,
       `the UI invents a ${absent} placeholder`,
     );
+  }
+});
+
+test("10b. the complete operational schedule is rendered, through the ONE shared renderer", () => {
+  // The block's assignment rows are handed to the shared renderer VERBATIM: the
+  // whole array, in the contract's own order, with no filter, slice, sort or
+  // re-map in between.
+  assert.ok(
+    SECTION_CODE.includes("<ExamAssignmentRows assignments={row.assignments} />"),
+    "the instructor screen does not render the operational assignment rows",
+  );
+  assert.ok(
+    SECTION_CODE.includes('from "@/lib/components/ExamAssignmentRows"'),
+    "the instructor screen does not mount the shared renderer",
+  );
+  assert.equal(
+    (SECTION_CODE.match(/row\.assignments/g) ?? []).length,
+    1,
+    "the assignment rows are read somewhere beyond the one approved hand-off",
+  );
+
+  // THE SCREEN ITSELF DECIDES NOTHING ABOUT THEM. Every per-assignment value —
+  // the role label, the personal window, the horse, the topic, the discipline
+  // and the pairing — lives in the shared renderer, so this file cannot grow a
+  // second, disagreeing copy of any of them.
+  for (const token of [
+    "horseName",
+    "instructionTopic",
+    "discipline",
+    "personalStartTime",
+    "personalEndTime",
+    "pairedParticipantName",
+    "pairedParticipantNames",
+    "EXAMINEE",
+    "INSTRUCTED_TRAINEE",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen re-implements ${token}`);
+  }
+  // ...and no pairing or timetable calculation was duplicated into UI code here.
+  for (const token of ["pairingIndex", "resolvePairing", "computePairing", "addMinutes", "parseInt"]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen duplicates ${token}`);
   }
 });
 
@@ -530,7 +584,16 @@ test("13. the instructor action and UI are untouched and name no trainee reader"
   // BYTE-IDENTICAL to HEAD, so no later trainee work can edit it unnoticed. The
   // trainee slice's own footprint is pinned by
   // lib/actions/trainee-exam-schedule.contract.test.ts.
-  for (const relative of [ACTION_REL, SECTION_REL, CLIENT_REL]) {
+  //
+  // EX-ROLE-OP-UI-MVP RE-POINT — `SECTION_REL` LEAVES THIS LIST. That slice
+  // renders the newly available operational assignment rows on BOTH role
+  // screens, so the instructor section is a file it necessarily edits; keeping
+  // it here would pin a claim the approved work contradicts. It is a re-point,
+  // not a hole: the section's every rendered value is pinned by tests 8-11
+  // above, its one new hand-off is pinned by test 10b, and its whole server seam
+  // is pinned by test 15. The instructor ACTION and CLIENT keep the strictly
+  // byte-identical claim, because that slice touches neither.
+  for (const relative of [ACTION_REL, CLIENT_REL]) {
     const result = spawnSync("git", ["diff", "--quiet", "HEAD", "--", relative], {
       cwd: REPO_ROOT,
       encoding: "utf8",
@@ -549,8 +612,12 @@ test("14. no admin exam file was modified, and no schema or migration", () => {
   assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", adminExams]), []);
   assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", "prisma"]), []);
   assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", "prisma"]), []);
-  // ...nor anything about identity, sessions or capabilities.
-  for (const dir of ["lib/auth", "lib/course/capabilities"]) {
+  // ...nor anything about identity, sessions or capabilities. `lib/exam` joins
+  // this list with EX-ROLE-OP-UI-MVP: the operational-READ slice that legitimately
+  // edited those cores is merged, so from here on any change under that directory
+  // is an unrelated one, and the exact-path exception test 16 used to carry for
+  // it is gone.
+  for (const dir of ["lib/auth", "lib/course/capabilities", "lib/exam"]) {
     assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", dir]), []);
     assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", dir]), []);
   }
@@ -622,29 +689,23 @@ test("16. the working tree holds only this slice's five paths and the approved t
     "lib/actions/trainee-exam-schedule.contract.test.ts",
     "app/student/StudentExamsSection.tsx",
     "app/student/StudentClient.tsx",
-    // EX-OPS-READ-MVP RE-POINT, for exactly the same reason and on exactly the
-    // same terms: an EXACT path list of the operational-read slice's own files,
-    // never a directory and never a glob. Test 13 above independently pins that
-    // none of the instructor files changed, test 5 pins that the scope core's
-    // authorization surface did not move, and that slice's own footprint is
-    // pinned by that slice's own cross-slice contract suite.
-    //
-    // The DIRECTORY PREFIX IS JOINED rather than spelled into each literal: the
-    // committed `exam-schema-structure` containment guard scans every file
-    // outside `lib/exam` for the exact token `<dir>/<core-name>`, and a
-    // fully-written path here would read to it as this suite wiring itself to an
-    // exam core. The paths produced are identical either way.
-    ...[
-      "exam-block-timetable-core.ts",
-      "exam-block-timetable-core.test.ts",
-      "exam-stored-adapter-core.ts",
-      "exam-stored-adapter-core.test.ts",
-      "exam-plan-loader-core.ts",
-      "exam-read-dto.ts",
-      "exam-read-dto.test.ts",
-      "exam-read-scope-core.ts",
-      "exam-read.contract.test.ts",
-    ].map((name) => ["lib", "exam", name].join("/")),
+    // EX-ROLE-OP-UI-MVP RE-POINT, on the same terms: an EXACT path list, never a
+    // directory and never a glob. These are the operational-UI slice's own
+    // paths — the shared renderer and its render tests, and the trainee
+    // navigation rule that was hiding the exams entry from the very trainees the
+    // exam schedule exists for. That slice's own behaviour is pinned by test 10b
+    // above, by the trainee suite's own tests, and by the two suites beside
+    // those files.
+    ASSIGNMENT_ROWS_REL,
+    ASSIGNMENT_ROWS_SUITE_REL,
+    "app/student/trainee-nav-visibility.ts",
+    "app/student/trainee-nav-visibility.test.ts",
+    // EX-OPS-READ-MVP RE-POINT REMOVED. Nine `lib/exam` paths were approved here
+    // while the operational-READ slice was in flight. That slice is merged, so
+    // those entries no longer describe anything in the working tree — they are
+    // dead permissions that would let an unrelated edit to an exam core pass
+    // this sweep unnoticed. Dropping them restores the sweep to its full
+    // strength; test 14 below independently pins that `lib/exam` is untouched.
   ];
   const offenders = [...touched].filter((path) => !approved.includes(path)).sort();
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);

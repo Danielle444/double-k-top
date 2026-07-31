@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ExamAssignmentRows } from "@/lib/components/ExamAssignmentRows";
 import {
   getTraineeExamDaySchedule,
   type TraineeExamScheduleView,
@@ -58,12 +59,33 @@ import { formatHebrewDate, formatHebrewWeekday, getLocalDateKey, parseDateKey } 
  * personal start is absent the personal-time line is simply not rendered.
  *
  * ===========================================================================
- * WHAT THE MVP CONTRACT DOES NOT CARRY
+ * THE COMPLETE OPERATIONAL SCHEDULE (EX-ROLE-OP-UI-MVP)
  * ===========================================================================
- * The trainee contract has no horse, no instruction topic, no discipline, no
- * pairing identity, no grade and no feedback. None of them is stubbed, labelled
- * "—" or given an empty row here: inventing a placeholder would tell a trainee
- * that a value exists and is blank, when in truth this read does not carry it.
+ * "לו״ז כולם" is deliberately a COMPLETE operational schedule, not a
+ * privacy-narrowed list of names: every visible block now renders its
+ * assignment-level rows — who is in it, in which role, at exactly which minutes,
+ * on which horse, on which topic and discipline, and paired with whom. A trainee
+ * needs all of it to act on the day, and the read layer already decided that
+ * these are approved display values for BOTH roles. They are rendered by the ONE
+ * shared renderer, `lib/components/ExamAssignmentRows`, which the instructor
+ * screen mounts too, so the two screens cannot drift apart.
+ *
+ * WHAT THAT DOES **NOT** WIDEN. The rows carry display names and operational
+ * values only. No national id, e-mail address, phone number, parent detail,
+ * contact detail, note or internal id is in them, none is rendered, and none is
+ * even representable in the renderer's prop type.
+ *
+ * "לו״ז שלי" IS STILL THE SAME FILTER IT WAS: `view.myRows`, which the committed
+ * trainee core computed server-side from the SIGNED SESSION and handed over as
+ * the boolean `isSelf`. The viewer's own row keeps its existing ring, its
+ * "השיבוץ שלי" label, its role and its exact personal window; the assignment
+ * rows are shown BENEATH that, so the viewer's horse, topic, discipline and
+ * partner are on their own block. NO NAME IS EVER COMPARED to find "mine" — the
+ * screen holds no name of the viewer to compare with, and adding an id to the
+ * contract just to highlight a line is exactly what the contract refuses.
+ *
+ * STILL NOT CARRIED, and therefore still not stubbed here: any grade, any
+ * feedback and any rating.
  */
 
 const LOADING_TEXT = "טוען לוח מבחנים...";
@@ -298,6 +320,13 @@ export function StudentExamsSection() {
                       count={row.instructedTraineeCount}
                     />
                   </div>
+
+                  {/* The block's COMPLETE operational schedule, verbatim and in
+                      the contract's own order. It is rendered identically in
+                      both views — "לו״ז שלי" differs by which ROWS reach here,
+                      never by what a row shows. An empty list renders nothing,
+                      so a beginner row stays exactly as it was. */}
+                  <ExamAssignmentRows assignments={row.assignments} />
                 </div>
               );
             })}
