@@ -454,9 +454,24 @@ test("12. no exam route directory was created in any role area", () => {
   }
 });
 
-test("13. no trainee reader and no trainee UI was touched", () => {
-  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", "app/student"]), []);
-  assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", "app/student"]), []);
+test("13. the instructor action and UI are untouched and name no trainee reader", () => {
+  // EX-TRAINEE-VIEW-MVP RE-POINT. This test also asserted that the working tree
+  // left `app/student` completely alone. That claim described THIS slice while
+  // it was in flight; the slice is now merged, so the same two commands no
+  // longer measure it at all — they measure whichever slice currently sits in
+  // the tree, and the separately reviewed trainee exam view is exactly such a
+  // slice. The claim was replaced, not dropped: what is checked now is the
+  // durable and strictly stronger property that the instructor surface is
+  // BYTE-IDENTICAL to HEAD, so no later trainee work can edit it unnoticed. The
+  // trainee slice's own footprint is pinned by
+  // lib/actions/trainee-exam-schedule.contract.test.ts.
+  for (const relative of [ACTION_REL, SECTION_REL, CLIENT_REL]) {
+    const result = spawnSync("git", ["diff", "--quiet", "HEAD", "--", relative], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, `${relative} was modified`);
+  }
   for (const token of ["readTraineeExamDay", "TraineeExamDayDto", "buildTraineeExamDayDto"]) {
     assert.equal(ACTION_CODE.includes(token), false, `the action names ${token}`);
     assert.equal(SECTION_CODE.includes(token), false, `the UI names ${token}`);
@@ -519,7 +534,7 @@ test("15. no write, publish, supervisor or pairing control was added", () => {
 // 16. This slice's own exact footprint
 // ===========================================================================
 
-test("16. the slice's footprint is exactly its five approved paths", () => {
+test("16. the working tree holds only this slice's five paths and the approved trainee-view paths", () => {
   const touched = new Set([
     ...gitLines(["diff", "--name-only", "HEAD"]),
     ...gitLines(["diff", "--name-only", "--cached", "HEAD"]),
@@ -531,6 +546,17 @@ test("16. the slice's footprint is exactly its five approved paths", () => {
     SECTION_REL,
     CLIENT_REL,
     "lib/components/BottomTabs.tsx",
+    // EX-TRAINEE-VIEW-MVP RE-POINT. This slice is merged, so a repo-wide sweep
+    // against HEAD now sees the NEXT slice's files rather than this one's. The
+    // sweep is deliberately kept — it is the only repo-wide "nothing else was
+    // touched" check in this suite — and widened by an EXACT path list, never a
+    // directory and never a glob. Each entry below is an approved path of the
+    // trainee exam view; test 13 above independently pins that none of the
+    // instructor files changed.
+    "lib/actions/trainee-exam-schedule.ts",
+    "lib/actions/trainee-exam-schedule.contract.test.ts",
+    "app/student/StudentExamsSection.tsx",
+    "app/student/StudentClient.tsx",
   ];
   const offenders = [...touched].filter((path) => !approved.includes(path)).sort();
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
