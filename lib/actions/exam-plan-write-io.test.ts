@@ -969,6 +969,14 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
     `${P3_ROUTE_DIR}/CreateExamAssignmentForm.tsx`,
     `${P3_ROUTE_DIR}/exam-assignment-messages.ts`,
     ["lib", "actions", "detailed-exam-assignment-write" + "-io.test.ts"].join("/"),
+    // EX-PAIR-BE-MVP — the approved instructed-trainee/examinee PAIRING backend,
+    // which travels in the same working tree. Its four `lib/` additions re-point
+    // the footprint list of the neighbouring publication backend's guard SUITE,
+    // so that suite joins the modified set. It is a `.test.ts`; no production
+    // file, no route, no Server Action and no schema, migration, auth, session,
+    // capability or policy file comes with it, and THIS binding and its pure core
+    // stay byte-identical to HEAD.
+    ["lib", "actions", "exam-publication-write" + "-io.test.ts"].join("/"),
   ];
   // RE-POINTED by EX-SES-UI-2 from ONE approved production file to TWO, and AGAIN
   // by EX-ASG-LTD2-B1 to FOUR — the assignment READ pair it must edit to publish

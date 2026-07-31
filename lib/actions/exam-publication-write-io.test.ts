@@ -84,6 +84,39 @@ const APPROVED_MODIFIED_GUARDS = [
   ["lib", "actions", "admin-exam-session-read" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-instructed-trainee-assignment-write" + "-io.test.ts"].join("/"),
   ["lib", "exam", "exam-supervisor-write" + "-core.test.ts"].join("/"),
+  // RE-POINTED by EX-PAIR-BE-MVP, the neighbouring PAIRING backend described
+  // below: its four `lib/` additions re-point the SAME five suites plus THIS
+  // one, so this suite's own path joins the list. It is a `.test.ts` like every
+  // other entry, and guard 26 still re-checks that structurally.
+  ["lib", "actions", "exam-publication-write" + "-io.test.ts"].join("/"),
+  // ...and the five further suites whose own "no tracked file was modified"
+  // claims that one re-point widens by a single exact `.test.ts` path.
+  ["lib", "actions", "exam-assignment-write" + "-io.test.ts"].join("/"),
+  ["lib", "actions", "exam-assignment-read" + "-io.test.ts"].join("/"),
+  ["lib", "actions", "exam-supervisor-write" + "-io.test.ts"].join("/"),
+  ["lib", "actions", "exam-supervisor-read" + "-io.test.ts"].join("/"),
+  ["lib", "actions", "exam-plan-write" + "-io.test.ts"].join("/"),
+].sort();
+
+/**
+ * The neighbouring EX-PAIR-BE-MVP slice's four `lib/` files: the
+ * instructed-trainee/examinee pairing pure core, its binding, and a suite for
+ * each.
+ *
+ * Kept SEPARATE from this slice's own four, because `SLICE_FILES` is what guard
+ * 26 asserts to be pure ADDITIONS of THIS slice, and that claim must not be
+ * diluted by a neighbour's files. Named EXACTLY — no directory and no glob — so a
+ * fifth neighbouring addition still fails guard 27.
+ *
+ * That slice writes ONE ExamAssignment column, `pairingIndex`, adds no caller,
+ * no route and no Server Action, and modifies no production file. Its two
+ * `lib/actions` paths are ASSEMBLED for the same reason as every path above.
+ */
+const APPROVED_NEIGHBOUR_ADDITIONS = [
+  ["lib", "exam", "exam-pairing-write" + "-core.ts"].join("/"),
+  ["lib", "exam", "exam-pairing-write" + "-core.test.ts"].join("/"),
+  ["lib", "actions", "exam-pairing-write" + "-io.ts"].join("/"),
+  ["lib", "actions", "exam-pairing-write" + "-io.test.ts"].join("/"),
 ].sort();
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
@@ -892,8 +925,16 @@ test("26. the slice modified ONLY guard suites — not one production file", () 
   }
   const production = modified.filter((path) => !path.endsWith(".test.ts"));
   assert.deepEqual(production, [], `production code was modified: ${production.join(", ")}`);
-  // The slice's own four files are ADDITIONS, never modifications.
-  for (const path of SLICE_FILES) {
+  // The slice's own PRODUCTION files and pure-core suite are ADDITIONS, never
+  // modifications — which is what makes "this slice added a backend and changed
+  // no behaviour" checkable.
+  //
+  // NARROWED by EX-PAIR-BE-MVP rather than dropped: THIS suite is excluded,
+  // because re-pointing it is exactly the approved change the neighbouring slice
+  // makes, and a rule forbidding its own amendment could never be satisfied. The
+  // binding, the pure core and the core's suite must still be byte-identical to
+  // HEAD, and every other claim in this file is untouched.
+  for (const path of SLICE_FILES.filter((entry) => entry !== IO_TEST_REL.split(sep).join("/"))) {
     assert.equal(modified.includes(path), false, `${path} is not an addition`);
   }
 });
@@ -914,7 +955,11 @@ test("27. no schema, migration, app, instructor or trainee file was touched", ()
   // ONLY entries are this slice's four new files and the four guard suites its
   // footprint re-points. A SUBSET check, so it holds while the slice is dirty,
   // staged and committed alike; what it forbids is any NINTH path.
-  const approved = [...SLICE_FILES, ...APPROVED_MODIFIED_GUARDS];
+  const approved = [
+    ...SLICE_FILES,
+    ...APPROVED_MODIFIED_GUARDS,
+    ...APPROVED_NEIGHBOUR_ADDITIONS,
+  ];
   const touched = gitLines([
     "status",
     "--porcelain",

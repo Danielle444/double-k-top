@@ -92,6 +92,15 @@ const APPROVED_NEW_FILES = [
   "lib/exam/exam-publication-write-core.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  // EX-PAIR-BE-MVP's four NEW files: the instructed-trainee/examinee PAIRING
+  // BACKEND, of exactly the same shape and with exactly the same properties — no
+  // route, no form, no Server Action, no tracked production file modified, and
+  // none of THIS binding's three writers reached. Named EXACTLY and assembled for
+  // the same reasons, so a ninth `lib/` addition still fails.
+  "lib/exam/exam-pairing-write-core.ts",
+  "lib/exam/exam-pairing-write-core.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
 ];
 
 /**
@@ -191,6 +200,14 @@ const APPROVED_MODIFIED_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
   "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
+  // EX-PAIR-BE-MVP — the approved instructed-trainee/examinee PAIRING backend,
+  // which travels in the same working tree. Its four new `lib/` files re-point the
+  // footprint lists of five neighbouring guard SUITES, so those five join this
+  // list. Every entry is a `.test.ts` suite; no `lib/` production module, no route
+  // file, no Server Action, and no schema, migration, auth, session, capability or
+  // policy file is named, and guard 33 is untouched: that slice reaches none of
+  // THIS binding's three writers.
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");

@@ -638,6 +638,14 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
     "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
     "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
+    // EX-PAIR-BE-MVP — the approved instructed-trainee/examinee PAIRING backend,
+    // which travels in the same working tree. Its four `lib/` additions re-point
+    // the footprint list of the neighbouring publication backend's guard SUITE,
+    // so that suite joins the modified set. It is a `.test.ts`; no production
+    // file, no route, no Server Action and no schema, migration, auth, session,
+    // capability or policy file comes with it, and THIS reader is neither edited
+    // nor given a caller by it.
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
   ].sort();
 
   const modified = gitLines([

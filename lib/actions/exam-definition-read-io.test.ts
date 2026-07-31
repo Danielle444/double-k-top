@@ -228,6 +228,22 @@ const SLICE_PATHS = [
   "lib/exam/exam-publication-write-core.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  // EX-PAIR-BE-MVP — the instructed-trainee/examinee PAIRING backend, which
+  // travels in the same working tree: a pure core, a binding and a suite for
+  // each, all four ADDITIONS under `lib/`, plus the five neighbouring guard
+  // SUITES whose footprint lists those four additions re-point. Listed here for
+  // the footprint guard below and for NO other reason — test 20's claim about who
+  // may call the DEFINITION reader is untouched, and the page is still its only
+  // production caller.
+  //
+  // That slice reads and writes ONE ExamAssignment column, `pairingIndex`: it
+  // consults no definition, adds no reader, no query, no route and no caller.
+  // Assembled for the sharpest reason of all — its own guard pins its caller list
+  // at EXACTLY ZERO.
+  "lib/exam/exam-pairing-write-core.ts",
+  "lib/exam/exam-pairing-write-core.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
