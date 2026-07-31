@@ -116,6 +116,15 @@ const SLICE_PATHS = [
   "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  // EX-ASG-IT2's three new route files, plus the committed Stage A caller guard
+  // it re-points from ZERO callers to exactly this route's Server Action module.
+  // That last entry is ASSEMBLED for the sharpest reason of all: the guard sweeps
+  // every file under `app/` for its own module name and must keep reporting
+  // exactly one caller, so a suite that spelled it whole would become the second.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
 
@@ -223,7 +232,7 @@ test("1. the four new files exist at the exact course-scoped route", () => {
   assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
 });
 
-test("2. the route directory holds EXACTLY the eighteen approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-one approved files", () => {
   // RE-POINTED by EX-SES-S4, not relaxed: the session-create slice added three
   // reviewed files to this route (a form, a message table and its own contract
   // suite), so the exact set grew from eight to eleven.
@@ -246,6 +255,7 @@ test("2. the route directory holds EXACTLY the eighteen approved files", () => {
     .sort();
   assert.deepEqual(routeFiles, [
     "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
@@ -258,6 +268,8 @@ test("2. the route directory holds EXACTLY the eighteen approved files", () => {
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
@@ -291,7 +303,7 @@ test("4. the action module declares use server as its FIRST statement", () => {
   assert.equal(ACTIONS.includes("server" + "-only"), false);
 });
 
-test("5. the module exports EXACTLY the seven approved actions, with exact signatures", () => {
+test("5. the module exports EXACTLY the eight approved actions, with exact signatures", () => {
   const exported = [
     ...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g),
   ].map(([, name]) => name);
@@ -311,8 +323,9 @@ test("5. the module exports EXACTLY the seven approved actions, with exact signa
     "deleteExamSessionAction",
     "createExamAssignmentAction",
     "deleteExamAssignmentAction",
+    "createExamInstructedTraineeAssignmentAction",
   ]);
-  assert.equal(exported.length, 7, "no eighth endpoint may exist in this module");
+  assert.equal(exported.length, 8, "no ninth endpoint may exist in this module");
   // Everything exported from a "use server" module is publicly callable, so the
   // export list is the attack surface: nothing else may leave this file.
   for (const token of ["export const", "export default", "export {", "export type"]) {
@@ -473,6 +486,10 @@ test("9. the action calls the committed writer with the bound id and the raw inp
       PLAN_WRITE_SPECIFIER,
       SESSION_WRITE_SPECIFIER,
       ASSIGNMENT_WRITE_SPECIFIER,
+      // ADDED by EX-ASG-IT2, assembled for the reason above: the committed
+      // instructed-trainee write binding's guard pinned its caller list at ZERO
+      // before this slice, and at exactly this one Server Action module after it.
+      "@/lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io",
       "@/lib/auth/require-admin",
       "next/cache",
       "next/navigation",
@@ -537,10 +554,10 @@ test("11. success revalidates ONLY this exams path and redirects with the flag",
   // at all, which its own suite pins.
   assert.equal(
     (ACTIONS.match(/revalidatePath\(/g) ?? []).length,
-    7,
+    8,
     "the module must revalidate at most once per action and no more",
   );
-  assert.equal((ACTIONS.match(/revalidatePath\(examsPath\);/g) ?? []).length, 7);
+  assert.equal((ACTIONS.match(/revalidatePath\(examsPath\);/g) ?? []).length, 8);
   assert.ok(DEFINITION_ACTION.includes("revalidatePath(examsPath);"), "the wrong path is revalidated");
   assert.ok(
     DEFINITION_ACTION.includes("redirect(`${examsPath}?createdDefinition=1`);"),

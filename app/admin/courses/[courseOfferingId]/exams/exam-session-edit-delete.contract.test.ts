@@ -73,6 +73,7 @@ const SUITE_REL = join(ROUTE_DIR_REL, "exam-session-edit-delete.contract.test.ts
  */
 const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
@@ -85,6 +86,8 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
@@ -129,6 +132,15 @@ const SLICE_PATHS = [
   "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  // EX-ASG-IT2's three new route files, plus the committed Stage A caller guard
+  // it re-points from ZERO callers to exactly this route's Server Action module.
+  // That last entry is ASSEMBLED for the sharpest reason of all: the guard sweeps
+  // every file under `app/` for its own module name and must keep reporting
+  // exactly one caller, so a suite that spelled it whole would become the second.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
 
@@ -280,7 +292,7 @@ test("4. the action module is still a Server Action module and nothing else", ()
   assert.equal(ACTIONS.includes("server" + "-only"), false);
 });
 
-test("5. the module exports EXACTLY the seven approved actions, in order", () => {
+test("5. the module exports EXACTLY the eight approved actions, in order", () => {
   const exported = [
     ...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g),
   ].map(([, name]) => name);
@@ -296,12 +308,13 @@ test("5. the module exports EXACTLY the seven approved actions, in order", () =>
     "deleteExamSessionAction",
     "createExamAssignmentAction",
     "deleteExamAssignmentAction",
+    "createExamInstructedTraineeAssignmentAction",
   ]);
-  assert.equal(exported.length, 7, "no eighth endpoint may exist in this module");
+  assert.equal(exported.length, 8, "no ninth endpoint may exist in this module");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 7);
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 8);
 });
 
 test("6. both new actions have the EXACT locked signature, and return void", () => {
@@ -673,6 +686,10 @@ test("18. the module's import surface did NOT grow a new binding", () => {
     "@/lib/actions/" + "exam-plan-write" + "-io",
     SESSION_WRITE_SPECIFIER,
     "@/lib/actions/" + "exam-assignment-write" + "-io",
+    // ADDED by EX-ASG-IT2, and assembled on exactly the same terms: the committed
+    // instructed-trainee write binding's guard pinned its caller list at ZERO
+    // before this slice, and at exactly this one Server Action module after it.
+    "@/lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io",
     "@/lib/auth/require-admin",
     "next/cache",
     "next/navigation",
@@ -990,8 +1007,8 @@ test("26. the version stamp travels ONLY as a hidden token, never as text or an 
   // bucket-lookup key. All five uses are NON-VISIBLE, which is the property this
   // guard has always protected, and the exact counts keep "only" honest.
   assert.ok(PAGE.includes("key={session.sessionId}"));
-  assert.equal((PAGE.match(/sessionId=\{session\.sessionId\}/g) ?? []).length, 3);
-  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 5);
+  assert.equal((PAGE.match(/sessionId=\{session\.sessionId\}/g) ?? []).length, 4);
+  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 6);
   assert.ok(
     PAGE.includes("assignmentsBySession.get(session.sessionId)"),
     "the fifth use must be the assignment-bucket lookup",
@@ -1073,10 +1090,13 @@ test("28. the six new feedback keys are declared, closed, and array-tolerant", (
     "assignmentIssues",
     "deletedAssignment",
     "assignmentDeleteError",
+    "createdInstructedTrainee",
+    "instructedTraineeError",
+    "instructedTraineeIssues",
   ].sort());
   // Every key admits the ARRAY form a repeated query key produces, which is what
   // forces every parser to reject it rather than coerce it.
-  assert.equal((queryType.match(/string \| string\[\]/g) ?? []).length, 20);
+  assert.equal((queryType.match(/string \| string\[\]/g) ?? []).length, 23);
   // Not one of them names a course, a plan, a definition, a session, a trainee, an
   // assignment or a version.
   for (const forbidden of [
@@ -1227,7 +1247,7 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
   // is uncommitted instead — four new route files and three further re-pointed
   // committed guards, for an exact twenty-three. Still an exhaustive literal set of
   // exact paths, admitting no directory, prefix or glob.
-  assert.equal(SLICE_PATHS.length, 23, "the approved scope is twenty-three files");
+  assert.equal(SLICE_PATHS.length, 27, "the approved scope is twenty-seven files");
 
   // EXACTLY TWO production files in scope are not new: the shared Server Action
   // module and the page. Everything else is either one of the new route files or a
@@ -1238,8 +1258,10 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
     `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
     `${ROUTE_DIR_PREFIX}ExamSessionEditForm.tsx`,
     `${ROUTE_DIR_PREFIX}CreateExamAssignmentForm.tsx`,
+    `${ROUTE_DIR_PREFIX}CreateExamInstructedTraineeAssignmentForm.tsx`,
     `${ROUTE_DIR_PREFIX}DeleteExamAssignmentForm.tsx`,
     `${ROUTE_DIR_PREFIX}exam-assignment-messages.ts`,
+    `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-messages.ts`,
     `${ROUTE_DIR_PREFIX}actions.ts`,
     `${ROUTE_DIR_PREFIX}page.tsx`,
   ].sort());

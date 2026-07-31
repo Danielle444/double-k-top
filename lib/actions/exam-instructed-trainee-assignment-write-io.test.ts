@@ -44,6 +44,60 @@ const NEW_FILES = [
   `lib/exam/${CORE_TEST_NAME}`,
 ];
 
+/** The ONE course-scoped admin route that may wire this binding. */
+const ROUTE_DIR_PREFIX = "app/admin/courses/[courseOfferingId]/exams/";
+
+/**
+ * The route files the approved WIRING slice (EX-ASG-IT2) adds.
+ *
+ * Spelled EXACTLY — three file names, no directory and no prefix — so a fourth
+ * route file, a second route, an instructor or trainee surface, or any `lib/`
+ * addition still fails the containment guards below.
+ */
+const APPROVED_NEW_ROUTE_FILES = [
+  `${ROUTE_DIR_PREFIX}CreateExamInstructedTraineeAssignmentForm.tsx`,
+  `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-messages.ts`,
+  `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-ui.contract.test.ts`,
+];
+
+/**
+ * The tracked files the approved WIRING slice may modify, each spelled exactly.
+ *
+ * TWO of them are production: the route's shared Server Action module and its
+ * page. Everything else is a guard SUITE whose exact counts or allow-lists that
+ * slice re-points. No schema, no migration, no auth module, no session module,
+ * no capability catalog, no course-policy core, and no `lib/` PRODUCTION file of
+ * any kind is among them — which the assertions below re-check structurally
+ * rather than trusting this list to stay honest on its own.
+ *
+ * The `lib/` entries are ASSEMBLED from pieces: several of those very suites pin
+ * caller allow-lists by sweeping `lib/` for their own module names, and a file
+ * that spelled one whole would enrol itself as a caller of a binding it never
+ * calls.
+ */
+const APPROVED_MODIFIED_FILES = [
+  `${ROUTE_DIR_PREFIX}actions.ts`,
+  `${ROUTE_DIR_PREFIX}page.tsx`,
+  `${ROUTE_DIR_PREFIX}exam-assignment-ui.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-definition-create.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-definitions-page.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-plan-create.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-session-create.contract.test.ts`,
+  `${ROUTE_DIR_PREFIX}exam-session-edit-delete.contract.test.ts`,
+  `lib/actions/${IO_TEST_NAME}`,
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+];
+
+/** Every path either slice is allowed to have touched, in any state. */
+const APPROVED_FOOTPRINT = [...APPROVED_MODIFIED_FILES, ...APPROVED_NEW_ROUTE_FILES];
+
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
 
 /** Strip comments so the guards assert on CODE, not on explanatory prose. */
@@ -695,10 +749,27 @@ test("21. the classifier is PRIVATE, local, and neither imports nor edits a sibl
 });
 
 // ===========================================================================
-// 22–26. Containment: no caller, no UI, four new files, nothing modified
+// 22–26. Containment: EXACTLY one caller, no UI, four new files
 // ===========================================================================
 
-test("22. NOTHING under app, lib or components calls this slice: it is callerless", () => {
+/**
+ * The ONE production module that may reach this binding, in git's own form.
+ *
+ * EX-ASG-IT2 TRANSITION. This guard asserted the binding had NO caller at all,
+ * which was correct while EX-ASG-IT1 was the uncommitted slice and added only
+ * new, unwired files. Wiring it necessarily gives it exactly one caller, so the
+ * guard is RE-POINTED to an EXACT one-entry list rather than deleted or relaxed
+ * to a directory: a SECOND caller — a page, a client component, an instructor or
+ * trainee route, a second Server Action module, or anything under `lib/` — still
+ * fails here, and so does a caller at any other path.
+ *
+ * The scan itself is unchanged: the same three directories, the same four
+ * patterns, the same comment stripping and the same sanity floor.
+ */
+const APPROVED_CALLER =
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts";
+
+test("22. EXACTLY ONE module under app, lib or components calls this slice", () => {
   const declaring = new Set(
     [IO_REL, IO_TEST_REL, CORE_REL, CORE_TEST_REL].map((rel) => join(REPO_ROOT, rel)),
   );
@@ -720,12 +791,19 @@ test("22. NOTHING under app, lib or components calls this slice: it is callerles
         /create-exam-instructed-trainee-assignment-core/.test(code) ||
         /\bcreateExamInstructedTraineeAssignment\s*\(/.test(code) ||
         /\bcreateExamInstructedTraineeAssignmentWithDeps\s*\(/.test(code);
-      if (reaches) callers.push(path.slice(REPO_ROOT.length + 1));
+      if (reaches) callers.push(path.slice(REPO_ROOT.length + 1).split(sep).join("/"));
     }
   }
-  // Sanity: the empty result below is a PASS, not an empty search.
+  // Sanity: the single result below is a PASS, not a degenerate search.
   assert.ok(scanned > 100, `expected the repository, scanned ${scanned} files`);
-  assert.deepEqual(callers, [], `the slice is not callerless: ${callers.join(", ")}`);
+  assert.deepEqual(
+    callers.sort(),
+    [APPROVED_CALLER],
+    `the caller set is not exactly the approved Server Action module: ${callers.join(", ")}`,
+  );
+  // The one caller is a Server Action module and NOT a UI file: no page, form or
+  // client component may reach a write binding directly.
+  assert.equal(APPROVED_CALLER.endsWith(".tsx"), false);
 });
 
 test("23. no exam route, page, form, component or Server Action was created", () => {
@@ -774,14 +852,40 @@ test("24. each approved file-prefix set contains EXACTLY its approved pair", () 
   }
 });
 
-test("25. the slice adds EXACTLY four files and modifies NO tracked file", () => {
+test("25. the four files are TRACKED, and only the approved wiring paths differ", () => {
   const scope = ["lib", "prisma", "app", "components"];
 
-  // What EXISTS IN HEAD and was edited, deleted, renamed or type-changed.
-  const modified = gitLines(["diff", "--name-only", "--diff-filter=MDRT", "HEAD", "--", ...scope]);
-  assert.deepEqual(modified, [], `the slice modified: ${modified.join(", ")}`);
+  // POST-MERGE RE-POINTING. This guard asserted the four files were UNTRACKED and
+  // that NOTHING tracked differed, which was exactly right while this slice was
+  // the uncommitted one. Both halves became permanently false the moment the
+  // slice was committed and merged, so the guard is RE-POINTED to what it was
+  // always protecting rather than deleted or loosened to a directory: the same
+  // four EXACT paths, now proven to be the repository's own, plus an EXACT
+  // containment list for whatever else differs.
+  //
+  // The containment is a SUBSET check on purpose. An equality check would only
+  // hold in one of the three ordinary states (dirty / staged / committed) and
+  // would go stale again the moment the wiring slice is committed — which is the
+  // very failure being corrected here. A subset of an exhaustive, path-exact list
+  // is just as strict about what MAY differ, in every state.
 
-  // What is UNTRACKED under those directories: exactly the four new files.
+  // 1. All four EXIST on disk.
+  for (const rel of NEW_FILES) {
+    assert.ok(
+      existsSync(join(REPO_ROOT, rel.split("/").join(sep))),
+      `${rel} is missing`,
+    );
+  }
+
+  // 2. All four are TRACKED repository files, named exactly.
+  const tracked = new Set(gitLines(["ls-files", "--", ...scope]));
+  for (const rel of NEW_FILES) {
+    assert.ok(tracked.has(rel), `${rel} is not a tracked repository file`);
+  }
+
+  // 3. NONE of the four is untracked any more — the exact inversion of the claim
+  //    this guard used to make, stated explicitly so it cannot go stale silently
+  //    a second time.
   const untracked = gitLines([
     "ls-files",
     "--others",
@@ -789,14 +893,72 @@ test("25. the slice adds EXACTLY four files and modifies NO tracked file", () =>
     "--",
     ...scope,
   ]).sort();
-  assert.deepEqual(untracked, [...NEW_FILES].sort(), `unexpected new files: ${untracked.join(", ")}`);
+  for (const rel of NEW_FILES) {
+    assert.equal(untracked.includes(rel), false, `${rel} is untracked again`);
+  }
 
-  // Every working-tree entry under `prisma/` — untracked included — is empty, so
-  // no schema edit and no migration directory was added.
+  // 4. No FIFTH file exists under either approved Stage A prefix: the binding and
+  //    its core each have exactly one implementation and one suite, so no sibling
+  //    variant, no `.tsx`, no backup and no second writer slipped in beside them.
+  assert.deepEqual(
+    readdirSync(join(REPO_ROOT, "lib", "actions"))
+      .filter((name) => name.startsWith("exam-instructed-trainee-assignment-write"))
+      .sort(),
+    [IO_NAME, IO_TEST_NAME].sort(),
+    "a fifth file exists under the approved lib/actions prefix",
+  );
+  assert.deepEqual(
+    readdirSync(join(REPO_ROOT, "lib", "exam"))
+      .filter((name) => name.startsWith("create-exam-instructed-trainee-assignment-core"))
+      .sort(),
+    [CORE_NAME, CORE_TEST_NAME].sort(),
+    "a fifth file exists under the approved lib/exam prefix",
+  );
+
+  // 5. Anything UNTRACKED in scope is one of the approved wiring slice's three
+  //    exact route files, and nothing else.
+  const unapprovedNew = untracked.filter((path) => !APPROVED_NEW_ROUTE_FILES.includes(path));
+  assert.deepEqual(unapprovedNew, [], `unexpected new files: ${unapprovedNew.join(", ")}`);
+
+  // 6. Anything MODIFIED in scope is on the exhaustive, path-exact approved list.
+  const modified = gitLines([
+    "diff",
+    "--name-only",
+    "--diff-filter=MDRT",
+    "HEAD",
+    "--",
+    ...scope,
+  ]).sort();
+  const unapprovedModified = modified.filter((path) => !APPROVED_MODIFIED_FILES.includes(path));
+  assert.deepEqual(
+    unapprovedModified,
+    [],
+    `the slice modified: ${unapprovedModified.join(", ")}`,
+  );
+
+  // 7. ...and the list cannot quietly grow into a production file under `lib/`:
+  //    every approved `lib/` entry is a guard SUITE, checked structurally rather
+  //    than by trusting the literal above.
+  for (const rel of APPROVED_MODIFIED_FILES) {
+    assert.equal(
+      rel.startsWith("lib/") && !rel.endsWith(".test.ts"),
+      false,
+      `a lib production module is on the approved list: ${rel}`,
+    );
+  }
+
+  // 8. Stage A's OWN production modules are byte-identical to HEAD. The wiring
+  //    slice REUSES this binding and its pure core; it may not edit either.
+  for (const production of [`lib/actions/${IO_NAME}`, `lib/exam/${CORE_NAME}`]) {
+    assert.equal(modified.includes(production), false, `${production} was modified`);
+  }
+
+  // 9. Every working-tree entry under `prisma/` — untracked included — is empty,
+  //    so no schema edit and no migration directory came with either slice.
   const prismaStatus = gitLines(["status", "--porcelain", "--", "prisma"]);
   assert.deepEqual(prismaStatus, [], `prisma/ changed: ${prismaStatus.join(", ")}`);
 
-  // The committed modules this slice REUSES still exist and were not duplicated.
+  // 10. The committed modules this slice REUSES still exist and were not duplicated.
   for (const rel of [
     join("lib", "exam", "exam-assignment-write-core.ts"),
     join("lib", "exam", "exam-domain-core.ts"),
@@ -807,21 +969,33 @@ test("25. the slice adds EXACTLY four files and modifies NO tracked file", () =>
   }
 });
 
-test("26. no capability, permission, env or MCP surface was touched", () => {
+test("26. no capability, permission, env, auth or MCP surface was touched", () => {
   const changed = gitLines(["status", "--porcelain"]).map((line) => line.slice(3));
   for (const path of changed) {
+    // POST-MERGE RE-POINTING, and NARROWED IN SPELLING RATHER THAN IN REACH. Each
+    // entry is a PATH-EXACT fragment — a directory segment or a file name — where
+    // two of them used to be the bare words `auth` and `session`. Those two were
+    // never about spelling: they were about the auth and session MODULES, and as
+    // bare substrings they now report this route's own
+    // `exam-session-create.contract.test.ts` as an authentication change. Every
+    // real surface below is still banned, and a genuine `lib/auth/…`,
+    // `app/api/auth/…`, `middleware.ts` or `session.ts` edit still fails here.
     for (const forbidden of [
       "capability-keys",
       "capabilities/",
       "permission",
       ".env",
       ".mcp.json",
-      "middleware",
+      "middleware.",
       "package.json",
       "package-lock.json",
       "next.config",
-      "auth",
-      "session",
+      "/auth/",
+      "auth.ts",
+      "/session/",
+      "session.ts",
+      "prisma/schema.prisma",
+      "prisma/migrations/",
     ]) {
       assert.equal(
         path.includes(forbidden),
@@ -830,8 +1004,15 @@ test("26. no capability, permission, env or MCP surface was touched", () => {
       );
     }
   }
-  // ...and the working tree carries exactly the four files, index included.
-  assert.deepEqual(changed.sort(), [...NEW_FILES].sort(), `working tree: ${changed.join(", ")}`);
+  // ...and the whole working tree — index included — stays inside the EXACT
+  // approved footprint: this slice's four committed files plus the approved
+  // wiring slice's twenty exact paths. A SUBSET check for the same reason guard
+  // 25 uses one: an equality check would hold in only one of the three ordinary
+  // states, which is exactly how this guard went stale before.
+  const unapproved = changed
+    .filter((path) => !APPROVED_FOOTPRINT.includes(path) && !NEW_FILES.includes(path))
+    .sort();
+  assert.deepEqual(unapproved, [], `working tree: ${unapproved.join(", ")}`);
 });
 
 test("27. this suite opens no database and reads no environment", () => {

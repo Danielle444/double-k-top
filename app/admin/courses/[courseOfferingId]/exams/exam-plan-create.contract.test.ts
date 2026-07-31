@@ -124,6 +124,15 @@ const SLICE_PATHS = [
   "lib/actions/" + "exam-session-write" + "-io.test.ts",
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  // EX-ASG-IT2's three new route files, plus the committed Stage A caller guard
+  // it re-points from ZERO callers to exactly this route's Server Action module.
+  // That last entry is ASSEMBLED for the sharpest reason of all: the guard sweeps
+  // every file under `app/` for its own module name and must keep reporting
+  // exactly one caller, so a suite that spelled it whole would become the second.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
 
@@ -273,7 +282,7 @@ test("1. the three P3 files exist at the EXACT course-scoped route", () => {
   }
 });
 
-test("2. the action module is a Server Action module exporting EXACTLY the seven approved actions", () => {
+test("2. the action module is a Server Action module exporting EXACTLY the eight approved actions", () => {
   const firstStatement = ACTION.split("\n").find((line) => line.trim().length > 0);
   assert.equal(firstStatement?.trim(), '"use server";', `first statement: ${firstStatement}`);
 
@@ -289,6 +298,7 @@ test("2. the action module is a Server Action module exporting EXACTLY the seven
   assert.deepEqual(exports, [
     "createExamAssignmentAction",
     "createExamDefinitionAction",
+    "createExamInstructedTraineeAssignmentAction",
     "createExamPlanAction",
     "createExamSessionAction",
     "deleteExamAssignmentAction",
@@ -301,7 +311,7 @@ test("2. the action module is a Server Action module exporting EXACTLY the seven
   assert.equal(/export\s+type/.test(ACTION), false, "no exported type is allowed");
   // No action was folded into a single generic endpoint that would have to
   // choose its operation from the request.
-  assert.equal((ACTION.match(/export async function /g) ?? []).length, 7);
+  assert.equal((ACTION.match(/export async function /g) ?? []).length, 8);
 });
 
 test("3. the action has the EXACT locked signature, and returns void", () => {
@@ -442,8 +452,8 @@ test("8. success revalidates ONLY this course's exams path, exactly once", () =>
   // Re-pointed again from 5 to 7 by EX-ASG-UI1, which adds the assignment CREATE
   // and REMOVAL endpoints. The per-action budget is unchanged: one each, on the
   // success branch alone.
-  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 7);
-  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 7);
+  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 8);
+  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 8);
   // The two successes are distinguished, and both land on the exams path.
   assert.ok(
     PLAN_ACTION.includes(
@@ -571,9 +581,9 @@ test("13. searchParams carries ONLY closed feedback tokens", () => {
   // version stamp — which the id ban below re-states from the other side.
   assert.ok(
     PAGE_FLAT.includes(
-      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; updatedSession?: string | string[]; unchangedSession?: string | string[]; sessionEditError?: string | string[]; sessionEditIssues?: string | string[]; deletedSession?: string | string[]; sessionDeleteError?: string | string[]; createdAssignment?: string | string[]; assignmentError?: string | string[]; assignmentIssues?: string | string[]; deletedAssignment?: string | string[]; assignmentDeleteError?: string | string[]; }>;",
+      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; updatedSession?: string | string[]; unchangedSession?: string | string[]; sessionEditError?: string | string[]; sessionEditIssues?: string | string[]; deletedSession?: string | string[]; sessionDeleteError?: string | string[]; createdAssignment?: string | string[]; assignmentError?: string | string[]; assignmentIssues?: string | string[]; deletedAssignment?: string | string[]; assignmentDeleteError?: string | string[]; createdInstructedTrainee?: string | string[]; instructedTraineeError?: string | string[]; instructedTraineeIssues?: string | string[]; }>;",
     ),
-    "the searchParams type must be the closed twenty-key shape",
+    "the searchParams type must be the closed twenty-three-key shape",
   );
   // created/existing are honoured only on the exact string "1"; a repeated key
   // (which arrives as an array) is not a recognized token.
@@ -799,6 +809,10 @@ test("17. no publication, source-date, session, capability or notification work"
     DEFINITION_BINDING_SPECIFIER,
     SESSION_BINDING_SPECIFIER,
     ASSIGNMENT_BINDING_SPECIFIER,
+    // ADDED by EX-ASG-IT2, assembled for the reason in the header: the committed
+    // instructed-trainee write binding's guard pinned its caller list at ZERO
+    // before this slice, and at exactly this one Server Action module after it.
+    "@/lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io",
     "next/cache",
     "next/navigation",
   ].sort());
@@ -844,6 +858,7 @@ test("19. the route directory holds EXACTLY the fourteen approved files", () => 
     .sort();
   assert.deepEqual(routeFiles, [
     "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
@@ -856,6 +871,8 @@ test("19. the route directory holds EXACTLY the fourteen approved files", () => 
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",

@@ -153,6 +153,15 @@ const SLICE_PATHS = [
   "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  // EX-ASG-IT2's three new route files, plus the committed Stage A caller guard
+  // it re-points from ZERO callers to exactly this route's Server Action module.
+  // That last entry is ASSEMBLED for the sharpest reason of all: the guard sweeps
+  // every file under `app/` for its own module name and must keep reporting
+  // exactly one caller, so a suite that spelled it whole would become the second.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
 
@@ -228,7 +237,7 @@ test("2. no top-level exams route exists in any role area", () => {
   }
 });
 
-test("3. the route directory holds exactly the eighteen approved files", () => {
+test("3. the route directory holds exactly the twenty-one approved files", () => {
   // Tracked AND untracked, so this holds both before and after the batch is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a `[courseOfferingId]` pathspec would be read by git as a
@@ -257,6 +266,7 @@ test("3. the route directory holds exactly the eighteen approved files", () => {
     .sort();
   assert.deepEqual(routeFiles, [
     "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
@@ -269,6 +279,8 @@ test("3. the route directory holds exactly the eighteen approved files", () => {
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
@@ -455,11 +467,14 @@ test("8. the route param is the ONLY scope input; the query is feedback only", (
       "assignmentIssues",
       "deletedAssignment",
       "assignmentDeleteError",
+      "createdInstructedTrainee",
+      "instructedTraineeError",
+      "instructedTraineeIssues",
     ].sort(),
   );
   assert.equal(
     (queryType.match(/string \| string\[\]/g) ?? []).length,
-    20,
+    23,
     "every feedback key must admit the array form a repeated key produces",
   );
   for (const forbidden of [
@@ -507,7 +522,7 @@ test("9. the page is a server component and declares force-dynamic", () => {
   assert.ok(PAGE.includes('export const dynamic = "force-dynamic"'));
 });
 
-test("10. the page imports EXACTLY the nineteen approved specifiers", () => {
+test("10. the page imports EXACTLY the twenty-one approved specifiers", () => {
   // RE-POINTED by EX-SES-UI-1, which adds FOUR: two more route-local files (the
   // session create form and its message table) and two committed `lib/` modules —
   // the admin session READ binding and the PURE day-grouping core.
@@ -533,6 +548,7 @@ test("10. the page imports EXACTLY the nineteen approved specifiers", () => {
   const specifiers = [...PAGE.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]).sort();
   assert.deepEqual(specifiers, [
     "./CreateExamAssignmentForm",
+    "./CreateExamInstructedTraineeAssignmentForm",
     "./DeleteExamAssignmentForm",
     "./ExamDefinitionCreateForm",
     "./ExamPlanCreateForm",
@@ -542,6 +558,7 @@ test("10. the page imports EXACTLY the nineteen approved specifiers", () => {
     "./actions",
     "./exam-assignment-messages",
     "./exam-definition-create-error-messages",
+    "./exam-instructed-trainee-assignment-messages",
     "./exam-session-create-error-messages",
     // ASSEMBLED: spelling this specifier whole would make THIS suite match the
     // committed reader guard's caller sweep, which must report exactly `page.tsx`.
@@ -736,8 +753,8 @@ test("13. EXACTLY the two approved Server Actions are reachable from the page", 
   }
   // No EIGHTH mutation entered the page: exactly seven bindings, all to the
   // verified context id and none to anything else.
-  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 7);
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 7);
+  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 8);
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 8);
 });
 
 test("14. the page renders NO control itself and holds no state", () => {
@@ -774,8 +791,8 @@ test("14. the page renders NO control itself and holds no state", () => {
   // adds the sixth and seventh.
   assert.equal(
     (PAGE.match(/action=/g) ?? []).length,
-    7,
-    "action= must appear exactly seven times",
+    8,
+    "action= must appear exactly eight times",
   );
   // The two assignment forms receive the HOISTED bound actions — the binding
   // itself is asserted above, and what matters here is that no OTHER expression
@@ -1071,6 +1088,7 @@ test("24. the amended committed guard suites all exist and are approved paths", 
     // at all — so every entry here is still a route-local file under `app/`. They
     // lead the list because it is `.sort()`ed and these names begin with C and D.
     "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
@@ -1087,6 +1105,11 @@ test("24. the amended committed guard suites all exist and are approved paths", 
     "app/admin/courses/[courseOfferingId]/exams/actions.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
+    // RE-POINTED AGAIN by EX-ASG-IT2: an instructed-trainee create form and a
+    // fifth message module joined the route, and both are reached by the page.
+    // The message module is route-local and PURE — it imports nothing at all — so
+    // every entry here is still a route-local file under `app/`.
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);

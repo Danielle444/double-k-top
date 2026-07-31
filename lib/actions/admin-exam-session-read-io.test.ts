@@ -131,6 +131,16 @@ const APPROVED_MODIFIED_FILES = [
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  // EX-ASG-IT2 — the approved INSTRUCTED_TRAINEE assignment CREATE UI, which
+  // travels in the same working tree. It adds the ASSIGNMENT contract suite to
+  // the modified set (that suite's route file set and export list learn about
+  // the eighth endpoint) and the committed instructed-trainee write guard,
+  // whose caller list it re-points from zero to exactly one Server Action
+  // module. Its own three new route files are ADDITIONS. Nothing here changes
+  // which module this guard is about: no reader gained a caller, no writer was
+  // edited, and no schema, migration, auth, capability or policy file is named.
+  `${ROUTE_DIR_PREFIX}exam-assignment-ui.contract.test.ts`,
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
 ];
 
 /**
@@ -150,6 +160,10 @@ const APPROVED_NEW_ROUTE_FILES = [
   `${ROUTE_DIR_PREFIX}DeleteExamAssignmentForm.tsx`,
   `${ROUTE_DIR_PREFIX}exam-assignment-messages.ts`,
   `${ROUTE_DIR_PREFIX}exam-assignment-ui.contract.test.ts`,
+  // EX-ASG-IT2's three new route files, on exactly the same terms.
+  `${ROUTE_DIR_PREFIX}CreateExamInstructedTraineeAssignmentForm.tsx`,
+  `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-messages.ts`,
+  `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-ui.contract.test.ts`,
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
@@ -988,8 +1002,14 @@ test("32. the slice touches no schema, migration, capability or policy file", ()
   // create and removal need a form each, so the bound moves from three to FIVE.
   // It is still a closed set, not a directory: a sixth UI file, or any `.tsx`
   // outside these five, still fails — and every entry is under this one route.
+  //
+  // RE-POINTED AGAIN by EX-ASG-IT2, on identical terms: the instructed-trainee
+  // create needs one form, so the bound moves from five to SIX. It is still a
+  // closed set, not a directory: a seventh UI file, or any `.tsx` outside these
+  // six, still fails - and every entry is under this one route.
   const APPROVED_UI_FILES = [
     `${ROUTE_DIR_PREFIX}page.tsx`,
+    `${ROUTE_DIR_PREFIX}CreateExamInstructedTraineeAssignmentForm.tsx`,
     `${ROUTE_DIR_PREFIX}ExamSessionEditForm.tsx`,
     `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
     `${ROUTE_DIR_PREFIX}CreateExamAssignmentForm.tsx`,

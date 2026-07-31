@@ -64,9 +64,17 @@ const DELETE_FORM_REL = join(ROUTE_DIR_REL, "DeleteExamAssignmentForm.tsx");
 const MESSAGES_REL = join(ROUTE_DIR_REL, "exam-assignment-messages.ts");
 const SUITE_REL = join(ROUTE_DIR_REL, "exam-assignment-ui.contract.test.ts");
 
-/** The route's EXACT final file set, after this slice's four additions. */
+/**
+ * The route's EXACT final file set, after this slice's four additions.
+ *
+ * RE-POINTED by EX-ASG-IT2 — grown, never relaxed: three reviewed
+ * instructed-trainee files (one client form, one closed message module and their
+ * contract suite) joined the route, so the exact set is twenty-one. A
+ * twenty-second file still fails here.
+ */
 const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
@@ -79,6 +87,8 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
@@ -108,6 +118,12 @@ const SLICE_PATHS = [
   `${ROUTE_DIR_PREFIX}exam-definitions-page.contract.test.ts`,
   `${ROUTE_DIR_PREFIX}exam-session-create.contract.test.ts`,
   `${ROUTE_DIR_PREFIX}exam-session-edit-delete.contract.test.ts`,
+  // EX-ASG-IT2's own three new route files, the sixth route guard suite it
+  // re-points, and the committed Stage A caller guard it re-points.
+  `${ROUTE_DIR_PREFIX}CreateExamInstructedTraineeAssignmentForm.tsx`,
+  `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-messages.ts`,
+  `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-ui.contract.test.ts`,
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
   // The committed `lib/` footprint and caller guards.
   "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
   "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
@@ -247,7 +263,7 @@ test("1. the four new files exist at the exact course-scoped route", () => {
   assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
 });
 
-test("2. the route directory holds EXACTLY the eighteen approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-one approved files", () => {
   // Tracked AND untracked, so this holds both before and after the slice is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a bracketed pathspec would be read by git as a character class.
@@ -293,14 +309,18 @@ test("4. the action module is still a Server Action module and nothing else", ()
   assert.equal(ACTIONS.includes("server" + "-only"), false);
 });
 
-test("5. the module exports EXACTLY the seven approved actions, in order", () => {
+test("5. the module exports EXACTLY the eight approved actions, in order", () => {
   const exported = [
     ...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g),
   ].map(([, name]) => name);
   // An EXHAUSTIVE allow-list in a FIXED order. Everything exported from a
   // "use server" module is a public network endpoint, so this list IS the attack
-  // surface: no eighth endpoint, and no helper, parser, constant or type beside
+  // surface: no NINTH endpoint, and no helper, parser, constant or type beside
   // them.
+  //
+  // RE-POINTED by EX-ASG-IT2 by APPENDING one reviewed endpoint to an exhaustive,
+  // ORDERED list — never by relaxing it. The seven UI1 pinned keep their exact
+  // relative positions, and an unapproved ninth still fails here.
   assert.deepEqual(exported, [
     "createExamPlanAction",
     "createExamDefinitionAction",
@@ -309,12 +329,13 @@ test("5. the module exports EXACTLY the seven approved actions, in order", () =>
     "deleteExamSessionAction",
     "createExamAssignmentAction",
     "deleteExamAssignmentAction",
+    "createExamInstructedTraineeAssignmentAction",
   ]);
-  assert.equal(exported.length, 7, "no eighth endpoint may exist in this module");
+  assert.equal(exported.length, 8, "no ninth endpoint may exist in this module");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 7);
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 8);
 });
 
 test("6. both new actions have the EXACT locked signature, and return void", () => {
