@@ -833,12 +833,25 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
     "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
     "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
   ];
-  /** The neighbouring slice's four NEW route files. */
+  /**
+   * The neighbouring slices' NEW files: EX-ASG-UI1's four route files, and
+   * EX-PUB-BE-MVP's four `lib/` files — the exam-plan publish/unpublish pure core,
+   * its binding, and a suite for each.
+   *
+   * The four backend paths are named EXACTLY, so a fifth `lib/` addition still
+   * fails, and the two `lib/actions` ones are ASSEMBLED from pieces because that
+   * slice's own guard pins its caller list at EXACTLY ZERO. It touches no
+   * supervisor module, adds no caller and modifies no production file.
+   */
   const APPROVED_NEIGHBOUR_ADDITIONS = [
     "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+    "lib/exam/exam-publication-write-core.ts",
+    "lib/exam/exam-publication-write-core.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
   ];
 
   // What EXISTS IN HEAD and was edited, deleted, renamed or type-changed.

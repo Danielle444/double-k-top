@@ -76,6 +76,22 @@ const APPROVED_NEW_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  // EX-PUB-BE-MVP's four NEW files: the exam-plan publish/unpublish BACKEND — a
+  // pure core, a binding, and a suite for each. They are the FIRST `lib/`
+  // additions on this list, and they are named EXACTLY rather than by directory,
+  // so a fifth still fails. That slice adds no route, no form and no Server
+  // Action, modifies no tracked production file, and reaches none of THIS
+  // binding's three writers: guard 33 still pins the CREATE writer to its single
+  // Server Action caller and the EDIT and REMOVAL writers to no caller at all.
+  //
+  // The two `lib/actions` paths are ASSEMBLED, not spelled: that slice's own
+  // guard sweeps `app/`, `lib/`, `components/` and `scripts/` for its module name
+  // and pins the caller list at EXACTLY ZERO, so a suite naming it whole would
+  // become the first entry in a list that must stay empty.
+  "lib/exam/exam-publication-write-core.ts",
+  "lib/exam/exam-publication-write-core.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
 ];
 
 /**

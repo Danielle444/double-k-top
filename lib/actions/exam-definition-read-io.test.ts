@@ -202,6 +202,20 @@ const SLICE_PATHS = [
   "lib/actions/" + "exam-assignment-read" + "-io.ts",
   "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
   "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  // EX-PUB-BE-MVP — the exam-plan publish/unpublish BACKEND, which travels in the
+  // same working tree: a pure core, a binding and a suite for each, all four
+  // ADDITIONS under `lib/`. Listed here for the footprint guard below and for NO
+  // other reason — test 20's claim about who may call the DEFINITION reader is
+  // untouched, and the page is still its only production caller.
+  //
+  // That slice reads and writes ONE ExamPlan column and nothing else: it consults
+  // no definition, adds no reader, no query, no route and no caller. The two
+  // `lib/actions` paths are ASSEMBLED for the sharpest reason of all — that
+  // slice's own guard pins its caller list at EXACTLY ZERO.
+  "lib/exam/exam-publication-write-core.ts",
+  "lib/exam/exam-publication-write-core.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");

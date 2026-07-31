@@ -964,12 +964,34 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
   // listed SEPARATELY from `NEW_FILES` on purpose: that list is also asserted to be
   // fully TRACKED below, which is a claim about this reader's own four committed
   // files and must not be diluted by files that are legitimately still untracked.
-  const INTRODUCED_FILES = [...NEW_FILES, ...APPROVED_NEW_ROUTE_FILES];
+  //
+  // RE-POINTED AGAIN by EX-PUB-BE-MVP, the exam-plan publish/unpublish BACKEND
+  // that travels in the same working tree: a pure core, a binding and a suite for
+  // each, all four under `lib/`. They are listed as FOUR EXACT paths for the same
+  // reason as the route files above — this reader gained no caller, its own four
+  // files are still asserted fully TRACKED below, and a fifth addition still
+  // fails. The two `lib/actions` paths are ASSEMBLED, not spelled: that slice's
+  // own guard pins its caller list at EXACTLY ZERO, so naming one whole here
+  // would become its first entry.
+  const APPROVED_NEW_LIB_FILES = [
+    "lib/exam/exam-publication-write-core.ts",
+    "lib/exam/exam-publication-write-core.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  ];
+  const INTRODUCED_FILES = [
+    ...NEW_FILES,
+    ...APPROVED_NEW_ROUTE_FILES,
+    ...APPROVED_NEW_LIB_FILES,
+  ];
   const unapproved = introduced.filter((path) => !INTRODUCED_FILES.includes(path));
   assert.deepEqual(unapproved, [], `unexpected files: ${unapproved.join(", ")}`);
-  // No `lib/` module was introduced at all: this slice reuses the committed
-  // writers rather than adding one.
+  // THIS slice introduced no `lib/` module at all: it reuses the committed writers
+  // rather than adding one. RE-POINTED by EX-PUB-BE-MVP and NARROWED rather than
+  // dropped — the four `lib/` paths a NEIGHBOURING backend slice adds are excluded
+  // by exact name, and any other `lib/` addition still fails here.
   for (const path of introduced) {
+    if (APPROVED_NEW_LIB_FILES.includes(path)) continue;
     assert.equal(path.startsWith("lib/"), false, `a lib module was introduced: ${path}`);
   }
 
