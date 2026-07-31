@@ -142,6 +142,20 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  // EX-ASG-LTD2-B1 — the ADMIN READ DETAIL slice, which travels in the same
+  // working tree. It edits the assignment READ pair's own production modules and
+  // the pure core's suite, and re-points that pair's guards; all three paths are
+  // ASSEMBLED, and the core's two most sharply of all, because the read guard
+  // sweeps `app/`, `lib/` and `components/` for that core's name and must keep
+  // reporting exactly the one page as its caller.
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.ts",
+  // ...and the two committed SUPERVISOR IO footprint guards, whose "this slice
+  // modified NO tracked file" claims that edit makes obsolete. Each is re-pointed
+  // to an exact path list, never relaxed.
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -1247,7 +1261,13 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
   // is uncommitted instead — four new route files and three further re-pointed
   // committed guards, for an exact twenty-three. Still an exhaustive literal set of
   // exact paths, admitting no directory, prefix or glob.
-  assert.equal(SLICE_PATHS.length, 27, "the approved scope is twenty-seven files");
+  // EX-ASG-LTD2-B1 TRANSITION, on exactly the same terms: the approved ADMIN READ
+  // DETAIL slice adds five paths — the assignment READ pair's two PRODUCTION
+  // modules, that pair's pure-core suite, and the two committed SUPERVISOR IO
+  // footprint guards whose "this slice modified NO tracked file" claims it
+  // re-points — so the exact scope is thirty-two. Still an exhaustive literal set
+  // of exact paths, admitting no directory, prefix or glob.
+  assert.equal(SLICE_PATHS.length, 32, "the approved scope is thirty-two files");
 
   // EXACTLY TWO production files in scope are not new: the shared Server Action
   // module and the page. Everything else is either one of the new route files or a
@@ -1264,6 +1284,8 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
     `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-messages.ts`,
     `${ROUTE_DIR_PREFIX}actions.ts`,
     `${ROUTE_DIR_PREFIX}page.tsx`,
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
   ].sort());
   for (const path of SLICE_PATHS) {
     assert.equal(
@@ -1271,10 +1293,24 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
       false,
       `a layout or route handler entered the scope: ${path}`,
     );
+  }
+  // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to an exact pair rather than
+  // dropped. The claim was "no `lib/` PRODUCTION module is in scope", which held
+  // while every slice in this tree only WIRED committed bindings. The detail slice
+  // must publish two more stored columns, which cannot be done without editing the
+  // pair that READS them — so those two are named exactly, and a THIRD `lib/`
+  // production module still fails here. No WRITER and no policy core may appear.
+  const APPROVED_LIB_PRODUCTION = [
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+  ];
+  for (const path of SLICE_PATHS) {
     assert.equal(
-      path.startsWith("lib/") && !path.endsWith(".test.ts"),
+      path.startsWith("lib/") &&
+        !path.endsWith(".test.ts") &&
+        !APPROVED_LIB_PRODUCTION.includes(path),
       false,
-      `a lib production module entered the scope: ${path}`,
+      `an unapproved lib production module entered the scope: ${path}`,
     );
   }
 });

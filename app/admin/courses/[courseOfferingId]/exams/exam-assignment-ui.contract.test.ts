@@ -133,6 +133,19 @@ const SLICE_PATHS = [
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  // EX-ASG-LTD2-B1 — the ADMIN READ DETAIL slice, which travels in the same
+  // working tree. It edits the assignment READ pair's own production modules and
+  // the pure core's suite; all three are ASSEMBLED, and the core's two most
+  // sharply of all, because the read guard sweeps `app/`, `lib/` and `components/`
+  // for that core's name and must keep reporting exactly the one page.
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.ts",
+  // ...and the two committed SUPERVISOR IO footprint guards, whose "this slice
+  // modified NO tracked file" claims that edit makes obsolete. Each is re-pointed
+  // to an exact path list, never relaxed.
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -811,10 +824,42 @@ test("26. every assignment renders under its OWN session, with every role kept",
   // would make a session look emptier than it is and disagree with its own count.
   assert.ok(PAGE.includes('EXAMINEE: "נבחן/ת"'));
   assert.ok(PAGE.includes('INSTRUCTED_TRAINEE: "חניך מודרך"'));
+  // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to what it always protected rather
+  // than relaxed. The claim was "the string `role === "EXAMINEE"` appears nowhere",
+  // which was a proxy for the real rule: NO ROW MAY BE DROPPED BY ROLE. The detail
+  // slice needs a per-row role test — the two stored detail values belong to the
+  // examinee's row and to no other — so the proxy is replaced by the rule itself:
+  //
+  //   - EXACTLY ONE role comparison exists, and it is the row-level DISPLAY
+  //     predicate. A second one, and any comparison against the other role, still
+  //     fails here;
+  //   - the list is still built by mapping EVERY bucketed row, with no filter of
+  //     any kind (guard 25 pins the absence of `.filter(` for the whole page);
+  //   - the predicate decides what a row SAYS. It is never the row's condition:
+  //     the `<li>` and its name, horse, role label and removal control are outside
+  //     it entirely.
   assert.equal(
-    PAGE.includes('role === "EXAMINEE"'),
+    (PAGE.match(/=== "EXAMINEE"/g) ?? []).length,
+    1,
+    "exactly one role comparison may exist, and it is the row-level display test",
+  );
+  assert.ok(
+    PAGE.includes('const isExaminee = assignment.role === "EXAMINEE";'),
+    "the one role comparison must be the row-level display predicate",
+  );
+  assert.equal(
+    PAGE.includes('=== "INSTRUCTED_TRAINEE"'),
     false,
-    "the page filters the list by role",
+    "the page must not branch on the second role",
+  );
+  assert.ok(
+    PAGE.includes("{sessionAssignments.map((assignment) => {"),
+    "every bucketed row must still be mapped",
+  );
+  assert.equal(
+    /isExaminee\s*(\?|&&)\s*\(?\s*<li/.test(squash(PAGE)),
+    false,
+    "the role predicate must not decide whether a row is rendered",
   );
   // The empty state is a fixed sentence, not a blank block.
   assert.ok(PAGE.includes("עדיין אין חניכים משובצים ליחידת המבחן הזו."));
@@ -1069,29 +1114,66 @@ test("35. no new route file reaches Prisma, a capability or a notification", () 
 });
 
 test("36. this slice adds NO publication, notification, instructor or trainee surface", () => {
+  // The bans that apply to BOTH files. `instructionTopic` left this list for the
+  // PAGE only — see below — and remains forbidden everywhere a WRITE could be
+  // built from it.
+  const FORBIDDEN_EVERYWHERE = [
+    "publishExamPlan",
+    "unpublishExamPlan",
+    "deleteExamPlan",
+    "reorderExamAssignments",
+    "updateExamAssignment",
+    "INSTRUCTED_TRAINEE\"," + " role",
+    "discipline:",
+    "pairingIndex",
+    "supervisor",
+    "Supervisor",
+    "sourceDate",
+    "SourceDate",
+    "TeachingPractice",
+    "beginnerChild",
+  ];
   for (const [label, source] of [
     ["actions", ACTIONS],
     ["page", PAGE],
   ] as const) {
-    for (const forbidden of [
-      "publishExamPlan",
-      "unpublishExamPlan",
-      "deleteExamPlan",
-      "reorderExamAssignments",
-      "updateExamAssignment",
-      "INSTRUCTED_TRAINEE\"," + " role",
-      "instructionTopic",
-      "discipline:",
-      "pairingIndex",
-      "supervisor",
-      "Supervisor",
-      "sourceDate",
-      "SourceDate",
-      "TeachingPractice",
-      "beginnerChild",
-    ]) {
+    for (const forbidden of FORBIDDEN_EVERYWHERE) {
       assert.equal(source.includes(forbidden), false, `the ${label} references ${forbidden}`);
     }
+  }
+
+  // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to the file that matters rather
+  // than relaxed. The blanket `instructionTopic` ban described a page that could
+  // not SHOW what the detailed writer stores; showing it is exactly this slice's
+  // purpose, and a value that exists but is never displayed is indistinguishable
+  // from one that was never written.
+  //
+  // The ban therefore stays TOTAL on the Server Action module — that is where a
+  // write could be assembled, and the field must never reach FormData, an action
+  // parameter or the query string — while the page may READ it. The page's own
+  // permitted uses are pinned exactly, so a THIRD one still fails here.
+  assert.equal(
+    ACTIONS.includes("instructionTopic"),
+    false,
+    "the action module must never handle the detail field",
+  );
+  const topicUses = PAGE.match(/instructionTopic/g) ?? [];
+  assert.equal(topicUses.length, 1, "the page may read the stored value exactly once");
+  assert.ok(
+    squash(PAGE).includes("storedDetailText( assignment.instructionTopic"),
+    "the value must go through the page's own display helper",
+  );
+  for (const forbidden of [
+    'name="instructionTopic"',
+    'get("instructionTopic")',
+    "instructionTopic=",
+    "instructionTopic:",
+  ]) {
+    assert.equal(
+      PAGE.includes(forbidden),
+      false,
+      `the page turns the detail value into ${forbidden}`,
+    );
   }
   // No instructor, trainee or supervisor route gained an assignment surface.
   for (const dir of [
@@ -1120,11 +1202,25 @@ test("37. the slice touched EXACTLY its approved paths, and no schema or migrati
   const prismaStatus = gitLines(["status", "--porcelain", "--", "prisma"]);
   assert.deepEqual(prismaStatus, [], `prisma/ changed: ${prismaStatus.join(", ")}`);
 
-  // The committed bindings this slice WIRES were not edited.
-  const libTouched = gitLines(["diff", "--name-only", "HEAD", "--", "lib"]).filter(
-    (path) => !path.endsWith(".test.ts"),
+  // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to an exact pair rather than
+  // dropped. The claim was "no `lib/` production module was edited at all", which
+  // held while every slice in this working tree only WIRED the committed bindings.
+  // The detail slice must publish two more stored columns, which cannot be done
+  // without editing the pair that reads them — so the two are named exactly, and a
+  // THIRD `lib/` production module still fails here. No WRITER, no policy core, no
+  // auth module and no session module may appear.
+  const APPROVED_LIB_PRODUCTION = [
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  ].sort();
+  const libTouched = gitLines(["diff", "--name-only", "HEAD", "--", "lib"])
+    .filter((path) => !path.endsWith(".test.ts"))
+    .sort();
+  assert.deepEqual(
+    libTouched,
+    APPROVED_LIB_PRODUCTION,
+    `an unapproved lib binding was edited: ${libTouched.join(", ")}`,
   );
-  assert.deepEqual(libTouched, [], `a committed lib binding was edited: ${libTouched.join(", ")}`);
 });
 
 test("38. this suite opens no database and reads no environment", () => {
@@ -1142,5 +1238,160 @@ test("38. this suite opens no database and reads no environment", () => {
   assert.deepEqual(
     [...new Set(specifiers)].sort(),
     ["node:assert/strict", "node:child_process", "node:fs", "node:path", "node:test"],
+  );
+});
+
+// ===========================================================================
+// 39–42. EX-ASG-LTD2-B1 — the stored DETAIL values on the assignment row
+// ===========================================================================
+
+test("39. the two stored detail values are DISPLAYED, verbatim and text-only", () => {
+  // The labels are this route's own constants, so a stored value can never supply
+  // one — it can only follow one.
+  assert.ok(PAGE.includes('const INSTRUCTION_TOPIC_LABEL = "נושא הדרכה";'));
+  assert.ok(PAGE.includes('const DISCIPLINE_LABEL = "ענף";'));
+  // The retired wording must not come back as a VALUE label. (The DEFINITION facts
+  // above legitimately keep their own requirement-flag wording; these two
+  // assertions are about the value labels this slice introduces.)
+  assert.equal(PAGE.includes('= "נושא שיעור"'), false, "the retired topic label came back");
+  assert.equal(PAGE.includes('= "דיסציפלינה"'), false, "the retired branch label came back");
+
+  // Each value is rendered as an ordinary React text node, inside a plain span,
+  // straight from the reader — no formatter, no interpolation into an attribute
+  // and no raw-HTML path anywhere on the page.
+  const flat = squash(PAGE);
+  assert.ok(flat.includes("{INSTRUCTION_TOPIC_LABEL}: {topicText}"));
+  assert.ok(flat.includes("{DISCIPLINE_LABEL}: {disciplineText}"));
+  for (const forbidden of [
+    "dangerouslySetInnerHTML",
+    "innerHTML",
+    "__html",
+    `${"eval"}(`,
+    "new Function",
+  ]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page renders through ${forbidden}`);
+  }
+
+  // The presence test is the horse's, and what is RETURNED is the untrimmed stored
+  // string: the page decides whether to show a value, never what it says.
+  assert.ok(
+    flat.includes(
+      "function storedDetailText(value: string | null): string | null { return value === null || value.trim().length === 0 ? null : value; }",
+    ),
+    "the display helper must not rewrite the stored value",
+  );
+});
+
+test("40. the detail values are shown for the EXAMINEE row only", () => {
+  const flat = squash(PAGE);
+  // Both value lines hang off the SAME single role predicate, and each also
+  // requires something to have been stored.
+  assert.ok(flat.includes("{isExaminee && topicText !== null ? ("));
+  assert.ok(flat.includes("{isExaminee && disciplineText !== null ? ("));
+  // The INSTRUCTED_TRAINEE row keeps everything it had — name, horse, role label
+  // and the ONE removal control — and gains neither value line: those are outside
+  // the predicate entirely.
+  assert.ok(flat.includes("{roleText(assignment.role)}"));
+  assert.ok(flat.includes("סוס: {horseText(assignment.horseName)}"));
+  assert.equal(
+    (PAGE.match(/<DeleteExamAssignmentForm/g) ?? []).length,
+    1,
+    "a second delete control entered the page",
+  );
+  // A null value is NOT rendered as an ordinary value row: there is no placeholder
+  // constant for either detail, and neither label may be emitted unconditionally.
+  assert.equal(
+    /\{INSTRUCTION_TOPIC_LABEL\}: \{(assignment\.instructionTopic|NO_)/.test(flat),
+    false,
+    "an absent topic is rendered as a value row",
+  );
+  assert.equal(
+    /\{DISCIPLINE_LABEL\}: \{(assignment\.discipline|NO_)/.test(flat),
+    false,
+    "an absent branch is rendered as a value row",
+  );
+});
+
+test("41. a MISSING required value is a fixed diagnostic that FAILS CLOSED", () => {
+  const flat = squash(PAGE);
+  assert.ok(
+    PAGE.includes('const MISSING_INSTRUCTION_TOPIC_TEXT = "חסר נושא הדרכה בשיבוץ ההיסטורי הזה.";'),
+  );
+  assert.ok(PAGE.includes('const MISSING_DISCIPLINE_TEXT = "חסר ענף בשיבוץ ההיסטורי הזה.";'));
+
+  // Each diagnostic is the SAME closed four-part test: the examinee role, KNOWN
+  // requirements, the requirement itself, and nothing stored. `requirements !==
+  // undefined` is a conjunct in both, so an unresolvable definition emits NEITHER
+  // warning — the page never invents what an exam demanded.
+  assert.ok(
+    flat.includes(
+      "const missingTopic = isExaminee && requirements !== undefined && requirements.requiresLessonTopic && topicText === null;",
+    ),
+    "the topic diagnostic is not the closed fail-closed test",
+  );
+  assert.ok(
+    flat.includes(
+      "const missingDiscipline = isExaminee && requirements !== undefined && requirements.requiresDiscipline && disciplineText === null;",
+    ),
+    "the branch diagnostic is not the closed fail-closed test",
+  );
+  // The requirements come from the definition reader the page already loaded — no
+  // second reader and no second query came with the diagnostics.
+  assert.ok(PAGE.includes("for (const definition of view.definitions) {"));
+  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 4, "a fifth reader entered the page");
+
+  // Rendering is NOT blocked by either diagnostic: both are siblings of the value
+  // spans inside the same row, never a wrapper around the row or an early return.
+  assert.ok(flat.includes("{missingTopic ? ( <span"));
+  assert.ok(flat.includes("{missingDiscipline ? ( <span"));
+  assert.equal(/missingTopic\s*(\?|&&)\s*\(?\s*<li/.test(flat), false, "a diagnostic hides the row");
+});
+
+test("42. the diagnostics add NO write, no route, no query key and no client state", () => {
+  // Not one affordance came with them: no form, no control, no handler, no state
+  // and no eighth action binding.
+  for (const forbidden of [
+    "<form",
+    "<button",
+    "<input",
+    "<select",
+    "<textarea",
+    "onClick",
+    "onSubmit",
+    "onChange",
+    "useState",
+    "useTransition",
+    "useEffect",
+    '"use client"',
+  ]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page renders ${forbidden}`);
+  }
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 8);
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 8);
+
+  // No new query key, and the query is still resolved once.
+  const squashed = squash(PAGE);
+  const queryStart = squashed.indexOf("searchParams: Promise<{");
+  assert.ok(queryStart > -1, "the searchParams type must be declared inline");
+  const queryType = squashed.slice(queryStart, squashed.indexOf("}>;", queryStart) + 3);
+  assert.equal((queryType.match(/\?: string \| string\[\];/g) ?? []).length, 23);
+  for (const forbidden of ["instructionTopic?", "discipline?", "missingTopic?", "assignmentId?"]) {
+    assert.equal(queryType.includes(forbidden), false, `searchParams gained ${forbidden}`);
+  }
+
+  // The route gained no file, and its Server Action module gained no export.
+  const routeFiles = [
+    ...new Set([
+      ...gitLines(["ls-files"]),
+      ...gitLines(["ls-files", "--others", "--exclude-standard"]),
+    ]),
+  ]
+    .filter((path) => path.startsWith(ROUTE_DIR_PREFIX))
+    .sort();
+  assert.deepEqual(routeFiles, FINAL_ROUTE_FILES, "the route file set changed");
+  assert.equal(
+    (ACTIONS.match(/^export async function /gm) ?? []).length,
+    8,
+    "the action module gained an export",
   );
 });

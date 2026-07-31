@@ -398,15 +398,41 @@ test("14. the assignment read is plan-scoped, unfiltered and student-id-free", (
   assert.equal(entry.includes(".filter("), false, "the reader filters rows");
   assert.equal(entry.includes(".sort("), false, "the reader re-implements the order");
 
-  // Exactly five own columns plus the trainee's display name — and no Student.id.
+  // Exactly SEVEN own columns plus the trainee's display name — and no Student.id.
+  //
+  // RE-POINTED by EX-ASG-LTD2-B1, and GROWN rather than relaxed: the two stored
+  // DETAIL values of an examinee's row joined the select. They are the
+  // ASSIGNMENT's OWN columns — free text a manager typed about the exam — so the
+  // list can describe more without reaching further: NOT ONE additional `Student`
+  // column, NOT ONE additional relation and NOT ONE additional statement came with
+  // them, which the exact list here, the unchanged `student` select and guard 10's
+  // three-statement inventory each prove independently.
+  //
+  // This is an EXACT list in EXACT source order, so an EIGHTH column still fails
+  // here, and the personal, scoping and audit bans below are untouched.
   const select = entry.slice(entry.indexOf("select: {"), entry.indexOf("orderBy:"));
   const columns = [...select.matchAll(/^\s+(\w+): true,/gm)].map((match) => match[1]);
-  assert.deepEqual(columns, ["id", "sessionId", "role", "horseName", "orderIndex"]);
-  assert.ok(select.includes("student: { select: { fullName: true } },"));
-  for (const forbidden of [
-    "studentId: true",
+  assert.deepEqual(columns, [
+    "id",
+    "sessionId",
+    "role",
+    "horseName",
     "instructionTopic",
     "discipline",
+    "orderIndex",
+  ]);
+  assert.ok(select.includes("student: { select: { fullName: true } },"));
+  // The two new columns are selected as themselves and mapped straight through:
+  // no rename, no default, no coalescing and no role test anywhere on the path.
+  assert.ok(entry.includes("instructionTopic: row.instructionTopic,"));
+  assert.ok(entry.includes("discipline: row.discipline,"));
+  assert.equal(
+    /instructionTopic:[^\n]*\?\?/.test(entry) || /discipline:[^\n]*\?\?/.test(entry),
+    false,
+    "a detail value is defaulted rather than carried",
+  );
+  for (const forbidden of [
+    "studentId: true",
     "pairingIndex",
     "sourcePracticeRole",
     "notes",
@@ -575,6 +601,29 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
     "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
     "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    // EX-ASG-LTD2-B1 — the ADMIN READ DETAIL slice, which travels in the same
+    // working tree. It is the FIRST slice to edit this read pair's own production
+    // modules, so the two of them and the pure core's suite join the list. That is
+    // an EXACT, three-entry addition and not a relaxation: the modules are this
+    // guard's OWN subject, the change is two nullable columns on the assignment
+    // select and two fields on the published row, and every other claim in this
+    // suite — server-only, two exports, three statements, no write, the admin
+    // boundary, the HISTORICAL_READ gate, no capability, no classification and the
+    // absent `Student.id` — is asserted unchanged above and holds.
+    //
+    // What this guard has always refused is unchanged: no schema, no migration, no
+    // auth module, no session module, no capability catalog and no course-policy
+    // core is named here, and the assertion below still pins WHICH `lib/`
+    // production modules may appear.
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    // ...and the two committed SUPERVISOR IO footprint guards, whose "this slice
+    // modified NO tracked file" claims this edit makes obsolete. Both are SUITES;
+    // no supervisor production module is named, and the assertion below still
+    // pins WHICH `lib/` production modules may appear at all.
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
   ].sort();
 
   const modified = gitLines([
@@ -591,12 +640,26 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
   const offenders = modified.filter((path) => !APPROVED_MODIFICATIONS.includes(path)).sort();
   assert.deepEqual(offenders, [], `the slice modified: ${offenders.join(", ")}`);
 
-  // No `lib/` PRODUCTION module was touched: the committed bindings and pure cores
-  // this slice WIRES were reused, not edited.
-  const libProduction = modified.filter(
-    (path) => path.startsWith("lib/") && !path.endsWith(".test.ts"),
+  // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to an exact pair rather than
+  // dropped. The claim was "no `lib/` PRODUCTION module was touched at all", which
+  // was correct while every earlier slice only WIRED these bindings. A read that
+  // must publish two more stored columns has to edit the pair that reads them, so
+  // the guard now names EXACTLY the two modules this suite is about — the pure
+  // read-shaping core and its own binding — and a THIRD `lib/` production module,
+  // of any kind, still fails here. No writer, no policy core, no auth module and
+  // no session module may appear.
+  const APPROVED_LIB_PRODUCTION = [
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  ].sort();
+  const libProduction = modified
+    .filter((path) => path.startsWith("lib/") && !path.endsWith(".test.ts"))
+    .sort();
+  assert.deepEqual(
+    libProduction,
+    APPROVED_LIB_PRODUCTION,
+    `an unapproved lib production module was edited: ${libProduction.join(", ")}`,
   );
-  assert.deepEqual(libProduction, [], `a lib production module was edited: ${libProduction.join(", ")}`);
 
   const prismaStatus = gitLines(["status", "--porcelain", "--", "prisma"]);
   assert.deepEqual(prismaStatus, [], `prisma/ changed: ${prismaStatus.join(", ")}`);

@@ -1,9 +1,9 @@
 /**
  * EXAM EX-S5B-5B + EXAM PLAN P3 + EXAM EX-S5B-5C + EXAM EX-SES-UI-1 + EXAM
- * EX-SES-UI-2 + EXAM EX-ASG-UI1 + EXAM EX-ASG-IT2 — the admin Exams surface of ONE
- * course offering: a read of its ExamDefinition configuration, of its scheduled
- * exam sessions AND of the people assigned to them, plus the EIGHT explicit
- * mutation affordances that belong to it.
+ * EX-SES-UI-2 + EXAM EX-ASG-UI1 + EXAM EX-ASG-IT2 + EXAM EX-ASG-LTD2-B1 — the admin
+ * Exams surface of ONE course offering: a read of its ExamDefinition configuration,
+ * of its scheduled exam sessions AND of the people assigned to them, plus the EIGHT
+ * explicit mutation affordances that belong to it.
  *
  * Server Component. The page itself holds no state and renders no form control:
  * every form is a separate client component, and the only mutations it can reach
@@ -253,6 +253,23 @@
  * fixed placeholder when it is absent, which historical rows may be — and the role
  * label. The order position is read but never shown: it decides sequence, and a
  * visible index would invite someone to treat it as a stable number.
+ *
+ * EX-ASG-LTD2-B1 adds TWO more values to that row and no third: the lesson subject
+ * and the branch the detailed create writer stores on an EXAMINEE. They are shown
+ * for that role ONLY — an instructed trainee's row carries neither, so a value
+ * found on one is malformed history rather than something to repeat under a label —
+ * and a row of either role is still RENDERED in full. Each value appears only when
+ * something is actually stored, is carried through to the screen exactly as it was
+ * typed, and is an ordinary React text node: no raw HTML path exists on this page.
+ *
+ * A HISTORICAL row that is MISSING a value its own exam demanded gets a fixed
+ * read-only sentence saying so, decided against the definition requirements this
+ * page already loaded — no second reader, no second query, no widening of any
+ * existing one. It FAILS CLOSED on an unresolvable definition: a row whose
+ * requirements are unknown gets no such sentence, because "we cannot tell what was
+ * required" and "a required value is absent" are different statements. The
+ * diagnostic is a statement and never an affordance: it opens no editor, adds no
+ * control and puts nothing in the query string.
  *
  * Nothing on this page touches Teaching Practice, a trainee, a coach, a child or
  * a parent contact — the reader cannot express any of them, and no such module is
@@ -584,6 +601,42 @@ const NO_HORSE_TEXT = "—";
 function horseText(horseName: string | null): string {
   return horseName === null || horseName.trim().length === 0 ? NO_HORSE_TEXT : horseName;
 }
+
+/**
+ * The two DETAIL labels of an examinee's stored row.
+ *
+ * The wording is the domain's own and is deliberately NOT the wording the
+ * DEFINITION facts above use for the requirement FLAGS: a flag says whether an
+ * exam demands such a value, and these two say what was actually stored for one
+ * person. Spelling them out locally is the same containment trade-off the exam
+ * kind and role labels already record in the header.
+ */
+const INSTRUCTION_TOPIC_LABEL = "נושא הדרכה";
+const DISCIPLINE_LABEL = "ענף";
+
+/**
+ * ONE stored detail value, or `null` when there is nothing to show.
+ *
+ * The presence test is the SAME one the horse uses: `null` and a value that is
+ * blank once trimmed are both "nothing stored", because a label followed by an
+ * empty run of spaces reads as a rendering bug rather than as data. What is
+ * RETURNED is the untrimmed stored string — the reader carries it verbatim and so
+ * does this page, so what a manager typed is what a manager sees.
+ */
+function storedDetailText(value: string | null): string | null {
+  return value === null || value.trim().length === 0 ? null : value;
+}
+
+/**
+ * The two read-only diagnostics for a HISTORICAL row that is missing a value its
+ * exam actually demanded.
+ *
+ * They are sentences this module owns, never anything derived from a stored value,
+ * and they carry no id, no name and no instruction to act: they say that something
+ * is absent, and the correction lives on a write surface this page does not have.
+ */
+const MISSING_INSTRUCTION_TOPIC_TEXT = "חסר נושא הדרכה בשיבוץ ההיסטורי הזה.";
+const MISSING_DISCIPLINE_TEXT = "חסר ענף בשיבוץ ההיסטורי הזה.";
 
 /** The frozen list a session with no assignment renders from. */
 const NO_ASSIGNMENTS: readonly AdminExamAssignmentRow[] = Object.freeze([]);
@@ -1270,7 +1323,47 @@ export default async function CourseExamsPage({
                               </h4>
                               {sessionAssignments.length > 0 ? (
                                 <ul className="mt-2 flex flex-col gap-1.5">
-                                  {sessionAssignments.map((assignment) => (
+                                  {sessionAssignments.map((assignment) => {
+                                    // The two DETAIL values belong to the EXAMINEE's
+                                    // row and to no other. An instructed trainee
+                                    // carries neither — the committed writer for that
+                                    // role cannot store one — so a value found on such
+                                    // a row is malformed history, and repeating it
+                                    // under a label would present a storage fault as a
+                                    // fact about that person. Every row is still
+                                    // RENDERED either way: this decides what a row
+                                    // says, never whether it appears.
+                                    const isExaminee = assignment.role === "EXAMINEE";
+                                    const topicText = storedDetailText(
+                                      assignment.instructionTopic,
+                                    );
+                                    const disciplineText = storedDetailText(
+                                      assignment.discipline,
+                                    );
+
+                                    // The two HISTORICAL diagnostics, against the
+                                    // definition requirements the page already loaded.
+                                    //
+                                    // FAIL CLOSED on unknown requirements — the same
+                                    // `requirements !== undefined` test the two create
+                                    // gates use: a session naming a definition the
+                                    // definition reader did not report tells us nothing
+                                    // about what its exam demanded, and asserting a
+                                    // value is MISSING on that basis would be inventing
+                                    // the requirement. The row and any stored value it
+                                    // does carry are shown regardless.
+                                    const missingTopic =
+                                      isExaminee &&
+                                      requirements !== undefined &&
+                                      requirements.requiresLessonTopic &&
+                                      topicText === null;
+                                    const missingDiscipline =
+                                      isExaminee &&
+                                      requirements !== undefined &&
+                                      requirements.requiresDiscipline &&
+                                      disciplineText === null;
+
+                                    return (
                                     <li
                                       key={assignment.assignmentId}
                                       className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-card px-3 py-2"
@@ -1284,6 +1377,26 @@ export default async function CourseExamsPage({
                                       <span className="text-xs text-muted-foreground">
                                         {roleText(assignment.role)}
                                       </span>
+                                      {isExaminee && topicText !== null ? (
+                                        <span className="text-xs text-muted-foreground">
+                                          {INSTRUCTION_TOPIC_LABEL}: {topicText}
+                                        </span>
+                                      ) : null}
+                                      {isExaminee && disciplineText !== null ? (
+                                        <span className="text-xs text-muted-foreground">
+                                          {DISCIPLINE_LABEL}: {disciplineText}
+                                        </span>
+                                      ) : null}
+                                      {missingTopic ? (
+                                        <span className="text-xs text-danger">
+                                          {MISSING_INSTRUCTION_TOPIC_TEXT}
+                                        </span>
+                                      ) : null}
+                                      {missingDiscipline ? (
+                                        <span className="text-xs text-danger">
+                                          {MISSING_DISCIPLINE_TEXT}
+                                        </span>
+                                      ) : null}
                                       {mayConfigure ? (
                                         <DeleteExamAssignmentForm
                                           action={boundDeleteAssignmentAction}
@@ -1292,7 +1405,8 @@ export default async function CourseExamsPage({
                                         />
                                       ) : null}
                                     </li>
-                                  ))}
+                                    );
+                                  })}
                                 </ul>
                               ) : (
                                 <p className="mt-2 text-xs leading-relaxed text-muted-foreground">

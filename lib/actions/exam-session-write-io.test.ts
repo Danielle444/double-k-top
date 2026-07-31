@@ -146,6 +146,21 @@ const APPROVED_MODIFIED_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  // EX-ASG-LTD2-B1 — the approved ADMIN READ DETAIL slice, which travels in the
+  // same working tree. It publishes two stored columns the assignment READ pair
+  // already reached, so that pair's two PRODUCTION modules and its pure core's
+  // suite join this list, together with the two supervisor footprint guards whose
+  // "nothing was modified" claims it re-points.
+  //
+  // Guard 33 is untouched by it: that slice reaches none of THIS binding's three
+  // writers, and this binding's own production module and all three pure cores
+  // stay byte-identical to HEAD. ASSEMBLED for the reason above, the assignment
+  // core's two most sharply of all.
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");

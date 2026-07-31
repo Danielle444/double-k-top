@@ -163,6 +163,20 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  // EX-ASG-LTD2-B1 — the ADMIN READ DETAIL slice, which travels in the same
+  // working tree. It edits the assignment READ pair's own production modules and
+  // the pure core's suite, and re-points that pair's guards; all three paths are
+  // ASSEMBLED, and the core's two most sharply of all, because the read guard
+  // sweeps `app/`, `lib/` and `components/` for that core's name and must keep
+  // reporting exactly the one page as its caller.
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.ts",
+  // ...and the two committed SUPERVISOR IO footprint guards, whose "this slice
+  // modified NO tracked file" claims that edit makes obsolete. Each is re-pointed
+  // to an exact path list, never relaxed.
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
 ];
 
 /** Strip comments so every guard asserts on CODE, not on explanatory prose. */

@@ -772,7 +772,64 @@ test("t22. the slice modified NO tracked file: no schema, migration, auth or pol
     "app",
     "components",
   ]);
-  assert.deepEqual(modified, [], `the slice modified: ${modified.join(", ")}`);
+  // EX-ASG-LTD2-B1 TRANSITION. This assertion was `deepEqual(modified, [])`, which
+  // was correct while nothing else lived in this working tree. The approved ADMIN
+  // READ DETAIL slice — which publishes two stored EXAM ASSIGNMENT columns on the
+  // admin exams page — shares the tree, so the guard is RE-POINTED to an EXACT
+  // path list rather than deleted or weakened to "some files changed".
+  //
+  // What it always protected is unchanged and is what the list proves: NOT ONE
+  // supervisor module of any kind, no schema, no migration, no auth module, no
+  // session module, no capability catalog and no course-policy core. The only two
+  // PRODUCTION files under `lib/` are the assignment READ pair, and this suite's
+  // own binding and pure core are re-asserted present and unduplicated below.
+  //
+  // The `lib/` entries are ASSEMBLED: several of those suites pin caller
+  // allow-lists by sweeping `lib/` for their own module names, and a file that
+  // spelled one whole would enrol itself as a caller of a module it never calls.
+  const ROUTE = "app/admin/courses/[courseOfferingId]/exams/";
+  const APPROVED_MODIFICATIONS = [
+    `${ROUTE}page.tsx`,
+    `${ROUTE}exam-assignment-ui.contract.test.ts`,
+    `${ROUTE}exam-definition-create.contract.test.ts`,
+    `${ROUTE}exam-definitions-page.contract.test.ts`,
+    `${ROUTE}exam-instructed-trainee-assignment-ui.contract.test.ts`,
+    `${ROUTE}exam-plan-create.contract.test.ts`,
+    `${ROUTE}exam-session-create.contract.test.ts`,
+    `${ROUTE}exam-session-edit-delete.contract.test.ts`,
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  ];
+  const unapproved = modified.filter((path) => !APPROVED_MODIFICATIONS.includes(path)).sort();
+  assert.deepEqual(unapproved, [], `the slice modified: ${unapproved.join(", ")}`);
+
+  // Every approved entry is a guard SUITE, one route page, or one of the two
+  // assignment READ production modules — so no supervisor production file, and no
+  // third `lib/` production module of any kind, can enter this list unnoticed.
+  const APPROVED_PRODUCTION = [
+    `${ROUTE}page.tsx`,
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+  ];
+  for (const path of APPROVED_MODIFICATIONS) {
+    assert.ok(
+      path.endsWith(".test.ts") || APPROVED_PRODUCTION.includes(path),
+      `${path} is neither a suite nor an approved production file`,
+    );
+    assert.equal(/supervisor/.test(path) && !path.endsWith(".test.ts"), false, `${path}`);
+  }
 
   // ...and every working-tree entry under `prisma/` — untracked included — is
   // empty, so no migration directory was added either.

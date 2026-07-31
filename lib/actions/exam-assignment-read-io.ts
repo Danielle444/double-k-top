@@ -106,20 +106,26 @@
  * NARROW SELECTS — NOTHING TO STRIP EVER LEAVES THE DATABASE
  * ===========================================================================
  * The enrolment query selects the trainee's id and full name. The plan query
- * selects the plan's id. The assignment query selects five of its own columns
+ * selects the plan's id. The assignment query selects seven of its own columns
  * plus the trainee's full name.
+ *
+ * TWO of those seven are the DETAIL values the detailed create writer stores on an
+ * examinee's row. They are the assignment's OWN columns — free text a manager
+ * typed about the exam, not a fact about a person — so reading them widens what
+ * this list can describe without widening WHOSE data it can reach: not one
+ * additional `Student` column, not one additional relation, and not one additional
+ * statement came with them.
  *
  * NOT selected anywhere, and therefore not leakable by any later mapper: the
  * trainee's identity number, phone, activity flag, group, subgroup, horse
  * fields and every parent, guardian or child contact; the enrolment's id,
- * status, `isPrimary`, dates and horse cache; the assignment's
- * `instructionTopic`, `discipline`, `pairingIndex`, `sourcePracticeRole`,
- * `notes`, `createdAt` and `updatedAt`; and `Student.id` on the assignment path
- * specifically — the list DISPLAYS who is assigned, and the removal path already
- * identifies its target by the ASSIGNMENT id. No Teaching-Practice model, no
- * beginner child, no supervisor, no break and no signed form is read, and NO
- * relation is `include`d anywhere. The Exams area models no grade, score or
- * evaluation at all.
+ * status, `isPrimary`, dates and horse cache; the assignment's `pairingIndex`,
+ * `sourcePracticeRole`, `notes`, `createdAt` and `updatedAt`; and `Student.id` on
+ * the assignment path specifically — the list DISPLAYS who is assigned, and the
+ * removal path already identifies its target by the ASSIGNMENT id. No
+ * Teaching-Practice model, no beginner child, no supervisor, no break and no
+ * signed form is read, and NO relation is `include`d anywhere. The Exams area
+ * models no grade, score or evaluation at all.
  *
  * ===========================================================================
  * NO DATE CONVERSION EXISTS HERE
@@ -316,6 +322,8 @@ export async function readAdminExamAssignments(
       sessionId: true,
       role: true,
       horseName: true,
+      instructionTopic: true,
+      discipline: true,
       orderIndex: true,
       student: { select: { fullName: true } },
     },
@@ -329,6 +337,8 @@ export async function readAdminExamAssignments(
       role: row.role,
       traineeName: row.student === null ? null : row.student.fullName,
       horseName: row.horseName,
+      instructionTopic: row.instructionTopic,
+      discipline: row.discipline,
       orderIndex: row.orderIndex,
     })),
   );

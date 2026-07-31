@@ -120,6 +120,20 @@ const SLICE_PATHS = [
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  // EX-ASG-LTD2-B1 — the ADMIN READ DETAIL slice, which travels in the same
+  // working tree. It edits the assignment READ pair's own production modules and
+  // the pure core's suite, and re-points that pair's guards; all three paths are
+  // ASSEMBLED, and the core's two most sharply of all, because the read guard
+  // sweeps `app/`, `lib/` and `components/` for that core's name and must keep
+  // reporting exactly the one page as its caller.
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.ts",
+  // ...and the two committed SUPERVISOR IO footprint guards, whose "this slice
+  // modified NO tracked file" claims that edit makes obsolete. Each is re-pointed
+  // to an exact path list, never relaxed.
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -834,11 +848,34 @@ test("26. the list, its roles, the count rule and the ONE delete path are untouc
   for (const forbidden of [
     "DeleteExamInstructedTraineeAssignmentForm",
     "deleteExamInstructedTraineeAssignmentAction",
-    'role === "EXAMINEE"',
+    // RE-POINTED by EX-ASG-LTD2-B1: the EXAMINEE comparison left this list and is
+    // pinned exactly below instead. The INSTRUCTED_TRAINEE one stays banned
+    // outright — nothing on this page may branch on the role this slice creates.
     'role === "INSTRUCTED_TRAINEE"',
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page adds ${forbidden}`);
   }
+  // NARROWED, not relaxed. What this guard protected is that the list shows EVERY
+  // stored row whatever its role; the detail slice needs a per-row DISPLAY test,
+  // because the two stored detail values belong to the examinee's row and to no
+  // other. So the rule is stated directly: EXACTLY ONE role comparison exists, it
+  // is the row-level predicate, and it decides what a row SAYS — never whether the
+  // row, its role label or its removal control is rendered.
+  assert.equal(
+    (PAGE.match(/=== "EXAMINEE"/g) ?? []).length,
+    1,
+    "exactly one role comparison may exist, and it is the row-level display test",
+  );
+  assert.ok(PAGE.includes('const isExaminee = assignment.role === "EXAMINEE";'));
+  assert.ok(
+    PAGE.includes("{sessionAssignments.map((assignment) => {"),
+    "every bucketed row must still be mapped",
+  );
+  assert.equal(
+    /isExaminee\s*(\?|&&)\s*\(?\s*<(li|DeleteExamAssignmentForm)/.test(squash(PAGE)),
+    false,
+    "the role predicate must not gate a row or its removal control",
+  );
   // The session reader's COUNT stays the authority for the edit/delete decisions.
   assert.ok(PAGE.includes("hasAssignments={session.assignmentCount > 0}"));
   assert.equal(
@@ -1135,10 +1172,38 @@ test("35. this slice adds NO publication, notification, pairing, wave or supervi
       "Notification",
       "sendPush",
       "webpush",
-      "instructionTopic",
     ]) {
       assert.equal(source.includes(forbidden), false, `the ${label} references ${forbidden}`);
     }
+  }
+  // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to the three files that matter
+  // rather than relaxed. The blanket ban meant "this slice's instructed-trainee
+  // surface has nothing to do with the examinee's stored lesson subject", which is
+  // still exactly true — the writer for this role cannot store one — and stays
+  // TOTAL on the Server Action module, the client form and the message module.
+  //
+  // Only the PAGE may now name it, and only to READ it: it displays the value on
+  // the EXAMINEE's row. It reaches no write, no FormData key and no query key
+  // through it, which is why the permitted use is pinned to a single occurrence.
+  for (const [label, source] of [
+    ["actions", ACTIONS],
+    ["form", FORM],
+    ["messages", MESSAGES],
+  ] as const) {
+    assert.equal(
+      source.includes("instructionTopic"),
+      false,
+      `the ${label} references instructionTopic`,
+    );
+  }
+  assert.equal(
+    (PAGE.match(/instructionTopic/g) ?? []).length,
+    1,
+    "the page may read the stored value exactly once",
+  );
+  assert.ok(squash(PAGE).includes("storedDetailText( assignment.instructionTopic"));
+  for (const forbidden of ['name="instructionTopic"', 'get("instructionTopic")', "instructionTopic:"]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page turns it into ${forbidden}`);
   }
 });
 
@@ -1166,12 +1231,24 @@ test("37. the slice touched EXACTLY its approved paths, and no schema or migrati
   const prismaStatus = gitLines(["status", "--porcelain", "--", "prisma"]);
   assert.deepEqual(prismaStatus, [], `prisma/ changed: ${prismaStatus.join(", ")}`);
 
-  // The committed binding this slice WIRES was not edited, and neither was any
-  // other production module under `lib/`.
-  const libTouched = gitLines(["diff", "--name-only", "HEAD", "--", "lib"]).filter(
-    (path) => !path.endsWith(".test.ts"),
+  // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to an exact pair rather than
+  // dropped. The claim was "no `lib/` production module was edited at all". The
+  // detail slice must publish two more stored columns, which cannot be done
+  // without editing the pair that READS them — so the two are named exactly here.
+  // The instructed-trainee WRITE binding this slice wires is NOT among them and
+  // still may not be edited, and neither may any third `lib/` production module.
+  const APPROVED_LIB_PRODUCTION = [
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  ].sort();
+  const libTouched = gitLines(["diff", "--name-only", "HEAD", "--", "lib"])
+    .filter((path) => !path.endsWith(".test.ts"))
+    .sort();
+  assert.deepEqual(
+    libTouched,
+    APPROVED_LIB_PRODUCTION,
+    `an unapproved lib binding was edited: ${libTouched.join(", ")}`,
   );
-  assert.deepEqual(libTouched, [], `a committed lib binding was edited: ${libTouched.join(", ")}`);
 
   // No dependency, environment, auth, middleware or MCP surface came with it.
   //
