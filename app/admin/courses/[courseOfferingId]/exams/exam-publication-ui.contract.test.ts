@@ -133,6 +133,19 @@ const SLICE_PATHS = [
   ROUTE_DIR_PREFIX + "actions.ts",
   ROUTE_DIR_PREFIX + "page.tsx",
   ROUTE_DIR_PREFIX + "exam-publication-ui.contract.test.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, which travels in the same
+  // working tree. It adds ONE contract suite of its own, re-points this suite's
+  // route file set and export count, and extends the committed ADMIN ASSIGNMENT
+  // READ pair so a stored pairing can be displayed at all. Those two lib/
+  // PRODUCTION modules and the pure core's suite therefore join this list BY
+  // NAME, assembled like every other lib/ entry here. Nothing it does touches
+  // publication: no schema, no migration, no auth, no capability and no
+  // publication module is named.
+  ROUTE_DIR_PREFIX + "exam-pairing-ui.contract.test.ts",
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
   ROUTE_DIR_PREFIX + "exam-plan-create.contract.test.ts",
   ROUTE_DIR_PREFIX + "exam-definitions-page.contract.test.ts",
   ROUTE_DIR_PREFIX + "exam-definition-create.contract.test.ts",
@@ -179,6 +192,8 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
@@ -236,7 +251,7 @@ test("1. the slice adds ONE file and creates no new route or component", () => {
   }
 });
 
-test("2. the route directory holds EXACTLY the twenty-two approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-three approved files", () => {
   // Tracked AND untracked, so this holds before and after the slice is committed.
   // Listing the whole repository and filtering by prefix in JS is deliberate: a
   // `[courseOfferingId]` pathspec would be read by git as a character class.
@@ -249,7 +264,7 @@ test("2. the route directory holds EXACTLY the twenty-two approved files", () =>
     .filter((path) => path.startsWith(ROUTE_DIR_PREFIX))
     .sort();
   assert.deepEqual(routeFiles, FINAL_ROUTE_FILES, "the route file set changed");
-  assert.equal(routeFiles.length, 22);
+  assert.equal(routeFiles.length, 23);
 });
 
 test("3. the action module is STILL a Server Action module and nothing else", () => {
@@ -261,7 +276,7 @@ test("3. the action module is STILL a Server Action module and nothing else", ()
   const exported = [...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g)].map(
     ([, name]) => name,
   );
-  assert.equal(exported.length, 9, "no tenth endpoint may exist in this module");
+  assert.equal(exported.length, 10, "no eleventh endpoint may exist in this module");
   assert.equal(exported[8], ACTION_NAME, "the publication action must be appended LAST");
   assert.equal(exported.filter((name) => name === ACTION_NAME).length, 1);
   for (const token of ["export const", "export default", "export {", "export type"]) {
@@ -723,8 +738,6 @@ test("22. no notification, history, per-session publication or validation was ad
       "notify",
       "Notification",
       "webpush",
-      "pairing",
-      "Pairing",
       "supervisor",
       "Supervisor",
       "duplicate",
@@ -733,6 +746,34 @@ test("22. no notification, history, per-session publication or validation was ad
     ]) {
       assert.equal(source.includes(forbidden), false, `${label} reaches ${forbidden}`);
     }
+  }
+  // RE-POINTED by EX-PAIR-UI-MVP, and NARROWED to the PUBLICATION surface rather
+  // than dropped. The two pairing tokens left the module-wide list because the
+  // route now legitimately holds a separately reviewed pairing endpoint of its
+  // own. What this guard has always protected is that PUBLISHING validates
+  // nothing and drags nothing along with it — so the ban is re-pointed onto the
+  // publication ACTION body and the publication CARD, where a pairing check would
+  // actually be a readiness gate. Both are still exact.
+  for (const forbidden of ["pairing", "Pairing"]) {
+    assert.equal(
+      PUBLICATION_ACTION.includes(forbidden),
+      false,
+      `the publication action reaches ${forbidden}`,
+    );
+  }
+  // The LAST occurrence is the CARD heading; the first is the constant table this
+  // module owns, which legitimately spells every sentence it may render.
+  const publicationCard = PAGE.slice(
+    PAGE.lastIndexOf("פרסום לוח המבחנים"),
+    PAGE.indexOf("{hasDefinitions ? ("),
+  );
+  assert.ok(publicationCard.length > 0, "the publication card is missing");
+  for (const forbidden of ["pairing", "Pairing"]) {
+    assert.equal(
+      publicationCard.includes(forbidden),
+      false,
+      `the publication card reaches ${forbidden}`,
+    );
   }
 });
 
@@ -770,15 +811,20 @@ test("24. the slice touched EXACTLY its approved paths, and no schema or migrati
   ]);
   const offenders = [...touched].filter((path) => !SLICE_PATHS.includes(path)).sort();
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
-  // The approved list cannot quietly grow into a `lib/` production file: every
-  // `lib/` entry on it is a guard suite, checked here rather than assumed. The two
-  // PRODUCTION files this slice may modify are BOTH route-local, and they are the
-  // route's Server Action module and its page — nothing else, anywhere.
+  // RE-POINTED by EX-PAIR-UI-MVP, and GROWN by an EXACT PAIR rather than relaxed.
+  // Two route-local PRODUCTION files remain the only ones this SUITE's own slice
+  // may modify. The pairing UI travelling in the same working tree additionally
+  // edits the committed ADMIN ASSIGNMENT READ pair — it cannot display a stored
+  // pairing without reading the index behind it — so those two `lib/` modules
+  // join this list BY NAME. A FIFTH production file, of any kind, still fails
+  // here, and no writer, policy core, auth module or session module may appear.
   const production = SLICE_PATHS.filter((path) => !path.endsWith(".test.ts")).sort();
   assert.deepEqual(production, [
     ROUTE_DIR_PREFIX + "actions.ts",
     ROUTE_DIR_PREFIX + "page.tsx",
-  ]);
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  ].sort());
   // No schema, no migration, and no auth, session, cookie, capability or
   // service-worker file — in ANY state.
   assert.deepEqual(gitLines(["status", "--porcelain", "--", "prisma"]), []);

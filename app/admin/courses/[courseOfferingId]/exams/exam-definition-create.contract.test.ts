@@ -80,6 +80,8 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
@@ -88,6 +90,10 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  // ...and the committed PAIRING backend guard, whose caller list EX-PAIR-UI-MVP
+  // re-points from zero to exactly one Server Action module. A `.test.ts`, so no
+  // production module joins this list.
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create-error-messages.ts",
@@ -101,6 +107,8 @@ const SLICE_PATHS = [
   // reason above — and the session paths most sharply of all, because that slice's
   // committed guard asserts its writers have EXACTLY ZERO callers under `app/`.
   "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "lib/exam/create-exam-plan" + "-core.test.ts",
   "lib/actions/exam-plan-write" + "-io.test.ts",
@@ -282,7 +290,7 @@ test("1. the four new files exist at the exact course-scoped route", () => {
   assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
 });
 
-test("2. the route directory holds EXACTLY the twenty-one approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-three approved files", () => {
   // RE-POINTED by EX-SES-S4, not relaxed: the session-create slice added three
   // reviewed files to this route (a form, a message table and its own contract
   // suite), so the exact set grew from eight to eleven.
@@ -320,6 +328,8 @@ test("2. the route directory holds EXACTLY the twenty-one approved files", () =>
     "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+    // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
@@ -376,8 +386,10 @@ test("5. the module exports EXACTLY the eight approved actions, with exact signa
     "deleteExamAssignmentAction",
     "createExamInstructedTraineeAssignmentAction",
     "setExamPlanPublicationAction",
+    // EX-PAIR-UI-MVP appended a TENTH: the admin pairing endpoint. Still EXHAUSTIVE.
+    "setExamPairingAction",
   ]);
-  assert.equal(exported.length, 9, "no tenth endpoint may exist in this module");
+  assert.equal(exported.length, 10, "no eleventh endpoint may exist in this module");
   // Everything exported from a "use server" module is publicly callable, so the
   // export list is the attack surface: nothing else may leave this file.
   for (const token of ["export const", "export default", "export {", "export type"]) {
@@ -554,6 +566,12 @@ test("9. the action calls the committed writer with the bound id and the raw inp
     // this slice and at exactly this one Server Action module after it — so a
     // suite that spelled the module whole would enrol itself in that list.
     "@/lib/actions/" + "exam-publication-write" + "-io",
+    // ADDED by EX-PAIR-UI-MVP, and assembled on exactly the same terms: the
+    // committed PAIRING write binding's own guard pinned its caller list at
+    // EXACTLY ZERO before this slice and at exactly this one Server Action
+    // module after it, so a suite that spelled the module whole would enrol
+    // itself in that list.
+    "@/lib/actions/" + "exam-pairing-write" + "-io",
       "@/lib/auth/require-admin",
       "next/cache",
       "next/navigation",
@@ -618,13 +636,13 @@ test("11. success revalidates ONLY this exams path and redirects with the flag",
   // at all, which its own suite pins.
   assert.equal(
     (ACTIONS.match(/revalidatePath\(/g) ?? []).length,
-    9,
+    10,
     "the module must revalidate at most once per action and no more",
   );
   // RE-POINTED from 8 to 9 by EX-PUB-UI-MVP. The per-action budget is unchanged,
   // and the publication endpoint's single occurrence sits on its CHANGED branch
   // alone, so a NO_CHANGE publication revalidates nothing at all.
-  assert.equal((ACTIONS.match(/revalidatePath\(examsPath\);/g) ?? []).length, 9);
+  assert.equal((ACTIONS.match(/revalidatePath\(examsPath\);/g) ?? []).length, 10);
   assert.ok(DEFINITION_ACTION.includes("revalidatePath(examsPath);"), "the wrong path is revalidated");
   assert.ok(
     DEFINITION_ACTION.includes("redirect(`${examsPath}?createdDefinition=1`);"),

@@ -97,7 +97,55 @@ const APPROVED_MODIFIED_GUARDS = [
   ["lib", "actions", "exam-supervisor-write" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-supervisor-read" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-plan-write" + "-io.test.ts"].join("/"),
+  // EX-PAIR-UI-MVP TRANSITION — the approved ADMIN PAIRING UI that WIRES this
+  // backend, and the reason guards 30–32 below are re-pointed. It edits the
+  // route's Server Action module and its page, extends the committed ADMIN
+  // ASSIGNMENT READ pair (a stored pairing cannot be DISPLAYED without reading
+  // the index behind it), and re-points the route's own contract suites. Every
+  // entry is an EXACT named path — never a directory, a prefix or a glob — and
+  // no schema, migration, auth, session, capability or policy file appears.
+  ["app", "admin", "courses", "[courseOfferingId]", "exams", "actions.ts"].join("/"),
+  ["app", "admin", "courses", "[courseOfferingId]", "exams", "page.tsx"].join("/"),
+  ["lib", "exam", "admin-exam-assignment-read" + "-core.ts"].join("/"),
+  ["lib", "exam", "admin-exam-assignment-read" + "-core.test.ts"].join("/"),
+  ["lib", "actions", "exam-assignment-read" + "-io.ts"].join("/"),
+  // ...and THIS suite, which the wiring necessarily re-points: guards 30–32 below
+  // each described a backend with no caller, and it has exactly one now.
+  ["lib", "actions", "exam-pairing-write" + "-io.test.ts"].join("/"),
+  ...[
+    "exam-assignment-ui",
+    "exam-definition-create",
+    "exam-definitions-page",
+    "exam-instructed-trainee-assignment-ui",
+    "exam-plan-create",
+    "exam-publication-ui",
+    "exam-session-create",
+    "exam-session-edit-delete",
+  ].map((name) =>
+    ["app", "admin", "courses", "[courseOfferingId]", "exams", `${name}.contract.test.ts`].join(
+      "/",
+    ),
+  ),
 ].sort();
+
+/**
+ * The ONE production module this backend is reachable from, and its slice's own
+ * new contract suite.
+ *
+ * ASSEMBLED like everything else here. Together with the list above these are
+ * the only paths the scoped trees may hold.
+ */
+const APPROVED_CALLERS = [
+  ["app", "admin", "courses", "[courseOfferingId]", "exams", "actions.ts"].join("/"),
+];
+const PAIRING_UI_SUITE = [
+  "app",
+  "admin",
+  "courses",
+  "[courseOfferingId]",
+  "exams",
+  "exam-pairing-ui.contract.test.ts",
+].join("/");
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
 
@@ -860,31 +908,71 @@ test("30. the slice modified ONLY guard suites — not one production file", () 
   ]);
   const unapproved = modified.filter((path) => !APPROVED_MODIFIED_GUARDS.includes(path));
   assert.deepEqual(unapproved, [], `the slice modified: ${unapproved.join(", ")}`);
-  // ...and the approved list cannot quietly grow into a production file.
+  // RE-POINTED by EX-PAIR-UI-MVP, and NARROWED to an EXACT set rather than
+  // dropped. The claim was "not one production file", which was correct while
+  // this backend was committed but deliberately UNWIRED. Wiring it is exactly
+  // what makes that claim obsolete: the route's Server Action module and page
+  // must change to call it, and the admin assignment read pair must change for a
+  // stored pairing to be displayable at all.
+  //
+  // What this guard has always protected is unchanged and is what the list
+  // proves: no schema, no migration, no policy core, no auth module, no session
+  // module, no capability catalog, no unrelated writer and no other route. A
+  // FIFTH production file, of any kind, still fails here.
+  const APPROVED_PRODUCTION = [
+    ["app", "admin", "courses", "[courseOfferingId]", "exams", "actions.ts"].join("/"),
+    ["app", "admin", "courses", "[courseOfferingId]", "exams", "page.tsx"].join("/"),
+    ["lib", "exam", "admin-exam-assignment-read" + "-core.ts"].join("/"),
+    ["lib", "actions", "exam-assignment-read" + "-io.ts"].join("/"),
+  ].sort();
   for (const path of APPROVED_MODIFIED_GUARDS) {
-    assert.ok(path.endsWith(".test.ts"), `${path} is not a guard suite`);
+    assert.ok(
+      path.endsWith(".test.ts") || APPROVED_PRODUCTION.includes(path),
+      `${path} is neither a guard suite nor an approved production file`,
+    );
   }
-  const production = modified.filter((path) => !path.endsWith(".test.ts"));
-  assert.deepEqual(production, [], `production code was modified: ${production.join(", ")}`);
-  // The slice's own four files are ADDITIONS, never modifications.
+  const production = modified.filter((path) => !path.endsWith(".test.ts")).sort();
+  assert.deepEqual(
+    production,
+    APPROVED_PRODUCTION,
+    `production code was modified: ${production.join(", ")}`,
+  );
+  // The backend's own PRODUCTION files stay byte-identical to HEAD: wiring a
+  // committed backend must not edit it. Its own SUITE is the one exception, and
+  // an explicit one — guards 30-32 here each described a backend with no caller,
+  // and re-pointing those claims is what this slice does to it.
   for (const path of SLICE_FILES) {
-    assert.equal(modified.includes(path), false, `${path} is not an addition`);
+    if (path === ["lib", "actions", "exam-pairing-write" + "-io.test.ts"].join("/")) continue;
+    assert.equal(modified.includes(path), false, `${path} was edited by a wiring slice`);
   }
 });
 
 test("31. no UI tree another writer owns was touched, and the footprint is exact", () => {
+  // RE-POINTED by EX-PAIR-UI-MVP, and NARROWED rather than dropped. `app/admin`
+  // leaves the untouched-tree list because the approved pairing UI lives in ONE
+  // route inside it — and every path it may hold is named exactly, below. The two
+  // trees this slice must never reach, the INSTRUCTOR and TRAINEE ones, stay
+  // pinned at completely unchanged.
   for (const tree of [
-    ["app", "admin"].join("/"),
     ["app", "instructor"].join("/"),
     ["app", "student"].join("/"),
   ]) {
     assert.deepEqual(gitLines(["status", "--porcelain", "--", tree]), [], `${tree} changed`);
   }
+  // ...and every `app/admin` entry belongs to the ONE approved exams route.
+  const adminTouched = gitLines(["status", "--porcelain", "--", ["app", "admin"].join("/")]).map(
+    (line) => line.replace(/^\S{1,2}\s+/, ""),
+  );
+  const routePrefix = ["app", "admin", "courses", "[courseOfferingId]", "exams"].join("/") + "/";
+  for (const path of adminTouched) {
+    assert.ok(path.startsWith(routePrefix), `an admin file outside the exams route changed: ${path}`);
+  }
   // Across the scoped trees — worktree, index and untracked together — the ONLY
-  // entries are this slice's four new files and the guard suites its footprint
-  // re-points. A SUBSET check, so it holds while the slice is dirty, staged and
-  // committed alike; what it forbids is any TENTH path.
-  const approved = [...SLICE_FILES, ...APPROVED_MODIFIED_GUARDS];
+  // entries are this slice's four new files, the guard suites and production
+  // files its footprint re-points, and the pairing UI's own new contract suite.
+  // A SUBSET check, so it holds while the slice is dirty, staged and committed
+  // alike; what it forbids is any path outside that exact set.
+  const approved = [...SLICE_FILES, ...APPROVED_MODIFIED_GUARDS, PAIRING_UI_SUITE];
   const touched = gitLines([
     "status",
     "--porcelain",
@@ -899,7 +987,19 @@ test("31. no UI tree another writer owns was touched, and the footprint is exact
   assert.deepEqual(unexpected, [], `unexpected changes: ${unexpected.join(", ")}`);
 });
 
-test("32. this backend has ZERO callers: nothing in the app can reach it yet", () => {
+test("32. EXACTLY the approved Server Action module reaches this backend", () => {
+  // EX-PAIR-UI-MVP TRANSITION. This guard asserted the caller list was EMPTY,
+  // which was the correct claim while the backend was committed but deliberately
+  // unwired. Wiring it is exactly what makes that claim obsolete, so the guard is
+  // RE-POINTED to an equally exact POSITIVE claim rather than deleted or weakened
+  // to "some caller exists": the ONE course-scoped admin exams Server Action
+  // module, and nothing else anywhere under `app/`, `lib/`, `components/` or
+  // `scripts/`.
+  //
+  // A SECOND caller — an instructor route, a trainee route, a component, a
+  // script, another action module — still fails here, which is the whole point:
+  // this backend carries an admin boundary and a course-lifecycle gate, and every
+  // new caller is a new decision about who may re-pair an exam.
   const own = new Set([
     join(REPO_ROOT, IO_REL),
     join(REPO_ROOT, IO_TEST_REL),
@@ -935,7 +1035,11 @@ test("32. this backend has ZERO callers: nothing in the app can reach it yet", (
   }
 
   const normalized = callers.map((path) => path.split(sep).join("/")).sort();
-  assert.deepEqual(normalized, [], `a caller already exists: ${normalized.join(", ")}`);
+  assert.deepEqual(
+    normalized,
+    [...APPROVED_CALLERS].sort(),
+    `an unapproved caller exists: ${normalized.join(", ")}`,
+  );
 });
 
 test("33. this suite opens no database and reads no environment", () => {

@@ -87,6 +87,8 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
@@ -132,6 +134,8 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
@@ -140,6 +144,10 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  // ...and the committed PAIRING backend guard, whose caller list EX-PAIR-UI-MVP
+  // re-points from zero to exactly one Server Action module. A `.test.ts`, so no
+  // production module joins this list.
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
   // The three new route files.
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
@@ -150,6 +158,8 @@ const SLICE_PATHS = [
   // The four route guard suites, including this one.
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   // The five committed `lib/` footprint guards.
@@ -331,7 +341,7 @@ test("1. the three new files exist at the exact course-scoped route", () => {
   assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
 });
 
-test("2. the route directory holds EXACTLY the eleven approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-three approved files", () => {
   // Tracked AND untracked, so this holds both before and after the slice is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a bracketed pathspec would be read by git as a character class.
@@ -401,12 +411,14 @@ test("5. the module exports EXACTLY the eight approved actions, in order", () =>
     "deleteExamAssignmentAction",
     "createExamInstructedTraineeAssignmentAction",
     "setExamPlanPublicationAction",
+    // EX-PAIR-UI-MVP appended a TENTH: the admin pairing endpoint. Still EXHAUSTIVE.
+    "setExamPairingAction",
   ]);
-  assert.equal(exported.length, 9, "no tenth endpoint may exist in this module");
+  assert.equal(exported.length, 10, "no eleventh endpoint may exist in this module");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 9);
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 10);
 });
 
 test("6. the session action has the EXACT locked signature, and returns void", () => {
@@ -641,6 +653,12 @@ test("15. the action imports no database client, capability or notification surf
     // this slice and at exactly this one Server Action module after it — so a
     // suite that spelled the module whole would enrol itself in that list.
     "@/lib/actions/" + "exam-publication-write" + "-io",
+    // ADDED by EX-PAIR-UI-MVP, and assembled on exactly the same terms: the
+    // committed PAIRING write binding's own guard pinned its caller list at
+    // EXACTLY ZERO before this slice and at exactly this one Server Action
+    // module after it, so a suite that spelled the module whole would enrol
+    // itself in that list.
+    "@/lib/actions/" + "exam-pairing-write" + "-io",
     "@/lib/auth/require-admin",
     "next/cache",
     "next/navigation",
@@ -1053,7 +1071,10 @@ test("26. page.tsx WIRES this form to the committed reader, grouping core and ac
   // instructed-trainee create form is the fourth, added by EX-ASG-IT2 — and once
   // as the assignment-bucket lookup key. Every one of the six is NON-VISIBLE,
   // which is the property this guard has always protected.
-  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 6);
+  // RE-POINTED by EX-PAIR-UI-MVP: ONE further NON-VISIBLE use — the pairing
+  // picker's same-session examinee bucket, looked up by this very key. Still
+  // never text, never an interpolation and never an href.
+  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 7);
   assert.equal((PAGE.match(/sessionId=\{session\.sessionId\}/g) ?? []).length, 4);
   assert.ok(
     PAGE.includes("assignmentsBySession.get(session.sessionId)"),
@@ -1297,7 +1318,7 @@ test("29. the slice touched EXACTLY its fourteen approved paths", () => {
   // paths this list already holds. Counted as a SET rather than as an array: the
   // list is an allow-list consulted with `includes`, so a repeated entry permits
   // nothing extra, and a raw length would report a scope that does not exist.
-  assert.equal(new Set(SLICE_PATHS).size, 33, "the approved scope is thirty-three files");
+  assert.equal(new Set(SLICE_PATHS).size, 35, "the approved scope is thirty-five files");
   assert.ok(
     SLICE_PATHS.includes(`${ROUTE_DIR_PREFIX}page.tsx`),
     "the wired page must be in scope",

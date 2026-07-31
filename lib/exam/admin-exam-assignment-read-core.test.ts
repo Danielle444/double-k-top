@@ -58,6 +58,9 @@ function assignment(
     instructionTopic: "עלייה וירידה",
     discipline: "רכיבה טיפולית",
     orderIndex: 0,
+    // EX-PAIR-UI-MVP: the default fixture states NO pairing, so every guard
+    // written before this slice keeps testing exactly what it tested.
+    pairingIndex: null,
     ...overrides,
   };
 }
@@ -377,6 +380,10 @@ test("16. an assignment row carries EXACTLY the eight approved keys", () => {
   // RE-POINTED by EX-ASG-LTD2-B1, and GROWN rather than relaxed: the two stored
   // DETAIL values of an examinee's row join the published shape, and a NINTH key
   // still fails here. Nothing was removed and nothing became optional.
+  // RE-POINTED by EX-PAIR-UI-MVP, and GROWN rather than relaxed: the two resolved
+  // PAIRING fields join the published row. This is still an EXACT list, so an
+  // eleventh key fails here — and `pairingIndex`, which is now an INPUT field, is
+  // deliberately NOT among them. Guard 18 below re-asserts that ban by name.
   const [row] = buildAdminExamAssignmentListView([assignment()]).assignments;
   assert.deepEqual(Object.keys(row).sort(), [
     "assignmentId",
@@ -384,6 +391,8 @@ test("16. an assignment row carries EXACTLY the eight approved keys", () => {
     "horseName",
     "instructionTopic",
     "orderIndex",
+    "pairedExamineeAssignmentId",
+    "pairedExamineeName",
     "role",
     "sessionId",
     "traineeName",
@@ -417,6 +426,11 @@ test("18. neither view carries personal or scoping data beyond the approved keys
   // RE-POINTED by EX-ASG-LTD2-B1: the two stored DETAIL values join the list. They
   // are the ASSIGNMENT's own columns — free text about the exam — and not a fact
   // about a person, which is why the personal and scoping bans below are unchanged.
+  // RE-POINTED AGAIN by EX-PAIR-UI-MVP: the two RESOLVED pairing fields join the
+  // list. They are the ANSWER to "who is this trainee examined alongside?" — an
+  // assignment id this surface already publishes, and a display name it already
+  // publishes — and NOT the internal `pairingIndex`, which stays in the forbidden
+  // list below and is proven absent by it.
   assert.deepEqual([...keys].sort(), [
     "assignmentId",
     "assignments",
@@ -425,6 +439,8 @@ test("18. neither view carries personal or scoping data beyond the approved keys
     "horseName",
     "instructionTopic",
     "orderIndex",
+    "pairedExamineeAssignmentId",
+    "pairedExamineeName",
     "role",
     "sessionId",
     "studentId",
@@ -513,10 +529,39 @@ const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
 const GENERATED_CLIENT = ["@prisma", "client"].join("/");
 const ENV_READ = "process" + ".env";
 
-test("21. the pure module declares NO imports at all", () => {
-  assert.equal(/(^|\n)\s*import\s/.test(CODE), false, "the module imports something");
+test("21. the pure module declares EXACTLY ONE import: the sibling pairing rule", () => {
+  // RE-POINTED by EX-PAIR-UI-MVP, and NARROWED to an EXACT single specifier
+  // rather than relaxed. The claim was "NO imports at all", which was correct
+  // while this module answered questions about ONE row at a time. Deciding WHICH
+  // EXAMINEE an instructed trainee is paired with is a question about a
+  // RELATIONSHIP, and the repository already has ONE committed answer to it —
+  // restating that rule here would give the manager's screen a second copy free
+  // to drift from the one the operational readers use.
+  //
+  // What this guard always protected is unchanged and is what the list proves: a
+  // pure sibling core in this same directory, reachable by a RELATIVE specifier,
+  // with no database, auth, framework, environment or clock behind it. A SECOND
+  // import — of any kind, relative or aliased — still fails here, and guard 22
+  // below independently re-asserts every forbidden dependency by name.
+  //
+  // The specifier is ASSEMBLED from pieces rather than spelled whole: guard 25
+  // below scans THIS suite's own source for module specifiers and pins the
+  // result exactly, and a written-out path here would read to it as this suite
+  // importing an exam core it does not import.
+  const PAIRING_RULE_MODULE = "./exam-block" + "-timetable-core";
+  const specifiers = [...CODE.matchAll(/\bfrom\s+"([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(specifiers, [PAIRING_RULE_MODULE]);
+  assert.equal(
+    (CODE.match(/(^|\n)\s*import\s/g) ?? []).length,
+    1,
+    "the module declares more than one import",
+  );
   assert.equal(/require\s*\(/.test(CODE), false, "the module uses require");
-  assert.equal(/\bfrom\s+"/.test(CODE), false, "the module has a module specifier");
+  // The RULE itself is what is imported — not a type, and not a second helper.
+  const imported = [...CODE.matchAll(/import\s+\{([^}]+)\}/g)].flatMap((m) =>
+    m[1].split(",").map((name) => name.trim()),
+  );
+  assert.deepEqual(imported, ["resolveExamPairings"]);
 });
 
 test("22. the pure module reaches NO database, auth, framework, env or clock", () => {
@@ -682,7 +727,24 @@ test("28. the detail values are role-blind, frozen, JSON-safe and non-mutating",
   assert.equal(instructed.role, "INSTRUCTED_TRAINEE");
   assert.equal(instructed.instructionTopic, "נושא");
   assert.equal(instructed.discipline, "ענף");
-  assert.equal(/\brole\b[^\n]*===/.test(CODE), false, "the pure core branches on role");
+  // RE-POINTED by EX-PAIR-UI-MVP, and NARROWED to the projection this guard is
+  // actually about. The claim was that the WHOLE module never branches on role,
+  // which was correct while nothing here needed to. Resolving a pairing does need
+  // to — only an INSTRUCTED_TRAINEE may carry a partner, and only an EXAMINEE may
+  // be one — so the ban is re-pointed onto `toAssignmentRow`, the one function
+  // that shapes a row's own stored values. A role test appearing THERE still
+  // fails, which is exactly what "the detail values are role-blind" means.
+  const projectionStart = CODE.indexOf("function toAssignmentRow(");
+  assert.ok(projectionStart > 0, "the projection is missing");
+  const projection = CODE.slice(
+    projectionStart,
+    CODE.indexOf("\n}", projectionStart) + 2,
+  );
+  assert.equal(
+    /\brole\b[^\n]*===/.test(projection),
+    false,
+    "the row projection branches on role",
+  );
 
   // The published row stays deeply frozen and JSON-safe with both values present.
   const list = buildAdminExamAssignmentListView([assignment()]);
@@ -700,4 +762,174 @@ test("28. the detail values are role-blind, frozen, JSON-safe and non-mutating",
   const snapshot = JSON.parse(JSON.stringify(rows));
   buildAdminExamAssignmentListView(rows);
   assert.deepEqual(rows, snapshot, "the input rows were mutated");
+});
+
+// ===========================================================================
+// 29-35. EX-PAIR-UI-MVP - the RESOLVED pairing
+// ===========================================================================
+
+/** One EXAMINEE of `session-1`, named and optionally carrying a stored index. */
+function examinee(
+  assignmentId: string,
+  traineeName: string,
+  pairingIndex: number | null,
+  sessionId = "session-1",
+): StoredAdminExamAssignmentRow {
+  return assignment({ assignmentId, sessionId, role: "EXAMINEE", traineeName, pairingIndex });
+}
+
+/** One INSTRUCTED_TRAINEE, which carries no horse and no detail values. */
+function instructedTrainee(
+  assignmentId: string,
+  traineeName: string,
+  pairingIndex: number | null,
+  sessionId = "session-1",
+): StoredAdminExamAssignmentRow {
+  return assignment({
+    assignmentId,
+    sessionId,
+    role: "INSTRUCTED_TRAINEE",
+    traineeName,
+    pairingIndex,
+    horseName: null,
+    instructionTopic: null,
+    discipline: null,
+  });
+}
+
+/** The published row with this assignment id. */
+function rowOf(
+  list: ReturnType<typeof buildAdminExamAssignmentListView>,
+  assignmentId: string,
+) {
+  const found = list.assignments.find((row) => row.assignmentId === assignmentId);
+  assert.ok(found !== undefined, `${assignmentId} is missing from the view`);
+  return found;
+}
+
+test("29. a stated index matching EXACTLY ONE examinee resolves to it, by name", () => {
+  const list = buildAdminExamAssignmentListView([
+    examinee("ex-1", "נועה", 1),
+    examinee("ex-2", "תמר", 2),
+    instructedTrainee("it-1", "יעל", 2),
+  ]);
+  const trainee = rowOf(list, "it-1");
+  assert.equal(trainee.pairedExamineeAssignmentId, "ex-2");
+  assert.equal(trainee.pairedExamineeName, "תמר");
+  // The partner is chosen by the STORED index and never by array position: the
+  // trainee resolves to the SECOND examinee listed, not the first.
+});
+
+test("30. several instructed trainees may share ONE examinee", () => {
+  const list = buildAdminExamAssignmentListView([
+    examinee("ex-1", "נועה", 4),
+    instructedTrainee("it-1", "יעל", 4),
+    instructedTrainee("it-2", "רותם", 4),
+  ]);
+  for (const id of ["it-1", "it-2"]) {
+    assert.equal(rowOf(list, id).pairedExamineeAssignmentId, "ex-1");
+    assert.equal(rowOf(list, id).pairedExamineeName, "נועה");
+  }
+});
+
+test("31. NO stated index resolves ONLY in a session holding exactly one examinee", () => {
+  const sole = buildAdminExamAssignmentListView([
+    examinee("ex-1", "נועה", null),
+    instructedTrainee("it-1", "יעל", null),
+  ]);
+  assert.equal(rowOf(sole, "it-1").pairedExamineeAssignmentId, "ex-1");
+  assert.equal(rowOf(sole, "it-1").pairedExamineeName, "נועה");
+
+  // Two examinees and no stated index identifies NEITHER of them.
+  const several = buildAdminExamAssignmentListView([
+    examinee("ex-1", "נועה", null),
+    examinee("ex-2", "תמר", null),
+    instructedTrainee("it-1", "יעל", null),
+  ]);
+  assert.equal(rowOf(several, "it-1").pairedExamineeAssignmentId, null);
+  assert.equal(rowOf(several, "it-1").pairedExamineeName, null);
+});
+
+test("32. an AMBIGUOUS or UNMATCHED index selects NO examinee at all", () => {
+  // Two examinees of one session sharing an index identify neither. The FIRST is
+  // never silently preferred.
+  const duplicated = buildAdminExamAssignmentListView([
+    examinee("ex-1", "נועה", 1),
+    examinee("ex-2", "תמר", 1),
+    instructedTrainee("it-1", "יעל", 1),
+  ]);
+  assert.equal(rowOf(duplicated, "it-1").pairedExamineeAssignmentId, null);
+  assert.equal(rowOf(duplicated, "it-1").pairedExamineeName, null);
+
+  // A STATED index matching no examinee resolves to nothing EVEN when the
+  // session holds exactly one: a stated-but-unmatched pairing is a fault to be
+  // surfaced, not an invitation to fall back on the only candidate.
+  const unmatched = buildAdminExamAssignmentListView([
+    examinee("ex-1", "נועה", 7),
+    instructedTrainee("it-1", "יעל", 9),
+  ]);
+  assert.equal(rowOf(unmatched, "it-1").pairedExamineeAssignmentId, null);
+  assert.equal(rowOf(unmatched, "it-1").pairedExamineeName, null);
+});
+
+test("33. a partner is NEVER resolved across sessions", () => {
+  // The other session's examinee holds the very index this trainee states, and
+  // is the only examinee anywhere. Neither the exact match nor the sole-examinee
+  // fallback may reach it.
+  const list = buildAdminExamAssignmentListView([
+    examinee("ex-other", "תמר", 3, "session-2"),
+    instructedTrainee("it-1", "יעל", 3, "session-1"),
+    instructedTrainee("it-2", "רותם", null, "session-1"),
+  ]);
+  for (const id of ["it-1", "it-2"]) {
+    assert.equal(rowOf(list, id).pairedExamineeAssignmentId, null);
+    assert.equal(rowOf(list, id).pairedExamineeName, null);
+  }
+});
+
+test("34. only an INSTRUCTED_TRAINEE carries a partner, and the index is NEVER published", () => {
+  const list = buildAdminExamAssignmentListView([
+    examinee("ex-1", "נועה", 1),
+    instructedTrainee("it-1", "יעל", 1),
+  ]);
+  // An examinee's own partner fields stay null: "who points at me" is a
+  // different question with a different cardinality.
+  assert.equal(rowOf(list, "ex-1").pairedExamineeAssignmentId, null);
+  assert.equal(rowOf(list, "ex-1").pairedExamineeName, null);
+
+  // The INTERNAL allocation label reaches no published row and no payload.
+  const serialized = JSON.stringify(list);
+  assert.equal(serialized.includes("pairingIndex"), false, "the index reaches the DTO");
+  for (const row of list.assignments) {
+    assert.equal("pairingIndex" in row, false, "a published row carries the index");
+  }
+});
+
+test("35. the pairing fields are frozen, JSON-safe, ordered-blind and non-mutating", () => {
+  const rows = [
+    instructedTrainee("it-1", "יעל", 1),
+    examinee("ex-1", null as unknown as string, 1),
+  ];
+  const snapshot = JSON.parse(JSON.stringify(rows));
+  const list = buildAdminExamAssignmentListView(rows);
+
+  // A partner whose trainee link is absent is named by the ONE fixed
+  // placeholder, exactly as its own row is - never by an id and never blank.
+  assert.equal(rowOf(list, "it-1").pairedExamineeAssignmentId, "ex-1");
+  assert.equal(rowOf(list, "it-1").pairedExamineeName, UNASSIGNED_EXAM_TRAINEE_NAME);
+
+  assert.ok(isDeeplyFrozen(list));
+  assert.deepEqual(JSON.parse(JSON.stringify(list)), list);
+  assert.throws(() => {
+    (list.assignments[0] as { pairedExamineeName: string | null }).pairedExamineeName = "x";
+  });
+  assert.deepEqual(rows, snapshot, "the input rows were mutated");
+
+  // The answer does not depend on the order the rows arrived in: the pairing is
+  // resolved over the UNSORTED input, before the presentation order is imposed.
+  const reversed = buildAdminExamAssignmentListView([rows[1], rows[0]]);
+  assert.deepEqual(
+    reversed.assignments.map((row) => row.pairedExamineeAssignmentId),
+    list.assignments.map((row) => row.pairedExamineeAssignmentId),
+  );
 });

@@ -88,6 +88,8 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
@@ -121,6 +123,8 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
@@ -129,6 +133,10 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  // ...and the committed PAIRING backend guard, whose caller list EX-PAIR-UI-MVP
+  // re-points from zero to exactly one Server Action module. A `.test.ts`, so no
+  // production module joins this list.
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
   // The three new files.
   `${ROUTE_DIR_PREFIX}ExamSessionEditForm.tsx`,
   `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
@@ -297,7 +305,7 @@ test("1. the three new files exist at the exact course-scoped route", () => {
   assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
 });
 
-test("2. the route directory holds EXACTLY the fourteen approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-three approved files", () => {
   // Tracked AND untracked, so this holds both before and after the slice is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a bracketed pathspec would be read by git as a character class.
@@ -361,12 +369,14 @@ test("5. the module exports EXACTLY the eight approved actions, in order", () =>
     "deleteExamAssignmentAction",
     "createExamInstructedTraineeAssignmentAction",
     "setExamPlanPublicationAction",
+    // EX-PAIR-UI-MVP appended a TENTH: the admin pairing endpoint. Still EXHAUSTIVE.
+    "setExamPairingAction",
   ]);
-  assert.equal(exported.length, 9, "no tenth endpoint may exist in this module");
+  assert.equal(exported.length, 10, "no eleventh endpoint may exist in this module");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 9);
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 10);
 });
 
 test("6. both new actions have the EXACT locked signature, and return void", () => {
@@ -754,6 +764,12 @@ test("18. the module's import surface did NOT grow a new binding", () => {
     // this slice and at exactly this one Server Action module after it — so a
     // suite that spelled the module whole would enrol itself in that list.
     "@/lib/actions/" + "exam-publication-write" + "-io",
+    // ADDED by EX-PAIR-UI-MVP, and assembled on exactly the same terms: the
+    // committed PAIRING write binding's own guard pinned its caller list at
+    // EXACTLY ZERO before this slice and at exactly this one Server Action
+    // module after it, so a suite that spelled the module whole would enrol
+    // itself in that list.
+    "@/lib/actions/" + "exam-pairing-write" + "-io",
     "@/lib/auth/require-admin",
     "next/cache",
     "next/navigation",
@@ -1021,12 +1037,23 @@ test("24. the page binds BOTH new actions to the VERIFIED context id, once each"
   // acquire inline markup: every one of these counts belongs to the publication
   // card, which sits outside the session list entirely and is pinned by name in
   // the page's own suite.
-  for (const forbidden of ["<select", "<textarea", "onClick", "onSubmit", "onChange"]) {
+  // RE-POINTED by EX-PAIR-UI-MVP: the pairing picker is a `<select>` and there is
+  // exactly ONE on this page. A SECOND still fails, and every other control token
+  // stays banned outright.
+  assert.equal((PAGE.match(/<select/g) ?? []).length, 1, "exactly one inline picker");
+  for (const forbidden of ["<textarea", "onClick", "onSubmit", "onChange"]) {
     assert.equal(PAGE.includes(forbidden), false, `the page renders ${forbidden}`);
   }
-  assert.equal((PAGE.match(/<form /g) ?? []).length, 2);
-  assert.equal((PAGE.match(/<button/g) ?? []).length, 2);
-  assert.equal((PAGE.match(/<input/g) ?? []).length, 2);
+  // RE-POINTED from two to THREE by EX-PAIR-UI-MVP, which renders its pairing
+  // control INLINE for the same reason the publication one is: fixed values, no
+  // pending UX, no validation and no confirmation. An inventory stays stronger
+  // than a ban: a FOURTH form, button or input still fails here.
+  assert.equal((PAGE.match(/<form /g) ?? []).length, 3);
+  assert.equal((PAGE.match(/<button/g) ?? []).length, 3);
+  // RE-POINTED from two to THREE by EX-PAIR-UI-MVP: the pairing form carries ONE
+  // hidden field naming the instructed-trainee row it belongs to. A FOURTH still
+  // fails, and the two `name="operation"` inputs are pinned separately below.
+  assert.equal((PAGE.match(/<input/g) ?? []).length, 3);
   assert.equal((PAGE.match(/name="operation"/g) ?? []).length, 2);
   // No inline markup sits anywhere near a session: neither the edit nor the
   // delete form gained a hidden field, a button or an input of the page's own.
@@ -1089,7 +1116,10 @@ test("26. the version stamp travels ONLY as a hidden token, never as text or an 
   // guard has always protected, and the exact counts keep "only" honest.
   assert.ok(PAGE.includes("key={session.sessionId}"));
   assert.equal((PAGE.match(/sessionId=\{session\.sessionId\}/g) ?? []).length, 4);
-  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 6);
+  // RE-POINTED by EX-PAIR-UI-MVP: ONE further NON-VISIBLE use — the pairing
+  // picker's same-session examinee bucket, looked up by this very key. Still
+  // never text, never an interpolation and never an href.
+  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 7);
   assert.ok(
     PAGE.includes("assignmentsBySession.get(session.sessionId)"),
     "the fifth use must be the assignment-bucket lookup",
@@ -1100,7 +1130,11 @@ test("26. the version stamp travels ONLY as a hidden token, never as text or an 
   // The ASSIGNMENT id is held to exactly the same rule: a React key and the
   // removal form's one hidden prop, and never text or an interpolation.
   assert.ok(PAGE.includes("key={assignment.assignmentId}"));
-  assert.equal((PAGE.match(/assignment\.assignmentId/g) ?? []).length, 2);
+  // RE-POINTED from 2 to 3 by EX-PAIR-UI-MVP: the pairing form's ONE hidden
+  // field is a third NON-VISIBLE use, held to exactly the same rule — never
+  // text, never an interpolation and never an href, which the ban below
+  // re-states from the other side.
+  assert.equal((PAGE.match(/assignment\.assignmentId/g) ?? []).length, 3);
   for (const forbidden of [">{assignment.assignmentId}<", "${assignment.assignmentId}"]) {
     assert.equal(PAGE.includes(forbidden), false, `the assignment id is rendered: ${forbidden}`);
   }
@@ -1176,11 +1210,16 @@ test("28. the six new feedback keys are declared, closed, and array-tolerant", (
     "instructedTraineeIssues",
     // ADDED by EX-PUB-UI-MVP: ONE closed publication FEEDBACK token, which this
     // suite pins only to prove the session family did not change shape.
+    // EX-PAIR-UI-MVP adds ONE more closed feedback token, and no other key.
+    "pairing",
     "publication",
   ].sort());
   // Every key admits the ARRAY form a repeated query key produces, which is what
   // forces every parser to reject it rather than coerce it.
-  assert.equal((queryType.match(/string \| string\[\]/g) ?? []).length, 24);
+  // RE-POINTED from 24 to 25 by EX-PAIR-UI-MVP: ONE closed pairing FEEDBACK
+  // token, which names no course, plan, session, trainee, assignment or version,
+  // and from which nothing derives scope, state or a selection.
+  assert.equal((queryType.match(/string \| string\[\]/g) ?? []).length, 25);
   // Not one of them names a course, a plan, a definition, a session, a trainee, an
   // assignment or a version.
   for (const forbidden of [
@@ -1345,7 +1384,7 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
   // paths this list already holds. Counted as a SET rather than as an array: the
   // list is an allow-list consulted with `includes`, so a repeated entry permits
   // nothing extra, and a raw length would report a scope that does not exist.
-  assert.equal(new Set(SLICE_PATHS).size, 33, "the approved scope is thirty-three files");
+  assert.equal(new Set(SLICE_PATHS).size, 35, "the approved scope is thirty-five files");
 
   // EXACTLY TWO production files in scope are not new: the shared Server Action
   // module and the page. Everything else is either one of the new route files or a

@@ -1,13 +1,21 @@
 /**
- * EXAM EX-ASG-IO1 — the PURE read shaping behind the two ADMIN assignment reads:
- * the ELIGIBLE-TRAINEE picker, and the STORED-ASSIGNMENT list.
+ * EXAM EX-ASG-IO1 + EXAM EX-PAIR-UI-MVP — the PURE read shaping behind the two
+ * ADMIN assignment reads: the ELIGIBLE-TRAINEE picker, and the STORED-ASSIGNMENT
+ * list.
  *
  * PURE by construction: no database client, no transaction, no clock, no
  * randomness, no environment, no auth/session/cookie, no capability, no
- * filesystem, no network, no Next, no `server-only`, no `"use server"`. This
- * module declares NO IMPORTS AT ALL, so its purity is a property of the file
- * rather than a promise about a dependency. Every export is a total,
- * deterministic function of its arguments and never mutates its inputs.
+ * filesystem, no network, no Next, no `server-only`, no `"use server"`. Every
+ * export is a total, deterministic function of its arguments and never mutates
+ * its inputs.
+ *
+ * EX-PAIR-UI-MVP narrows the "NO IMPORTS AT ALL" property this module used to
+ * hold to EXACTLY ONE import, and to one that cannot cost it any of the above:
+ * the committed, equally pure SIBLING core that owns the pairing rule. Restating
+ * that rule here instead would give the manager's screen a second, drifting copy
+ * of the decision the operational readers already make — which is precisely the
+ * failure mode "one rule, one place" exists to prevent. Everything the purity
+ * guards below actually protect is asserted unchanged.
  *
  * WHAT THIS ANSWERS (and only this):
  *  - in what TOTAL order are the two lists presented, and what exactly may each
@@ -15,6 +23,8 @@
  *  - what does "nothing to show" look like, so an empty answer is a shape rather
  *    than a special case every caller re-invents?
  *  - what is shown for a stored assignment whose trainee link is absent?
+ *  - WHICH EXAMINEE, if any, is each instructed trainee currently paired with —
+ *    answered by the committed pairing rule and never by array position?
  *
  * WHAT THIS DELIBERATELY DOES NOT DO:
  *  - it PERFORMS NO IO and knows nothing of a row, a query, a plan, a course
@@ -126,7 +136,40 @@
  * The freezing is DEEP: the view, its array and every row in it. A shallow
  * freeze would leave a consumer free to rewrite a trainee's name in place, and a
  * shared frozen empty array is safe precisely because it is immutable.
+ *
+ * ===========================================================================
+ * EX-PAIR-UI-MVP — THE PAIRING IS RESOLVED, AND THE INDEX IS NOT PUBLISHED
+ * ===========================================================================
+ * The stored INPUT row now carries `pairingIndex`, because deciding who is
+ * paired with whom is impossible without it. The PUBLISHED row does NOT, and
+ * must never: the index is an internal allocation label, it means nothing to a
+ * manager, and a surface that received it would be free to invent a pairing from
+ * it. What is published instead is the ANSWER — the paired examinee's assignment
+ * id, and that examinee's display name — for INSTRUCTED_TRAINEE rows and for no
+ * other role.
+ *
+ * The answer comes from the committed sibling pairing rule, applied ONE SESSION
+ * AT A TIME, so an examinee of another session can never be resolved as a
+ * partner. That rule already fails closed exactly where this surface must:
+ *
+ *   - an index shared by two examinees of the session identifies neither;
+ *   - an index matching no examinee of the session resolves to nothing, EVEN in
+ *     a session holding exactly one examinee — a stated-but-unmatched pairing is
+ *     a fault to be surfaced, not an invitation to guess;
+ *   - NO stated index resolves to nothing UNLESS the session holds exactly one
+ *     examinee, which is the single unambiguous fallback.
+ *
+ * This module adds ONE fail-closed condition of its own on top, deliberately
+ * rather than trusting the caller: a resolved id is published only if it belongs
+ * to a row THIS LIST holds, that row is an EXAMINEE, and it is in the SAME
+ * session. Nothing is ever resolved by name, by order position or by array
+ * index, and a row of any other role publishes `null` for both fields.
  */
+
+// ===========================================================================
+// The one import: the committed pairing rule, shared rather than restated
+// ===========================================================================
+import { resolveExamPairings } from "./exam-block-timetable-core";
 
 // ===========================================================================
 // The fixed placeholder
@@ -199,10 +242,14 @@ export interface EligibleExamTraineeListView {
  * a value that exists but is never displayed is indistinguishable from one that
  * was never written, and this list is the only surface that shows the row at all.
  *
+ * `pairingIndex` is EX-PAIR-UI-MVP's one addition, and it is an INPUT ONLY. It
+ * is the internal allocation label the pairing rule reads, it is consumed here,
+ * and it appears in NO published type in this module — see the header.
+ *
  * Note what still has NO field and therefore cannot arrive: `Student.id`, the
  * identity number, the phone, any parent or guardian detail, the group, the
- * pairing index, the source practice role, the notes, `planId`,
- * `courseOfferingId`, `createdAt` and `updatedAt`.
+ * source practice role, the notes, `planId`, `courseOfferingId`, `createdAt` and
+ * `updatedAt`.
  */
 export interface StoredAdminExamAssignmentRow {
   readonly assignmentId: string;
@@ -213,6 +260,7 @@ export interface StoredAdminExamAssignmentRow {
   readonly instructionTopic: string | null;
   readonly discipline: string | null;
   readonly orderIndex: number;
+  readonly pairingIndex: number | null;
 }
 
 /**
@@ -231,6 +279,14 @@ export interface StoredAdminExamAssignmentRow {
  * decision, made against the DEFINITION's requirements, which this module cannot
  * see and deliberately does not join.
  *
+ * `pairedExamineeAssignmentId` and `pairedExamineeName` are EX-PAIR-UI-MVP's two
+ * additions. Both are `null` on every EXAMINEE row and on every instructed
+ * trainee whose pairing does not resolve UNAMBIGUOUSLY — see the header for the
+ * exact conditions. The id is published because the admin pairing control must
+ * be able to pre-select the CURRENT partner without deriving it from array
+ * position; the name is published so that control can say who that is without a
+ * second lookup. The `pairingIndex` behind them is NOT published.
+ *
  * There is deliberately no `studentId`, and no field for anything the header's
  * exclusion list names.
  */
@@ -243,6 +299,8 @@ export interface AdminExamAssignmentRow {
   readonly instructionTopic: string | null;
   readonly discipline: string | null;
   readonly orderIndex: number;
+  readonly pairedExamineeAssignmentId: string | null;
+  readonly pairedExamineeName: string | null;
 }
 
 /** The whole assignment list, for the same reason the picker is wrapped. */
@@ -388,6 +446,151 @@ function bySessionThenPositionThenId(
 // The projections
 // ===========================================================================
 
+// ===========================================================================
+// EX-PAIR-UI-MVP — the pairing answer
+// ===========================================================================
+
+/** The two published pairing fields of ONE row, resolved together. */
+interface ResolvedPairing {
+  readonly pairedExamineeAssignmentId: string | null;
+  readonly pairedExamineeName: string | null;
+}
+
+/**
+ * The ONE frozen "no partner" answer.
+ *
+ * Shared rather than rebuilt per row, and it is what EVERY row starts from: an
+ * examinee, an unrecognized role, an unresolved pairing and a resolved id that
+ * names no row of this list all end here. Nothing is ever guessed.
+ */
+const NO_PAIRING: ResolvedPairing = Object.freeze({
+  pairedExamineeAssignmentId: null,
+  pairedExamineeName: null,
+});
+
+/** One row, reduced to what the committed pairing rule is entitled to see. */
+interface PairingCandidate {
+  readonly assignmentId: string;
+  readonly pairingIndex: number | null;
+}
+
+/** Remember one EXAMINEE display name UNDER ITS OWN SESSION. */
+function rememberExamineeName(
+  namesBySession: Map<string, Map<string, string>>,
+  sessionId: string,
+  assignmentId: string,
+  displayName: string,
+): void {
+  const names = namesBySession.get(sessionId);
+  if (names === undefined) {
+    namesBySession.set(sessionId, new Map([[assignmentId, displayName]]));
+    return;
+  }
+  names.set(assignmentId, displayName);
+}
+
+/** Append one candidate to its session's bucket, creating the bucket once. */
+function bucket(
+  buckets: Map<string, PairingCandidate[]>,
+  sessionId: string,
+  candidate: PairingCandidate,
+): void {
+  const existing = buckets.get(sessionId);
+  if (existing === undefined) {
+    buckets.set(sessionId, [candidate]);
+    return;
+  }
+  existing.push(candidate);
+}
+
+/**
+ * WHICH EXAMINEE each instructed trainee is paired with, keyed by the instructed
+ * trainee's own assignment id.
+ *
+ * The decision itself is NOT made here: it is the committed sibling rule, asked
+ * ONCE PER SESSION with that session's own examinees and instructed trainees, so
+ * an examinee of another session is not merely filtered out — it is never
+ * offered to the rule at all. Every fail-closed case the rule owns (a duplicated
+ * index, an unmatched index, an absent index in a session with more than one
+ * examinee) simply yields no entry here, and a row with no entry publishes
+ * {@link NO_PAIRING}.
+ *
+ * What IS decided here is the one extra condition this list can check and the
+ * rule cannot: the resolved partner must be a row of THIS list, an EXAMINEE, and
+ * in the SAME session. That is asserted by the NAME LOOKUP, which is nested one
+ * map per session rather than flattened onto a composite key — so "the same
+ * session" is a property of the structure and needs no separator character that
+ * an id is merely assumed never to contain. A miss fails closed rather than
+ * publishing an id with no name.
+ *
+ * Never throws, and never mutates the input rows.
+ */
+function resolvePairings(
+  rows: readonly StoredAdminExamAssignmentRow[],
+): ReadonlyMap<string, ResolvedPairing> {
+  const examineesBySession = new Map<string, PairingCandidate[]>();
+  const instructedBySession = new Map<string, PairingCandidate[]>();
+  const examineeNamesBySession = new Map<string, Map<string, string>>();
+
+  for (const row of rows) {
+    const candidate: PairingCandidate = {
+      assignmentId: row.assignmentId,
+      pairingIndex: row.pairingIndex,
+    };
+    if (row.role === "EXAMINEE") {
+      bucket(examineesBySession, row.sessionId, candidate);
+      rememberExamineeName(
+        examineeNamesBySession,
+        row.sessionId,
+        row.assignmentId,
+        toTraineeName(row.traineeName),
+      );
+      continue;
+    }
+    if (row.role === "INSTRUCTED_TRAINEE") {
+      bucket(instructedBySession, row.sessionId, candidate);
+    }
+  }
+
+  const resolved = new Map<string, ResolvedPairing>();
+  for (const [sessionId, instructed] of instructedBySession) {
+    const examinees = examineesBySession.get(sessionId) ?? [];
+    const pairing = resolveExamPairings(examinees, instructed);
+    for (const [instructedAssignmentId, examineeAssignmentId] of pairing.examineeOfInstructedTrainee) {
+      const name = examineeNamesBySession.get(sessionId)?.get(examineeAssignmentId);
+      if (name === undefined) {
+        continue;
+      }
+      resolved.set(
+        instructedAssignmentId,
+        Object.freeze({
+          pairedExamineeAssignmentId: examineeAssignmentId,
+          pairedExamineeName: name,
+        }),
+      );
+    }
+  }
+  return resolved;
+}
+
+/**
+ * The pairing answer for ONE row.
+ *
+ * ROLE-GATED, and gated the strict way round: only an `INSTRUCTED_TRAINEE` may
+ * carry a partner. An examinee's partners are the trainees pointing AT it, which
+ * is a different question with a different cardinality, and answering it in this
+ * field would make one row's `pairedExamineeAssignmentId` mean two things.
+ */
+function pairingOf(
+  resolved: ReadonlyMap<string, ResolvedPairing>,
+  row: StoredAdminExamAssignmentRow,
+): ResolvedPairing {
+  if (row.role !== "INSTRUCTED_TRAINEE") {
+    return NO_PAIRING;
+  }
+  return resolved.get(row.assignmentId) ?? NO_PAIRING;
+}
+
 /** One frozen picker option. The name is carried VERBATIM. */
 function toTraineeOption(row: StoredEligibleExamTraineeRow): EligibleExamTraineeOption {
   return Object.freeze({
@@ -408,8 +611,16 @@ function toTraineeOption(row: StoredEligibleExamTraineeRow): EligibleExamTrainee
  * else changed. No role is consulted while shaping them: this module publishes
  * what the row holds, and WHICH roles a surface chooses to show a detail for is
  * that surface's decision, not a silent erasure made here.
+ *
+ * The PAIRING is the one field that is not shaped from this row alone — it is a
+ * relationship, so it arrives already resolved from the whole list. `pairingIndex`
+ * is READ by that resolution and is deliberately NOT copied here: the published
+ * row carries the answer, never the internal label it was derived from.
  */
-function toAssignmentRow(row: StoredAdminExamAssignmentRow): AdminExamAssignmentRow {
+function toAssignmentRow(
+  row: StoredAdminExamAssignmentRow,
+  pairing: ResolvedPairing,
+): AdminExamAssignmentRow {
   return Object.freeze({
     assignmentId: row.assignmentId,
     sessionId: row.sessionId,
@@ -419,6 +630,8 @@ function toAssignmentRow(row: StoredAdminExamAssignmentRow): AdminExamAssignment
     instructionTopic: toOptionalText(row.instructionTopic),
     discipline: toOptionalText(row.discipline),
     orderIndex: toOrderIndex(row.orderIndex),
+    pairedExamineeAssignmentId: pairing.pairedExamineeAssignmentId,
+    pairedExamineeName: pairing.pairedExamineeName,
   });
 }
 
@@ -471,9 +684,15 @@ export function buildAdminExamAssignmentListView(
   if (rows.length === 0) {
     return emptyAdminExamAssignmentListView();
   }
+  // The pairing is resolved over the WHOLE list first, and over the UNSORTED
+  // input: it is a relationship between rows rather than a property of one, and
+  // it must not depend on the presentation order this function then imposes.
+  const pairings = resolvePairings(rows);
   return Object.freeze({
     assignments: Object.freeze(
-      [...rows].sort(bySessionThenPositionThenId).map(toAssignmentRow),
+      [...rows]
+        .sort(bySessionThenPositionThenId)
+        .map((row) => toAssignmentRow(row, pairingOf(pairings, row))),
     ),
   });
 }

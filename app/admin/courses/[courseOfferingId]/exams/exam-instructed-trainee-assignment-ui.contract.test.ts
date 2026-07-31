@@ -81,6 +81,8 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
@@ -114,6 +116,8 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  // EX-PAIR-UI-MVP - the approved admin PAIRING UI, whose ONE new file this is.
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
@@ -122,6 +126,10 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  // ...and the committed PAIRING backend guard, whose caller list EX-PAIR-UI-MVP
+  // re-points from zero to exactly one Server Action module. A `.test.ts`, so no
+  // production module joins this list.
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
   // The three new files.
   `${ROUTE_DIR_PREFIX}CreateExamInstructedTraineeAssignmentForm.tsx`,
   `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-messages.ts`,
@@ -289,7 +297,7 @@ test("1. the three new files exist at the exact course-scoped route", () => {
   assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
 });
 
-test("2. the route directory holds EXACTLY the twenty-one approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-three approved files", () => {
   // Tracked AND untracked, so this holds both before and after the slice is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a bracketed pathspec would be read by git as a character class.
@@ -360,13 +368,15 @@ test("5. the module exports EXACTLY nine actions, IT2's appended EIGHTH", () => 
     "deleteExamAssignmentAction",
     ACTION_NAME,
     "setExamPlanPublicationAction",
+    // EX-PAIR-UI-MVP appended a TENTH: the admin pairing endpoint. Still EXHAUSTIVE.
+    "setExamPairingAction",
   ]);
-  assert.equal(exported.length, 9, "no tenth endpoint may exist in this module");
+  assert.equal(exported.length, 10, "no eleventh endpoint may exist in this module");
   assert.equal(exported[7], ACTION_NAME, "the new action must be appended after the seven");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 9);
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 10);
 });
 
 test("6. the action has the EXACT locked signature, and returns void", () => {
@@ -415,7 +425,7 @@ test("9. the module's import surface gained EXACTLY the one committed writer", (
   // publication write binding. The three positive assertions below still pin the
   // specifiers THIS suite is responsible for, and the core/Prisma/capability/
   // notification bans below are untouched.
-  assert.equal(specifiers.length, 10, "the action module's import surface is not ten");
+  assert.equal(specifiers.length, 11, "the action module's import surface is not eleven");
   assert.ok(specifiers.includes(WRITER_SPECIFIER), "the committed writer is not imported");
   assert.ok(
     specifiers.includes("@/lib/actions/" + "detailed-exam-assignment-write" + "-io"),
@@ -909,9 +919,11 @@ test("26. the list, its roles, the count rule and the ONE delete path are untouc
     "DeleteExamInstructedTraineeAssignmentForm",
     "deleteExamInstructedTraineeAssignmentAction",
     // RE-POINTED by EX-ASG-LTD2-B1: the EXAMINEE comparison left this list and is
-    // pinned exactly below instead. The INSTRUCTED_TRAINEE one stays banned
-    // outright — nothing on this page may branch on the role this slice creates.
-    'role === "INSTRUCTED_TRAINEE"',
+    // pinned exactly below instead. RE-POINTED AGAIN by EX-PAIR-UI-MVP: the
+    // INSTRUCTED_TRAINEE one leaves this list too, because the pairing control
+    // belongs to that role and to no other. It is pinned to an EXACT count
+    // below, and what this guard protects — that the LIST still shows every
+    // stored row of every role — is asserted directly and is unchanged.
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page adds ${forbidden}`);
   }
@@ -959,7 +971,7 @@ test("26. the list, its roles, the count rule and the ONE delete path are untouc
 // 27–29. The page's query surface and bindings
 // ===========================================================================
 
-test("27. searchParams carries EXACTLY the closed twenty-four keys", () => {
+test("27. searchParams carries EXACTLY the closed twenty-five keys", () => {
   const squashed = squash(PAGE);
   const start = squashed.indexOf("searchParams: Promise<{");
   assert.ok(start > -1, "the searchParams type must be declared inline");
@@ -973,11 +985,12 @@ test("27. searchParams carries EXACTLY the closed twenty-four keys", () => {
   }
   assert.equal(
   // RE-POINTED from 23 to 24 by EX-PUB-UI-MVP, which adds ONE closed publication
-  // FEEDBACK token. This slice's own three keys are pinned by name above and are
-  // untouched, and the id ban below still refuses every scope-shaped key.
+  // FEEDBACK token, and from 24 to 25 by EX-PAIR-UI-MVP, which adds ONE closed
+  // pairing FEEDBACK token. This slice's own three keys are pinned by name above
+  // and are untouched, and the id ban below still refuses every scope-shaped key.
     (queryType.match(/\?: string \| string\[\];/g) ?? []).length,
-    24,
-    "the searchParams type must be the closed twenty-four-key shape",
+    25,
+    "the searchParams type must be the closed twenty-five-key shape",
   );
   // No id, no scope and no submitted value may become a query key...
   for (const forbidden of [
@@ -1036,9 +1049,11 @@ test("29. the page binds EXACTLY eight actions, all to the verified context id",
   // raw route param. `action=` counts TWO more, because the publication card's
   // two mutually exclusive forms are written out separately so each can carry a
   // LITERAL hidden operation value rather than a computed one.
-  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 9);
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 9);
-  assert.equal((PAGE.match(/action=/g) ?? []).length, 10);
+  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 10);
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 10);
+  // RE-POINTED from 10 to 11 by EX-PAIR-UI-MVP: ONE more inline form, bound to
+  // the SAME verified context id, which the two `.bind` counts above pin.
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 11);
   // The new binding is HOISTED, not created inside the session loop.
   assert.ok(
     squash(PAGE).includes(
@@ -1321,10 +1336,24 @@ test("37. the slice touched EXACTLY its approved paths, and no schema or migrati
   // binding it reaches — the instructed-trainee writer, the detailed examinee
   // writer and the assignment read pair — is already committed, and the wiring
   // lives entirely under `app/`.
+  // RE-POINTED by EX-PAIR-UI-MVP, back to an EXACT PAIR. That slice must display
+  // a stored pairing, which is undecidable without reading the index behind it,
+  // so it edits the committed ADMIN ASSIGNMENT READ pair — the pure read-shaping
+  // core and its own binding — and nothing else under `lib/`. A THIRD `lib/`
+  // production module, of ANY kind, still fails here: no writer, no policy core,
+  // no auth module and no session module may appear.
+  const APPROVED_LIB_PRODUCTION = [
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  ].sort();
   const libTouched = gitLines(["diff", "--name-only", "HEAD", "--", "lib"])
     .filter((path) => !path.endsWith(".test.ts"))
     .sort();
-  assert.deepEqual(libTouched, [], `an unapproved lib binding was edited: ${libTouched.join(", ")}`);
+  assert.deepEqual(
+    libTouched,
+    APPROVED_LIB_PRODUCTION,
+    `an unapproved lib binding was edited: ${libTouched.join(", ")}`,
+  );
 
   // No dependency, environment, auth, middleware or MCP surface came with it.
   //

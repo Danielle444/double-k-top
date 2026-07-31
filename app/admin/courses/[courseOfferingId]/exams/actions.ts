@@ -2,8 +2,9 @@
 
 /**
  * EXAM PLAN P3 + EXAM EX-S5B-5C + EXAM EX-SES-S4 + EXAM EX-SES-UI-2 + EXAM
- * EX-ASG-UI1 + EXAM EX-ASG-IT2 + EXAM EX-PUB-UI-MVP — the Server Action module of
- * the course-scoped exams route, holding EXACTLY NINE approved mutations:
+ * EX-ASG-UI1 + EXAM EX-ASG-IT2 + EXAM EX-PUB-UI-MVP + EXAM EX-PAIR-UI-MVP — the
+ * Server Action module of the course-scoped exams route, holding EXACTLY TEN
+ * approved mutations:
  *
  *   1. `createExamPlanAction`       — bring ONE empty, unpublished ExamPlan into
  *                                     existence for ONE course offering;
@@ -29,19 +30,28 @@
  *   9. `setExamPlanPublicationAction`
  *                                   — PUBLISH or UNPUBLISH that same plan, which
  *                                     is what decides whether trainees can see it
- *                                     at all.
+ *                                     at all;
+ *  10. `setExamPairingAction`        — PAIR ONE instructed trainee of that same
+ *                                     plan with ONE examinee of the SAME session,
+ *                                     or UNPAIR that one trainee.
  *
  * ===========================================================================
- * WHY NINE EXPORTS, AND WHY EXACTLY NINE
+ * WHY TEN EXPORTS, AND WHY EXACTLY TEN
  * ===========================================================================
  * Everything exported from a `"use server"` module has a stable, PUBLICLY
- * CALLABLE network id, so the export list IS the attack surface. These nine
+ * CALLABLE network id, so the export list IS the attack surface. These ten
  * actions were each approved and reviewed on their own, and they are kept as
  * SEPARATE endpoints rather than folded into one generic "exams" action: a single
  * action taking a discriminator would have to decide FROM THE REQUEST which
  * operation to run, which is precisely the decision that must not be
- * client-influenced. Eight narrow endpoints, each with a fixed operation, cannot
+ * client-influenced. Ten narrow endpoints, each with a fixed operation, cannot
  * be talked into performing another one.
+ *
+ * The TENTH illustrates the rule from a different angle. Pairing and UNPAIRING
+ * are ONE endpoint, and that is not a discriminator either: they reach ONE
+ * committed writer whose own signature already models "no partner" as the `null`
+ * value of its third parameter. There is no second operation to choose, and no
+ * field through which a request could select a different writer.
  *
  * The eighth is the sharpest illustration of that rule. It writes a DIFFERENT
  * role from the sixth, and the two are deliberately NOT one create endpoint
@@ -59,12 +69,12 @@
  * result codes and are wired to different forms.
  *
  * Nothing else leaves this file. No helper, no parser, no constant and no type is
- * exported alongside them: an exported helper here would be a tenth public
- * endpoint, and a future reader would have no way to tell which of the nine was
- * meant to be called. The committed writer modules behind these nine also expose
+ * exported alongside them: an exported helper here would be an eleventh public
+ * endpoint, and a future reader would have no way to tell which of the ten was
+ * meant to be called. The committed writer modules behind these ten also expose
  * definition EDIT, safe REMOVAL and atomic REORDER, session REORDERING and plan
  * DELETION; none of those is re-exported, wrapped or imported here, so this route
- * adds exactly nine callable mutations to the app and every other one remains
+ * adds exactly ten callable mutations to the app and every other one remains
  * unreachable from any client.
  *
  * The NINTH is the one exception to the "no discriminator" rule stated below, and
@@ -174,7 +184,16 @@
  *   - `publication=<token>`  — the publication outcome: the writer's own
  *                              `PUBLISHED`, `UNPUBLISHED` and `NO_CHANGE`
  *                              successes, its stable refusal codes, and this
- *                              module's own fail-closed `unknown_operation`.
+ *                              module's own fail-closed `unknown_operation`;
+ *   - `pairing=<token>`      — the pairing outcome: the writer's own `PAIRED`,
+ *                              `UNPAIRED` and `NO_CHANGE` successes, and its
+ *                              stable refusal codes.
+ *
+ * The pairing family is ONE key for the same reason the publication family is:
+ * a pairing has exactly ONE outcome per submission, and the diagnostic is a
+ * PAGE-LEVEL banner rather than a per-row one — which is deliberate, because a
+ * per-row diagnostic would need an assignment id in the URL, and this route puts
+ * none there.
  *
  * The publication family is ONE key rather than a success/error pair, because a
  * publication has exactly ONE outcome per submission and only one publication
@@ -219,15 +238,15 @@
  * ===========================================================================
  * It creates ONE empty plan, it appends ONE definition, it appends, edits or
  * removes ONE session, it assigns or unassigns ONE examinee, it assigns ONE
- * instructed trainee, and it flips the plan's ONE general publication column. It
- * does not DELETE or edit a plan; it does not edit, reorder or delete an
- * ExamDefinition; it does not reorder sessions, edit or reorder an assignment,
- * REMOVE an instructed trainee through any second path, add a break, a supervisor
- * or a source date; it publishes no INDIVIDUAL session and writes no
- * `individualPublishedAt`; it writes no pairing, no wave and no personal time; it
- * sends no notification, records no publication history, reads no capability and
- * touches no schema. None of those modules is imported, so none of them can be
- * reached from here.
+ * instructed trainee, it flips the plan's ONE general publication column, and it
+ * sets or clears ONE instructed trainee's pairing. It does not DELETE or edit a
+ * plan; it does not edit, reorder or delete an ExamDefinition; it does not
+ * reorder sessions, edit or reorder an assignment, REMOVE an instructed trainee
+ * through any second path, add a break, a supervisor or a source date; it
+ * publishes no INDIVIDUAL session and writes no `individualPublishedAt`; it
+ * writes no wave and no personal time; it sends no notification, records no
+ * publication history, reads no capability and touches no schema. None of those
+ * modules is imported, so none of them can be reached from here.
  *
  * The instructed-trainee row is REMOVED by the SAME assignment removal above:
  * that writer locates a row by id within the plan and is role-blind, so a
@@ -260,6 +279,23 @@ import { deleteExamAssignment } from "@/lib/actions/exam-assignment-write-io";
 import { createDetailedExamAssignment } from "@/lib/actions/detailed-exam-assignment-write-io";
 import { createExamInstructedTraineeAssignment } from "@/lib/actions/exam-instructed-trainee-assignment-write-io";
 import { setExamPlanPublication } from "@/lib/actions/exam-publication-write-io";
+import { setExamInstructedTraineePairing } from "@/lib/actions/exam-pairing-write-io";
+
+/**
+ * EX-PAIR-UI-MVP — the ONE submitted value that means "no partner".
+ *
+ * The empty string is the natural value of an HTML `<option>` that selects
+ * nothing, and it is DEDICATED: no assignment id is ever empty, so this literal
+ * cannot collide with a real target. It is compared EXACTLY — there is no trim,
+ * no case fold and no `??` anywhere on the path — so only a submission that
+ * actually carries the empty option can unpair.
+ *
+ * An ABSENT field, a repeated field and a `File` entry all fail the `typeof`
+ * test below and become `""` rather than this value, which the committed writer
+ * refuses as invalid input. "Nothing was submitted" is therefore never silently
+ * read as "the manager asked to unpair".
+ */
+const EXAM_PAIRING_NONE_VALUE = "";
 
 /**
  * Create ONE empty ExamPlan for the bound course offering.
@@ -1101,4 +1137,128 @@ export async function setExamPlanPublicationAction(
   //    denial, the missing plan and the stale write. No diagnostics list exists
   //    for a publication, so there is no issues token.
   redirect(`${examsPath}?publication=${encodeURIComponent(result.code)}`);
+}
+
+/**
+ * EX-PAIR-UI-MVP — PAIR ONE instructed trainee of the bound offering's plan with
+ * ONE examinee of the SAME exam session, or UNPAIR that one trainee.
+ *
+ * Returns `Promise<void>`, like its nine neighbours: every outcome is expressed
+ * as a navigation, so the action holds no client-visible state and its signature
+ * cannot grow a `prevState` parameter.
+ *
+ * ===========================================================================
+ * TWO FIELDS, AND DELIBERATELY NOT A THIRD
+ * ===========================================================================
+ * The mapping below reads `instructedTraineeAssignmentId` and
+ * `examineeAssignmentId` and NOTHING else. Absent — not filtered out, but never
+ * looked for — are `courseOfferingId` (bound by the route), `planId` and
+ * `sessionId` (BOTH are derived server-side: the plan from the verified
+ * offering, and the session from the instructed-trainee row the server itself
+ * resolved), `pairingIndex` (the committed backend allocates or reuses it, and
+ * its signature has no parameter through which one could arrive), `studentId`
+ * and every other participant id, a role, an order index, a trainee or examinee
+ * NAME, a date, a time, a timestamp, a version token and an actor id. The
+ * committed writer's signature has three parameters and no fourth, so none of
+ * them is reachable even by a hand-crafted submission.
+ *
+ * The SESSION is the sharpest of those. This endpoint never states which session
+ * a pairing belongs to, so it cannot be talked into pairing across two of them:
+ * the backend reads the instructed trainee's own session and requires the
+ * examinee to be in it, and a mismatch is refused rather than written.
+ *
+ * ===========================================================================
+ * NO COERCION, AND ONE EXACT SENTINEL
+ * ===========================================================================
+ * Neither value is wrapped in `String(...)`, defaulted with `??` or trimmed.
+ * The instructed id is read through a `typeof` narrowing that yields `""` for an
+ * absent, `null` or non-string entry — which FAILS CLOSED, because no assignment
+ * has an empty id and the committed core refuses it as invalid input before any
+ * query runs. `String(...)` would instead turn a `File` from a multipart
+ * submission into the text `"[object File]"` and send that to the database.
+ *
+ * The examinee id is read the same way, with ONE exact extra comparison against
+ * the dedicated empty sentinel documented above: that value — and only that
+ * value — becomes the `null` that means UNPAIR. Everything else that is not a
+ * string becomes `""` and is refused.
+ *
+ * ===========================================================================
+ * WHAT THIS ACTION DOES NOT DO
+ * ===========================================================================
+ * It calls ONE committed writer and nothing else. It reads no Prisma client,
+ * writes no row itself, restates none of the pairing rules (which roles may be
+ * paired, that both rows share one session, when an index is reused and when one
+ * is allocated, that an ambiguous index fails closed, that a no-op writes
+ * nothing), sends no notification, records no history, publishes nothing,
+ * validates no timetable and reads no capability. It does NOT consult the plan's
+ * publication state either: publication is not authorization, and the product
+ * rule that a manager may still edit a published plan is unchanged here.
+ */
+export async function setExamPairingAction(
+  courseOfferingId: string,
+  formData: FormData,
+): Promise<void> {
+  // 1. Authorize the manager BEFORE anything is read or written.
+  await requireAdmin();
+
+  // 2. The exams path of THIS offering — the only path this action revalidates
+  //    and the only one it redirects back to.
+  const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
+
+  // 3. WHICH instructed trainee. Fails closed to `""`; see the header.
+  const submittedInstructed = formData.get("instructedTraineeAssignmentId");
+  const instructedTraineeAssignmentId =
+    typeof submittedInstructed === "string" ? submittedInstructed : "";
+
+  // 4. WHICH examinee, or the dedicated sentinel that means UNPAIR. The exact
+  //    comparison comes FIRST, so only a submission actually carrying the empty
+  //    option can clear a pairing; every other non-string becomes `""`.
+  const submittedExaminee = formData.get("examineeAssignmentId");
+  const examineeAssignmentId =
+    submittedExaminee === EXAM_PAIRING_NONE_VALUE
+      ? null
+      : typeof submittedExaminee === "string"
+        ? submittedExaminee
+        : "";
+
+  // 5. The committed writer. The bound offering id is a REQUEST: the writer runs
+  //    the admin boundary and the exact-offering lookup itself, applies the
+  //    course lifecycle gate on the VERIFIED status, resolves the plan from that
+  //    verified id, reads BOTH assignments WITHIN that plan, derives the session
+  //    from the instructed row, and issues one conditional write. Every role,
+  //    same-session, reuse, allocation, ambiguity and stale-write decision is
+  //    its own.
+  const result = await setExamInstructedTraineePairing(
+    courseOfferingId,
+    instructedTraineeAssignmentId,
+    examineeAssignmentId,
+  );
+
+  // 6. Success, in its THREE distinguishable forms. A real change revalidates
+  //    this ONE exams path and says which way it went; a NO_CHANGE revalidates
+  //    NOTHING, because the writer issued no statement at all and a cache
+  //    invalidation would be a lie about what happened. None of the three
+  //    carries an assignment id, a session id or the allocated pairing index —
+  //    the writer returns that index, and this module never reads it.
+  if (result.ok) {
+    if (result.status !== "NO_CHANGE") {
+      revalidatePath(examsPath);
+    }
+    redirect(`${examsPath}?pairing=${result.status}`);
+  }
+
+  // 7. The one refusal that is NOT about this page: the offering does not exist,
+  //    so returning to its exams route would render a second not-found. The
+  //    manager goes to the course list, and the requested id is not reflected
+  //    back in the destination.
+  if (result.code === "offering_not_found") {
+    redirect("/admin/courses?error=invalid");
+  }
+
+  // 8. Every other refusal is fully described by its code alone: the lifecycle
+  //    denial, the missing plan, the unusable ids, either assignment missing or
+  //    foreign, either role mismatched, two different sessions, an ambiguous
+  //    stored index and the stale write. No diagnostics list exists for a
+  //    pairing, so there is no issues token.
+  redirect(`${examsPath}?pairing=${encodeURIComponent(result.code)}`);
 }
