@@ -61,6 +61,29 @@ const APPROVED_NEW_ROUTE_FILES = [
 ];
 
 /**
+ * The `lib/` files the approved EX-PUB-BE-MVP backend slice adds, which travels in
+ * the same working tree: the exam-plan publish/unpublish pure core, its binding,
+ * and a suite for each.
+ *
+ * Kept SEPARATE from the route-file list above rather than merged into it, because
+ * these are not route files and the distinction is what makes "no route, no form
+ * and no Server Action came with the backend slice" still checkable. Spelled as
+ * FOUR exact paths — no directory and no prefix — so a fifth `lib/` addition still
+ * fails guards 25 and 26.
+ *
+ * That slice reads and writes ONE ExamPlan column, adds no caller anywhere, and
+ * modifies no tracked production file. The two `lib/actions` paths are ASSEMBLED
+ * from pieces: its own guard sweeps `app/`, `lib/`, `components/` and `scripts/`
+ * for that module name and pins the caller list at EXACTLY ZERO.
+ */
+const APPROVED_NEW_LIB_FILES = [
+  "lib/exam/exam-publication-write-core.ts",
+  "lib/exam/exam-publication-write-core.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+];
+
+/**
  * The tracked files the approved WIRING slice may modify, each spelled exactly.
  *
  * TWO of them are production: the route's shared Server Action module and its
@@ -130,7 +153,11 @@ const APPROVED_MODIFIED_FILES = [
 ];
 
 /** Every path either slice is allowed to have touched, in any state. */
-const APPROVED_FOOTPRINT = [...APPROVED_MODIFIED_FILES, ...APPROVED_NEW_ROUTE_FILES];
+const APPROVED_FOOTPRINT = [
+  ...APPROVED_MODIFIED_FILES,
+  ...APPROVED_NEW_ROUTE_FILES,
+  ...APPROVED_NEW_LIB_FILES,
+];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
 
@@ -950,8 +977,13 @@ test("25. the four files are TRACKED, and only the approved wiring paths differ"
   );
 
   // 5. Anything UNTRACKED in scope is one of the approved wiring slice's three
-  //    exact route files, and nothing else.
-  const unapprovedNew = untracked.filter((path) => !APPROVED_NEW_ROUTE_FILES.includes(path));
+  //    exact route files, or one of the approved backend slice's four exact
+  //    `lib/` files, and nothing else. RE-POINTED by EX-PUB-BE-MVP and WIDENED BY
+  //    FOUR NAMED PATHS rather than by a directory: a fifth addition still fails.
+  const unapprovedNew = untracked.filter(
+    (path) =>
+      !APPROVED_NEW_ROUTE_FILES.includes(path) && !APPROVED_NEW_LIB_FILES.includes(path),
+  );
   assert.deepEqual(unapprovedNew, [], `unexpected new files: ${unapprovedNew.join(", ")}`);
 
   // 6. Anything MODIFIED in scope is on the exhaustive, path-exact approved list.
