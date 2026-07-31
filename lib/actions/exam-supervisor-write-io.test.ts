@@ -834,6 +834,38 @@ test("t22. the slice modified NO tracked file: no schema, migration, auth or pol
     // capability or policy file comes with it, and no supervisor module is
     // touched by it.
     "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+    "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-read-" + "dto.test.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
   ];
   const unapproved = modified.filter((path) => !APPROVED_MODIFICATIONS.includes(path)).sort();
   assert.deepEqual(unapproved, [], `the slice modified: ${unapproved.join(", ")}`);
@@ -852,6 +884,17 @@ test("t22. the slice modified NO tracked file: no schema, migration, auth or pol
     `${ROUTE}page.tsx`,
     "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
     "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
   ];
   for (const path of APPROVED_MODIFICATIONS) {
     assert.ok(

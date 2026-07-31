@@ -297,6 +297,34 @@ export interface ExamAssignmentOperationalRowDto {
   readonly pairedParticipantNames: readonly string[];
 }
 
+/**
+ * ONE participant of ONE stored exam block, as the TRAINEE screen displays them.
+ *
+ * It is the shared operational contract PLUS exactly one field: `isSelf`. The
+ * trainee's "לו״ז שלי" needs to mark the viewer's own assignment row inside a
+ * block that legitimately holds several people, and the row-level `isSelf` on
+ * {@link TraineeExamDayRowDto} cannot express which of those rows is theirs.
+ *
+ * WHY IT IS A SEPARATE TYPE RATHER THAN A FIELD ON THE SHARED CONTRACT. An
+ * instructor and an admin have no "self" among examinees, so the field would be
+ * meaningless there and permanently `false` — a value a UI could still read and
+ * act on. Keeping it off the shared contract means the ADMIN AND INSTRUCTOR KEY
+ * SETS ARE BYTE-FOR-BYTE UNCHANGED by this addition, which the contract suite
+ * asserts on the serialized DTO of all three roles.
+ *
+ * `isSelf` IS DECIDED SERVER-SIDE BY EXACT STUDENT-ID EQUALITY, against the
+ * `viewerStudentId` the committed trainee core resolved from the signed session
+ * and already normalized. It is NEVER decided by comparing `participantName`:
+ * two trainees may share a display name, a name may fail to resolve, and a name
+ * is not identity. NO ID IS ADDED TO THIS CONTRACT — the comparison happens
+ * before narrowing and only the BOOLEAN survives it.
+ */
+export interface TraineeExamAssignmentOperationalRowDto
+  extends ExamAssignmentOperationalRowDto {
+  /** True iff this assignment belongs to the VIEWING trainee. */
+  readonly isSelf: boolean;
+}
+
 // ===========================================================================
 // Narrowing issues — SERVER-SIDE ONLY, and PII-free
 // ===========================================================================
@@ -503,8 +531,13 @@ export interface TraineeExamDayRowDto {
    * assignment, and its participants and children already travel on
    * {@link TraineeExamBeginnerDetailDto}. An empty list is never a claim that a
    * block holds nobody — a stored block that holds nobody is simply empty too.
+   *
+   * Each row additionally carries `isSelf`, so the viewer's OWN assignment is
+   * identifiable inside a block that holds several people — see
+   * {@link TraineeExamAssignmentOperationalRowDto}. A beginner row's empty array
+   * therefore stays empty and gains nothing.
    */
-  readonly assignments: readonly ExamAssignmentOperationalRowDto[];
+  readonly assignments: readonly TraineeExamAssignmentOperationalRowDto[];
   readonly beginner: TraineeExamBeginnerDetailDto | null;
 }
 
@@ -958,6 +991,60 @@ function buildAssignmentRowDtos(
   );
 }
 
+/**
+ * Is this internal assignment row the VIEWER's own? EXACT id equality, FAIL
+ * CLOSED.
+ *
+ * The row's `studentId` and the viewer id are compared as trimmed strings and in
+ * no other way. A blank viewer (an operational read, or a trainee whose id could
+ * not be resolved) matches NOBODY rather than everybody; an assignment with no
+ * bound student matches nobody either. There is deliberately no name, no index,
+ * no `assignmentId` and no `pairingIndex` in this comparison — a display name is
+ * not identity, and two trainees may legitimately share one.
+ */
+function isViewerAssignment(
+  row: StoredExamAssignmentOperationalRow,
+  viewerStudentId: string | null,
+): boolean {
+  if (viewerStudentId === null) return false;
+  const studentId = row?.studentId;
+  if (!isPresent(studentId)) return false;
+  return studentId.trim() === viewerStudentId;
+}
+
+/**
+ * The TRAINEE assignment rows of ONE row: the shared operational rows, each
+ * carrying the extra `isSelf` boolean.
+ *
+ * Identical to {@link buildAssignmentRowDtos} in every other respect — same
+ * order, same fields, same fail-closed empty array for a live beginner row and
+ * for a row with no usable sibling detail — so the two views cannot drift. The
+ * id used to decide `isSelf` is consumed HERE and never enters the result.
+ */
+function buildTraineeAssignmentRowDtos(
+  lookup: ExamAssignmentOperationalDetailLookup | null | undefined,
+  source: ExamRowSource,
+  sessionId: string,
+  studentNames: ReadonlyMap<string, string> | null | undefined,
+  viewerStudentId: string | null,
+): readonly TraineeExamAssignmentOperationalRowDto[] {
+  if (source !== "STORED") {
+    return Object.freeze([] as TraineeExamAssignmentOperationalRowDto[]);
+  }
+  const detail = readAssignmentDetail(lookup, sessionId);
+  if (detail === null) return Object.freeze([] as TraineeExamAssignmentOperationalRowDto[]);
+  return Object.freeze(
+    detail.assignments
+      .filter((row) => row !== null && typeof row === "object")
+      .map((row) =>
+        Object.freeze({
+          ...buildAssignmentRowDto(row, studentNames),
+          isSelf: isViewerAssignment(row, viewerStudentId),
+        }),
+      ),
+  );
+}
+
 /** Whether a projected row is a live beginner row. Decided by `kind`, as the
  * committed trainee core decides it — never by inspecting the id's shape. */
 function rowSource(session: ProjectionSession): ExamRowSource {
@@ -1107,6 +1194,13 @@ export function buildTraineeExamDayDto(
 ): TraineeExamDayDto {
   const projectedRows = Array.isArray(projection?.allRows) ? projection.allRows : [];
   const studentNames = names?.studentNames;
+  // The viewer identity the committed trainee core already resolved and
+  // normalized. It is READ HERE and NEVER PROJECTED: it decides one boolean per
+  // assignment row and stops. A malformed or absent value marks NOBODY, exactly
+  // as it does for the row-level `isSelf` the same core computed.
+  const viewerStudentId = isPresent(projection?.viewerStudentId)
+    ? projection.viewerStudentId.trim()
+    : null;
 
   const allRows: TraineeExamDayRowDto[] = [];
   for (const row of projectedRows) {
@@ -1155,11 +1249,15 @@ export function buildTraineeExamDayDto(
         instructedTraineeNames: instructed.names,
         instructedTraineeCount: instructed.count,
         beginnerChildCount: countOrZero(session.beginnerChildCount),
-        assignments: buildAssignmentRowDtos(
+        assignments: buildTraineeAssignmentRowDtos(
           assignmentDetails,
           source,
           sessionId,
           studentNames,
+          // The SERVER-DERIVED viewer id the committed trainee core matched rows
+          // on, reused verbatim so the row-level and assignment-level `isSelf`
+          // can never disagree about who the viewer is.
+          viewerStudentId,
         ),
         beginner:
           detail === null || participants === null

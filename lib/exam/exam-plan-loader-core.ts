@@ -140,8 +140,28 @@
  * parent contacts would appear under the other's exam plan. Whether the answer
  * is a schema-level course binding, a per-plan lesson allow-list or a product
  * rule that source dates may not be shared is exactly the decision that review
- * must take; it is NOT settled here, and no code in this slice may be read as
- * having settled it.
+ * must take.
+ *
+ * THAT DECISION HAS NOW BEEN TAKEN (EX-BEGINNER-EXAM-READ), and it is the THIRD
+ * option — a PRODUCT RULE, with no schema change, no migration, no allow-list
+ * table and no new lesson→course relation:
+ *
+ *     BEGINNER TEACHING-PRACTICE EXAMS EXIST ONLY FOR LEVEL 1.
+ *
+ * It is enforced HERE, by `beginnerSourceEnabled`, which the caller derives from
+ * the DB-verified offering's level through the committed
+ * `isBeginnerSourceCourseLevel` predicate. When it is not exactly `true` the
+ * source-date dependency is NOT CALLED AT ALL, so a non-Level-1 offering reads no
+ * source date, no lesson, no participant, no child and no parent contact — its
+ * beginner reading is empty whatever rows its plan holds. With at most one level
+ * able to project beginner rows, a SHARED SOURCE DATE can no longer put one
+ * course's people under another course's plan: the overlap is unreachable, not
+ * merely improbable.
+ *
+ * The structural limitation above is unchanged and still true — the containment
+ * is a product rule layered ON TOP of it, never a claim that the schema now binds
+ * a lesson to a course. If beginner exams are ever extended beyond Level 1, this
+ * paragraph stops being sufficient and the schema-level binding becomes required.
  *
  * ===========================================================================
  * LESSON PUBLICATION IS AN OPTION, NOT A ROLE
@@ -303,6 +323,19 @@ export interface ExamPlanLoadOptions {
    * viewer input it already expects, and is used for nothing else here.
    */
   readonly viewerStudentId: string | null;
+  /**
+   * Whether this offering may read beginner Teaching-Practice rows AT ALL.
+   *
+   * It is the COURSE-CONTAINMENT gate, not a role and not an authorization: the
+   * caller derives it from the DB-verified offering's level through the
+   * committed `isBeginnerSourceCourseLevel` predicate, because beginner
+   * teaching-practice exams exist only for Level 1. A Level-2 plan passes
+   * `false` and reads no beginner data whatever its selected source dates say.
+   *
+   * Read FAIL CLOSED below: only a literal `true` enables the source, so a
+   * malformed or partially-built options object reads no Teaching Practice.
+   */
+  readonly beginnerSourceEnabled: boolean;
 }
 
 /**
@@ -663,6 +696,10 @@ export async function loadExamPlan(
   const requirePlanPublication = input.options?.requirePlanPublication !== false;
   const requireLessonPublication = input.options?.requireLessonPublication !== false;
   const viewerTraineeId = idOrNull(input.options?.viewerStudentId);
+  // The COURSE-CONTAINMENT gate. Inverted relative to the two publication gates
+  // above because it ENABLES rather than requires: only a literal `true` opens
+  // the Teaching-Practice source, so anything malformed reads nothing.
+  const beginnerSourceEnabled = input.options?.beginnerSourceEnabled === true;
 
   // --- 2. THE PLAN, FIRST AND ALONE ----------------------------------------
   const plan = await deps.fetchPlanByCourseOfferingId(courseOfferingId);
@@ -690,10 +727,18 @@ export async function loadExamPlan(
   }
 
   // --- 4. content, scoped ONLY by the plan id the plan row returned ---------
+  // The source-date fetch is SKIPPED ENTIRELY when this offering may not read
+  // beginner rows. Skipping the FETCH rather than filtering its result is the
+  // point: an offering outside the beginner level never reads a source date, so
+  // it never reaches step 5 either, and no Teaching-Practice row — no trainee,
+  // no child, no parent contact — is loaded for it in the first place. There is
+  // consequently nothing to strip, hide or forget to hide downstream.
   const [definitionRows, sessionRows, sourceDateRows] = await Promise.all([
     deps.fetchDefinitionsByPlanId(planId),
     deps.fetchSessionsByPlanId(planId),
-    deps.fetchSourceDatesByPlanId(planId),
+    beginnerSourceEnabled
+      ? deps.fetchSourceDatesByPlanId(planId)
+      : Promise.resolve([] as readonly ExamPlanSourceDateRow[]),
   ]);
 
   const { dates: sourceDates, invalidCount } = normalizeSourceDates(

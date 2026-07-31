@@ -115,6 +115,7 @@ import type {
 } from "./exam-plan-loader-core";
 import type { ProjectionSession } from "./exam-schedule-projection-core";
 import type { BeginnerDetail } from "./exam-live-beginner-adapter-core";
+import { isBeginnerSourceCourseLevel } from "./exam-beginner-course-scope-core";
 import type { ConflictSession } from "./exam-conflict-core";
 
 /**
@@ -137,41 +138,56 @@ export type { AdminExamReadDto, InstructorExamReadDto, TraineeExamDayDto };
  * Teaching-Practice lessons. They are NEVER self-selected — the wrapper that
  * supplies them is the thing that has already proven the caller is an admin.
  * `viewerStudentId` is `null`: an operational reader has no personal row.
+ *
+ * `courseLevel` is the DB-VERIFIED level of the offering the caller already
+ * resolved — never a client value, never a level the caller chose. It decides
+ * ONLY whether beginner Teaching-Practice rows exist for this offering (they
+ * exist for Level 1 alone); it grants and removes no other field, and every
+ * audience keeps the identical beginner detail contract.
  */
-export const ADMIN_EXAM_PLAN_LOAD_OPTIONS: ExamPlanLoadOptions = Object.freeze({
-  requirePlanPublication: false,
-  requireLessonPublication: false,
-  viewerStudentId: null,
-});
+export function adminExamPlanLoadOptions(courseLevel: unknown): ExamPlanLoadOptions {
+  return Object.freeze({
+    requirePlanPublication: false,
+    requireLessonPublication: false,
+    viewerStudentId: null,
+    beginnerSourceEnabled: isBeginnerSourceCourseLevel(courseLevel),
+  });
+}
 
 /**
  * The INSTRUCTOR loader options — identical to the admin's today.
  *
- * They are a SEPARATE constant rather than an alias so a future policy split
+ * They are a SEPARATE producer rather than an alias so a future policy split
  * (an instructor who may not see drafts, say) changes one line here instead of
  * silently changing the admin reading too.
  */
-export const INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS: ExamPlanLoadOptions = Object.freeze({
-  requirePlanPublication: false,
-  requireLessonPublication: false,
-  viewerStudentId: null,
-});
+export function instructorExamPlanLoadOptions(courseLevel: unknown): ExamPlanLoadOptions {
+  return Object.freeze({
+    requirePlanPublication: false,
+    requireLessonPublication: false,
+    viewerStudentId: null,
+    beginnerSourceEnabled: isBeginnerSourceCourseLevel(courseLevel),
+  });
+}
 
 /**
  * The TRAINEE loader options: BOTH publication gates ON, and the viewer bound to
  * the AUTHENTICATED student id — the one derived from the signed session, never
  * a client value and never resolved by name.
  *
- * Built per call because it carries that id; the two booleans are constants of
- * this function and are not parameters.
+ * Built per call because it carries that id and the resolved course level; the
+ * two publication booleans are constants of this function and are not
+ * parameters.
  */
 export function traineeExamPlanLoadOptions(
   authenticatedStudentId: string,
+  courseLevel: unknown,
 ): ExamPlanLoadOptions {
   return Object.freeze({
     requirePlanPublication: true,
     requireLessonPublication: true,
     viewerStudentId: authenticatedStudentId,
+    beginnerSourceEnabled: isBeginnerSourceCourseLevel(courseLevel),
   });
 }
 
@@ -190,6 +206,27 @@ export function traineeExamPlanLoadOptions(
  */
 export type ExamPlanLoadFn = (input: ExamPlanLoadInput) => Promise<ExamPlanPayload>;
 
+/**
+ * The DB-VERIFIED course offering every role resolver returns — the two fields
+ * this module reads, and no more.
+ *
+ * `level` is required because the beginner containment rule depends on it and a
+ * reader that cannot state the level must not silently fall back to reading
+ * beginner rows. It is deliberately the NARROWEST shape that all three real
+ * resolvers already satisfy structurally (`AdminCourseContext`,
+ * `CourseOfferingView` and `CurrentCourseOffering` each carry `id` and `level`),
+ * so no production resolver changes and no name, date, status or enrollment
+ * field becomes reachable here.
+ *
+ * It is INPUT ONLY. Neither field is ever projected into a returned DTO: the id
+ * scopes the load, the level opens or closes the beginner source, and both stop
+ * at this module's boundary.
+ */
+export interface ResolvedExamCourseOffering {
+  readonly id: string;
+  readonly level: number;
+}
+
 /** A batched id → display-name lookup. Called AT MOST ONCE per successful read. */
 export type ExamDisplayNameFetch = (
   ids: readonly string[],
@@ -206,7 +243,7 @@ export type ExamDisplayNameFetch = (
 export interface AdminExamReadDeps {
   readonly requireAdminCourseOffering: (
     courseOfferingId: string,
-  ) => Promise<{ readonly id: string }>;
+  ) => Promise<ResolvedExamCourseOffering>;
   readonly loadPlan: ExamPlanLoadFn;
   readonly fetchStudentDisplayNames: ExamDisplayNameFetch;
   readonly fetchInstructorDisplayNames: ExamDisplayNameFetch;
@@ -230,7 +267,7 @@ export interface InstructorExamReadDeps {
   readonly requireInstructorId: () => Promise<string>;
   readonly resolveInstructorCourseOffering: (
     requestedCourseOfferingId: string,
-  ) => Promise<{ readonly id: string }>;
+  ) => Promise<ResolvedExamCourseOffering>;
   readonly isCourseContextDenial: (error: unknown) => boolean;
   readonly loadPlan: ExamPlanLoadFn;
   readonly fetchStudentDisplayNames: ExamDisplayNameFetch;
@@ -253,7 +290,7 @@ export interface InstructorExamReadDeps {
  */
 export interface TraineeExamReadDeps {
   readonly requireTraineeId: () => Promise<string>;
-  readonly resolveTraineeCourseOffering: () => Promise<{ readonly id: string }>;
+  readonly resolveTraineeCourseOffering: () => Promise<ResolvedExamCourseOffering>;
   readonly isCourseContextDenial: (error: unknown) => boolean;
   readonly loadPlan: ExamPlanLoadFn;
   readonly fetchStudentDisplayNames: ExamDisplayNameFetch;
@@ -521,6 +558,9 @@ function emptyTraineeProjection(): TraineeExamDayProjection {
     allRows: Object.freeze([]),
     myRows: Object.freeze([]),
     issues: Object.freeze([]),
+    // NOBODY. A denial and an empty day must not name a viewer, and there are no
+    // rows here for an assignment-level `isSelf` to mark in any case.
+    viewerStudentId: null,
   });
 }
 
@@ -630,10 +670,11 @@ export async function readAdminExamPlanWithDeps(
     return emptyAdminExamReadDto();
   }
 
-  // 2. Only now: the plan, under the LOCKED admin options.
+  // 2. Only now: the plan, under the LOCKED admin options — carrying the
+  //    beginner containment gate derived from the VERIFIED offering's level.
   const payload = await deps.loadPlan({
     courseOfferingId: verifiedId,
-    options: ADMIN_EXAM_PLAN_LOAD_OPTIONS,
+    options: adminExamPlanLoadOptions(offering?.level),
   });
 
   // 3–4. Names, then the committed narrowing. The payload never leaves.
@@ -668,6 +709,10 @@ export async function readInstructorExamPlanWithDeps(
   deps: InstructorExamReadDeps,
 ): Promise<InstructorExamReadDto> {
   let verifiedId: string | null;
+  // The VERIFIED offering's level, captured beside its id so the two can never
+  // come from different offerings. `undefined` until proven, and `undefined`
+  // fails the beginner gate closed.
+  let verifiedLevel: unknown;
   try {
     // 1. Identity FIRST. The value is intentionally unused: no instructor
     //    identity influences which rows are read — the CALL is the gate.
@@ -675,6 +720,7 @@ export async function readInstructorExamPlanWithDeps(
     // 2. The requested id is a REQUEST, re-authorized server-side.
     const offering = await deps.resolveInstructorCourseOffering(requestedCourseOfferingId);
     verifiedId = idOrNull(offering?.id);
+    verifiedLevel = offering?.level;
   } catch (error) {
     if (deps.isCourseContextDenial(error)) {
       return emptyInstructorExamReadDto();
@@ -687,10 +733,11 @@ export async function readInstructorExamPlanWithDeps(
     return emptyInstructorExamReadDto();
   }
 
-  // 3. Only now: the plan, under the LOCKED instructor options.
+  // 3. Only now: the plan, under the LOCKED instructor options — carrying the
+  //    beginner containment gate derived from the VERIFIED offering's level.
   const payload = await deps.loadPlan({
     courseOfferingId: verifiedId,
-    options: INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS,
+    options: instructorExamPlanLoadOptions(verifiedLevel),
   });
 
   // 4–5. Names, then the committed narrowing. The payload never leaves.
@@ -743,12 +790,17 @@ export async function readTraineeExamDayWithDeps(
 
   let studentId: string | null;
   let verifiedId: string | null;
+  // The RESOLVED offering's level, captured beside its id. `undefined` fails the
+  // beginner gate closed, so a trainee whose course cannot state a level reads
+  // no beginner row rather than another course's.
+  let verifiedLevel: unknown;
   try {
     // 1. The AUTHENTICATED trainee — the only trustworthy identity here.
     studentId = idOrNull(await deps.requireTraineeId());
     // 2. Their ONE authorized course. No argument exists to influence it.
     const offering = await deps.resolveTraineeCourseOffering();
     verifiedId = idOrNull(offering?.id);
+    verifiedLevel = offering?.level;
   } catch (error) {
     if (deps.isCourseContextDenial(error)) {
       return emptyTraineeExamDayDto();
@@ -764,7 +816,7 @@ export async function readTraineeExamDayWithDeps(
   //    produces the empty payload without a single content query.
   const payload = await deps.loadPlan({
     courseOfferingId: verifiedId,
-    options: traineeExamPlanLoadOptions(studentId),
+    options: traineeExamPlanLoadOptions(studentId, verifiedLevel),
   });
 
   // 4. The committed projection. `isSelf`, the personal role, the exact personal

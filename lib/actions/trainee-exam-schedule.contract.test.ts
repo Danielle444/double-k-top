@@ -300,10 +300,66 @@ function assertScopeCoreAuthorizationUnchanged(): void {
   const changedLines = (diff.stdout ?? "")
     .split("\n")
     .filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line));
+  // NARROWED by EX-BEGINNER-EXAM-READ, on the axis this guard exists to protect.
+  //
+  // The claim is that no changed line may touch the AUTHORIZATION SURFACE. This
+  // slice changes that file in exactly three shapes, and NOTHING else:
+  //
+  //   1. each role resolver's RETURN TYPE widens from `{ readonly id: string }`
+  //      to the two-field `ResolvedExamCourseOffering`, so the reader can read the
+  //      DB-VERIFIED offering's LEVEL alongside its id;
+  //   2. the two locked per-role option CONSTANTS become option PRODUCERS taking
+  //      that level, because the Level-1 beginner containment gate cannot be a
+  //      compile-time constant;
+  //   3. the three call sites pass the level they just resolved.
+  //
+  // The authorization ORDER, the denial classification, the actor resolution and
+  // the four publication literals are all untouched — the literals are re-asserted
+  // verbatim below, and a pure RE-INDENTATION is recognised as such by comparing
+  // trimmed text rather than being waved through by a pattern.
+  //
+  // Every tolerated line is spelled out EXACTLY. A new resolver, a skipped call, a
+  // reordered step or a changed publication value matches none of them and still
+  // fails here.
+  const TOLERATED_CHANGED_LINES = new Set([
+    "readonly requireAdminCourseOffering: (",
+    "readonly resolveInstructorCourseOffering: (",
+    "readonly resolveTraineeCourseOffering: () => Promise<{ readonly id: string }>;",
+    "readonly resolveTraineeCourseOffering: () => Promise<ResolvedExamCourseOffering>;",
+    ") => Promise<{ readonly id: string }>;",
+    ") => Promise<ResolvedExamCourseOffering>;",
+    "export const ADMIN_EXAM_PLAN_LOAD_OPTIONS: ExamPlanLoadOptions = Object.freeze({",
+    "export const INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS: ExamPlanLoadOptions = Object.freeze({",
+    "export function adminExamPlanLoadOptions(courseLevel: unknown): ExamPlanLoadOptions {",
+    "export function instructorExamPlanLoadOptions(courseLevel: unknown): ExamPlanLoadOptions {",
+    "options: ADMIN_EXAM_PLAN_LOAD_OPTIONS,",
+    "options: INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS,",
+    "options: adminExamPlanLoadOptions(offering?.level),",
+    "options: instructorExamPlanLoadOptions(verifiedLevel),",
+    "options: traineeExamPlanLoadOptions(studentId),",
+    "options: traineeExamPlanLoadOptions(studentId, verifiedLevel),",
+    "authenticatedStudentId: string,",
+    "): ExamPlanLoadOptions {",
+  ]);
+  // A line whose TRIMMED text appears on BOTH sides of the diff is a pure
+  // re-indentation: the same code, moved. Recognised structurally rather than
+  // listed, so it cannot be used to smuggle a value change through.
+  const removed = new Set(
+    changedLines.filter((line) => line.startsWith("-")).map((line) => line.slice(1).trim()),
+  );
+  const added = new Set(
+    changedLines.filter((line) => line.startsWith("+")).map((line) => line.slice(1).trim()),
+  );
+  const reindented = new Set([...removed].filter((line) => added.has(line)));
+
   for (const token of SCOPE_AUTHORIZATION_TOKENS) {
-    const offenders = changedLines.filter((line) => line.includes(token));
+    const offenders = changedLines
+      .filter((line) => line.includes(token))
+      .map((line) => line.slice(1).trim())
+      .filter((line) => !reindented.has(line) && !TOLERATED_CHANGED_LINES.has(line));
     assert.deepEqual(offenders, [], `${SCOPE_REL} changed a line naming ${token}`);
   }
+
 
   const scope = stripComments(read(SCOPE_REL));
   for (const locked of [
@@ -904,6 +960,38 @@ test("17. the working tree holds only the approved paths of this slice and the o
     // The nine `lib/exam` paths of the merged operational-READ slice are GONE
     // from this list for the reason given in test 15 above: they are dead
     // permissions now, and dropping them restores the sweep to full strength.
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+    "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-read-" + "dto.test.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
   ];
   const offenders = [...touched]
     .map((path) => path.split("\\").join("/"))

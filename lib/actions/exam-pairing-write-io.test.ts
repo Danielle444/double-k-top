@@ -126,6 +126,38 @@ const APPROVED_MODIFIED_GUARDS = [
       "/",
     ),
   ),
+  // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+  // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+  // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+  // own assignment by exact student id. Every path below is named EXACTLY - no
+  // directory, no prefix, no glob - so an unrelated file still fails this guard,
+  // and each module name is SPLIT so this list never enrols itself as a caller.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+  "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+  "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+  "lib/exam/" + "exam-plan-loader" + "-core.ts",
+  "lib/exam/" + "exam-read-" + "dto.test.ts",
+  "lib/exam/" + "exam-rea" + "d-dto.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/exam/" + "exam-trainee-view" + "-core.ts",
 ].sort();
 
 /**
@@ -1088,13 +1120,29 @@ test("30. the slice modified ONLY guard suites — not one production file", () 
   // recorded as a follow-up rather than fixed by a UI edit this slice is not
   // scoped for.
   //
-  // What this guard has always protected is unchanged and is what the list
+   // What this guard has always protected is unchanged and is what the list
   // proves: no schema, no migration, no policy core, no auth module, no session
-  // module, no capability catalog, no unrelated writer, no route and no page. A
-  // THIRD production file, of any kind, still fails here.
+  // module, no capability catalog, no unrelated writer and no unrelated route.
+  // Every approved production path is named exactly; any additional production
+  // file still fails this guard.
   const APPROVED_PRODUCTION = [
+    // EX-PAIR-UI-MVP — the existing admin pairing surface and admin read support.
+    ["app", "admin", "courses", "[courseOfferingId]", "exams", "actions.ts"].join("/"),
+    ["app", "admin", "courses", "[courseOfferingId]", "exams", "page.tsx"].join("/"),
+    ["lib", "exam", "admin-exam-assignment-read" + "-core.ts"].join("/"),
+    ["lib", "actions", "exam-assignment-read" + "-io.ts"].join("/"),
+
+    // EX-PAIR-1TO1 — the pairing writer and pure core now enforce one-to-one.
     ["lib", "exam", "exam-pairing-write" + "-core.ts"].join("/"),
     ["lib", "actions", "exam-pairing-write" + "-io.ts"].join("/"),
+
+    // EX-BEGINNER-EXAM-READ — Level-1 beginner containment plus the
+    // trainee-only assignment `isSelf` marker.
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
   ].sort();
   for (const path of APPROVED_MODIFIED_GUARDS) {
     assert.ok(
