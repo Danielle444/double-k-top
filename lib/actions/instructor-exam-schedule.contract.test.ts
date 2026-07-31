@@ -39,6 +39,21 @@ const SCOPE_REL = "lib/exam/exam-read-scope-core.ts";
  */
 const ASSIGNMENT_ROWS_REL = "lib/components/ExamAssignmentRows.tsx";
 const ASSIGNMENT_ROWS_SUITE_REL = "lib/components/ExamAssignmentRows.test.tsx";
+/**
+ * EX-ROLE-SCHEDULE-REDESIGN — the three shared leaves this screen now composes.
+ *
+ * The PURE view core owns the wave grouping, the examinee/instructed-trainee
+ * nesting and the navigation filtering; the navigation bar owns the connected
+ * views; the personal-detail renderer is the trainee screen's alone. Each is
+ * proven by its own suite beside it — what this suite pins is that the
+ * instructor screen DELEGATES to them rather than growing copies of their rules.
+ */
+const VIEW_CORE_REL = "lib/components/exam-schedule-view-core.ts";
+const VIEW_CORE_SUITE_REL = "lib/components/exam-schedule-view-core.test.ts";
+const SCHEDULE_NAV_REL = "lib/components/ExamScheduleNav.tsx";
+const SCHEDULE_NAV_SUITE_REL = "lib/components/ExamScheduleNav.test.tsx";
+const PERSONAL_DETAIL_REL = "lib/components/ExamPersonalAssignmentDetail.tsx";
+const PERSONAL_DETAIL_SUITE_REL = "lib/components/ExamPersonalAssignmentDetail.test.tsx";
 
 function read(relative: string): string {
   return readFileSync(join(REPO_ROOT, relative), "utf8");
@@ -397,9 +412,35 @@ test("8. the empty state renders the exact approved Hebrew sentence", () => {
   );
   assert.ok(SECTION_CODE.includes("{EMPTY_TEXT}"), "the empty state is never rendered");
   // It covers BOTH "no plan" and "no sessions".
+  //
+  // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — `groups.length > 0`. That expression
+  // measured the LOADED rows while the screen had exactly one view of them. The
+  // screen now has three connected views over that same loaded schedule, and
+  // `groups` is what the CHOSEN VIEW left standing — so keeping the old
+  // expression would have let a narrowed view that happens to be empty print
+  // "this course has no exam plan", a publication-shaped claim it is in no
+  // position to make.
+  //
+  // The claim is REPLACED by the one it was standing in for, and strengthened:
+  // the approved sentence is reached ONLY from the unfiltered loaded rows, and a
+  // narrowed empty view gets its own sentence, which says nothing about whether
+  // a plan exists.
   assert.ok(
-    SECTION_CODE.includes("view.planId !== null") && SECTION_CODE.includes("groups.length > 0"),
+    SECTION_CODE.includes("view.planId !== null") && SECTION_CODE.includes("allRows.length > 0"),
     "the empty state must cover a missing plan and an empty plan alike",
+  );
+  assert.ok(
+    SECTION.includes('const NO_MATCHING_ROWS_TEXT = "אין מבחנים בתצוגה שנבחרה.";'),
+    "a narrowed empty view has no sentence of its own",
+  );
+  assert.ok(SECTION_CODE.includes("{NO_MATCHING_ROWS_TEXT}"), "that sentence is never rendered");
+  // The two sentences are never interchangeable: only ONE of them is reachable
+  // from the filtered rows.
+  assert.equal(
+    SECTION_CODE.includes("groups.length === 0 && (") &&
+      SECTION_CODE.includes("!hasPlan && ("),
+    true,
+    "the narrowed-view notice and the no-plan sentence share a condition",
   );
 });
 
@@ -471,11 +512,37 @@ test("10b. the complete operational schedule is rendered, through the ONE shared
     SECTION_CODE.includes('from "@/lib/components/ExamAssignmentRows"'),
     "the instructor screen does not mount the shared renderer",
   );
+  // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — this count was ONE. The screen now
+  // reads `row.assignments` a SECOND time, and for one purpose only: to decide
+  // whether the participant SUMMARY above the rows would merely reprint the
+  // names the rows are about to show. The claim is replaced by an EXACT list of
+  // the two approved uses, which is stronger than a bare count — a third use, or
+  // a different second one, fails here.
+  const APPROVED_ASSIGNMENT_USES = [
+    "{row.assignments.length === 0 && (",
+    "<ExamAssignmentRows assignments={row.assignments} />",
+  ];
+  for (const fragment of APPROVED_ASSIGNMENT_USES) {
+    assert.ok(SECTION_CODE.includes(fragment), `approved use is missing: ${fragment}`);
+  }
   assert.equal(
     (SECTION_CODE.match(/row\.assignments/g) ?? []).length,
-    1,
-    "the assignment rows are read somewhere beyond the one approved hand-off",
+    2,
+    "the assignment rows are read somewhere beyond the two approved uses",
   );
+  // The second use is a LENGTH TEST and nothing else: no element of the array is
+  // indexed, filtered, sliced, sorted or re-mapped by the screen.
+  for (const token of [
+    "row.assignments[",
+    "row.assignments.filter",
+    "row.assignments.map",
+    "row.assignments.slice",
+    "row.assignments.sort",
+    "row.assignments.find",
+    "row.assignments.some",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen reaches into ${token}`);
+  }
 
   // THE SCREEN ITSELF DECIDES NOTHING ABOUT THEM. Every per-assignment value —
   // the role label, the personal window, the horse, the topic, the discipline
@@ -498,6 +565,112 @@ test("10b. the complete operational schedule is rendered, through the ONE shared
   for (const token of ["pairingIndex", "resolvePairing", "computePairing", "addMinutes", "parseInt"]) {
     assert.equal(SECTION_CODE.includes(token), false, `the screen duplicates ${token}`);
   }
+});
+
+// ===========================================================================
+// 10c–10e. EX-ROLE-SCHEDULE-REDESIGN — connected views, and no repetition
+// ===========================================================================
+
+test("10c. the three connected views are one loaded schedule, narrowed in the browser", () => {
+  // לו״ז כללי, by exam type and by date — mounted as the SHARED navigation bar,
+  // not re-implemented here.
+  assert.ok(
+    SECTION.includes('const GENERAL_VIEW_LABEL = "לו״ז כללי";'),
+    "the general view has no approved label",
+  );
+  assert.ok(
+    SECTION_CODE.includes('from "@/lib/components/ExamScheduleNav"'),
+    "the screen does not mount the shared navigation bar",
+  );
+  assert.equal(
+    (SECTION_CODE.match(/<ExamScheduleNav\s/g) ?? []).length,
+    1,
+    "a second navigation bar was added",
+  );
+
+  // The option lists and the narrowing come from the PURE view core, so this
+  // file holds no filtering rule of its own to disagree with the trainee
+  // screen's.
+  assert.ok(
+    SECTION_CODE.includes('from "@/lib/components/exam-schedule-view-core"'),
+    "the screen does not use the shared view core",
+  );
+  for (const call of ["listExamDefinitionNames(allRows)", "listExamDates(allRows)"]) {
+    assert.ok(SECTION_CODE.includes(call), `the options are not derived from the loaded rows: ${call}`);
+  }
+  assert.ok(SECTION_CODE.includes("filterExamRows(allRows, {"), "the views are not one narrowing");
+
+  // ...and they are ONE read. There is exactly one server call on this screen,
+  // it takes the course id and nothing else, and no view issues another.
+  const calls = SECTION_CODE.match(/getInstructorExamSchedule\([^)]*\)/g) ?? [];
+  assert.deepEqual(calls, ["getInstructorExamSchedule(selectedOfferingId)"]);
+  assert.equal(
+    (SECTION_CODE.match(/useEffect\(/g) ?? []).length,
+    1,
+    "a view change can now trigger a second load",
+  );
+  // The effect depends on the COURSE alone: no navigation state is in its
+  // dependency list, so switching views cannot re-fetch anything.
+  assert.ok(
+    SECTION_CODE.includes("}, [selectedOfferingId]);"),
+    "the load is no longer keyed by the course alone",
+  );
+  for (const token of ["navMode]", "navDate]", "navDefinitionName]"]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the load now depends on ${token}`);
+  }
+});
+
+test("10d. a filtered view can only ever NARROW what the server already sent", () => {
+  // The narrowing runs over `allRows`, which is `view.rows` — the contract as it
+  // arrived. Nothing is concatenated, pushed or spread into it.
+  assert.ok(SECTION_CODE.includes("const allRows = view === null ? [] : view.rows;"));
+  for (const token of [
+    "allRows.concat(",
+    "allRows.push(",
+    "view.rows.concat(",
+    "view.rows.push(",
+    "...allRows",
+    "...view.rows",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen builds rows with ${token}`);
+  }
+  // A view selection is a plain local string, never anything the server reads.
+  assert.equal(
+    /getInstructorExamSchedule\([^)]*nav/.test(SECTION_CODE),
+    false,
+    "a view selection is sent to the server",
+  );
+});
+
+test("10e. the participant summary is not printed twice on one block", () => {
+  // A block whose operational rows are rendered below already names every
+  // examinee and every instructed trainee. The summary therefore survives ONLY
+  // where it is the only place those names appear at all.
+  assert.ok(
+    SECTION_CODE.includes("{row.assignments.length === 0 && ("),
+    "the duplicate participant summary was not removed",
+  );
+  const guardStart = SECTION_CODE.indexOf("{row.assignments.length === 0 && (");
+  const guardEnd = SECTION_CODE.indexOf("</>", guardStart);
+  assert.ok(guardEnd > guardStart, "the guarded summary block could not be located");
+  const summary = SECTION_CODE.slice(guardStart, guardEnd);
+  assert.ok(summary.includes("row.examineeNames"), "the examinee summary moved out of the guard");
+  assert.ok(
+    summary.includes("row.instructedTraineeNames"),
+    "the trainee summary moved out of the guard",
+  );
+  // Supervisors are NEVER in the operational rows, so their line is never a
+  // duplicate and must stay OUTSIDE the guard — it is the one participant line
+  // that always stands.
+  assert.equal(
+    summary.includes("row.supervisorNames"),
+    false,
+    "the supervisor line was hidden behind the duplicate-summary guard",
+  );
+  assert.ok(
+    SECTION_CODE.indexOf("row.supervisorNames") > guardEnd,
+    "the supervisor line disappeared or moved inside the guard",
+  );
 });
 
 test("11. no internal id and no raw contract object is rendered", () => {
@@ -700,6 +873,19 @@ test("16. the working tree holds only this slice's five paths and the approved t
     ASSIGNMENT_ROWS_SUITE_REL,
     "app/student/trainee-nav-visibility.ts",
     "app/student/trainee-nav-visibility.test.ts",
+    // EX-ROLE-SCHEDULE-REDESIGN RE-POINT, on the same terms again: an EXACT path
+    // list, never a directory and never a glob. These four are that slice's own
+    // NEW paths — the pure view core that does the wave grouping and the nesting,
+    // the shared navigation bar, the compact personal-detail renderer, and the
+    // suites beside each of them. Every one of them is a `lib/components` leaf:
+    // the slice adds no route, no action, no reader and no `lib/exam` file, and
+    // test 14 below independently pins that last part.
+    VIEW_CORE_REL,
+    VIEW_CORE_SUITE_REL,
+    SCHEDULE_NAV_REL,
+    SCHEDULE_NAV_SUITE_REL,
+    PERSONAL_DETAIL_REL,
+    PERSONAL_DETAIL_SUITE_REL,
     // EX-OPS-READ-MVP RE-POINT REMOVED. Nine `lib/exam` paths were approved here
     // while the operational-READ slice was in flight. That slice is merged, so
     // those entries no longer describe anything in the working tree — they are

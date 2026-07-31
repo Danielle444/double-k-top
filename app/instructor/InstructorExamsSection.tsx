@@ -4,6 +4,15 @@ import { useEffect, useState } from "react";
 import { InstructorScheduleCourseSelector } from "@/app/instructor/InstructorScheduleCourseSelector";
 import { ExamAssignmentRows } from "@/lib/components/ExamAssignmentRows";
 import {
+  ExamScheduleNav,
+  type ExamScheduleNavMode,
+} from "@/lib/components/ExamScheduleNav";
+import {
+  filterExamRows,
+  listExamDates,
+  listExamDefinitionNames,
+} from "@/lib/components/exam-schedule-view-core";
+import {
   getInstructorExamSchedule,
   type InstructorExamScheduleView,
 } from "@/lib/actions/instructor-exam-schedule";
@@ -70,12 +79,39 @@ import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates
  * feedback and any rating. None is labelled "—" or given an empty row, because
  * inventing a placeholder would tell an instructor that a value exists and is
  * blank, when in truth this read does not carry it at all.
+ *
+ * ===========================================================================
+ * CONNECTED VIEWS (EX-ROLE-SCHEDULE-REDESIGN)
+ * ===========================================================================
+ * The screen offers three views of ONE loaded schedule: the general לו״ז כללי,
+ * a view per exam type, and a view per date. They are NOT three reads. The
+ * course's schedule is fetched exactly once, and the shared navigation bar
+ * narrows the array already in hand — so a view can only ever show FEWER rows
+ * than the general one, never a row the server withheld, and switching views
+ * issues no request at all. The option lists themselves are derived from the
+ * loaded rows by the pure view core, so a view exists only when there is data
+ * behind it.
+ *
+ * THE PARTICIPANT SUMMARY IS NOT PRINTED TWICE. A block whose operational rows
+ * are rendered below already names every examinee and every instructed trainee,
+ * in their waves and with their horses; repeating those same names in a summary
+ * line above them is noise that makes a schedule longer without making it say
+ * anything more. The summary therefore survives ONLY on a block that carries no
+ * operational rows — a live beginner row today — where it is the only place
+ * those names appear at all. Supervisors are never in the operational rows, so
+ * their line always stands.
  */
 
 const LOADING_TEXT = "טוען לוח מבחנים...";
 const ERROR_TEXT = "לא ניתן לטעון כרגע את לוח המבחנים.";
 const EMPTY_TEXT = "אין עדיין לוח מבחנים לקורס זה.";
 const NO_COURSE_TEXT = "יש לבחור קורס כדי לראות את לוח המבחנים";
+/**
+ * Shown ONLY when the course HAS a schedule and the CHOSEN VIEW holds none of
+ * it. It says nothing about whether a plan exists, so it can never stand in for
+ * {@link EMPTY_TEXT} — that question is that sentence's alone.
+ */
+const NO_MATCHING_ROWS_TEXT = "אין מבחנים בתצוגה שנבחרה.";
 
 type ExamRow = InstructorExamScheduleView["rows"][number];
 
@@ -139,15 +175,28 @@ function PeopleLine({
   );
 }
 
+const GENERAL_VIEW_LABEL = "לו״ז כללי";
+
 export function InstructorExamsSection() {
   const [selectedOfferingId, setSelectedOfferingId] = useState<string | null>(null);
   const [view, setView] = useState<InstructorExamScheduleView | null>(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(false);
+  // The connected views. All three read the SAME `view` above; none of them is a
+  // second request, and none of them can name a row the server did not send.
+  const [navMode, setNavMode] = useState<ExamScheduleNavMode>("all");
+  const [navDefinitionName, setNavDefinitionName] = useState<string | null>(null);
+  const [navDate, setNavDate] = useState<string | null>(null);
 
   useEffect(() => {
+    // A new course means the previous course's exam types and dates no longer
+    // exist: the view returns to the general one rather than staying pointed at
+    // a selection that is now meaningless.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setNavMode("all");
+    setNavDefinitionName(null);
+    setNavDate(null);
     if (selectedOfferingId === null) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setView(null);
       setFailed(false);
       setLoading(false);
@@ -178,8 +227,21 @@ export function InstructorExamsSection() {
     };
   }, [selectedOfferingId]);
 
-  const groups = view === null ? [] : groupRowsByDate(view.rows);
-  const hasPlan = view !== null && view.planId !== null && groups.length > 0;
+  const allRows = view === null ? [] : view.rows;
+  // The option lists are derived from THE LOADED ROWS, so a view is offered only
+  // when there is something behind it.
+  const definitionNames = listExamDefinitionNames(allRows);
+  const dates = listExamDates(allRows);
+  // The general view is both axes unconstrained — not a third code path.
+  const visibleRows = filterExamRows(allRows, {
+    definitionName: navMode === "type" ? navDefinitionName : null,
+    date: navMode === "date" ? navDate : null,
+  });
+  const groups = groupRowsByDate(visibleRows);
+  // "Is there a schedule at all" is answered by the LOADED rows, never by the
+  // filtered ones: a narrowed view that happens to be empty must not read as a
+  // course with no exam plan.
+  const hasPlan = view !== null && view.planId !== null && allRows.length > 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -220,6 +282,27 @@ export function InstructorExamsSection() {
             {view.isPublished ? "לוח מבחנים מפורסם" : "לוח מבחנים בטיוטה"}
           </p>
 
+          {/* The three connected views over the SAME loaded schedule. */}
+          <ExamScheduleNav
+            allLabel={GENERAL_VIEW_LABEL}
+            mode={navMode}
+            onSelectMode={setNavMode}
+            definitionNames={definitionNames}
+            selectedDefinitionName={navDefinitionName}
+            onSelectDefinitionName={setNavDefinitionName}
+            dates={dates}
+            selectedDate={navDate}
+            onSelectDate={setNavDate}
+          />
+
+          {/* A NARROWED view with nothing in it says exactly that, and never
+              borrows the "this course has no exam plan" sentence above. */}
+          {groups.length === 0 && (
+            <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
+              {NO_MATCHING_ROWS_TEXT}
+            </p>
+          )}
+
           {groups.map((group) => (
             <div key={group.date} className="flex flex-col gap-2">
               <p className="text-base font-bold text-card-foreground">
@@ -254,16 +337,27 @@ export function InstructorExamsSection() {
                     )}
 
                     <div className="mt-2 flex flex-col gap-1">
-                      <PeopleLine
-                        label="נבחנים"
-                        names={row.examineeNames}
-                        count={row.examineeCount}
-                      />
-                      <PeopleLine
-                        label="חניכים מדריכים"
-                        names={row.instructedTraineeNames}
-                        count={row.instructedTraineeCount}
-                      />
+                      {/* The participant SUMMARY, and only where it is the only
+                          place those names appear. A block with operational
+                          rows names everyone below, in their waves and with
+                          their horses, so printing the same names again here
+                          would be pure repetition. */}
+                      {row.assignments.length === 0 && (
+                        <>
+                          <PeopleLine
+                            label="נבחנים"
+                            names={row.examineeNames}
+                            count={row.examineeCount}
+                          />
+                          <PeopleLine
+                            label="חניכים מדריכים"
+                            names={row.instructedTraineeNames}
+                            count={row.instructedTraineeCount}
+                          />
+                        </>
+                      )}
+                      {/* Supervisors are never in the operational rows, so their
+                          line is never a duplicate and always stands. */}
                       <PeopleLine
                         label="משגיחים"
                         names={row.supervisorNames}
