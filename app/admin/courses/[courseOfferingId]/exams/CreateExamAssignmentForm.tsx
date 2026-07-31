@@ -10,11 +10,31 @@
  * creates for the same trainee. Everything else here is ordinary markup.
  *
  * ===========================================================================
- * EXACTLY THREE FIELDS LEAVE THIS FORM
+ * AT MOST FIVE FIELDS LEAVE THIS FORM
  * ===========================================================================
- *   - `sessionId`  — hidden, the session this form was rendered under;
- *   - `studentId`  — the chosen trainee, a native `<select>` value;
- *   - `horseName`  — free text, REQUIRED for an examinee.
+ *   - `sessionId`        — hidden, the session this form was rendered under;
+ *   - `studentId`        — the chosen trainee, a native `<select>` value;
+ *   - `horseName`        — free text, REQUIRED for an examinee;
+ *   - `instructionTopic` — free text, rendered ONLY when this session's exam
+ *                          demands a lesson topic, and REQUIRED when rendered;
+ *   - `discipline`       — free text, rendered ONLY when this session's exam
+ *                          demands a branch, and REQUIRED when rendered.
+ *
+ * ===========================================================================
+ * THE TWO CONDITIONAL FIELDS ARE A COURTESY, NEVER THE RULE
+ * ===========================================================================
+ * EX-ASG-LTD2-B2 adds the last two, each behind ONE boolean prop the SERVER
+ * computed from the session's own ExamDefinition. When a flag is false the input
+ * is ABSENT from the markup rather than hidden or disabled, so nothing is
+ * submitted for it at all — and the committed writer would write `null` for an
+ * unsupported value even if a hand-crafted submission carried one, because the
+ * DEFINITION and never the submission decides what is stored.
+ *
+ * The `required` attribute on each rendered input is likewise a courtesy that
+ * saves a round trip: the committed detailed input core refuses a blank value the
+ * definition demands regardless of what the browser enforces. This component
+ * duplicates neither rule — it holds no requirement table, reads no definition and
+ * makes no decision of its own; it renders what the two props say.
  *
  * There is no course field, no plan field, no definition field, no role field,
  * no order field and no count field — not hidden, not disabled, but ABSENT from
@@ -110,11 +130,15 @@ export function CreateExamAssignmentForm({
   courseOfferingId,
   sessionId,
   eligibleTrainees,
+  requiresLessonTopic,
+  requiresDiscipline,
 }: {
   action: (formData: FormData) => void | Promise<void>;
   courseOfferingId: string;
   sessionId: string;
   eligibleTrainees: readonly EligibleExamTraineeChoice[];
+  requiresLessonTopic: boolean;
+  requiresDiscipline: boolean;
 }) {
   // Referenced ONLY so the narrow, page-typed prop does not read as an
   // accidentally unused parameter. It is never rendered, never submitted and
@@ -184,6 +208,26 @@ export function CreateExamAssignmentForm({
           */}
           <input type="text" name="horseName" required className={FIELD_CLASS} />
         </label>
+
+        {/*
+          The lesson topic, rendered ONLY when this session's exam demands one.
+          With the flag false the input is ABSENT — not hidden and not disabled —
+          so nothing is submitted for it and the writer stores `null`.
+        */}
+        {requiresLessonTopic ? (
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-card-foreground">נושא הדרכה</span>
+            <input type="text" name="instructionTopic" required className={FIELD_CLASS} />
+          </label>
+        ) : null}
+
+        {/* The branch, on its own independent flag and the same terms. */}
+        {requiresDiscipline ? (
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="font-medium text-card-foreground">ענף</span>
+            <input type="text" name="discipline" required className={FIELD_CLASS} />
+          </label>
+        ) : null}
       </fieldset>
 
       <div>

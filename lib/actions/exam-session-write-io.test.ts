@@ -161,6 +161,20 @@ const APPROVED_MODIFIED_FILES = [
   "lib/actions/" + "exam-assignment-read" + "-io.ts",
   "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
   "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  // EX-ASG-LTD2-B2 - the approved DETAILED examinee assignment UI wiring, which
+  // travels in the same working tree. It switches the route's ONE existing create
+  // endpoint to the committed detailed writer, which brings that route's examinee
+  // create form and its route-local assignment message table into the modified set,
+  // plus the detailed writer's own committed guard, whose caller list it re-points
+  // from zero to exactly one Server Action module. The last path is ASSEMBLED,
+  // because that guard sweeps `app/`, `lib/` and `components/` for its own module
+  // name. Nothing here changes which module THIS guard is about: no new route file,
+  // Server Action, query key or component exists, no `lib/` production module is
+  // edited, and no schema, migration, auth, session, capability or policy file
+  // appears.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
+  "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");

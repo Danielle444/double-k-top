@@ -43,8 +43,9 @@
  * ===========================================================================
  * WHAT THE ASSIGNMENT SURFACE MAY AND MAY NOT SAY
  * ===========================================================================
- * The examinee create form collects EXACTLY three values — the session (hidden,
- * fixed by the row it was rendered under), the trainee and the horse. The
+ * The examinee create form collects three values ALWAYS — the session (hidden,
+ * fixed by the row it was rendered under), the trainee and the horse — plus, when
+ * and only when this session's exam demands them, a lesson topic and a branch. The
  * instructed-trainee create form collects EXACTLY two — the session and the
  * trainee, and no horse, because that role carries none. The ROLE is not among
  * either form's fields: each committed create core fixes its own single role
@@ -55,15 +56,16 @@
  * before. Hiding one would make a session look emptier than it is and would
  * disagree with the count beside it.
  *
- * The two create forms are gated INDEPENDENTLY. A definition that ALSO demands a
- * lesson topic or a discipline gets no EXAMINEE form: that form collects neither,
- * and the committed writer refuses the whole create rather than storing a
- * half-filled row. `requiresInstructedTrainee` never enters that gate. The
- * INSTRUCTED-TRAINEE form asks exactly one question in return — does this
- * session's exam ask for such a person? — and consults neither topic nor
- * discipline, because refusing this role over the examinee's missing topic would
- * block precisely the blocks it exists to complete. Both gates FAIL CLOSED when
- * the requirements are unknown.
+ * The two create forms are gated INDEPENDENTLY. EX-ASG-LTD2-B2 NARROWS the
+ * examinee gate to the fail-closed case alone: a definition that demands a lesson
+ * topic or a branch now GETS the form, which collects both and hands them to the
+ * committed writer that stores them, so the only remaining reason to withhold it
+ * is that the requirements cannot be resolved at all. `requiresInstructedTrainee`
+ * never enters that gate. The INSTRUCTED-TRAINEE form asks exactly one question in
+ * return — does this session's exam ask for such a person? — and consults neither
+ * topic nor branch, because refusing this role over the examinee's missing topic
+ * would block precisely the blocks it exists to complete. Both gates still FAIL
+ * CLOSED when the requirements are unknown.
  *
  * Nothing here renders an identity number, a phone, a parent or guardian contact,
  * a group, a subgroup or any enrolment detail. The committed readers do not select
@@ -1260,18 +1262,26 @@ export default async function CourseExamsPage({
                             requirements !== undefined &&
                             requirements.requiresInstructedTrainee;
 
-                          // A definition that also demands a lesson topic or a
-                          // discipline cannot be assigned from UI1: this form
-                          // collects neither, and the committed writer refuses the
-                          // whole create rather than storing a half-filled row.
-                          // The instructed-trainee requirement is deliberately NOT
-                          // consulted here — that is a SECOND row, written by the
+                          // RE-POINTED by EX-ASG-LTD2-B2, and NARROWED to the one
+                          // thing it always really protected. The gate used to
+                          // ALSO refuse a definition demanding a lesson topic or a
+                          // discipline, because the create form collected neither
+                          // and the writer behind it refused the whole create
+                          // rather than storing a half-filled row. The form now
+                          // collects both and the endpoint now calls the writer
+                          // that stores them, so those two demands are ordinary
+                          // fields rather than a dead end.
+                          //
+                          // What remains is the FAIL-CLOSED case and nothing else:
+                          // `undefined` means the session names a definition the
+                          // definition reader did not report, so this page cannot
+                          // tell what its exam demands — and a write surface must
+                          // never be opened on a requirement nobody can state. The
+                          // instructed-trainee requirement is still deliberately
+                          // NOT consulted: that is a SECOND row, written by the
                           // separate operation above, and it never blocks the
                           // examinee.
-                          const requiresUnsupportedFields =
-                            requirements === undefined ||
-                            requirements.requiresLessonTopic ||
-                            requirements.requiresDiscipline;
+                          const requirementsUnknown = requirements === undefined;
 
                           return (
                           <li
@@ -1415,10 +1425,10 @@ export default async function CourseExamsPage({
                               )}
 
                               {mayConfigure ? (
-                                requiresUnsupportedFields ? (
+                                requirementsUnknown ? (
                                   <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-                                    סוג מבחן זה דורש פרטים נוספים, ולכן השיבוץ ייפתח
-                                    בשלב הבא.
+                                    לא ניתן לזהות את דרישות סוג המבחן של יחידה זו,
+                                    ולכן אין כאן שיבוץ.
                                   </p>
                                 ) : (
                                   <div className="mt-3">
@@ -1427,6 +1437,8 @@ export default async function CourseExamsPage({
                                       courseOfferingId={context.id}
                                       sessionId={session.sessionId}
                                       eligibleTrainees={eligibleView.trainees}
+                                      requiresLessonTopic={requirements.requiresLessonTopic}
+                                      requiresDiscipline={requirements.requiresDiscipline}
                                     />
                                   </div>
                                 )

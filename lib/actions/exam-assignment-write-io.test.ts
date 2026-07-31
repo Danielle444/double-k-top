@@ -710,6 +710,44 @@ test("21. EXACTLY the approved Server Action module calls either writer", () => 
     APPROVED_CALLERS,
     `the caller list is not exactly the approved Server Action module: ${callers.join(", ")}`,
   );
+
+  // EX-ASG-LTD2-B2 TRANSITION, and a STRICTLY TIGHTER claim than the file-level one
+  // above. The two writers share a module, so a file-level caller list cannot tell
+  // them apart — and the route's create endpoint now calls the committed DETAILED
+  // examinee binding instead of the three-field CREATE below, while still calling
+  // the REMOVAL. The module therefore keeps exactly one caller, and the CREATE has
+  // none.
+  //
+  // This is the whole point of stating it per SYMBOL: "the ordinary create writer
+  // is unreachable from production" is a property no import list can express, and
+  // it is what makes the switch provable rather than merely intended. A single
+  // production caller of the create — anywhere under `app/`, `lib/` or
+  // `components/` — fails here, so the two paths cannot silently coexist.
+  const createCallers: string[] = [];
+  for (const dir of ["app", "lib", "components"]) {
+    const root = join(REPO_ROOT, dir);
+    if (!existsSync(root)) continue;
+    for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile() || !/\.tsx?$/.test(entry.name)) continue;
+      const path = join(entry.parentPath ?? root, entry.name);
+      if (path.includes(`${sep}generated${sep}`)) continue;
+      // The declaring module, the cores that DECLARE these symbols and every
+      // `.test.ts` are excluded: a suite that asserts about the create is not a
+      // caller of it, which is the same distinction the file-level scan draws.
+      if (declaring.has(path) || ownSuites.has(path) || /\.test\.tsx?$/.test(entry.name)) continue;
+      const code = stripComments(readFileSync(path, "utf8"));
+      const reaches =
+        /create-exam-assignment-core/.test(code) ||
+        /\bcreateExamAssignment\s*\(/.test(code) ||
+        /\bcreateExamAssignmentWithDeps\s*\(/.test(code);
+      if (reaches) createCallers.push(path.slice(REPO_ROOT.length + 1));
+    }
+  }
+  assert.deepEqual(
+    createCallers.sort(),
+    [],
+    `the three-field create writer must have no production caller; found: ${createCallers.join(", ")}`,
+  );
 });
 
 test("22. no exam route, page, form or Server Action was created", () => {
@@ -826,6 +864,21 @@ test("24. only the approved wiring paths are modified: no schema, migration, aut
     "lib/actions/" + "exam-assignment-read" + "-io.ts",
     "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
     "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    // EX-ASG-LTD2-B2 — the approved DETAILED examinee assignment UI wiring, which
+    // travels in the same working tree. It switches the route's ONE create endpoint
+    // to the committed detailed writer, which brings the examinee create form (two
+    // conditional inputs) and the route-local assignment message table (the
+    // detailed writer's own issue codes) into the modified set, plus that writer's
+    // committed guard, whose caller list it re-points from zero to exactly one
+    // Server Action module. The last path is ASSEMBLED, because that guard sweeps
+    // for its own module name.
+    //
+    // Nothing here changes which module THIS guard is about: the three-field write
+    // binding below is not edited, LOSES its create caller rather than gaining one,
+    // and no schema, migration, auth, session, capability or policy file appears.
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
+    "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
   ].sort();
 
   const modified = gitLines([
@@ -842,25 +895,24 @@ test("24. only the approved wiring paths are modified: no schema, migration, aut
   const offenders = modified.filter((path) => !APPROVED_MODIFICATIONS.includes(path)).sort();
   assert.deepEqual(offenders, [], `the slice modified: ${offenders.join(", ")}`);
 
-  // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to an exact pair rather than
-  // dropped. The claim was "no `lib/` PRODUCTION module was touched at all", which
-  // held while every slice in this tree only WIRED the committed bindings. A read
-  // that must publish two more stored columns has to edit the pair that reads
-  // them, so the two are named exactly and a THIRD still fails here.
+  // RE-POINTED by EX-ASG-LTD2-B1 to an exact pair, and RE-POINTED AGAIN by
+  // EX-ASG-LTD2-B2 back to the STRICTEST form of the claim — EMPTY.
   //
-  // What this guard is about is untouched by that: NEITHER named module is the
-  // assignment WRITE binding or its cores, and no policy, auth or session module
-  // may appear.
-  const APPROVED_LIB_PRODUCTION = [
-    "lib/actions/" + "exam-assignment-read" + "-io.ts",
-    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
-  ].sort();
+  // The pair was correct while the read slice was uncommitted in this working tree
+  // and had to publish two more stored columns. It is committed now, so those names
+  // described a moment rather than a rule, and the wiring slice that followed edits
+  // no `lib/` production module at all: every binding it reaches is already
+  // committed, and the wiring lives entirely under `app/`.
+  //
+  // The original claim is therefore restored in full: NO `lib/` production module —
+  // no writer, no reader, no core, no policy, auth or session module — may differ
+  // from HEAD.
   const libProduction = modified
     .filter((path) => path.startsWith("lib/") && !path.endsWith(".test.ts"))
     .sort();
   assert.deepEqual(
     libProduction,
-    APPROVED_LIB_PRODUCTION,
+    [],
     `an unapproved lib production module was edited: ${libProduction.join(", ")}`,
   );
 

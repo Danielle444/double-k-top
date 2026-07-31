@@ -134,6 +134,18 @@ const SLICE_PATHS = [
   // to an exact path list, never relaxed.
   "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
   "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  // EX-ASG-LTD2-B2 — the approved DETAILED examinee assignment UI wiring, which
+  // travels in the same working tree. It switches the ONE existing create endpoint
+  // to the committed detailed writer, so the examinee create form and the
+  // route-local assignment message table join this list. Nothing new is created:
+  // no route file, no Server Action, no query key and no form component. The last
+  // path is that writer's own committed guard, whose caller list this wiring
+  // re-points from ZERO to exactly the one Server Action module — and it is
+  // ASSEMBLED, because that guard sweeps `app/`, `lib/` and `components/` for its
+  // own module name and would otherwise enrol this suite as a caller.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
+  "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -362,8 +374,16 @@ test("8. there is STILL no try/catch anywhere, so NEXT_REDIRECT always propagate
 
 test("9. the module's import surface gained EXACTLY the one committed writer", () => {
   const specifiers = [...ACTIONS.matchAll(/from\s+"([^"]+)"/g)].map(([, s]) => s).sort();
-  assert.equal(specifiers.length, 8, "the action module's import surface is not eight");
+  // RE-POINTED by EX-ASG-LTD2-B2 by ADDING one specifier: the committed DETAILED
+  // examinee write binding, which the existing create endpoint now calls in place
+  // of the three-field one. The three-field binding is STILL imported, for the
+  // removal, so this is a ninth specifier and not a swap.
+  assert.equal(specifiers.length, 9, "the action module's import surface is not nine");
   assert.ok(specifiers.includes(WRITER_SPECIFIER), "the committed writer is not imported");
+  assert.ok(
+    specifiers.includes("@/lib/actions/" + "detailed-exam-assignment-write" + "-io"),
+    "the detailed examinee write binding is not imported",
+  );
   // The IMPORT KEYWORD itself is split, not just the specifier: this suite's own
   // no-database guard below extracts every `from "…"` occurrence in THIS file and
   // pins the result to five node: builtins, so any spelling that puts a quote
@@ -752,32 +772,35 @@ test("23. the visibility rule is EXACTLY the definition flag, and fails closed",
     squash(PAGE).includes("requirements !== undefined && requirements.requiresInstructedTrainee"),
   );
   // The gate is DECLARED BEFORE the examinee gate, which is what lets the guard
-  // below prove the flag never enters it.
+  // below prove the flag never enters it. RE-POINTED by EX-ASG-LTD2-B2: the
+  // examinee gate is now named `requirementsUnknown`, and the ORDER — the whole
+  // point of this assertion — is unchanged.
   assert.ok(
-    PAGE.indexOf("const showInstructedTraineeForm") <
-      PAGE.indexOf("const requiresUnsupportedFields"),
-    "showInstructedTraineeForm must be declared before requiresUnsupportedFields",
+    PAGE.indexOf("const showInstructedTraineeForm") < PAGE.indexOf("const requirementsUnknown"),
+    "showInstructedTraineeForm must be declared before the examinee gate",
   );
 });
 
 test("24. the two create gates are INDEPENDENT in both directions", () => {
-  // The examinee gate is unchanged in meaning, and the instructed-trainee flag
-  // does not enter it.
+  // RE-POINTED by EX-ASG-LTD2-B2. The examinee gate NARROWED — from "unknown, or
+  // topic, or discipline" to "unknown" alone, because the examinee form now
+  // collects both values and its endpoint calls the writer that stores them. This
+  // guard is about INDEPENDENCE, not about the examinee rule (that is the
+  // assignment suite's own), so what it pins is the new gate's exact text and the
+  // fact that the instructed-trainee flag still does not enter it.
   assert.ok(
-    squash(PAGE).includes(
-      "const requiresUnsupportedFields = requirements === undefined || requirements.requiresLessonTopic || requirements.requiresDiscipline;",
-    ),
-    "the examinee gate is no longer the closed topic/discipline test",
+    squash(PAGE).includes("const requirementsUnknown = requirements === undefined;"),
+    "the examinee gate is not the closed unknown-requirements test",
   );
   assert.equal(
-    /requiresUnsupportedFields[\s\S]{0,200}requiresInstructedTrainee/.test(squash(PAGE)),
+    /requirementsUnknown[\s\S]{0,200}requiresInstructedTrainee/.test(squash(PAGE)),
     false,
     "requiresInstructedTrainee must not gate the examinee create form",
   );
   // ...and the topic and discipline flags do not enter the instructed-trainee one.
   const gate = squash(PAGE).slice(
     squash(PAGE).indexOf("const showInstructedTraineeForm"),
-    squash(PAGE).indexOf("const requiresUnsupportedFields"),
+    squash(PAGE).indexOf("const requirementsUnknown"),
   );
   for (const forbidden of [
     "requiresLessonTopic",
@@ -1185,8 +1208,16 @@ test("35. this slice adds NO publication, notification, pairing, wave or supervi
   // Only the PAGE may now name it, and only to READ it: it displays the value on
   // the EXAMINEE's row. It reaches no write, no FormData key and no query key
   // through it, which is why the permitted use is pinned to a single occurrence.
+  //
+  // RE-POINTED AGAIN by EX-ASG-LTD2-B2, and narrowed once more rather than
+  // dropped. The examinee create endpoint now COLLECTS the lesson subject, so the
+  // Server Action module legitimately names it — twice, as a FormData key and its
+  // raw read, which the assignment suite pins exactly. What this guard is about is
+  // untouched and is re-stated from the side that matters here: THIS slice's
+  // instructed-trainee surface still has nothing to do with that value, so the ban
+  // stays TOTAL on the client form and the message module, and the
+  // instructed-trainee ACTION BODY must still never name it.
   for (const [label, source] of [
-    ["actions", ACTIONS],
     ["form", FORM],
     ["messages", MESSAGES],
   ] as const) {
@@ -1196,6 +1227,11 @@ test("35. this slice adds NO publication, notification, pairing, wave or supervi
       `the ${label} references instructionTopic`,
     );
   }
+  assert.equal(
+    actionBody(ACTIONS, "createExamInstructedTraineeAssignmentAction").includes("instructionTopic"),
+    false,
+    "the instructed-trainee action references instructionTopic",
+  );
   assert.equal(
     (PAGE.match(/instructionTopic/g) ?? []).length,
     1,
@@ -1231,24 +1267,19 @@ test("37. the slice touched EXACTLY its approved paths, and no schema or migrati
   const prismaStatus = gitLines(["status", "--porcelain", "--", "prisma"]);
   assert.deepEqual(prismaStatus, [], `prisma/ changed: ${prismaStatus.join(", ")}`);
 
-  // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to an exact pair rather than
-  // dropped. The claim was "no `lib/` production module was edited at all". The
-  // detail slice must publish two more stored columns, which cannot be done
-  // without editing the pair that READS them — so the two are named exactly here.
-  // The instructed-trainee WRITE binding this slice wires is NOT among them and
-  // still may not be edited, and neither may any third `lib/` production module.
-  const APPROVED_LIB_PRODUCTION = [
-    "lib/actions/" + "exam-assignment-read" + "-io.ts",
-    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
-  ].sort();
+  // RE-POINTED by EX-ASG-LTD2-B1 to an exact pair, and RE-POINTED AGAIN by
+  // EX-ASG-LTD2-B2 back to the STRICTEST form of the claim — EMPTY.
+  //
+  // The pair was correct while the read slice was uncommitted in this working tree.
+  // It is committed now, so those names described a moment rather than a rule, and
+  // the wiring slice that followed edits no `lib/` production module at all: every
+  // binding it reaches — the instructed-trainee writer, the detailed examinee
+  // writer and the assignment read pair — is already committed, and the wiring
+  // lives entirely under `app/`.
   const libTouched = gitLines(["diff", "--name-only", "HEAD", "--", "lib"])
     .filter((path) => !path.endsWith(".test.ts"))
     .sort();
-  assert.deepEqual(
-    libTouched,
-    APPROVED_LIB_PRODUCTION,
-    `an unapproved lib binding was edited: ${libTouched.join(", ")}`,
-  );
+  assert.deepEqual(libTouched, [], `an unapproved lib binding was edited: ${libTouched.join(", ")}`);
 
   // No dependency, environment, auth, middleware or MCP surface came with it.
   //

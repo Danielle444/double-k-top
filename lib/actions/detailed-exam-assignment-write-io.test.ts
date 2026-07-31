@@ -11,8 +11,8 @@
  * drives every ordering, requirement, refusal and eligibility decision with
  * fakes. What is left — and what only a source-text guard can prove — is that the
  * BINDING is the one that core was designed for: the exact statements, the exact
- * scopes, the exact selects, the exact classifier, and the exact absence of a
- * caller.
+ * scopes, the exact selects, the exact classifier, and — since EX-ASG-LTD2-B2
+ * wired it — the exact, single approved caller.
  *
  * DB-FREE: no database connection is opened, no SQL is executed, no environment
  * variable is read, and no production identifier appears anywhere. The only files
@@ -498,8 +498,27 @@ test("26. a redirect cannot be laundered: no digest is read anywhere", () => {
 // 27–31. Containment: no caller, no UI, no schema
 // ===========================================================================
 
-test("27. NOTHING under app, lib or components calls this binding or its core", () => {
+test("27. EXACTLY the approved Server Action module calls this binding", () => {
+  // EX-ASG-LTD2-B2 TRANSITION. This guard asserted the caller list was EMPTY, which
+  // was the correct claim while the detailed binding was committed but deliberately
+  // unwired. Wiring it is exactly what makes that claim obsolete, so the guard is
+  // RE-POINTED to an equally exact POSITIVE claim rather than deleted or weakened
+  // to "some caller exists": the ONE course-scoped admin exams Server Action
+  // module, and nothing else anywhere under `app/`, `lib/` or `components/`.
+  //
+  // A SECOND caller still fails here, and that is the whole point. This is a WRITE
+  // binding: every caller is a new publicly reachable path to creating an exam
+  // assignment, and no page, form, component or other route may reach one
+  // directly — only a reviewed Server Action may.
+  //
+  // The scan is unchanged in every other respect: it still matches the module name,
+  // the core name, the binding CALL and the orchestration CALL, so a caller that
+  // imported the pure core to run the orchestration itself would be caught too.
   const declaring = new Set(NEW_FILES.map((rel) => join(REPO_ROOT, rel)));
+  /** The ONE production module authorized to reach this writer. */
+  const APPROVED_CALLERS = [
+    join("app", "admin", "courses", "[courseOfferingId]", "exams", "actions.ts"),
+  ];
   // Assembled, for the reason the header gives.
   const IO_TOKEN = new RegExp("detailed-exam-assignment-write" + "-io");
   const CORE_TOKEN = new RegExp(CORE_BASENAME);
@@ -530,7 +549,18 @@ test("27. NOTHING under app, lib or components calls this binding or its core", 
   }
   // Sanity: the exact result below is a PASS, not an empty search.
   assert.ok(scanned > 100, `expected the repository, scanned ${scanned} files`);
-  assert.deepEqual(callers, [], `this slice must stay callerless; found: ${callers.join(", ")}`);
+  assert.deepEqual(
+    callers.sort(),
+    APPROVED_CALLERS,
+    `the caller list is not exactly the approved Server Action module: ${callers.join(", ")}`,
+  );
+  // The one caller is a Server Action module, not a UI file: no `.tsx` may ever
+  // appear in that list.
+  assert.equal(
+    APPROVED_CALLERS.some((path) => path.endsWith(".tsx")),
+    false,
+    "a UI file reaches the write binding",
+  );
 });
 
 test("28. no exam route, page, form or Server Action was created", () => {

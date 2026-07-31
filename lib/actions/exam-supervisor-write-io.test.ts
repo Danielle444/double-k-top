@@ -811,6 +811,21 @@ test("t22. the slice modified NO tracked file: no schema, migration, auth or pol
     "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
     "lib/exam/" + "create-exam-plan" + "-core.test.ts",
     "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    // EX-ASG-LTD2-B2 - the approved DETAILED examinee assignment UI wiring, which
+    // travels in the same working tree. It switches the route's ONE existing create
+    // endpoint to the committed detailed writer, which brings that route's examinee
+    // create form and its route-local assignment message table into the modified set,
+    // plus the detailed writer's own committed guard, whose caller list it re-points
+    // from zero to exactly one Server Action module. The last path is ASSEMBLED,
+    // because that guard sweeps `app/`, `lib/` and `components/` for its own module
+    // name. Nothing here changes which module THIS guard is about: no new route file,
+    // Server Action, query key or component exists, no `lib/` production module is
+    // edited, and no schema, migration, auth, session, capability or policy file
+    // appears.
+    `${ROUTE}actions.ts`,
+    `${ROUTE}CreateExamAssignmentForm.tsx`,
+    `${ROUTE}exam-assignment-messages.ts`,
+    "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
   ];
   const unapproved = modified.filter((path) => !APPROVED_MODIFICATIONS.includes(path)).sort();
   assert.deepEqual(unapproved, [], `the slice modified: ${unapproved.join(", ")}`);
@@ -819,6 +834,13 @@ test("t22. the slice modified NO tracked file: no schema, migration, auth or pol
   // assignment READ production modules — so no supervisor production file, and no
   // third `lib/` production module of any kind, can enter this list unnoticed.
   const APPROVED_PRODUCTION = [
+    // RE-POINTED by EX-ASG-LTD2-B2: the examinee create FORM and the route-local
+    // assignment MESSAGE TABLE are production files of that same one route, and the
+    // detailed-writer wiring edits both. Each is named EXACTLY - no directory, no
+    // prefix, no glob - so a further production file still fails here.
+    `${ROUTE}actions.ts`,
+    `${ROUTE}CreateExamAssignmentForm.tsx`,
+    `${ROUTE}exam-assignment-messages.ts`,
     `${ROUTE}page.tsx`,
     "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
     "lib/actions/" + "exam-assignment-read" + "-io.ts",

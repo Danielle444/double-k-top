@@ -146,6 +146,12 @@ const SLICE_PATHS = [
   // to an exact path list, never relaxed.
   "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
   "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  // EX-ASG-LTD2-B2 — the DETAILED writer's own committed guard, whose caller list
+  // this slice re-points from ZERO to exactly the one Server Action module.
+  // ASSEMBLED, and this one most sharply of all: that guard sweeps `app/`, `lib/`
+  // and `components/` for its own module name, so spelling it whole here would
+  // enrol THIS suite in the very allow-list it re-points.
+  "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -155,6 +161,19 @@ const ASSIGNMENT_READ_MODULE = "exam-assignment-read" + "-io";
 const ASSIGNMENT_READ_SPECIFIER = "@/lib/actions/" + ASSIGNMENT_READ_MODULE;
 const CREATE_WRITER_CALL = "create" + "ExamAssignment" + "(";
 const DELETE_WRITER_CALL = "delete" + "ExamAssignment" + "(";
+/**
+ * EX-ASG-LTD2-B2's writer: the committed DETAILED examinee create binding, which
+ * the ONE existing create endpoint now calls in place of the three-field one.
+ *
+ * ASSEMBLED for the reason the header gives, and for a second one that is sharper
+ * still: that binding's own committed guard pinned its caller list at EXACTLY ZERO
+ * before this slice and at exactly the one Server Action module after it, and it
+ * matches raw source text — so a suite that spelled the module name or the call
+ * whole would enrol itself as a caller.
+ */
+const DETAILED_WRITE_MODULE = "detailed-exam-assignment-write" + "-io";
+const DETAILED_WRITE_SPECIFIER = "@/lib/actions/" + DETAILED_WRITE_MODULE;
+const DETAILED_WRITER_CALL = "create" + "DetailedExamAssignment" + "(";
 const ELIGIBLE_READER_CALL = "read" + "EligibleExamTraineesForAdmin" + "(";
 const ASSIGNMENT_READER_CALL = "read" + "AdminExamAssignments" + "(";
 const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
@@ -232,8 +251,25 @@ function actionBody(source: string, name: string): string {
 const CREATE_ACTION = actionBody(ACTIONS, "createExamAssignmentAction");
 const DELETE_ACTION = actionBody(ACTIONS, "deleteExamAssignmentAction");
 
-/** The THREE fields — and the ONLY three — the create action may read. */
-const CREATE_FIELDS = ["sessionId", "studentId", "horseName"];
+/**
+ * The FIVE fields — and the ONLY five — the create action may read, in the ONLY
+ * order it may read them.
+ *
+ * RE-POINTED by EX-ASG-LTD2-B2 by APPENDING the two the detailed writer collects.
+ * The order is the committed detailed input core's own diagnostic order, so a
+ * refusal lists its per-field advice in the sequence the form renders it. A SIXTH
+ * field, and a different order, still fail here.
+ */
+const CREATE_FIELDS = [
+  "sessionId",
+  "studentId",
+  "horseName",
+  "instructionTopic",
+  "discipline",
+];
+
+/** The three fields the create form submits UNCONDITIONALLY. */
+const ALWAYS_SUBMITTED_FIELDS = ["sessionId", "studentId", "horseName"];
 
 /** The refusal codes the create action must map, and no others. */
 const CREATE_REFUSALS = [
@@ -256,12 +292,27 @@ const DELETE_REFUSALS = [
   "assignment_not_found",
 ];
 
-/** The three stable input-issue codes the message module must own. */
-const ISSUE_CODES = [
+/**
+ * The stable input-issue codes the message module must own.
+ *
+ * RE-POINTED by EX-ASG-LTD2-B2 by ADDING the detailed writer's own five — which
+ * are what a fresh submission now produces — and KEEPING the legacy three, which
+ * travel through the query string and can therefore still arrive from a page the
+ * previous build rendered.
+ */
+const DETAILED_ISSUE_CODES = [
+  "EX-ASG-LTD-SESSION-REQUIRED",
+  "EX-ASG-LTD-STUDENT-REQUIRED",
+  "EX-ASG-LTD-HORSE-REQUIRED",
+  "EX-ASG-LTD-TOPIC-REQUIRED",
+  "EX-ASG-LTD-DISCIPLINE-REQUIRED",
+];
+const LEGACY_ISSUE_CODES = [
   "EX-ASG-IN-SESSION-REQUIRED",
   "EX-ASG-IN-STUDENT-REQUIRED",
   "EX-ASG-IN-HORSE-REQUIRED",
 ];
+const ISSUE_CODES = [...DETAILED_ISSUE_CODES, ...LEGACY_ISSUE_CODES];
 
 // ===========================================================================
 // 1–3. The route's exact file set
@@ -387,6 +438,7 @@ test("7. requireAdmin() is the FIRST awaited operation in BOTH new bodies", () =
     for (const token of [
       "formData.get",
       CREATE_WRITER_CALL,
+      DETAILED_WRITER_CALL,
       DELETE_WRITER_CALL,
       "redirect(",
       "revalidatePath(",
@@ -410,12 +462,17 @@ test("8. there is NO try/catch anywhere, so NEXT_REDIRECT always propagates", ()
 // ===========================================================================
 
 test("9. the offering is the BOUND leading argument and is NEVER read from FormData", () => {
-  // The id reaches each writer from the bound parameter, in the locked position...
+  // The id reaches each writer from the bound parameter, in the locked position.
+  //
+  // RE-POINTED by EX-ASG-LTD2-B2: the SAME endpoint, the SAME bound leading
+  // argument and the SAME raw-forwarding shape, now against the committed DETAILED
+  // writer and its five fields. The whole call is pinned as one string, so the
+  // writer, the argument order and every field name are proven together.
   assert.ok(
     squash(CREATE_ACTION).includes(
-      `${CREATE_WRITER_CALL}courseOfferingId, { sessionId: formData.get("sessionId"), studentId: formData.get("studentId"), horseName: formData.get("horseName"), });`,
+      `${DETAILED_WRITER_CALL}courseOfferingId, { sessionId: formData.get("sessionId"), studentId: formData.get("studentId"), horseName: formData.get("horseName"), instructionTopic: formData.get("instructionTopic"), discipline: formData.get("discipline"), });`,
     ),
-    "the create writer is not called with the bound id and the exact three raw fields",
+    "the create writer is not the detailed one, called with the bound id and the exact five raw fields",
   );
   assert.ok(
     squash(DELETE_ACTION).includes(
@@ -462,10 +519,10 @@ test("9. the offering is the BOUND leading argument and is NEVER read from FormD
   }
 });
 
-test("10. the CREATE reads EXACTLY three named fields, and nothing else", () => {
+test("10. the CREATE reads EXACTLY five named fields, in order, and nothing else", () => {
   const reads = [...CREATE_ACTION.matchAll(/formData\.get\("([^"]+)"\)/g)].map(([, f]) => f);
   assert.deepEqual(reads, CREATE_FIELDS);
-  assert.equal(reads.length, 3, "the create action's FormData budget is exactly three");
+  assert.equal(reads.length, 5, "the create action's FormData budget is exactly five");
   // No iteration API could smuggle a fourth field past the exact list above.
   for (const token of ["formData.entries", "formData.forEach", "formData.keys", "formData.getAll"]) {
     assert.equal(CREATE_ACTION.includes(token), false, `the create action uses ${token}`);
@@ -497,8 +554,8 @@ test("11. the REMOVAL reads EXACTLY one field, forwarded RAW and never coerced",
   );
 });
 
-test("12. neither action coerces, defaults or trims the create's three values", () => {
-  // Every one of the three is forwarded EXACTLY as FormData.get returned it — a
+test("12. neither action coerces, defaults or trims the create's five values", () => {
+  // Every one of the five is forwarded EXACTLY as FormData.get returned it — a
   // string, or null for an absent field. The committed input core defines the
   // rest, and a second copy here would be free to drift from the rule the
   // database actually sees.
@@ -631,9 +688,13 @@ test("17. the create form is a client component with EXACTLY the approved props"
     CREATE_FORM_SOURCE.split("\n").find((line) => line.trim().length > 0)?.trim(),
     '"use ' + 'client";',
   );
+  // RE-POINTED by EX-ASG-LTD2-B2 by ADDING exactly two BOOLEAN props — never a
+  // requirements object, a definition, a definition id or a kind. Two booleans is
+  // the narrowest thing that can express "render this input": the form cannot read
+  // a rule it was never handed, and a SIXTH prop still fails here.
   assert.ok(
     squash(CREATE_FORM).includes(
-      "export function CreateExamAssignmentForm({ action, courseOfferingId, sessionId, eligibleTrainees, }: { action: (formData: FormData) => void | Promise<void>; courseOfferingId: string; sessionId: string; eligibleTrainees: readonly EligibleExamTraineeChoice[]; })",
+      "export function CreateExamAssignmentForm({ action, courseOfferingId, sessionId, eligibleTrainees, requiresLessonTopic, requiresDiscipline, }: { action: (formData: FormData) => void | Promise<void>; courseOfferingId: string; sessionId: string; eligibleTrainees: readonly EligibleExamTraineeChoice[]; requiresLessonTopic: boolean; requiresDiscipline: boolean; })",
     ),
     "the create form's prop shape is not the locked one",
   );
@@ -650,12 +711,15 @@ test("17. the create form is a client component with EXACTLY the approved props"
   }
 });
 
-test("18. the create form submits EXACTLY three fields, and binds no scope", () => {
-  // The session travels as a HIDDEN field; the offering does NOT.
+test("18. the create form submits EXACTLY five fields, and binds no scope", () => {
+  // The session travels as a HIDDEN field; the offering does NOT. Neither of the
+  // two conditional fields is hidden either — a hidden topic or branch would post a
+  // value the manager never saw.
   assert.ok(CREATE_FORM.includes('<input type="hidden" name="sessionId" value={sessionId} />'));
   const hidden = [...CREATE_FORM.matchAll(/type="hidden"\s+name="([^"]+)"/g)].map(([, n]) => n);
   assert.deepEqual(hidden, ["sessionId"], "the create form carries an unapproved hidden field");
-  // The complete submitted field set.
+  // The complete submitted field set — the same five the action reads, and no
+  // sixth. RE-POINTED by EX-ASG-LTD2-B2 from three.
   const named = [...CREATE_FORM.matchAll(/\bname="([^"]+)"/g)].map(([, n]) => n).sort();
   assert.deepEqual(named, [...CREATE_FIELDS].sort());
   // The offering is bound into the ACTION on the server, never posted.
@@ -889,28 +953,110 @@ test("27. the horse placeholder is safe, and NO id or personal detail is rendere
   }
 });
 
-test("28. the create form is hidden for topic/discipline, but NOT for instructed-trainee", () => {
-  // A definition demanding a lesson topic or a discipline cannot be assigned from
-  // UI1: this form collects neither, so the affordance is absent rather than
-  // offered-and-refused. An UNKNOWN definition fails closed the same way.
+test("28. the create form is hidden ONLY when the requirements are unknown", () => {
+  // RE-POINTED by EX-ASG-LTD2-B2, and NARROWED to the one thing this gate always
+  // really protected. It used to ALSO withhold the form from a definition demanding
+  // a lesson topic or a branch, because the form collected neither and the writer
+  // behind it refused the whole create. The form now collects both and the endpoint
+  // now calls the writer that STORES them, so those two demands are ordinary fields
+  // and withholding the form over them would hide the very surface this slice
+  // exists to open.
+  //
+  // The FAIL-CLOSED case survives untouched and is now the WHOLE gate: `undefined`
+  // means the session names a definition the definition reader did not report, so
+  // the page cannot state what its exam demands — and a write surface must never be
+  // opened on a requirement nobody can state.
+  const flat = squash(PAGE);
   assert.ok(
-    squash(PAGE).includes(
-      "const requiresUnsupportedFields = requirements === undefined || requirements.requiresLessonTopic || requirements.requiresDiscipline;",
-    ),
-    "the create gate is not the closed topic/discipline test",
+    flat.includes("const requirementsUnknown = requirements === undefined;"),
+    "the create gate is not the closed unknown-requirements test",
   );
-  assert.ok(PAGE.includes("סוג מבחן זה דורש פרטים נוספים, ולכן השיבוץ ייפתח"));
-  // requiresInstructedTrainee is deliberately NOT consulted by that gate: the
-  // instructed trainee is a SECOND row written by a later operation, and it never
+  // The retired disjuncts are GONE, not merely reordered: neither requirement flag
+  // may appear in the gate under any name.
+  assert.equal(
+    PAGE.includes("requiresUnsupportedFields"),
+    false,
+    "the retired topic/discipline gate is still present",
+  );
+  assert.equal(
+    /requirementsUnknown\s*=[^;]*requires(LessonTopic|Discipline|InstructedTrainee)/.test(flat),
+    false,
+    "a definition requirement must not enter the examinee create gate",
+  );
+  assert.ok(PAGE.includes("לא ניתן לזהות את דרישות סוג המבחן של יחידה זו"));
+  assert.equal(
+    PAGE.includes("סוג מבחן זה דורש פרטים נוספים"),
+    false,
+    "the retired not-yet-supported sentence is still rendered",
+  );
+  // requiresInstructedTrainee is still deliberately NOT consulted by that gate: the
+  // instructed trainee is a SECOND row written by a separate operation, and it never
   // blocks the examinee.
   assert.equal(
-    /requiresUnsupportedFields[\s\S]{0,200}requiresInstructedTrainee/.test(squash(PAGE)),
+    /requirementsUnknown[\s\S]{0,200}requiresInstructedTrainee/.test(flat),
     false,
     "requiresInstructedTrainee must not gate the examinee create form",
+  );
+  // The two flags reach the form as PROPS — read from the same already-loaded
+  // definition requirements, on the branch where they are provably known.
+  assert.ok(
+    flat.includes(
+      "requiresLessonTopic={requirements.requiresLessonTopic} requiresDiscipline={requirements.requiresDiscipline}",
+    ),
+    "the two requirement booleans are not passed from the loaded definition requirements",
   );
   // The requirements come from the DEFINITION reader already loaded — no second
   // query, and no widening of the session reader, which reports neither flag.
   assert.ok(PAGE.includes("for (const definition of view.definitions) {"));
+  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 4, "a fifth reader entered the page");
+});
+
+test("28b. the two conditional inputs render IFF their flag, and are REQUIRED", () => {
+  const flat = squash(CREATE_FORM);
+  // Each input is rendered by its OWN flag and by nothing else — no `&&` chain
+  // with the other, no count, no role and no kind — and each collapses to `null`
+  // rather than to a hidden or disabled control, so a flag that is false submits
+  // no entry at all.
+  assert.ok(
+    flat.includes(
+      '{requiresLessonTopic ? ( <label className="flex flex-col gap-1 text-sm"> <span className="font-medium text-card-foreground">נושא הדרכה</span> <input type="text" name="instructionTopic" required className={FIELD_CLASS} /> </label> ) : null}',
+    ),
+    "the lesson-topic input is not rendered iff requiresLessonTopic, required",
+  );
+  assert.ok(
+    flat.includes(
+      '{requiresDiscipline ? ( <label className="flex flex-col gap-1 text-sm"> <span className="font-medium text-card-foreground">ענף</span> <input type="text" name="discipline" required className={FIELD_CLASS} /> </label> ) : null}',
+    ),
+    "the branch input is not rendered iff requiresDiscipline, required",
+  );
+  // Each flag is read EXACTLY once, in its own condition: there is no second place
+  // a requirement could change what this form does.
+  for (const flag of ["requiresLessonTopic", "requiresDiscipline"]) {
+    assert.equal(
+      (CREATE_FORM.match(new RegExp(`\\b${flag}\\b`, "g")) ?? []).length,
+      3,
+      `${flag} must appear exactly three times: destructured, typed and tested`,
+    );
+  }
+  // The form holds NO rule of its own: no requirement table, no definition, no
+  // kind, no role and no client-side copy of what the writer decides.
+  for (const forbidden of [
+    "requiresInstructedTrainee",
+    "definitionKind",
+    "ExamKind",
+    "INTERFACE_RIDING",
+    "EXAMINEE",
+  ]) {
+    assert.equal(CREATE_FORM.includes(forbidden), false, `the create form reaches ${forbidden}`);
+  }
+  // Both new inputs sit INSIDE the disabled-able fieldset, so the empty-roster
+  // state still disables every control rather than only some.
+  const fieldsetAt = CREATE_FORM.indexOf("<fieldset disabled={hasNoTrainees}");
+  const fieldsetEnd = CREATE_FORM.indexOf("</fieldset>");
+  for (const field of ["instructionTopic", "discipline"]) {
+    const at = CREATE_FORM.indexOf(`name="${field}"`);
+    assert.ok(at > fieldsetAt && at < fieldsetEnd, `${field} sits outside the fieldset`);
+  }
 });
 
 test("29. write controls sit behind the lifecycle gate; the LIST does not", () => {
@@ -1021,12 +1167,34 @@ test("32. the fixed Hebrew is exactly the approved wording", () => {
     "יש לבחור יחידת מבחן.",
     "יש לבחור חניך.",
     "יש להזין שם סוס.",
+    // ADDED by EX-ASG-LTD2-B2 — the two per-field diagnostics the detailed writer
+    // can now raise, in the approved wording.
+    "יש להזין נושא הדרכה.",
+    "יש להזין ענף.",
   ]) {
     assert.ok(MESSAGES.includes(sentence), `the approved sentence is missing: ${sentence}`);
   }
   for (const code of ISSUE_CODES) {
     assert.ok(MESSAGES.includes(code), `the issue code ${code} is unmapped`);
   }
+  // Every detailed code maps to the EXACT approved sentence, pinned as a pair so a
+  // code cannot quietly acquire another message.
+  for (const [code, text] of [
+    ["EX-ASG-LTD-SESSION-REQUIRED", "יש לבחור יחידת מבחן."],
+    ["EX-ASG-LTD-STUDENT-REQUIRED", "יש לבחור חניך."],
+    ["EX-ASG-LTD-HORSE-REQUIRED", "יש להזין שם סוס."],
+    ["EX-ASG-LTD-TOPIC-REQUIRED", "יש להזין נושא הדרכה."],
+    ["EX-ASG-LTD-DISCIPLINE-REQUIRED", "יש להזין ענף."],
+  ] as const) {
+    assert.ok(
+      MESSAGES.includes(`"${code}": "${text}"`),
+      `${code} does not map to its approved sentence`,
+    );
+  }
+  // The issue table holds EXACTLY the eight codes and no ninth.
+  const issueTable = MESSAGES.slice(MESSAGES.indexOf("EXAM_ASSIGNMENT_ISSUE_TEXT: Readonly"));
+  const mapped = [...issueTable.matchAll(/"(EX-ASG-[A-Z-]+)":/g)].map(([, code]) => code);
+  assert.deepEqual(mapped, ISSUE_CODES, "the issue table is not exactly the approved eight");
 });
 
 test("33. every parser is CLOSED, and no query value is ever echoed", () => {
@@ -1102,10 +1270,31 @@ test("35. no new route file reaches Prisma, a capability or a notification", () 
       assert.equal(source.includes(forbidden), false, `the ${label} references ${forbidden}`);
     }
   }
-  // Only the Server Action module may reach the assignment WRITE binding, and only
-  // the page may reach the assignment READ binding.
+  // Only the Server Action module may reach the assignment WRITE bindings — the
+  // three-field one, still imported for its REMOVAL, and the DETAILED one the
+  // create now calls — and only the page may reach the assignment READ binding.
   assert.ok(ACTIONS.includes(ASSIGNMENT_WRITE_SPECIFIER));
+  assert.ok(
+    ACTIONS.includes(DETAILED_WRITE_SPECIFIER),
+    "the action module must import the detailed write binding",
+  );
   assert.equal(PAGE.includes(ASSIGNMENT_WRITE_MODULE), false, "the page reaches the write binding");
+  assert.equal(
+    PAGE.includes(DETAILED_WRITE_MODULE),
+    false,
+    "the page reaches the detailed write binding",
+  );
+  for (const [label, source] of [
+    ["create form", CREATE_FORM],
+    ["delete form", DELETE_FORM],
+    ["messages", MESSAGES],
+  ] as const) {
+    assert.equal(
+      source.includes(DETAILED_WRITE_MODULE),
+      false,
+      `the ${label} reaches the detailed write binding`,
+    );
+  }
   assert.equal(
     ACTIONS.includes(ASSIGNMENT_READ_MODULE),
     false,
@@ -1124,7 +1313,6 @@ test("36. this slice adds NO publication, notification, instructor or trainee su
     "reorderExamAssignments",
     "updateExamAssignment",
     "INSTRUCTED_TRAINEE\"," + " role",
-    "discipline:",
     "pairingIndex",
     "supervisor",
     "Supervisor",
@@ -1144,18 +1332,51 @@ test("36. this slice adds NO publication, notification, instructor or trainee su
 
   // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to the file that matters rather
   // than relaxed. The blanket `instructionTopic` ban described a page that could
-  // not SHOW what the detailed writer stores; showing it is exactly this slice's
+  // not SHOW what the detailed writer stores; showing it is exactly that slice's
   // purpose, and a value that exists but is never displayed is indistinguishable
   // from one that was never written.
   //
-  // The ban therefore stays TOTAL on the Server Action module — that is where a
-  // write could be assembled, and the field must never reach FormData, an action
-  // parameter or the query string — while the page may READ it. The page's own
-  // permitted uses are pinned exactly, so a THIRD one still fails here.
+  // RE-POINTED AGAIN by EX-ASG-LTD2-B2, and again narrowed rather than dropped.
+  // The ban on the Server Action module described an endpoint that could not
+  // COLLECT the two values; collecting them is exactly this slice's purpose, and a
+  // definition demanding a lesson topic was otherwise unassignable from any screen.
+  //
+  // What the ban always protected is re-stated as the exact shape instead: each
+  // field may be read from FormData EXACTLY ONCE, as a RAW forward and nothing
+  // else. No second read, no coercion, no default, no interpolation into a URL and
+  // no other syntactic use may exist — so the action still cannot assemble a write
+  // of its own from either value, which is the whole of what the blanket ban bought.
+  for (const field of ["instructionTopic", "discipline"]) {
+    assert.equal(
+      (ACTIONS.match(new RegExp(field, "g")) ?? []).length,
+      2,
+      `the action module may name ${field} exactly twice: the key and its raw read`,
+    );
+    assert.ok(
+      ACTIONS.includes(`${field}: formData.get("${field}"),`),
+      `${field} is not a raw one-line forward`,
+    );
+    for (const forbidden of [
+      `String(formData.get("${field}")`,
+      `Number(formData.get("${field}")`,
+      `formData.get("${field}") ??`,
+      `formData.get("${field}") ||`,
+      `${field}=`,
+      `\${${field}`,
+    ]) {
+      assert.equal(
+        ACTIONS.includes(forbidden),
+        false,
+        `the action module turns ${field} into ${forbidden}`,
+      );
+    }
+  }
+  // ...and NEITHER value reaches the query string, on any branch.
   assert.equal(
-    ACTIONS.includes("instructionTopic"),
+    CREATE_ACTION.includes("assignmentIssues=${encodeURIComponent(codes)}") &&
+      CREATE_ACTION.includes("instructionTopic}"),
     false,
-    "the action module must never handle the detail field",
+    "a submitted detail value reaches the query string",
   );
   const topicUses = PAGE.match(/instructionTopic/g) ?? [];
   assert.equal(topicUses.length, 1, "the page may read the stored value exactly once");
@@ -1202,25 +1423,173 @@ test("37. the slice touched EXACTLY its approved paths, and no schema or migrati
   const prismaStatus = gitLines(["status", "--porcelain", "--", "prisma"]);
   assert.deepEqual(prismaStatus, [], `prisma/ changed: ${prismaStatus.join(", ")}`);
 
-  // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to an exact pair rather than
-  // dropped. The claim was "no `lib/` production module was edited at all", which
-  // held while every slice in this working tree only WIRED the committed bindings.
-  // The detail slice must publish two more stored columns, which cannot be done
-  // without editing the pair that reads them — so the two are named exactly, and a
-  // THIRD `lib/` production module still fails here. No WRITER, no policy core, no
-  // auth module and no session module may appear.
-  const APPROVED_LIB_PRODUCTION = [
-    "lib/actions/" + "exam-assignment-read" + "-io.ts",
-    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
-  ].sort();
+  // RE-POINTED by EX-ASG-LTD2-B1 to an exact pair, and RE-POINTED AGAIN by
+  // EX-ASG-LTD2-B2 back to the STRICTEST form of the claim — EMPTY.
+  //
+  // The pair was correct while the read slice was uncommitted in this working tree
+  // and had to publish two more stored columns. It is committed now, so the exact
+  // names described a moment rather than a rule. THIS slice edits no `lib/`
+  // production module at all: the detailed writer, its core and the assignment read
+  // pair are all already committed, and wiring them is done entirely under `app/`.
+  //
+  // What the guard always protected is therefore restored in full: no writer, no
+  // reader, no core, no policy core, no auth module and no session module may
+  // differ from HEAD.
   const libTouched = gitLines(["diff", "--name-only", "HEAD", "--", "lib"])
     .filter((path) => !path.endsWith(".test.ts"))
     .sort();
-  assert.deepEqual(
-    libTouched,
-    APPROVED_LIB_PRODUCTION,
-    `an unapproved lib binding was edited: ${libTouched.join(", ")}`,
+  assert.deepEqual(libTouched, [], `an unapproved lib binding was edited: ${libTouched.join(", ")}`);
+});
+
+// ===========================================================================
+// 43–45. EX-ASG-LTD2-B2 — the detailed writer behind the ONE create endpoint
+// ===========================================================================
+
+test("43. the ONE create endpoint calls the DETAILED writer and nothing else", () => {
+  // The endpoint is the SAME one: no ninth export, no second create action and no
+  // second bound action entered the route. (Guard 5 pins the exhaustive ordered
+  // export list; these restate the count from the two other directions.)
+  assert.equal((ACTIONS.match(/^export async function /gm) ?? []).length, 8);
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 8);
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 8);
+
+  // The create action reaches the DETAILED writer EXACTLY ONCE...
+  assert.equal(
+    (CREATE_ACTION.match(new RegExp(DETAILED_WRITER_CALL.replace(/[()]/g, "\\$&"), "g")) ?? [])
+      .length,
+    1,
+    "the create action must call the detailed writer exactly once",
   );
+  // ...and the THREE-FIELD create writer is not reached from ANY action body. It
+  // is the committed sibling of the removal writer and lives in the same module,
+  // so the import alone cannot prove this — the CALL SHAPE can.
+  assert.equal(
+    ACTIONS.includes(CREATE_WRITER_CALL),
+    false,
+    "the ordinary three-field create writer still has a production caller",
+  );
+  // The removal is untouched: still the ordinary, role-blind writer.
+  assert.ok(DELETE_ACTION.includes(DELETE_WRITER_CALL));
+  assert.equal(
+    DELETE_ACTION.includes(DETAILED_WRITER_CALL),
+    false,
+    "the removal must not reach the detailed writer",
+  );
+  // The instructed-trainee endpoint is untouched and independent: its own writer,
+  // its own two fields, its own token family — and no detail field at all.
+  const instructed = actionBody(ACTIONS, "createExamInstructedTraineeAssignmentAction");
+  assert.equal(instructed.includes(DETAILED_WRITER_CALL), false);
+  assert.equal(instructed.includes(CREATE_WRITER_CALL), false);
+  assert.deepEqual(
+    [...instructed.matchAll(/formData\.get\("([^"]+)"\)/g)].map(([, f]) => f),
+    ["sessionId", "studentId"],
+  );
+  assert.ok(instructed.includes("instructedTraineeError="));
+});
+
+test("44. NO client input selects the writer, and no discriminator exists", () => {
+  // The writer is a compile-time-known identifier in the source of ONE function.
+  // Nothing read from the submission, the query string or a prop can change which
+  // one runs: there is no conditional call, no lookup table and no field whose
+  // value names an operation.
+  assert.equal(
+    /(if|\?|&&|\|\|)[^;]{0,120}create(Detailed)?ExamAssignment\s*\(/.test(squash(CREATE_ACTION)),
+    false,
+    "the writer is chosen conditionally",
+  );
+  for (const forbidden of [
+    'formData.get("mode")',
+    'formData.get("detailed")',
+    'formData.get("writer")',
+    'formData.get("kind")',
+    'formData.get("variant")',
+    'formData.get("requiresLessonTopic")',
+    'formData.get("requiresDiscipline")',
+    'formData.get("requiresInstructedTrainee")',
+  ]) {
+    assert.equal(
+      CREATE_ACTION.includes(forbidden),
+      false,
+      `the create action lets the client supply ${forbidden}`,
+    );
+  }
+  // The form posts no such field either, and carries no flag of its own.
+  const named = [...CREATE_FORM.matchAll(/\bname="([^"]+)"/g)].map(([, n]) => n);
+  for (const field of named) {
+    assert.ok(CREATE_FIELDS.includes(field), `the form posts an unapproved field: ${field}`);
+  }
+  for (const forbidden of ['name="mode"', 'name="detailed"', 'name="requiresLessonTopic"']) {
+    assert.equal(CREATE_FORM.includes(forbidden), false, `the create form posts ${forbidden}`);
+  }
+  // The three ALWAYS-submitted fields are still unconditional markup — only the
+  // two new ones are behind a flag.
+  for (const field of ALWAYS_SUBMITTED_FIELDS) {
+    assert.ok(CREATE_FORM.includes(`name="${field}"`), `${field} left the form`);
+  }
+  assert.equal(
+    /requires(LessonTopic|Discipline)[\s\S]{0,80}name="(sessionId|studentId|horseName)"/.test(
+      squash(CREATE_FORM),
+    ),
+    false,
+    "an always-submitted field was put behind a requirement flag",
+  );
+});
+
+test("45. this slice adds no route, no query key, no schema and no capability", () => {
+  // The route gained no file...
+  const routeFiles = [
+    ...new Set([
+      ...gitLines(["ls-files"]),
+      ...gitLines(["ls-files", "--others", "--exclude-standard"]),
+    ]),
+  ]
+    .filter((path) => path.startsWith(ROUTE_DIR_PREFIX))
+    .sort();
+  assert.deepEqual(routeFiles, FINAL_ROUTE_FILES, "the route file set changed");
+
+  // ...and no query key. The examinee family is unchanged: the same success token,
+  // the same headline token and the same issues token carry the new writer's codes.
+  const squashed = squash(PAGE);
+  const queryStart = squashed.indexOf("searchParams: Promise<{");
+  const queryType = squashed.slice(queryStart, squashed.indexOf("}>;", queryStart) + 3);
+  assert.equal((queryType.match(/\?: string \| string\[\];/g) ?? []).length, 23);
+  for (const forbidden of ["instructionTopic?", "discipline?", "detailedAssignment"]) {
+    assert.equal(queryType.includes(forbidden), false, `searchParams gained ${forbidden}`);
+  }
+  for (const token of ["createdAssignment=1", "assignmentError=", "assignmentIssues="]) {
+    assert.ok(CREATE_ACTION.includes(token), `the create endpoint dropped ${token}`);
+  }
+
+  // Nothing this slice touched reaches a schema, a capability, a notification, a
+  // publication or an auth/session module. (Guard 35 pins Prisma and the accessor
+  // spellings for the same five files.)
+  for (const [label, source] of [
+    ["actions", ACTIONS],
+    ["page", PAGE],
+    ["create form", CREATE_FORM],
+    ["messages", MESSAGES],
+  ] as const) {
+    for (const forbidden of [
+      "schema" + ".prisma",
+      "migrat",
+      "capabilit",
+      "Capabilit",
+      "notification",
+      "publishExamPlan",
+      "individualPublishedAt",
+      "@/lib/auth/session",
+      "cookies(",
+      "process" + ".env",
+    ]) {
+      assert.equal(source.includes(forbidden), false, `the ${label} references ${forbidden}`);
+    }
+  }
+  // The one auth import the actions legitimately keep is the admin boundary, and
+  // it is still the first awaited call of every body (guard 7). The IMPORT KEYWORD
+  // is split: guard 38 below extracts every `from "…"` occurrence in THIS file and
+  // pins the result to five node: builtins, so spelling it whole here would enrol
+  // the expectation as an import of its own.
+  assert.ok(ACTIONS.includes("fr" + 'om "@/lib/auth/require-admin"'));
 });
 
 test("38. this suite opens no database and reads no environment", () => {
