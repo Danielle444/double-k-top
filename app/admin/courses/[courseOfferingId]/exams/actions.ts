@@ -17,7 +17,9 @@
  *   5. `deleteExamSessionAction`    — remove ONE stored session of that same
  *                                     plan, and only one nobody is assigned to;
  *   6. `createExamAssignmentAction` — assign ONE examinee to ONE stored session
- *                                     of that same plan;
+ *                                     of that same plan, carrying the lesson topic
+ *                                     and/or discipline that session's exam
+ *                                     demands;
  *   7. `deleteExamAssignmentAction` — remove ONE stored assignment of that same
  *                                     plan;
  *   8. `createExamInstructedTraineeAssignmentAction`
@@ -230,10 +232,8 @@ import {
   updateExamSession,
   deleteExamSession,
 } from "@/lib/actions/exam-session-write-io";
-import {
-  createExamAssignment,
-  deleteExamAssignment,
-} from "@/lib/actions/exam-assignment-write-io";
+import { deleteExamAssignment } from "@/lib/actions/exam-assignment-write-io";
+import { createDetailedExamAssignment } from "@/lib/actions/detailed-exam-assignment-write-io";
 import { createExamInstructedTraineeAssignment } from "@/lib/actions/exam-instructed-trainee-assignment-write-io";
 
 /**
@@ -680,9 +680,32 @@ export async function deleteExamSessionAction(
  * cannot grow a `prevState` parameter.
  *
  * ===========================================================================
- * THREE FIELDS, AND DELIBERATELY NOT A FOURTH
+ * EX-ASG-LTD2-B2 — THE SAME ENDPOINT, NOW ON THE DETAILED WRITER
  * ===========================================================================
- * The mapping below reads `sessionId`, `studentId` and `horseName` and NOTHING
+ * This action used to call the committed THREE-FIELD examinee create binding,
+ * which has no field for a lesson topic or a discipline and therefore REFUSES
+ * OUTRIGHT whenever the session's definition demands either — which is exactly
+ * why the page hid this form for such a definition.
+ *
+ * It now calls the committed FIVE-FIELD DETAILED binding instead, which stores
+ * both values when the definition asks for them and stores `null` when it does
+ * not. That is the whole of this change: the SAME single endpoint, the SAME name,
+ * the SAME signature, the SAME form and the SAME route. No second create action
+ * was added, and none is reachable — an endpoint that chose its writer from the
+ * request would be precisely the client-influenced decision the eight narrow
+ * endpoints above exist to prevent, so THERE IS NO DISCRIMINATOR: the writer is
+ * fixed in the source of this one function.
+ *
+ * The three-field binding keeps its own committed contract and its own suite and
+ * is simply no longer reached by any production caller. Its removal is a separate,
+ * separately reviewed decision.
+ *
+ * ===========================================================================
+ * FIVE FIELDS, AND DELIBERATELY NOT A SIXTH
+ * ===========================================================================
+ * The mapping below reads `sessionId`, `studentId`, `horseName`,
+ * `instructionTopic` and `discipline` — in that FIXED order, which is the order
+ * the committed detailed input core reports its diagnostics in — and NOTHING
  * else. Absent — not filtered out, but never looked for — are `courseOfferingId`
  * and `planId` (the first is bound by the route, the second is derived from it),
  * `role` (the committed create core fixes the single EXAMINEE literal, and its
@@ -690,15 +713,21 @@ export async function deleteExamSessionAction(
  * computes it as the next position within the SESSION, inside its own
  * transaction), `definitionId` and the definition's requirement flags (properties
  * of the session's exam, re-read server-side), `assignmentCount` (a client claim
- * about server state), a date, a time, an instruction topic, a discipline, a
- * pairing index and a trainee's display NAME. The committed writer's signature has
- * no parameter for any of them, and its normalized payload has no field for any of
- * them either.
+ * about server state), a date, a time, a pairing index and a trainee's display
+ * NAME. The committed writer's signature has no parameter for any of them, and its
+ * normalized payload has no field for any of them either.
+ *
+ * THE TWO NEW FIELDS ARE A SUBMISSION, NEVER A GRANT. Whether either is REQUIRED,
+ * and whether either is STORED AT ALL, is decided server-side from the session's
+ * own definition: a value the definition does not support is written as `null`
+ * however insistently it was posted, and a value the definition demands and did
+ * not receive refuses the whole create rather than storing a half-filled row.
+ * Nothing in this function restates either rule.
  *
  * ===========================================================================
  * NO COERCION AT ALL
  * ===========================================================================
- * All three values are forwarded EXACTLY as `FormData.get` returned them: a
+ * All five values are forwarded EXACTLY as `FormData.get` returned them: a
  * `string`, or `null` for an absent field. There is no `String(...)`, no `??`, no
  * `.trim()`, no default and no empty-string collapse anywhere in this function —
  * deliberately, because the committed input core already defines all of it and a
@@ -706,9 +735,11 @@ export async function deleteExamSessionAction(
  * sees.
  *
  * That core accepts `unknown` for every field and FAILS CLOSED on every shape it
- * does not want: each of the three must be a NON-BLANK string after trimming, and
- * a NON-STRING is REFUSED rather than stringified — which is exactly why a `File`
- * entry from a multipart submission cannot become the name of a horse.
+ * does not want: the three required values must each be a NON-BLANK string after
+ * trimming, the two optional ones read as "nothing was supplied" when absent,
+ * `null` or blank, and a NON-STRING is REFUSED rather than stringified — which is
+ * exactly why a `File` entry from a multipart submission cannot become the name of
+ * a horse, a lesson topic or a branch.
  */
 export async function createExamAssignmentAction(
   courseOfferingId: string,
@@ -721,17 +752,20 @@ export async function createExamAssignmentAction(
   //    and the only one it redirects back to.
   const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
 
-  // 3. The committed writer, given the bound route id and the three raw values.
-  //    The bound offering id is a REQUEST: the writer runs the admin boundary and
-  //    the exact-offering lookup itself, resolves the plan from the DB-verified
-  //    id, verifies the submitted session WITHIN that plan, and matches the
+  // 3. The committed DETAILED writer, given the bound route id and the five raw
+  //    values. The bound offering id is a REQUEST: the writer runs the admin
+  //    boundary and the exact-offering lookup itself, resolves the plan from the
+  //    DB-verified id, verifies the submitted session WITHIN that plan, reads that
+  //    session's definition for the topic and discipline demands, and matches the
   //    trainee through ONE fail-closed statement requiring an ACTIVE enrolment in
   //    that same offering — so a session or a trainee belonging to another course
   //    is unreachable.
-  const result = await createExamAssignment(courseOfferingId, {
+  const result = await createDetailedExamAssignment(courseOfferingId, {
     sessionId: formData.get("sessionId"),
     studentId: formData.get("studentId"),
     horseName: formData.get("horseName"),
+    instructionTopic: formData.get("instructionTopic"),
+    discipline: formData.get("discipline"),
   });
 
   // 4. Success: revalidate EXACTLY this exams path — no course dashboard, no
@@ -764,8 +798,10 @@ export async function createExamAssignmentAction(
 
   // 7. Every other refusal is fully described by its code alone: the lifecycle
   //    denial, the missing plan, the missing-or-foreign session, the ineligible
-  //    trainee, the already-assigned conflict, and the definition whose extra
-  //    required fields this surface does not yet collect.
+  //    trainee and the already-assigned conflict. The detailed writer has no
+  //    "this surface cannot collect those fields" refusal at all — collecting them
+  //    is what this endpoint now does — and the route-local table keeps that
+  //    retired code anyway, so an older build's redirect still renders a sentence.
   redirect(`${examsPath}?assignmentError=${encodeURIComponent(result.code)}`);
 }
 

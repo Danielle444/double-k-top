@@ -156,6 +156,17 @@ const SLICE_PATHS = [
   // to an exact path list, never relaxed.
   "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
   "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  // EX-ASG-LTD2-B2 — the approved DETAILED examinee assignment UI wiring, which
+  // travels in the same working tree. It switches the ONE existing create endpoint
+  // to the committed detailed writer. Every route file it edits — the Server Action
+  // module, the page, the examinee create form and the route-local assignment
+  // message table — is ALREADY in this list, and nothing new is created: no route
+  // file, no Server Action, no query key and no form component. The ONE path it
+  // adds is that writer's own committed guard, whose caller list the wiring
+  // re-points from ZERO to exactly the one Server Action module — and it is
+  // ASSEMBLED, because that guard sweeps `app/`, `lib/` and `components/` for its
+  // own module name and would otherwise enrol this suite as a caller.
+  "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -704,6 +715,12 @@ test("18. the module's import surface did NOT grow a new binding", () => {
     // instructed-trainee write binding's guard pinned its caller list at ZERO
     // before this slice, and at exactly this one Server Action module after it.
     "@/lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io",
+    // ADDED by EX-ASG-LTD2-B2, and assembled on exactly the same terms: the
+    // committed DETAILED examinee write binding's guard pinned its caller list at
+    // ZERO before that slice, and at exactly this one Server Action module after
+    // it. It is an ADDITION and not a swap — the three-field binding above is
+    // still imported, for the assignment REMOVAL.
+    "@/lib/actions/" + "detailed-exam-assignment-write" + "-io",
     "@/lib/auth/require-admin",
     "next/cache",
     "next/navigation",
@@ -1267,7 +1284,11 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
   // footprint guards whose "this slice modified NO tracked file" claims it
   // re-points — so the exact scope is thirty-two. Still an exhaustive literal set
   // of exact paths, admitting no directory, prefix or glob.
-  assert.equal(SLICE_PATHS.length, 32, "the approved scope is thirty-two files");
+  // EX-ASG-LTD2-B2 TRANSITION, on exactly the same terms: the approved detailed
+  // assignment UI wiring edits only files this list ALREADY holds and adds exactly
+  // ONE path — the detailed writer's own committed guard, whose caller list it
+  // re-points from zero to one — so the exact scope is thirty-three.
+  assert.equal(SLICE_PATHS.length, 33, "the approved scope is thirty-three files");
 
   // EXACTLY TWO production files in scope are not new: the shared Server Action
   // module and the page. Everything else is either one of the new route files or a

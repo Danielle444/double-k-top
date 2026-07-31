@@ -162,6 +162,20 @@ const APPROVED_MODIFIED_FILES = [
   "lib/actions/" + "exam-assignment-read" + "-io.ts",
   "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
   "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  // EX-ASG-LTD2-B2 - the approved DETAILED examinee assignment UI wiring, which
+  // travels in the same working tree. It switches the route's ONE existing create
+  // endpoint to the committed detailed writer, which brings that route's examinee
+  // create form and its route-local assignment message table into the modified set,
+  // plus the detailed writer's own committed guard, whose caller list it re-points
+  // from zero to exactly one Server Action module. The last path is ASSEMBLED,
+  // because that guard sweeps `app/`, `lib/` and `components/` for its own module
+  // name. Nothing here changes which module THIS guard is about: no new route file,
+  // Server Action, query key or component exists, no `lib/` production module is
+  // edited, and no schema, migration, auth, session, capability or policy file
+  // appears.
+  `${ROUTE_DIR_PREFIX}CreateExamAssignmentForm.tsx`,
+  `${ROUTE_DIR_PREFIX}exam-assignment-messages.ts`,
+  "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
 ];
 
 /**
@@ -930,6 +944,12 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
   // asserted byte-identical above and remain so), and a FIFTH production file
   // still fails here.
   const APPROVED_PRODUCTION = [
+    // RE-POINTED by EX-ASG-LTD2-B2: the examinee create FORM and the route-local
+    // assignment MESSAGE TABLE are production files of that same one route, and the
+    // detailed-writer wiring edits both. Each is named EXACTLY - no directory, no
+    // prefix, no glob - so a further production file still fails here.
+    `${ROUTE_DIR_PREFIX}CreateExamAssignmentForm.tsx`,
+    `${ROUTE_DIR_PREFIX}exam-assignment-messages.ts`,
     `${ROUTE_DIR_PREFIX}page.tsx`,
     `${ROUTE_DIR_PREFIX}actions.ts`,
     "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",

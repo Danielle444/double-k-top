@@ -54,6 +54,15 @@
  * a URL for this course-scoped route. It is kept in the table so the closed set
  * stays the writer's own set, and so a future caller that DID return here would
  * find a sentence waiting rather than the fallback.
+ *
+ * `definition_requires_unsupported_fields` is kept on the SAME terms, and is now
+ * UNREACHABLE from a fresh submission: the create endpoint calls the committed
+ * DETAILED writer, which COLLECTS the lesson topic and the branch instead of
+ * refusing over them, and whose refusal set does not contain this code at all. It
+ * stays because this table's job is to have a sentence ready for whatever token
+ * arrives — an older tab, a bookmark or a back button can still carry this one —
+ * and a retired code that rendered the generic fallback would tell the manager
+ * less than the sentence that already exists for it.
  */
 export type ExamAssignmentCreateErrorCode =
   | "invalid_input"
@@ -73,8 +82,27 @@ export type ExamAssignmentDeleteErrorCode =
   | "plan_not_found"
   | "assignment_not_found";
 
-/** The input-shape diagnostics an assignment CREATE submission can produce. */
+/**
+ * The input-shape diagnostics an assignment CREATE submission can produce.
+ *
+ * TWO GENERATIONS, ON PURPOSE. The `EX-ASG-LTD-*` set is what the create endpoint
+ * emits today: it calls the committed DETAILED writer, whose five-field input core
+ * owns that closed namespace. The `EX-ASG-IN-*` set belongs to the committed
+ * three-field writer this route no longer calls.
+ *
+ * The legacy three are KEPT rather than deleted, and it costs nothing to keep
+ * them: a diagnostic travels through the QUERY STRING, so a manager who is holding
+ * a page rendered by the previous build — or who simply pressed back — can still
+ * arrive here carrying one. Dropping the codes would render that submission's
+ * per-field advice as nothing at all, which reads as "no reason given". They are
+ * unreachable from a fresh submission, not wrong.
+ */
 export type ExamAssignmentIssueCode =
+  | "EX-ASG-LTD-SESSION-REQUIRED"
+  | "EX-ASG-LTD-STUDENT-REQUIRED"
+  | "EX-ASG-LTD-HORSE-REQUIRED"
+  | "EX-ASG-LTD-TOPIC-REQUIRED"
+  | "EX-ASG-LTD-DISCIPLINE-REQUIRED"
   | "EX-ASG-IN-SESSION-REQUIRED"
   | "EX-ASG-IN-STUDENT-REQUIRED"
   | "EX-ASG-IN-HORSE-REQUIRED";
@@ -143,6 +171,11 @@ export const EXAM_ASSIGNMENT_DELETE_ERROR_TEXT: Readonly<
 export const EXAM_ASSIGNMENT_ISSUE_TEXT: Readonly<
   Record<ExamAssignmentIssueCode, string>
 > = Object.freeze({
+  "EX-ASG-LTD-SESSION-REQUIRED": "יש לבחור יחידת מבחן.",
+  "EX-ASG-LTD-STUDENT-REQUIRED": "יש לבחור חניך.",
+  "EX-ASG-LTD-HORSE-REQUIRED": "יש להזין שם סוס.",
+  "EX-ASG-LTD-TOPIC-REQUIRED": "יש להזין נושא הדרכה.",
+  "EX-ASG-LTD-DISCIPLINE-REQUIRED": "יש להזין ענף.",
   "EX-ASG-IN-SESSION-REQUIRED": "יש לבחור יחידת מבחן.",
   "EX-ASG-IN-STUDENT-REQUIRED": "יש לבחור חניך.",
   "EX-ASG-IN-HORSE-REQUIRED": "יש להזין שם סוס.",
