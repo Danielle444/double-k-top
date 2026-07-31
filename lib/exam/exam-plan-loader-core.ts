@@ -17,6 +17,10 @@
  *                          stored blocks (EX-S5A-1) and the live beginner rows
  *                          (EX-C2-0) together;
  *   - `storedDetails`    — the sibling stored slot lookup, keyed by `sessionId`;
+ *   - `storedAssignmentDetails`
+ *                        — the sibling ASSIGNMENT-LEVEL operational lookup
+ *                          (role, horse, topic, discipline, personal time and
+ *                          resolved pairing), also keyed by `sessionId`;
  *   - `beginnerDetails`  — the sibling live beginner lookup, keyed by the
  *                          synthetic `tp:` session id the committed live adapter
  *                          generated — never one re-derived here;
@@ -151,11 +155,13 @@
 import type {
   StoredExamAdapterIssue,
   StoredExamBlockComposition,
+  StoredExamBlockOperationalDetail,
   StoredExamDefinitionRow,
   StoredExamSessionRow,
 } from "./exam-stored-adapter-core";
 import {
   buildStoredExamBlockDetailLookup,
+  buildStoredExamBlockOperationalLookup,
   composeStoredExamBlocks,
 } from "./exam-stored-adapter-core";
 import type {
@@ -409,6 +415,21 @@ export interface ExamPlanPayload {
   readonly sessions: readonly ProjectionSession[];
   /** Stored `sessionId` → its slot detail. Live rows never appear here. */
   readonly storedDetails: ReadonlyMap<string, StoredExamBlockDetail>;
+  /**
+   * Stored `sessionId` → its ASSIGNMENT-LEVEL operational detail: who is in the
+   * block, in which role, on which horse, on which topic and discipline, at
+   * which exact personal time, paired with whom.
+   *
+   * A SECOND SIBLING, not a widening of `storedDetails`: that one answers "what
+   * is the viewer's own slot" for the trainee view core and is ABSENT for an
+   * unresolved block, while this one answers "what is the whole operational
+   * picture of this block" and is PRESENT for an unresolved block with `null`
+   * personal times throughout. Live rows never appear in either.
+   *
+   * SENSITIVE like the rest of this payload: it carries other people's student
+   * ids. The DTO narrowing resolves them into display names and drops the ids.
+   */
+  readonly storedAssignmentDetails: ReadonlyMap<string, StoredExamBlockOperationalDetail>;
   /** Synthetic `tp:` session id → its live detail. Stored rows never appear here. */
   readonly beginnerDetails: ReadonlyMap<string, BeginnerDetail>;
   /**
@@ -580,6 +601,10 @@ function buildEmptyPayload(issues: readonly ExamPlanLoaderIssue[]): ExamPlanPayl
       string,
       StoredExamBlockDetail
     >,
+    storedAssignmentDetails: new Map<
+      string,
+      StoredExamBlockOperationalDetail
+    >() as ReadonlyMap<string, StoredExamBlockOperationalDetail>,
     beginnerDetails: new Map<string, BeginnerDetail>() as ReadonlyMap<string, BeginnerDetail>,
     conflictSessions: Object.freeze([] as ConflictSession[]),
     sourceDates: Object.freeze([] as string[]),
@@ -694,6 +719,7 @@ export async function loadExamPlan(
     Array.isArray(definitionRows) ? definitionRows : [],
   );
   const storedDetails = buildStoredExamBlockDetailLookup(stored.blocks);
+  const storedAssignmentDetails = buildStoredExamBlockOperationalLookup(stored.blocks);
 
   const storedBlockDiagnostics: StoredExamBlockDiagnostic[] = [];
   for (const block of stored.blocks) {
@@ -777,6 +803,7 @@ export async function loadExamPlan(
     publishedAt,
     sessions: Object.freeze(sessions),
     storedDetails,
+    storedAssignmentDetails,
     beginnerDetails: beginnerDetails as ReadonlyMap<string, BeginnerDetail>,
     conflictSessions: Object.freeze(
       stored.blocks.map((block) => block.conflictSession),

@@ -19,12 +19,15 @@ import { join } from "node:path";
 
 import {
   computeExamBlockTimetable,
+  resolveExamPairings,
   resolveInstructedTraineeSlots,
   EXAM_TIMETABLE_ISSUE_MESSAGES,
   EXAM_TIMETABLE_WARNING_MESSAGES,
   type ExamBlockTimetableInput,
   type TimetableBreak,
   type TimetableExaminee,
+  type TimetableInstructedTrainee,
+  type TimetablePairedExaminee,
 } from "./exam-block-timetable-core";
 
 // --- fixtures ---------------------------------------------------------------
@@ -731,4 +734,159 @@ test("the module is DB-free, clock-free and IO-free at the source level", () => 
   // The one permitted dependency is the sibling pure overlap core.
   const imports = [...code.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(imports, ["./exam-overlap-core"]);
+});
+
+// ===========================================================================
+// EX-OPS-READ-MVP — resolveExamPairings: the ONE pairing rule, both directions
+// ===========================================================================
+
+/** A block of `n` examinees with explicit pairing indexes. */
+function pairedExaminees(
+  entries: readonly (readonly [string, number | null])[],
+): TimetablePairedExaminee[] {
+  return entries.map(([assignmentId, pairingIndex]) => ({ assignmentId, pairingIndex }));
+}
+
+function instructedTrainees(
+  entries: readonly (readonly [string, number | null])[],
+): TimetableInstructedTrainee[] {
+  return entries.map(([assignmentId, pairingIndex]) => ({ assignmentId, pairingIndex }));
+}
+
+test("a matched pairing index resolves in BOTH directions", () => {
+  const pairing = resolveExamPairings(
+    pairedExaminees([
+      ["e1", 1],
+      ["e2", 2],
+    ]),
+    instructedTrainees([["t1", 2]]),
+  );
+  assert.equal(pairing.examineeOfInstructedTrainee.get("t1"), "e2");
+  assert.deepEqual(pairing.instructedTraineesOfExaminee.get("e2"), ["t1"]);
+  // The unpaired examinee gets NO entry rather than an empty one.
+  assert.equal(pairing.instructedTraineesOfExaminee.has("e1"), false);
+});
+
+test("SEVERAL instructed trainees may share one examinee, in input order", () => {
+  const pairing = resolveExamPairings(
+    pairedExaminees([["e1", 7]]),
+    instructedTrainees([
+      ["t1", 7],
+      ["t2", 7],
+      ["t3", 7],
+    ]),
+  );
+  assert.deepEqual(pairing.instructedTraineesOfExaminee.get("e1"), ["t1", "t2", "t3"]);
+  for (const id of ["t1", "t2", "t3"]) {
+    assert.equal(pairing.examineeOfInstructedTrainee.get(id), "e1");
+  }
+});
+
+test("a null pairing resolves to the SOLE examinee, and to nothing when there are two", () => {
+  const sole = resolveExamPairings(
+    pairedExaminees([["e1", null]]),
+    instructedTrainees([["t1", null]]),
+  );
+  assert.equal(sole.examineeOfInstructedTrainee.get("t1"), "e1");
+
+  const two = resolveExamPairings(
+    pairedExaminees([
+      ["e1", null],
+      ["e2", null],
+    ]),
+    instructedTrainees([["t1", null]]),
+  );
+  assert.equal(two.examineeOfInstructedTrainee.has("t1"), false);
+  assert.equal(two.instructedTraineesOfExaminee.size, 0);
+});
+
+test("a DUPLICATED examinee pairing index is ambiguous and resolves nothing", () => {
+  const pairing = resolveExamPairings(
+    pairedExaminees([
+      ["e1", 1],
+      ["e2", 1],
+    ]),
+    instructedTrainees([["t1", 1]]),
+  );
+  assert.equal(pairing.examineeOfInstructedTrainee.has("t1"), false);
+  assert.equal(pairing.instructedTraineesOfExaminee.size, 0);
+});
+
+test("a STATED but unmatched pairing never falls back to the sole examinee", () => {
+  const pairing = resolveExamPairings(
+    pairedExaminees([["e1", 1]]),
+    instructedTrainees([["t1", 9]]),
+  );
+  assert.equal(pairing.examineeOfInstructedTrainee.has("t1"), false);
+});
+
+test("resolveExamPairings is total, frozen and never mutates its inputs", () => {
+  const examineeRows = pairedExaminees([["e1", 1]]);
+  const traineeRows = instructedTrainees([
+    ["t1", 1],
+    ["", 1],
+  ]);
+  const before = JSON.stringify({ examineeRows, traineeRows });
+
+  const pairing = resolveExamPairings(examineeRows, traineeRows);
+  assert.equal(JSON.stringify({ examineeRows, traineeRows }), before);
+  assert.ok(Object.isFrozen(pairing));
+  assert.ok(Object.isFrozen(pairing.instructedTraineesOfExaminee.get("e1")));
+  // A blank assignment id addresses nothing and is skipped in silence.
+  assert.deepEqual(pairing.instructedTraineesOfExaminee.get("e1"), ["t1"]);
+
+  // Non-arrays are accepted rather than thrown on.
+  const empty = resolveExamPairings(
+    undefined as unknown as TimetablePairedExaminee[],
+    undefined as unknown as TimetableInstructedTrainee[],
+  );
+  assert.equal(empty.examineeOfInstructedTrainee.size, 0);
+  assert.equal(empty.instructedTraineesOfExaminee.size, 0);
+});
+
+test("slot inheritance and the pairing resolution AGREE, case for case", () => {
+  const cases: readonly {
+    readonly examinees: readonly (readonly [string, number | null])[];
+    readonly instructed: readonly (readonly [string, number | null])[];
+  }[] = [
+    { examinees: [["a1", 1]], instructed: [["t1", 1]] },
+    { examinees: [["a1", null]], instructed: [["t1", null]] },
+    { examinees: [["a1", null], ["a2", null]], instructed: [["t1", null]] },
+    { examinees: [["a1", 1], ["a2", 1]], instructed: [["t1", 1]] },
+    { examinees: [["a1", 1]], instructed: [["t1", 9]] },
+    { examinees: [["a1", 3]], instructed: [["t1", 3], ["t2", 3]] },
+    { examinees: [["a1", 1], ["a2", 2]], instructed: [["t1", 2], ["t2", 1]] },
+  ];
+
+  for (const scenario of cases) {
+    const timetable = computeExamBlockTimetable(
+      input({
+        examinees: scenario.examinees.map(([assignmentId], index) => ({
+          assignmentId,
+          orderIndex: index,
+        })),
+      }),
+    );
+    const examineeRows = pairedExaminees(scenario.examinees);
+    const traineeRows = instructedTrainees(scenario.instructed);
+
+    const slots = resolveInstructedTraineeSlots(timetable, examineeRows, traineeRows);
+    const pairing = resolveExamPairings(examineeRows, traineeRows);
+
+    // Exactly the trainees the pairing resolved get a slot...
+    assert.deepEqual(
+      slots.map((slot) => slot.assignmentId),
+      traineeRows
+        .filter((trainee) => pairing.examineeOfInstructedTrainee.has(trainee.assignmentId))
+        .map((trainee) => trainee.assignmentId),
+      `slot set disagrees for ${JSON.stringify(scenario)}`,
+    );
+    // ...and each inherits the interval of the examinee the pairing named.
+    for (const slot of slots) {
+      const source = pairing.examineeOfInstructedTrainee.get(slot.assignmentId);
+      const examineeSlot = timetable.slots.find((s) => s.assignmentId === source);
+      assert.equal(slot.startTime, examineeSlot?.startTime);
+      assert.equal(slot.endTime, examineeSlot?.endTime);
+    }
+  }
 });

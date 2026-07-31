@@ -33,6 +33,21 @@
  *   ZA2  — assignment / break ids             (absent from the TRAINEE DTO)
  *   ZO8  — operational-only lesson state      (absent from the TRAINEE DTO)
  *   ZU5  — the UNPUBLISHED lesson's content   (absent from the TRAINEE DTO)
+ *   ZP3  — assignment OPERATIONAL VALUES      (PRESENT for every authorized
+ *                                              role — see the note below)
+ *
+ * ZP3 IS THE EX-OPS-READ-MVP RE-POINT, AND IT IS EXACT. Before that slice the
+ * per-assignment horse, instruction topic and discipline were projected by
+ * nothing, so they were planted with ZH6 — "stored internals nothing projects".
+ * They are now APPROVED VISIBLE OPERATIONAL DATA for instructors and trainees
+ * alike, because "לו״ז כולל" is deliberately a complete operational schedule.
+ * They therefore move to their OWN marker, and ZH6 keeps its exact original
+ * meaning for the values that are still projected by nothing: the session TITLE,
+ * the session NOTES, the ASSIGNMENT NOTES, the break LABEL, the child id and the
+ * Teaching-Practice role-label override. Nothing was removed from ZH6's guard —
+ * the three values that legitimately became visible were moved OUT of it, and
+ * their visibility is asserted POSITIVELY in group K rather than merely
+ * un-forbidden.
  *
  * Run with: npx tsx --test lib/exam/exam-read.contract.test.ts
  */
@@ -40,6 +55,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, sep } from "node:path";
+import { spawnSync } from "node:child_process";
 
 import {
   loadExamPlan,
@@ -136,6 +152,13 @@ const ASG = "ZA2";
 const OPS = "ZO8";
 /** Everything belonging to the UNPUBLISHED lesson. */
 const UNPUB = "ZU5";
+/**
+ * The per-assignment OPERATIONAL values — horse, instruction topic, discipline.
+ *
+ * Deliberately NOT in either forbidden list: these are the values EX-OPS-READ-MVP
+ * exposes to instructors and trainees. Their PRESENCE is asserted in group K.
+ */
+const OPV = "ZP3";
 
 const DATE = "2026-08-02";
 const OTHER_DATE = "2026-08-03";
@@ -255,14 +278,20 @@ function assignment(over: {
   readonly pairingIndex?: number | null;
   readonly horseName?: string | null;
 }) {
+  // The OPERATIONAL values are unique per assignment but must NOT embed the
+  // assignment id: ZA2 stays forbidden in a trainee payload while ZP3 is visible
+  // there, so a value carrying both would make one of the two guards untestable.
+  // The tag is the id with the ZA2 marker removed — still unique, without
+  // smuggling the id into a visible string.
+  const tag = over.id.split(`-${ASG}-`).join("-");
   return Object.freeze({
     id: over.id,
     studentId: over.studentId,
     role: over.role,
     orderIndex: over.orderIndex,
-    horseName: over.horseName ?? `horse-${HID}-${over.id}`,
-    instructionTopic: `topic-${HID}-${over.id}`,
-    discipline: `discipline-${HID}-${over.id}`,
+    horseName: over.horseName ?? `horse-${OPV}-${tag}`,
+    instructionTopic: `topic-${OPV}-${tag}`,
+    discipline: `discipline-${OPV}-${tag}`,
     pairingIndex: over.pairingIndex ?? null,
     notes: `assignment-notes-${HID}-${over.id}`,
   });
@@ -1526,7 +1555,23 @@ test("F2. no forbidden CHANNEL exists in the trainee contract", async () => {
     "instructedTraineeNames",
     "instructedTraineeCount",
     "beginnerChildCount",
+    "assignments",
     "beginner",
+  ]);
+  // The ASSIGNMENT row's field set is exact too: the operational values and
+  // NOTHING that identifies a row, a person or a pairing index.
+  const riding = dto.allRows.find((row) => row.sessionId === "sess-riding");
+  assert.ok(riding !== undefined && riding.assignments.length > 0);
+  assert.deepEqual(Object.keys(riding.assignments[0]), [
+    "participantName",
+    "role",
+    "horseName",
+    "instructionTopic",
+    "discipline",
+    "personalStartTime",
+    "personalEndTime",
+    "pairedParticipantName",
+    "pairedParticipantNames",
   ]);
 });
 
@@ -2344,4 +2389,590 @@ test("J3. the approved EX-S5A-5 file scope is exactly this one new suite", () =>
       `the suite imports ${specifier}`,
     );
   }
+});
+
+// ===========================================================================
+// GROUP K — EX-OPS-READ-MVP: the COMPLETE assignment-level operational contract
+// ===========================================================================
+
+/**
+ * The exact field set of one assignment row. Listed once, so every case below
+ * asserts against the same contract rather than against its own idea of it.
+ */
+const ASSIGNMENT_ROW_KEYS = [
+  "participantName",
+  "role",
+  "horseName",
+  "instructionTopic",
+  "discipline",
+  "personalStartTime",
+  "personalEndTime",
+  "pairedParticipantName",
+  "pairedParticipantNames",
+] as const;
+
+/** One ad-hoc stored session, so a pairing shape can be stated in one place. */
+function pairingSession(
+  id: string,
+  assignments: readonly ReturnType<typeof assignment>[],
+): StoredExamSessionRow {
+  return Object.freeze({
+    id,
+    definitionId: DEF_ADVANCED,
+    date: DATE,
+    startTime: "11:00",
+    endTime: "13:00",
+    orderIndex: 0,
+    arena: "מגרש פיירינג",
+    title: null,
+    notes: null,
+    individualPublishedAt: null,
+    updatedAt: SESSION_UPDATED_AT,
+    assignments: Object.freeze(assignments),
+    breaks: Object.freeze([]),
+    supervisorInstructorIds: Object.freeze([]),
+  });
+}
+
+/** The assignment rows of ONE session, from the ADMIN/INSTRUCTOR reading. */
+async function operationalAssignments(sessions: readonly StoredExamSessionRow[], id: string) {
+  const dto = await readAdmin({ sessions, sourceDates: [] });
+  const row = dto.rows.find((r) => r.sessionId === id);
+  assert.ok(row !== undefined, `expected an operational row for ${id}`);
+  return row.assignments;
+}
+
+/** The assignment rows of ONE session, from the TRAINEE full-day reading. */
+async function traineeAssignments(sessions: readonly StoredExamSessionRow[], id: string) {
+  const dto = await readTrainee({ sessions, sourceDates: [] });
+  const row = dto.allRows.find((r) => r.sessionId === id);
+  assert.ok(row !== undefined, `expected a trainee row for ${id}`);
+  return row.assignments;
+}
+
+test("K1. the INSTRUCTOR plan carries the complete assignment rows of every session", async () => {
+  const dto = await readInstructorExamPlanWithDeps(
+    COURSE_OFFERING_ID,
+    instructorDeps(makeCalls()),
+  );
+  const riding = dto.rows.find((row) => row.sessionId === "sess-riding");
+  assert.ok(riding !== undefined);
+
+  // Every stored assignment is present, in the committed adapter order.
+  assert.deepEqual(
+    riding.assignments.map((a) => a.participantName),
+    ["נועה לוי", "אורי הצופה", "דנה כהן"],
+  );
+  assert.deepEqual(
+    riding.assignments.map((a) => a.role),
+    ["EXAMINEE", "EXAMINEE", "EXAMINEE"],
+  );
+  for (const row of riding.assignments) {
+    assert.deepEqual(Object.keys(row), [...ASSIGNMENT_ROW_KEYS]);
+  }
+  // An EXAMINEE exposes its stored horse, topic and discipline.
+  assert.equal(riding.assignments[1].horseName, `horse-${OPV}-a-r2`);
+  assert.equal(riding.assignments[1].instructionTopic, `topic-${OPV}-a-r2`);
+  assert.equal(riding.assignments[1].discipline, `discipline-${OPV}-a-r2`);
+  // ...and its own derived personal time, which is NOT the block start.
+  assert.equal(riding.assignments[1].personalStartTime, "09:25");
+  assert.equal(riding.assignments[1].personalEndTime, "09:40");
+  assert.equal(riding.startTime, "09:00");
+
+  // A live beginner row carries no stored assignment at all.
+  const lunge = dto.rows.find((row) => row.sessionId === "tp:lesson-lunge");
+  assert.deepEqual(lunge?.assignments, []);
+});
+
+test("K2. the TRAINEE full-day view carries the SAME complete rows, for every visible row", async () => {
+  const dto = await readTrainee();
+  const riding = dto.allRows.find((row) => row.sessionId === "sess-riding");
+  assert.ok(riding !== undefined);
+  assert.deepEqual(
+    riding.assignments.map((a) => a.participantName),
+    ["נועה לוי", "אורי הצופה", "דנה כהן"],
+  );
+
+  // A row belonging to somebody ELSE is just as complete: the trainee schedule
+  // is an operational schedule, not a privacy-narrowed list of names.
+  const iface = dto.allRows.find((row) => row.sessionId === "sess-interface");
+  assert.ok(iface !== undefined && iface.isSelf === false);
+  assert.deepEqual(
+    iface.assignments.map((a) => [a.participantName, a.horseName, a.personalStartTime]),
+    [
+      ["נועה לוי", `horse-${OPV}-a-if1`, "13:00"],
+      // An id with no resolvable name keeps its operational row, nameless.
+      [null, `horse-${OPV}-a-if2`, "13:00"],
+      // A RESERVED, not-yet-bound place holds its lane and identifies nobody.
+      [null, `horse-${OPV}-a-if3`, "13:20"],
+    ],
+  );
+
+  // BOTH roles agree, field for field, on the same session.
+  const admin = await readAdmin();
+  assert.deepEqual(
+    admin.rows.find((row) => row.sessionId === "sess-riding")?.assignments,
+    riding.assignments,
+  );
+  assert.ok(Object.isFrozen(riding.assignments));
+  assert.ok(Object.isFrozen(riding.assignments[0]));
+});
+
+test("K3. a PAIRED instructed trainee inherits the examinee topic, discipline and time", async () => {
+  const rows = await operationalAssignments(SESSION_ROWS, "sess-advanced");
+  const [first, second, instructed] = rows;
+
+  // The examinee it is paired with (pairingIndex 2), whose wave is 11:30-12:00.
+  assert.equal(second.participantName, "דנה כהן");
+  assert.equal(second.role, "EXAMINEE");
+  assert.equal(second.personalStartTime, "11:30");
+  assert.equal(second.personalEndTime, "12:00");
+  assert.equal(second.pairedParticipantName, "אורי הצופה");
+  assert.deepEqual(second.pairedParticipantNames, ["אורי הצופה"]);
+
+  assert.equal(instructed.role, "INSTRUCTED_TRAINEE");
+  assert.equal(instructed.participantName, "אורי הצופה");
+  assert.equal(instructed.pairedParticipantName, "דנה כהן");
+  // The INHERITED slot — the paired examinee's exact interval, never the block's.
+  assert.equal(instructed.personalStartTime, "11:30");
+  assert.equal(instructed.personalEndTime, "12:00");
+  // ...and the INHERITED topic and discipline, taken from that examinee's row.
+  assert.equal(instructed.instructionTopic, `topic-${OPV}-a-ad2`);
+  assert.equal(instructed.discipline, `discipline-${OPV}-a-ad2`);
+  assert.equal(instructed.instructionTopic, second.instructionTopic);
+  assert.equal(instructed.discipline, second.discipline);
+  // An instructed trainee never carries a horse: the lesson horse is recorded
+  // once, on the examinee row.
+  assert.equal(instructed.horseName, null);
+
+  // The UNPAIRED examinee (pairingIndex 1) has no partner and no inheritance.
+  assert.equal(first.pairedParticipantName, null);
+  assert.deepEqual(first.pairedParticipantNames, []);
+
+  // The trainee reading is identical.
+  assert.deepEqual(await traineeAssignments(SESSION_ROWS, "sess-advanced"), rows);
+});
+
+test("K4. ONE examinee plus a null-pairing trainee resolves through the unambiguous fallback", async () => {
+  const sessions = [
+    pairingSession("sess-k4", [
+      assignment({ id: `a-${ASG}-k4e`, studentId: OTHER, role: "EXAMINEE", orderIndex: 0 }),
+      assignment({
+        id: `a-${ASG}-k4t`,
+        studentId: VIEWER,
+        role: "INSTRUCTED_TRAINEE",
+        orderIndex: 1,
+      }),
+    ]),
+  ];
+  const [examinee, instructed] = await operationalAssignments(sessions, "sess-k4");
+
+  assert.equal(examinee.pairedParticipantName, "אורי הצופה");
+  assert.equal(instructed.pairedParticipantName, "נועה לוי");
+  // The block's single examinee runs 11:00-11:30 and the trainee inherits it.
+  assert.equal(examinee.personalStartTime, "11:00");
+  assert.equal(instructed.personalStartTime, "11:00");
+  assert.equal(instructed.personalEndTime, "11:30");
+  assert.equal(instructed.instructionTopic, `topic-${OPV}-a-k4e`);
+  assert.equal(instructed.discipline, `discipline-${OPV}-a-k4e`);
+});
+
+test("K5. TWO examinees plus a null-pairing trainee resolves NO partner, topic or time", async () => {
+  const sessions = [
+    pairingSession("sess-k5", [
+      assignment({ id: `a-${ASG}-k5e1`, studentId: OTHER, role: "EXAMINEE", orderIndex: 0 }),
+      assignment({ id: `a-${ASG}-k5e2`, studentId: DUP_A, role: "EXAMINEE", orderIndex: 1 }),
+      assignment({
+        id: `a-${ASG}-k5t`,
+        studentId: VIEWER,
+        role: "INSTRUCTED_TRAINEE",
+        orderIndex: 2,
+      }),
+    ]),
+  ];
+  const rows = await operationalAssignments(sessions, "sess-k5");
+  const instructed = rows[2];
+
+  assert.equal(instructed.role, "INSTRUCTED_TRAINEE");
+  assert.equal(instructed.participantName, "אורי הצופה");
+  // Nothing is guessed: no partner, no inherited topic, no invented time.
+  assert.equal(instructed.pairedParticipantName, null);
+  assert.deepEqual(instructed.pairedParticipantNames, []);
+  assert.equal(instructed.instructionTopic, null);
+  assert.equal(instructed.discipline, null);
+  assert.equal(instructed.personalStartTime, null);
+  assert.equal(instructed.personalEndTime, null);
+  // The two examinees keep their own exact slots — the block is not broken.
+  assert.equal(rows[0].personalStartTime, "11:00");
+  assert.equal(rows[1].personalStartTime, "11:30");
+  assert.equal(rows[0].pairedParticipantName, null);
+});
+
+test("K6. a DUPLICATED examinee pairingIndex is ambiguous and resolves nothing", async () => {
+  const sessions = [
+    pairingSession("sess-k6", [
+      assignment({
+        id: `a-${ASG}-k6e1`,
+        studentId: OTHER,
+        role: "EXAMINEE",
+        orderIndex: 0,
+        pairingIndex: 1,
+      }),
+      assignment({
+        id: `a-${ASG}-k6e2`,
+        studentId: DUP_A,
+        role: "EXAMINEE",
+        orderIndex: 1,
+        // THE SAME pairing index: it identifies no single examinee.
+        pairingIndex: 1,
+      }),
+      assignment({
+        id: `a-${ASG}-k6t`,
+        studentId: VIEWER,
+        role: "INSTRUCTED_TRAINEE",
+        orderIndex: 2,
+        pairingIndex: 1,
+      }),
+    ]),
+  ];
+  const rows = await operationalAssignments(sessions, "sess-k6");
+  const instructed = rows[2];
+
+  assert.equal(instructed.pairedParticipantName, null);
+  assert.deepEqual(instructed.pairedParticipantNames, []);
+  assert.equal(instructed.instructionTopic, null);
+  assert.equal(instructed.discipline, null);
+  assert.equal(instructed.personalStartTime, null);
+  assert.equal(instructed.personalEndTime, null);
+  // Neither examinee wins the pairing either.
+  assert.deepEqual(rows[0].pairedParticipantNames, []);
+  assert.deepEqual(rows[1].pairedParticipantNames, []);
+
+  // The committed trainee core still EXCLUDES the row from the trainee whose
+  // OWN pairing is the ambiguous one — no exact personal time exists for them,
+  // and this slice did not weaken that. Asserted here so the absence is proven
+  // to be that committed rule rather than a row this slice lost.
+  const affected = await readTrainee({ sessions, sourceDates: [] });
+  assert.equal(
+    affected.allRows.some((row) => row.sessionId === "sess-k6"),
+    false,
+  );
+
+  // A trainee who is NOT in the block sees it in the full schedule, and reads
+  // exactly what the operational roles read.
+  const bystander = await readTrainee({ sessions, sourceDates: [], studentId: OFFDAY });
+  const row = bystander.allRows.find((r) => r.sessionId === "sess-k6");
+  assert.ok(row !== undefined && row.isSelf === false);
+  assert.deepEqual(row.assignments, rows);
+});
+
+test("K7. SEVERAL instructed trainees may reference ONE examinee", async () => {
+  const sessions = [
+    pairingSession("sess-k7", [
+      assignment({
+        id: `a-${ASG}-k7e`,
+        studentId: OTHER,
+        role: "EXAMINEE",
+        orderIndex: 0,
+        pairingIndex: 4,
+      }),
+      assignment({
+        id: `a-${ASG}-k7t1`,
+        studentId: VIEWER,
+        role: "INSTRUCTED_TRAINEE",
+        orderIndex: 1,
+        pairingIndex: 4,
+      }),
+      assignment({
+        id: `a-${ASG}-k7t2`,
+        studentId: DUP_A,
+        role: "INSTRUCTED_TRAINEE",
+        orderIndex: 2,
+        pairingIndex: 4,
+      }),
+    ]),
+  ];
+  const [examinee, t1, t2] = await operationalAssignments(sessions, "sess-k7");
+
+  // The list is the contract; the names are NEVER joined into one string.
+  assert.deepEqual(examinee.pairedParticipantNames, ["אורי הצופה", "דנה כהן"]);
+  assert.equal(examinee.pairedParticipantName, null);
+  assert.equal(
+    examinee.pairedParticipantNames.some((name) => name.includes(",")),
+    false,
+    "the paired names were joined",
+  );
+  // Each trainee resolves back to the ONE examinee, and inherits from it.
+  for (const trainee of [t1, t2]) {
+    assert.equal(trainee.role, "INSTRUCTED_TRAINEE");
+    assert.equal(trainee.pairedParticipantName, "נועה לוי");
+    assert.deepEqual(trainee.pairedParticipantNames, ["נועה לוי"]);
+    assert.equal(trainee.instructionTopic, `topic-${OPV}-a-k7e`);
+    assert.equal(trainee.discipline, `discipline-${OPV}-a-k7e`);
+    assert.equal(trainee.personalStartTime, examinee.personalStartTime);
+    assert.equal(trainee.personalEndTime, examinee.personalEndTime);
+    assert.equal(trainee.horseName, null);
+  }
+});
+
+test("K8. an UNRESOLVED block keeps its people and invents NO time for any of them", async () => {
+  const dto = await readAdmin();
+  const unresolved = dto.rows.find((row) => row.sessionId === "sess-unresolved");
+  assert.ok(unresolved !== undefined);
+  assert.equal(unresolved.timetableStatus, "UNRESOLVED");
+
+  assert.deepEqual(
+    unresolved.assignments.map((a) => a.participantName),
+    ["אורי הצופה"],
+  );
+  // The operational values survive; the personal time does not exist and is
+  // NEVER substituted by the block start, the stored end or a derived end.
+  assert.equal(unresolved.assignments[0].horseName, `horse-${OPV}-a-un1`);
+  assert.equal(unresolved.assignments[0].personalStartTime, null);
+  assert.equal(unresolved.assignments[0].personalEndTime, null);
+  assert.equal(unresolved.startTime, "99:99");
+  assert.equal(unresolved.endTime, "15:00");
+});
+
+test("K9. no pairing index, id or contact field is exposed on an assignment row", async () => {
+  const admin = await readAdmin();
+  const trainee = await readTrainee();
+
+  for (const [name, rows] of [
+    ["admin", admin.rows.flatMap((row) => row.assignments)],
+    ["trainee", trainee.allRows.flatMap((row) => row.assignments)],
+  ] as const) {
+    assert.ok(rows.length > 0, `sanity: ${name} produced no assignment row`);
+    for (const row of rows) {
+      assert.deepEqual(Object.keys(row), [...ASSIGNMENT_ROW_KEYS]);
+      for (const forbidden of [
+        "pairingIndex",
+        "assignmentId",
+        "studentId",
+        "sessionId",
+        "courseOfferingId",
+        "enrollmentId",
+        "nationalId",
+        "email",
+        "phone",
+        "parentName",
+        "parentPhone",
+        "notes",
+        "orderIndex",
+        "waveIndex",
+      ]) {
+        assert.equal(forbidden in row, false, `${name} assignment row exposes ${forbidden}`);
+      }
+    }
+  }
+
+  // By VALUE, not merely by key: the fixture's pairing indexes are numbers, and
+  // no assignment row may carry a number at all.
+  for (const row of trainee.allRows.flatMap((r) => r.assignments)) {
+    for (const value of Object.values(row)) {
+      assert.equal(typeof value === "number", false, "an assignment row carries a number");
+    }
+  }
+});
+
+test("K10. PUBLICATION policy is untouched by the assignment rows", async () => {
+  // The trainee still sees no unpublished lesson and no draft plan...
+  const trainee = await readTrainee();
+  assert.equal(
+    trainee.allRows.some((row) => row.sessionId === "tp:lesson-hidden"),
+    false,
+  );
+  assert.deepEqual(await readTrainee({ planPublishedAt: null }), emptyTraineeExamDayDto());
+  // ...and the empty day carries no assignment row of any kind.
+  assert.deepEqual(
+    emptyTraineeExamDayDto().allRows.flatMap((row) => row.assignments),
+    [],
+  );
+
+  // ...while the instructor still sees drafts, WITH their assignment rows.
+  const draft = await readInstructorExamPlanWithDeps(
+    COURSE_OFFERING_ID,
+    instructorDeps(makeCalls(), { planPublishedAt: null }),
+  );
+  assert.equal(draft.isPublished, false);
+  assert.ok(draft.rows.flatMap((row) => row.assignments).length > 0);
+
+  // The locked per-role loader options are exactly what they were.
+  const traineeCalls = makeCalls();
+  await readTraineeExamDayWithDeps(DATE, traineeDeps(traineeCalls));
+  assert.deepEqual(traineeCalls.loadOptions, [
+    { requirePlanPublication: true, requireLessonPublication: true, viewerStudentId: VIEWER },
+  ]);
+  const instructorCalls = makeCalls();
+  await readInstructorExamPlanWithDeps(COURSE_OFFERING_ID, instructorDeps(instructorCalls));
+  assert.deepEqual(instructorCalls.loadOptions, [
+    { requirePlanPublication: false, requireLessonPublication: false, viewerStudentId: null },
+  ]);
+});
+
+test("K11. the assignment rows cost NO extra query and mutate NO input", async () => {
+  const calls = makeCalls();
+  await readAdminExamPlanWithDeps(COURSE_OFFERING_ID, adminDeps(calls));
+  // The same one-student / one-instructor batch contract as before: the names an
+  // assignment row needs were already in the batch.
+  assert.equal(calls.studentBatches.length, 1);
+  assert.equal(calls.instructorBatches.length, 1);
+  assert.deepEqual(calls.order, [
+    `admin-course:${COURSE_OFFERING_ID}`,
+    "load",
+    "plan",
+    "definitions",
+    "sessions",
+    "sourceDates",
+    "lessons",
+    "student-names",
+    "instructor-names",
+  ]);
+
+  assert.equal(
+    JSON.stringify({
+      definitions: DEFINITION_ROWS,
+      sessions: SESSION_ROWS,
+      lessons: LESSON_ROWS,
+      sourceDates: SOURCE_DATE_ROWS,
+    }),
+    FIXTURE_SNAPSHOT,
+    "the operational read mutated its input rows",
+  );
+});
+
+test("K12. session ORDER and DIAGNOSTICS are exactly what they were", async () => {
+  const dto = await readAdmin();
+  assert.deepEqual(
+    dto.rows.map((row) => row.sessionId),
+    [
+      "sess-riding",
+      "tp:lesson-lunge",
+      "sess-advanced",
+      "tp:lesson-group",
+      "sess-interface",
+      "tp:lesson-hidden",
+      "sess-unresolved",
+      "sess-offday",
+    ],
+  );
+  assert.deepEqual(Object.keys(dto.diagnostics), [
+    "storedAdapterIssues",
+    "storedBlockDiagnostics",
+    "teachingPracticeSourceIssues",
+    "beginnerRejections",
+    "loaderIssues",
+    "narrowingIssues",
+  ]);
+  // The unresolved block's diagnostics are still reported, unchanged.
+  const diagnostic = dto.diagnostics.storedBlockDiagnostics.find(
+    (entry) => entry.sessionId === "sess-unresolved",
+  );
+  assert.ok(diagnostic !== undefined && diagnostic.timetableIssues.length > 0);
+  // No diagnostic gained an operational value.
+  assert.equal(JSON.stringify(dto.diagnostics).includes(OPV), false);
+});
+
+test("K13. the assignment rows are plain, frozen JSON on every role's reading", async () => {
+  const admin = await readAdmin();
+  const instructor = await readInstructorExamPlanWithDeps(
+    COURSE_OFFERING_ID,
+    instructorDeps(makeCalls()),
+  );
+  const trainee = await readTrainee();
+  for (const [name, dto] of [
+    ["admin", admin],
+    ["instructor", instructor],
+    ["trainee", trainee],
+  ] as const) {
+    assert.deepEqual(findNonPlainJsonPaths(dto), [], `${name} is not plain JSON`);
+    assert.deepEqual(JSON.parse(JSON.stringify(dto)), dto, `${name} does not round trip`);
+  }
+  const rows = trainee.allRows.flatMap((row) => row.assignments);
+  assert.ok(rows.length > 0);
+  for (const row of rows) {
+    assert.ok(Object.isFrozen(row));
+    assert.ok(Object.isFrozen(row.pairedParticipantNames));
+  }
+  // Freshly allocated per row: no two rows share one empty list.
+  const empties = trainee.allRows.filter((row) => row.assignments.length === 0);
+  assert.ok(empties.length > 1, "sanity: the day must hold several beginner rows");
+  assert.notEqual(empties[0].assignments, empties[1].assignments);
+});
+
+// ===========================================================================
+// GROUP K (cont.) — the EX-OPS-READ-MVP FOOTPRINT
+// ===========================================================================
+
+function gitLines(args: readonly string[]): string[] {
+  const result = spawnSync("git", [...args], { cwd: REPO_ROOT, encoding: "utf8" });
+  return (result.stdout ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+/** Everything this working tree touches, tracked and untracked alike. */
+function touchedPaths(): string[] {
+  return [
+    ...new Set([
+      ...gitLines(["diff", "--name-only", "HEAD"]),
+      ...gitLines(["diff", "--name-only", "--cached", "HEAD"]),
+      ...gitLines(["ls-files", "--others", "--exclude-standard"]),
+    ]),
+  ]
+    .map((path) => path.split("\\").join("/"))
+    .sort();
+}
+
+test("K14. no admin, instructor or trainee UI file was touched", () => {
+  const forbidden = [
+    "app/admin/courses/[courseOfferingId]/exams",
+    "app/instructor",
+    "app/student",
+  ];
+  const offenders = touchedPaths().filter((path) =>
+    forbidden.some((dir) => path === dir || path.startsWith(`${dir}/`)),
+  );
+  assert.deepEqual(offenders, [], `a UI file was modified: ${offenders.join(", ")}`);
+});
+
+test("K15. no schema, migration, writer, publication or notification file was touched", () => {
+  const touched = touchedPaths();
+  for (const dir of ["prisma", "lib/auth", "lib/course/capabilities"]) {
+    const offenders = touched.filter((path) => path === dir || path.startsWith(`${dir}/`));
+    assert.deepEqual(offenders, [], `${dir} was modified: ${offenders.join(", ")}`);
+  }
+  const writeLike = touched.filter((path) =>
+    /(-write-|publication|notification|middleware|\.mcp\.json|package(-lock)?\.json|\.env)/.test(
+      path,
+    ),
+  );
+  assert.deepEqual(writeLike, [], `a write/publication file was modified: ${writeLike.join(", ")}`);
+});
+
+test("K16. the slice's footprint is exactly its approved read-pipeline paths", () => {
+  const approved = [
+    "lib/exam/exam-block-timetable-core.ts",
+    "lib/exam/exam-block-timetable-core.test.ts",
+    "lib/exam/exam-stored-adapter-core.ts",
+    "lib/exam/exam-stored-adapter-core.test.ts",
+    "lib/exam/exam-plan-loader-core.ts",
+    "lib/exam/exam-read-dto.ts",
+    "lib/exam/exam-read-dto.test.ts",
+    "lib/exam/exam-read-scope-core.ts",
+    "lib/exam/exam-read.contract.test.ts",
+    // The two FOREIGN slice-footprint guards this slice re-points. Their own
+    // per-slice path allow-lists were measured against a HEAD that no longer
+    // exists, so every later change to any file reddens them; each is widened by
+    // an EXACT path list naming this slice's files, and their authorization
+    // assertions are strengthened rather than relaxed.
+    "lib/actions/instructor-exam-schedule.contract.test.ts",
+    "lib/actions/trainee-exam-schedule.contract.test.ts",
+  ];
+  const offenders = touchedPaths().filter((path) => !approved.includes(path));
+  assert.deepEqual(offenders, [], `outside the approved scope: ${offenders.join(", ")}`);
+  // No file was CREATED: every directory-listing guard in `lib/exam` measures a
+  // file list, and this slice extends existing modules rather than adding one.
+  assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard"]), []);
 });

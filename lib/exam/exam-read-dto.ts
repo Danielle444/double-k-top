@@ -135,7 +135,11 @@
  *    authoritative id for an EDIT must add it in that write slice, with its own
  *    review, rather than pre-exposing it now.
  */
-import type { ExamBeginnerFormat, ExamKind } from "./exam-domain-core";
+import type {
+  ExamAssignmentRole,
+  ExamBeginnerFormat,
+  ExamKind,
+} from "./exam-domain-core";
 import type {
   ProjectionSession,
   ProjectionTimetableStatus,
@@ -152,7 +156,11 @@ import type {
   ExamPlanPayload,
   ExamPlanLoaderIssueCode,
 } from "./exam-plan-loader-core";
-import type { StoredExamAdapterIssueCode } from "./exam-stored-adapter-core";
+import type {
+  StoredExamAssignmentOperationalRow,
+  StoredExamBlockOperationalDetail,
+  StoredExamAdapterIssueCode,
+} from "./exam-stored-adapter-core";
 import type { TeachingPracticeSourceAdapterIssueCode } from "./exam-tp-source-adapter-core";
 import type {
   ExamTimetableIssueCode,
@@ -216,6 +224,78 @@ export type TraineeExamSessionDisplayDetailLookup = ReadonlyMap<
 
 /** The row label for the viewing trainee's OWN row. */
 export const TRAINEE_SELF_ROW_LABEL = "השיבוץ שלי";
+
+/** The sibling lookup: stored `sessionId` → its assignment-level detail. */
+export type ExamAssignmentOperationalDetailLookup = ReadonlyMap<
+  string,
+  StoredExamBlockOperationalDetail
+>;
+
+// ===========================================================================
+// The assignment-level operational row — SHARED by every authorized role
+// ===========================================================================
+
+/**
+ * ONE participant of ONE stored exam block, as the COMPLETE OPERATIONAL
+ * SCHEDULE displays them.
+ *
+ * IT IS THE SAME CONTRACT FOR AN INSTRUCTOR AND FOR A TRAINEE, deliberately.
+ * The trainee's "לו״ז כולל" is a complete operational schedule rather than a
+ * privacy-narrowed list of names: a trainee needs to see who rides which horse,
+ * on which topic, at which exact minute, paired with whom — otherwise the
+ * screen cannot be acted on. What separates the roles is WHICH ROWS each is
+ * handed (publication, the selected day, the resolved course), which is decided
+ * before this file is reached, and never which of these fields exists.
+ *
+ * WHAT IS ABSENT, AND WHY IT STAYS ABSENT:
+ *  - `assignmentId`, `studentId`, `sessionId`, `courseOfferingId`, enrollment id
+ *    — a display row needs no identity, and the two are not interchangeable;
+ *  - `pairingIndex` — the numeric scheduling input. The pairing it expresses is
+ *    already RESOLVED into names below, and exposing the raw index would let a
+ *    UI invent a second, disagreeing pairing rule;
+ *  - the assignment's `notes`, the session's `title` and `notes` — none is an
+ *    approved visible value;
+ *  - national id, email, phone, parent detail and every raw row.
+ *
+ * `participantName` is `string | null`, not `string`: an id that resolves to no
+ * name yields NOTHING. Substituting the id would leak the very value the lookup
+ * exists to remove, and substituting `""` would render a person with a blank
+ * name — so the row survives with its horse, topic and time, and says plainly
+ * that the name could not be resolved. This is the same rule
+ * {@link resolveName} already applies everywhere else in this file.
+ */
+export interface ExamAssignmentOperationalRowDto {
+  /** The resolved display name, or `null` when it could not be resolved. */
+  readonly participantName: string | null;
+  readonly role: ExamAssignmentRole;
+  /** The EXAMINEE's horse. Always `null` on an instructed-trainee row. */
+  readonly horseName: string | null;
+  /** Inherited from the paired examinee on an instructed-trainee row. */
+  readonly instructionTopic: string | null;
+  /** Inherited from the paired examinee on an instructed-trainee row. */
+  readonly discipline: string | null;
+  /** The participant's EXACT personal start. Never the block start. */
+  readonly personalStartTime: string | null;
+  /** The participant's EXACT personal end. Never the block end. */
+  readonly personalEndTime: string | null;
+  /**
+   * The ONE paired participant's name, when the pairing resolves to exactly one
+   * NAMED partner. `null` for none, for an ambiguous pairing, for a partner
+   * whose name could not be resolved, and for an examinee with several paired
+   * instructed trainees — see {@link pairedParticipantNames}.
+   */
+  readonly pairedParticipantName: string | null;
+  /**
+   * EVERY paired participant's resolved name, in the resolved pairing order.
+   *
+   * An examinee legitimately instructs several trainees, and joining their names
+   * into one string would produce a value no consumer could split back apart, so
+   * the list is the contract and `pairedParticipantName` is the convenience for
+   * the single-partner case. EMPTY for an unresolved or ambiguous pairing —
+   * never a guessed partner.
+   */
+  readonly pairedParticipantNames: readonly string[];
+}
 
 // ===========================================================================
 // Narrowing issues — SERVER-SIDE ONLY, and PII-free
@@ -411,6 +491,20 @@ export interface TraineeExamDayRowDto {
   readonly instructedTraineeNames: readonly string[];
   readonly instructedTraineeCount: number;
   readonly beginnerChildCount: number;
+  /**
+   * The COMPLETE assignment-level operational rows of a stored block, in the
+   * committed adapter order.
+   *
+   * "לו״ז כולל" is intentionally the full operational schedule, so this is
+   * populated for EVERY visible row and not only for the viewer's own — the
+   * viewer's own row remains identifiable through `isSelf` / `selfLabel`.
+   *
+   * ALWAYS EMPTY for a live beginner row: a beginner lesson has no stored exam
+   * assignment, and its participants and children already travel on
+   * {@link TraineeExamBeginnerDetailDto}. An empty list is never a claim that a
+   * block holds nobody — a stored block that holds nobody is simply empty too.
+   */
+  readonly assignments: readonly ExamAssignmentOperationalRowDto[];
   readonly beginner: TraineeExamBeginnerDetailDto | null;
 }
 
@@ -554,6 +648,16 @@ export interface OperationalExamRowDto {
   readonly supervisorNames: readonly string[];
   /** The AUTHORITATIVE supervisor count — may exceed `supervisorNames.length`. */
   readonly supervisorCount: number;
+  /**
+   * The COMPLETE assignment-level operational rows of a stored block, in the
+   * committed adapter order — the same contract the trainee day receives.
+   *
+   * PRESENT FOR AN UNRESOLVED BLOCK TOO, with `null` personal times throughout:
+   * an operational role keeps such a block together with its diagnostics, and
+   * knowing WHO is in a block whose timetable failed is exactly what makes it
+   * fixable. ALWAYS EMPTY for a live beginner row.
+   */
+  readonly assignments: readonly ExamAssignmentOperationalRowDto[];
   readonly beginner: OperationalExamBeginnerDetailDto | null;
 }
 
@@ -759,6 +863,101 @@ function resolveArena(
   return isPresent(entry.arena) ? entry.arena.trim() : null;
 }
 
+/**
+ * The assignment-level operational detail for ONE row, or `null` — FAIL CLOSED,
+ * exactly as the beginner detail and the arena attach.
+ *
+ * Attaches by EXACT session id. A missing entry, a non-object entry, an entry
+ * declaring a DIFFERENT session, an entry that does not declare itself stored
+ * and an entry with no assignment array all yield `null`. Another block's
+ * participants, horses and personal times shown against this row would be
+ * strictly worse than showing none.
+ */
+function readAssignmentDetail(
+  lookup: ExamAssignmentOperationalDetailLookup | null | undefined,
+  sessionId: string,
+): StoredExamBlockOperationalDetail | null {
+  const entry = mapGet(lookup, sessionId);
+  if (entry === null || typeof entry !== "object") return null;
+  if (entry.sessionId !== sessionId) return null;
+  if (entry.source !== "STORED") return null;
+  if (!Array.isArray(entry.assignments)) return null;
+  return entry;
+}
+
+/** The two legal assignment roles. Compared, never coerced. */
+const ASSIGNMENT_ROLES: readonly ExamAssignmentRole[] = Object.freeze([
+  "EXAMINEE",
+  "INSTRUCTED_TRAINEE",
+]);
+
+function isAssignmentRole(v: unknown): v is ExamAssignmentRole {
+  return typeof v === "string" && ASSIGNMENT_ROLES.includes(v as ExamAssignmentRole);
+}
+
+/**
+ * Narrow ONE internal operational assignment row into the client contract.
+ *
+ * Every id is used as a LOOKUP KEY and then dropped: `studentId` becomes
+ * `participantName`, `pairedStudentIds` become `pairedParticipantNames`, and
+ * neither `assignmentId` nor `pairingIndex` is read at all. Nothing is
+ * recomputed — the role, the horse, the inherited topic and discipline, the
+ * exact personal times and the resolved pairing all arrive already decided by
+ * the committed adapter, in the one pass that also produced the personal slots.
+ */
+function buildAssignmentRowDto(
+  row: StoredExamAssignmentOperationalRow,
+  studentNames: ReadonlyMap<string, string> | null | undefined,
+): ExamAssignmentOperationalRowDto {
+  const pairedIds = Array.isArray(row?.pairedStudentIds) ? row.pairedStudentIds : [];
+  const pairedNames: string[] = [];
+  for (const id of pairedIds) {
+    const name = resolveName(studentNames, id);
+    // An unresolved partner contributes no name — never the id, never a
+    // placeholder person, and never a partner invented to fill the gap.
+    if (name !== null) pairedNames.push(name);
+  }
+  const frozenPairedNames = Object.freeze(pairedNames);
+
+  return Object.freeze({
+    participantName: resolveName(studentNames, row?.studentId),
+    // A role token that is not a legal role cannot be coerced into one; the
+    // committed adapter has already excluded such a row, so this is the
+    // fail-closed reading of an impossible state rather than a second rule.
+    role: isAssignmentRole(row?.role) ? row.role : "EXAMINEE",
+    horseName: textOrNull(row?.horseName),
+    instructionTopic: textOrNull(row?.instructionTopic),
+    discipline: textOrNull(row?.discipline),
+    personalStartTime: textOrNull(row?.personalStartTime),
+    personalEndTime: textOrNull(row?.personalEndTime),
+    // Exactly ONE named partner, or nothing. Two names are never joined.
+    pairedParticipantName: frozenPairedNames.length === 1 ? frozenPairedNames[0] : null,
+    pairedParticipantNames: frozenPairedNames,
+  });
+}
+
+/**
+ * The assignment rows of ONE row, as a freshly allocated frozen array.
+ *
+ * A live beginner row and a row with no usable sibling detail alike receive an
+ * EMPTY array — never a shared one, so no two rows can observe each other.
+ */
+function buildAssignmentRowDtos(
+  lookup: ExamAssignmentOperationalDetailLookup | null | undefined,
+  source: ExamRowSource,
+  sessionId: string,
+  studentNames: ReadonlyMap<string, string> | null | undefined,
+): readonly ExamAssignmentOperationalRowDto[] {
+  if (source !== "STORED") return Object.freeze([] as ExamAssignmentOperationalRowDto[]);
+  const detail = readAssignmentDetail(lookup, sessionId);
+  if (detail === null) return Object.freeze([] as ExamAssignmentOperationalRowDto[]);
+  return Object.freeze(
+    detail.assignments
+      .filter((row) => row !== null && typeof row === "object")
+      .map((row) => buildAssignmentRowDto(row, studentNames)),
+  );
+}
+
 /** Whether a projected row is a live beginner row. Decided by `kind`, as the
  * committed trainee core decides it — never by inspecting the id's shape. */
 function rowSource(session: ProjectionSession): ExamRowSource {
@@ -886,16 +1085,25 @@ function responsibleInstructorName(
  * horses, examiner sets and staffing state are unreachable from here rather than
  * merely unread.
  *
+ * THE ASSIGNMENT DETAIL IS A SEPARATE SIBLING, not a widening of the arena one.
+ * {@link TraineeExamSessionDisplayDetail} exists precisely because it can
+ * express an arena and nothing else; folding the operational rows into it would
+ * destroy that property. They therefore arrive as their own narrow lookup, which
+ * can express assignment rows and nothing else — no conflict input, no
+ * supervisor id, no examiner set, no staffing state.
+ *
  * @param projection            the committed trainee day projection.
  * @param beginnerDetails       the sibling live detail lookup, keyed by session id.
  * @param sessionDisplayDetails the narrow stored display sibling (arena only).
  * @param names                 the caller-supplied display-name lookups.
+ * @param assignmentDetails     the sibling assignment-level operational lookup.
  */
 export function buildTraineeExamDayDto(
   projection: TraineeExamDayProjection,
   beginnerDetails: ReadonlyMap<string, BeginnerDetail> | null | undefined,
   sessionDisplayDetails: TraineeExamSessionDisplayDetailLookup | null | undefined,
   names: ExamDisplayNameLookup | null | undefined,
+  assignmentDetails: ExamAssignmentOperationalDetailLookup | null | undefined,
 ): TraineeExamDayDto {
   const projectedRows = Array.isArray(projection?.allRows) ? projection.allRows : [];
   const studentNames = names?.studentNames;
@@ -947,6 +1155,12 @@ export function buildTraineeExamDayDto(
         instructedTraineeNames: instructed.names,
         instructedTraineeCount: instructed.count,
         beginnerChildCount: countOrZero(session.beginnerChildCount),
+        assignments: buildAssignmentRowDtos(
+          assignmentDetails,
+          source,
+          sessionId,
+          studentNames,
+        ),
         beginner:
           detail === null || participants === null
             ? null
@@ -1195,6 +1409,14 @@ function buildOperationalDto(
         beginnerChildCount: countOrZero(session.beginnerChildCount),
         supervisorNames: supervisors.names,
         supervisorCount: supervisors.count,
+        // The internal payload's OWN sibling — the operational builders need no
+        // extra parameter for it, because they already receive the payload.
+        assignments: buildAssignmentRowDtos(
+          payload?.storedAssignmentDetails,
+          source,
+          sessionId,
+          studentNames,
+        ),
         beginner:
           detail === null || participants === null
             ? null

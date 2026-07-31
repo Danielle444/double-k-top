@@ -80,6 +80,7 @@ import type {
   ConflictSession,
 } from "./exam-conflict-core";
 import type {
+  ExamBlockPairing,
   ExamBlockTimetable,
   ExamTimetableIssue,
   ExamTimetableSlot,
@@ -91,6 +92,7 @@ import type {
 } from "./exam-block-timetable-core";
 import {
   computeExamBlockTimetable,
+  resolveExamPairings,
   resolveInstructedTraineeSlots,
 } from "./exam-block-timetable-core";
 import type {
@@ -280,16 +282,89 @@ export interface StoredExamSessionRow {
 // ===========================================================================
 
 /**
+ * ONE assignment of a stored block, as the OPERATIONAL read pipeline sees it —
+ * the complete per-participant row an instructor's and a trainee's full schedule
+ * are built from.
+ *
+ * INTERNAL, NOT A CLIENT SHAPE. It carries `assignmentId` and `studentId`
+ * because a pairing is a relationship between assignment rows and a name is
+ * resolved from a student id; BOTH are dropped by the DTO narrowing, which emits
+ * display names and never an id. Nothing here may be returned to a browser.
+ *
+ * FIELD BY FIELD:
+ *  - `horseName` is the EXAMINEE's stored horse. It is `null` for an
+ *    INSTRUCTED_TRAINEE unconditionally: `isHorseRequiredFor` is false for that
+ *    role because the lesson horse is recorded ONCE on the examinee assignment,
+ *    the instructed-trainee write path cannot state one, and showing a second,
+ *    possibly disagreeing horse against the same lesson would be worse than
+ *    showing none. No current business rule allows one.
+ *  - `instructionTopic` / `discipline` are the EXAMINEE's own stored values, and
+ *    for an INSTRUCTED_TRAINEE are INHERITED from the resolved paired examinee —
+ *    read-time only. Nothing is copied back to the database.
+ *  - `personalStartTime` / `personalEndTime` are the derived slot's, taken
+ *    VERBATIM from the one timetable pass. `null` means "no exact personal time"
+ *    and is NEVER the block start, the block end or a default.
+ *  - `pairedStudentIds` are the resolved partners' student ids: for an examinee
+ *    every instructed trainee paired to it, for an instructed trainee the one
+ *    examinee it is paired with. An ambiguous or absent pairing yields an EMPTY
+ *    array — never a guess.
+ *
+ * The numeric `pairingIndex` is deliberately ABSENT: it is a scheduling input,
+ * the pairing it expresses is already resolved into `pairedStudentIds`, and a
+ * reader that could see it would be able to invent its own second pairing rule.
+ */
+export interface StoredExamAssignmentOperationalRow {
+  /** `null` for a row whose id was illegible — see `EX-ADP-ASSIGNMENT-ID-REQUIRED`. */
+  readonly assignmentId: string | null;
+  /** `null` for a RESERVED, not-yet-bound place. */
+  readonly studentId: string | null;
+  readonly role: ExamAssignmentRole;
+  readonly horseName: string | null;
+  readonly instructionTopic: string | null;
+  readonly discipline: string | null;
+  /** Zero-padded `HH:MM`, or `null`. Never substituted. */
+  readonly personalStartTime: string | null;
+  /** Zero-padded `HH:MM`, or `null`. Never substituted. */
+  readonly personalEndTime: string | null;
+  readonly pairedStudentIds: readonly string[];
+}
+
+/**
+ * The assignment-level operational detail of ONE stored block, looked up by
+ * `sessionId`.
+ *
+ * A SIBLING payload, exactly like {@link StoredExamBlockDetail}: nothing here is
+ * merged onto `ProjectionSession`, which stays the compact row every list view
+ * holds for every row of the day.
+ *
+ * UNLIKE the personal-slot detail, this one EXISTS FOR AN UNRESOLVED BLOCK TOO.
+ * An unresolved block still has real participants, real horses, real topics and
+ * real pairs — it merely has no exact time for anybody, which is expressed by
+ * `personalStartTime` / `personalEndTime` being `null` on every row rather than
+ * by the whole detail vanishing. Operational readers keep such a block.
+ */
+export interface StoredExamBlockOperationalDetail {
+  readonly source: "STORED";
+  readonly sessionId: string;
+  readonly assignments: readonly StoredExamAssignmentOperationalRow[];
+}
+
+/**
  * Everything one stored block yields, produced in one pass.
  *
  * `detail` is `null` EXACTLY when the timetable did not resolve: an unresolved
  * block has no exact personal time for anybody, and the trainee view core hides
  * such a row outright rather than falling back to the block interval.
+ *
+ * `operationalDetail` is ALWAYS present — see
+ * {@link StoredExamBlockOperationalDetail}.
  */
 export interface StoredExamBlockComposition {
   readonly session: ProjectionSession;
   /** `null` iff `session.timetableStatus === "UNRESOLVED"`. */
   readonly detail: StoredExamBlockDetail | null;
+  /** The assignment-level operational rows. Never `null`. */
+  readonly operationalDetail: StoredExamBlockOperationalDetail;
   readonly conflictSession: ConflictSession;
   readonly timetableIssues: readonly ExamTimetableIssue[];
   readonly timetableWarnings: readonly ExamTimetableWarning[];
@@ -341,6 +416,18 @@ function isPresent(v: unknown): v is string {
 
 /** The trimmed id, or `null` when absent/blank. Whitespace is never identity. */
 function normalizedId(v: unknown): string | null {
+  return isPresent(v) ? v.trim() : null;
+}
+
+/**
+ * A trimmed OPERATIONAL DISPLAY string, or `null`.
+ *
+ * A blank horse, topic or discipline is `null` rather than an empty string
+ * masquerading as a value — the same rule the committed narrowing already
+ * applies to a block's arena. This normalizes DISPLAY text only and is never
+ * applied to an id.
+ */
+function displayTextOrNull(v: unknown): string | null {
   return isPresent(v) ? v.trim() : null;
 }
 
@@ -582,6 +669,14 @@ function composeStoredBlock(
     breaks,
   });
 
+  // --- 3a. the pairing, resolved ONCE and shared ---------------------------
+  // The SAME `pairedExaminees` / `instructed` arrays the slot inheritance below
+  // consumes, run through the SAME committed rule, so the operational rows and
+  // the personal slots cannot disagree about who is paired with whom. It is
+  // computed here rather than after the timetable because pairing is a property
+  // of the assignment rows alone — an UNRESOLVED block still has real pairs.
+  const pairing: ExamBlockPairing = resolveExamPairings(pairedExaminees, instructed);
+
   // --- 4. inherited instructed-trainee slots -------------------------------
   // An instructed trainee never consumes a lane and never appears in
   // `waves[].assignmentIds`; it INHERITS the paired examinee's exact interval.
@@ -688,6 +783,80 @@ function composeStoredBlock(
     });
   }
 
+  // --- 5c-bis. the sibling ASSIGNMENT-LEVEL operational detail --------------
+  // Built from the adapter's own `ordered` copy, from the ONE timetable pass and
+  // from the ONE pairing resolution above — so it cannot disagree with the
+  // personal slots, the participant id arrays or the conflict input.
+  //
+  // It is built for EVERY block, resolved or not. An unresolved block simply has
+  // no slot for anybody, which surfaces as `null` personal times on every row;
+  // the block start, the block end and `derivedBlockEndTime` are NEVER used as a
+  // substitute, exactly as the trainee view core refuses to substitute them.
+  const assignmentRowById = new Map<string, ResolvedAssignment>();
+  for (const a of ordered) {
+    if (a.assignmentId === null) continue;
+    // First writer wins, matching the slot index above, so a malformed row that
+    // repeats an assignment id cannot make the lookup order-dependent.
+    if (!assignmentRowById.has(a.assignmentId)) assignmentRowById.set(a.assignmentId, a);
+  }
+
+  /** The partner ASSIGNMENT ids of one row, in the resolved pairing order. */
+  const partnersOf = (a: ResolvedAssignment): readonly string[] => {
+    if (a.assignmentId === null) return [];
+    if (a.role === ROLE_EXAMINEE) {
+      return pairing.instructedTraineesOfExaminee.get(a.assignmentId) ?? [];
+    }
+    const examineeAssignmentId = pairing.examineeOfInstructedTrainee.get(a.assignmentId);
+    return examineeAssignmentId === undefined ? [] : [examineeAssignmentId];
+  };
+
+  const operationalRows: StoredExamAssignmentOperationalRow[] = [];
+  for (const a of ordered) {
+    const partnerAssignmentIds = partnersOf(a);
+    const slot = a.assignmentId === null ? undefined : slotByAssignmentId.get(a.assignmentId);
+
+    // An instructed trainee INHERITS the paired examinee's topic and discipline,
+    // and inherits them only when EXACTLY ONE examinee is resolved for it — the
+    // pairing rule already yields at most one, so an ambiguous, unmatched or
+    // multi-examinee-unpaired trainee resolves nothing and inherits nothing.
+    const isExaminee = a.role === ROLE_EXAMINEE;
+    const inheritedFrom =
+      isExaminee || partnerAssignmentIds.length !== 1
+        ? null
+        : (assignmentRowById.get(partnerAssignmentIds[0]) ?? null);
+    const topicSource = isExaminee ? a : inheritedFrom;
+
+    operationalRows.push(
+      Object.freeze({
+        assignmentId: a.assignmentId,
+        studentId: a.studentId,
+        role: a.role,
+        // The lesson horse lives on the examinee row and nowhere else.
+        horseName: isExaminee ? displayTextOrNull(a.row.horseName) : null,
+        instructionTopic:
+          topicSource === null ? null : displayTextOrNull(topicSource.row.instructionTopic),
+        discipline:
+          topicSource === null ? null : displayTextOrNull(topicSource.row.discipline),
+        // VERBATIM from the derived slot, or nothing at all.
+        personalStartTime: slot === undefined ? null : slot.startTime,
+        personalEndTime: slot === undefined ? null : slot.endTime,
+        pairedStudentIds: Object.freeze(
+          partnerAssignmentIds
+            .map((id) => assignmentRowById.get(id)?.studentId ?? null)
+            // A RESERVED partner identifies nobody, so it contributes no id and
+            // will contribute no name — rather than a placeholder person.
+            .filter((id): id is string => id !== null),
+        ),
+      }),
+    );
+  }
+
+  const operationalDetail: StoredExamBlockOperationalDetail = Object.freeze({
+    source: "STORED" as const,
+    sessionId,
+    assignments: Object.freeze(operationalRows),
+  });
+
   // --- 5d. the conflict input ----------------------------------------------
   // Built in the SAME pass from the SAME timetable, so it cannot disagree with
   // the projection row about session identity, definition identity or status.
@@ -783,6 +952,7 @@ function composeStoredBlock(
   return Object.freeze({
     session,
     detail,
+    operationalDetail,
     conflictSession,
     timetableIssues: timetable.issues,
     timetableWarnings: timetable.warnings,
@@ -910,6 +1080,32 @@ export function buildStoredExamBlockDetailLookup(
     if (block === null || typeof block !== "object") continue;
     if (block.detail === null) continue;
     lookup.set(block.detail.sessionId, block.detail);
+  }
+  return lookup;
+}
+
+/**
+ * Build the ASSIGNMENT-LEVEL operational lookup, keyed by stored `sessionId`.
+ *
+ * Every projected block contributes an entry, INCLUDING an unresolved one —
+ * that is the difference from {@link buildStoredExamBlockDetailLookup}, and it
+ * is the point: an operational reader keeps an unresolved block and must still
+ * be able to show who is in it. A block that produced no projection at all
+ * contributes nothing here either, because it is not in `blocks`.
+ *
+ * A live beginner row must never appear here: it has no stored assignment, and
+ * its participants travel on its own live detail instead.
+ */
+export function buildStoredExamBlockOperationalLookup(
+  blocks: readonly StoredExamBlockComposition[],
+): ReadonlyMap<string, StoredExamBlockOperationalDetail> {
+  const lookup = new Map<string, StoredExamBlockOperationalDetail>();
+  const list = Array.isArray(blocks) ? blocks : [];
+  for (const block of list) {
+    if (block === null || typeof block !== "object") continue;
+    const detail = block.operationalDetail;
+    if (detail === null || detail === undefined || typeof detail !== "object") continue;
+    lookup.set(detail.sessionId, detail);
   }
   return lookup;
 }
