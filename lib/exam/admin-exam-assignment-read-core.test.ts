@@ -16,7 +16,9 @@
  *   8–10  the empty views;
  *  11–14  deep freeze, JSON round-trip, no input mutation, frozen inputs;
  *  15–20  the published shapes: exactly the approved keys, and no `Student.id`;
- *  21–25  the structural purity guards over the module's own source text.
+ *  21–25  the structural purity guards over the module's own source text;
+ *  26–28  EX-ASG-LTD2-B1 — the two stored DETAIL values: carried verbatim, null
+ *         preserved as null, published for every role, and given no placeholder.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -53,6 +55,8 @@ function assignment(
     role: "EXAMINEE",
     traineeName: "דנה",
     horseName: "סוסון",
+    instructionTopic: "עלייה וירידה",
+    discipline: "רכיבה טיפולית",
     orderIndex: 0,
     ...overrides,
   };
@@ -369,11 +373,16 @@ test("15. an option carries EXACTLY studentId and fullName", () => {
   assert.deepEqual(option, { studentId: "student-a", fullName: "אבי" });
 });
 
-test("16. an assignment row carries EXACTLY the six approved keys", () => {
+test("16. an assignment row carries EXACTLY the eight approved keys", () => {
+  // RE-POINTED by EX-ASG-LTD2-B1, and GROWN rather than relaxed: the two stored
+  // DETAIL values of an examinee's row join the published shape, and a NINTH key
+  // still fails here. Nothing was removed and nothing became optional.
   const [row] = buildAdminExamAssignmentListView([assignment()]).assignments;
   assert.deepEqual(Object.keys(row).sort(), [
     "assignmentId",
+    "discipline",
     "horseName",
+    "instructionTopic",
     "orderIndex",
     "role",
     "sessionId",
@@ -405,11 +414,16 @@ test("18. neither view carries personal or scoping data beyond the approved keys
   // `studentId` appears ONCE, and only on the picker option, which exists to be
   // submitted back as the create's chosen trainee. Test 17 proves it is absent
   // from the assignment DTO.
+  // RE-POINTED by EX-ASG-LTD2-B1: the two stored DETAIL values join the list. They
+  // are the ASSIGNMENT's own columns — free text about the exam — and not a fact
+  // about a person, which is why the personal and scoping bans below are unchanged.
   assert.deepEqual([...keys].sort(), [
     "assignmentId",
     "assignments",
+    "discipline",
     "fullName",
     "horseName",
+    "instructionTopic",
     "orderIndex",
     "role",
     "sessionId",
@@ -440,8 +454,6 @@ test("18. neither view carries personal or scoping data beyond the approved keys
     "courseOfferingId",
     "createdAt",
     "updatedAt",
-    "instructionTopic",
-    "discipline",
     "pairingIndex",
     "sourcePracticeRole",
     "notes",
@@ -607,4 +619,85 @@ test("25. this slice's lib/exam files are exactly the approved pair, and this su
       "node:test",
     ],
   );
+});
+
+// ===========================================================================
+// 26–28. EX-ASG-LTD2-B1 — the two stored DETAIL values
+// ===========================================================================
+
+test("26. the two detail values are carried VERBATIM, with no fallback text", () => {
+  const topic = "  עלייה   וירידה ";
+  const branch = "\tרכיבה טיפולית\n";
+  const [row] = buildAdminExamAssignmentListView([
+    assignment({ instructionTopic: topic, discipline: branch }),
+  ]).assignments;
+  // Byte-for-byte: no trim, no case fold, no normalization and no substitution.
+  assert.equal(row.instructionTopic, topic);
+  assert.equal(row.discipline, branch);
+
+  // A value that happens to look like markup is data, not markup: the core is a
+  // shaper, so it neither escapes nor rewrites it, and the consumer renders it as
+  // a text node.
+  const hostile = "<img src=x onerror=alert(1)>";
+  const [hostileRow] = buildAdminExamAssignmentListView([
+    assignment({ instructionTopic: hostile, discipline: hostile }),
+  ]).assignments;
+  assert.equal(hostileRow.instructionTopic, hostile);
+  assert.equal(hostileRow.discipline, hostile);
+});
+
+test("27. an absent detail reads as null, never as undefined and never as text", () => {
+  const list = buildAdminExamAssignmentListView([
+    assignment({ assignmentId: "assignment-a", instructionTopic: null, discipline: null }),
+    assignment({ assignmentId: "assignment-b", instructionTopic: undefined, discipline: undefined }),
+  ]);
+  for (const row of list.assignments) {
+    assert.equal(row.instructionTopic, null);
+    assert.equal(row.discipline, null);
+    // The keys must SURVIVE as null rather than vanish: `undefined` would
+    // disappear from the serialized payload instead of round-tripping as
+    // "no value".
+    assert.ok("instructionTopic" in row, "the key vanished instead of reading as null");
+    assert.ok("discipline" in row, "the key vanished instead of reading as null");
+  }
+  const serialized = JSON.stringify(list);
+  assert.ok(serialized.includes('"instructionTopic":null'));
+  assert.ok(serialized.includes('"discipline":null'));
+
+  // NO placeholder is invented for either value. The missing-trainee placeholder
+  // is the ONE fixed string this module owns, and it belongs to the name alone.
+  assert.equal(serialized.includes(UNASSIGNED_EXAM_TRAINEE_NAME), false);
+  assert.equal(CODE.includes("toTraineeName(row.instructionTopic)"), false);
+  assert.equal(CODE.includes("toTraineeName(row.discipline)"), false);
+});
+
+test("28. the detail values are role-blind, frozen, JSON-safe and non-mutating", () => {
+  // NOTHING is filtered or blanked by role here. An INSTRUCTED_TRAINEE row whose
+  // stored data is malformed is reported AS IT IS, so the surface that renders it
+  // can decide what to say — a core that silently emptied the field would hide the
+  // fault instead of exposing it.
+  const [instructed] = buildAdminExamAssignmentListView([
+    assignment({ role: "INSTRUCTED_TRAINEE", instructionTopic: "נושא", discipline: "ענף" }),
+  ]).assignments;
+  assert.equal(instructed.role, "INSTRUCTED_TRAINEE");
+  assert.equal(instructed.instructionTopic, "נושא");
+  assert.equal(instructed.discipline, "ענף");
+  assert.equal(/\brole\b[^\n]*===/.test(CODE), false, "the pure core branches on role");
+
+  // The published row stays deeply frozen and JSON-safe with both values present.
+  const list = buildAdminExamAssignmentListView([assignment()]);
+  assert.ok(isDeeplyFrozen(list));
+  assert.deepEqual(JSON.parse(JSON.stringify(list)), list);
+  assert.throws(() => {
+    (list.assignments[0] as { discipline: string | null }).discipline = "x";
+  });
+
+  // ...and the INPUT rows are neither reordered nor rewritten.
+  const rows = [
+    assignment({ assignmentId: "assignment-c", instructionTopic: "ב" }),
+    assignment({ assignmentId: "assignment-a", instructionTopic: null }),
+  ];
+  const snapshot = JSON.parse(JSON.stringify(rows));
+  buildAdminExamAssignmentListView(rows);
+  assert.deepEqual(rows, snapshot, "the input rows were mutated");
 });

@@ -184,6 +184,24 @@ const SLICE_PATHS = [
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  // EX-ASG-LTD2-B1 — the approved ADMIN READ DETAIL slice, which travels in the
+  // same working tree: it publishes two stored columns on the assignment list and
+  // shows them on the page this reader already feeds. Listed here for the
+  // footprint guard below and for NO other reason — test 20's claim about who may
+  // call the DEFINITION reader is untouched, and the page is still its only
+  // production caller.
+  //
+  // That slice does consult this reader's requirement flags, but only through the
+  // SAME page-level lookup EX-ASG-UI1 already built: it decides whether a stored
+  // value is MISSING, which adds no reader, no query and no caller. Every path is
+  // ASSEMBLED, the assignment core's two most sharply of all, because the
+  // committed read guard sweeps `app/`, `lib/` and `components/` for that core's
+  // name and must keep reporting exactly one caller.
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");

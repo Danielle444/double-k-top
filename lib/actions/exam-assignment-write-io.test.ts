@@ -811,6 +811,21 @@ test("24. only the approved wiring paths are modified: no schema, migration, aut
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
     "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
     "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    // EX-ASG-LTD2-B1 — the approved ADMIN READ DETAIL slice, which travels in the
+    // same working tree. It publishes two stored columns the assignment READ pair
+    // already reached, so that pair's two PRODUCTION modules and its pure core's
+    // suite join this list, together with the two supervisor footprint guards
+    // whose "nothing was modified" claims it re-points.
+    //
+    // Nothing here changes which module THIS guard is about: the assignment WRITE
+    // binding is not named, gained no caller and was not edited, and no schema,
+    // migration, auth, session, capability or policy file appears. The assertion
+    // below still pins WHICH `lib/` production modules may differ at all.
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
   ].sort();
 
   const modified = gitLines([
@@ -827,15 +842,26 @@ test("24. only the approved wiring paths are modified: no schema, migration, aut
   const offenders = modified.filter((path) => !APPROVED_MODIFICATIONS.includes(path)).sort();
   assert.deepEqual(offenders, [], `the slice modified: ${offenders.join(", ")}`);
 
-  // No `lib/` PRODUCTION module was touched: the committed bindings and pure cores
-  // this slice WIRES were reused, not edited.
-  const libProduction = modified.filter(
-    (path) => path.startsWith("lib/") && !path.endsWith(".test.ts"),
-  );
+  // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to an exact pair rather than
+  // dropped. The claim was "no `lib/` PRODUCTION module was touched at all", which
+  // held while every slice in this tree only WIRED the committed bindings. A read
+  // that must publish two more stored columns has to edit the pair that reads
+  // them, so the two are named exactly and a THIRD still fails here.
+  //
+  // What this guard is about is untouched by that: NEITHER named module is the
+  // assignment WRITE binding or its cores, and no policy, auth or session module
+  // may appear.
+  const APPROVED_LIB_PRODUCTION = [
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  ].sort();
+  const libProduction = modified
+    .filter((path) => path.startsWith("lib/") && !path.endsWith(".test.ts"))
+    .sort();
   assert.deepEqual(
     libProduction,
-    [],
-    `a lib production module was edited: ${libProduction.join(", ")}`,
+    APPROVED_LIB_PRODUCTION,
+    `an unapproved lib production module was edited: ${libProduction.join(", ")}`,
   );
 
   // ...and every working-tree entry under `prisma/` — untracked included — is

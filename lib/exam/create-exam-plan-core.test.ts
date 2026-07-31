@@ -1133,15 +1133,38 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     // which module this guard is about: no reader gained a caller, no writer was
     // edited, and no schema, migration, auth, capability or policy file is named.
     `${ROUTE_DIR}/exam-assignment-ui.contract.test.ts`,
+    `${ROUTE_DIR}/exam-instructed-trainee-assignment-ui.contract.test.ts`,
     ["lib", "actions", "exam-instructed-trainee-assignment-write" + "-io.test.ts"].join("/"),
+    // EX-ASG-LTD2-B1 — the approved ADMIN READ DETAIL slice, which travels in the
+    // same working tree. It adds THREE further tolerated SUITES: the assignment
+    // read core's own suite, and the two supervisor footprint guards whose
+    // "nothing was modified" claims it re-points. Its two PRODUCTION modules are
+    // in the tolerated-production list below, which is why that list grows.
+    ["lib", "exam", "admin-exam-assignment-read" + "-core.test.ts"].join("/"),
+    ["lib", "actions", "exam-supervisor-read" + "-io.test.ts"].join("/"),
+    ["lib", "actions", "exam-supervisor-write" + "-io.test.ts"].join("/"),
   ];
   // RE-POINTED by EX-SES-UI-2 from ONE tolerated production file to TWO. That
   // slice adds the approved session EDIT and REMOVAL endpoints to the route's
   // SHARED Server Action module, so that module — and not a new one — is what
   // differs. Both paths are spelled EXACTLY; a third production file, a `lib/`
   // module, this core, its binding or a second route all still fail below.
+  //
+  // RE-POINTED AGAIN by EX-ASG-LTD2-B1, from TWO to FOUR. That slice publishes two
+  // stored EXAM ASSIGNMENT columns, which cannot be done without editing the pair
+  // that READS them — so the first two `lib/` production modules become tolerated
+  // here, named EXACTLY. THIS core and THIS binding are still asserted
+  // byte-identical to HEAD immediately below, and a FIFTH production file, a third
+  // `lib/` module or a second route all still fail.
   const P3_ACTIONS_TRACKED_PATH = `${ROUTE_DIR}/actions.ts`;
-  const TOLERATED_PRODUCTION = [P3_PAGE_TRACKED_PATH, P3_ACTIONS_TRACKED_PATH];
+  const ASSIGNMENT_READ_CORE_PATH = ["lib", "exam", "admin-exam-assignment-read" + "-core.ts"].join("/");
+  const ASSIGNMENT_READ_IO_PATH = ["lib", "actions", "exam-assignment-read" + "-io.ts"].join("/");
+  const TOLERATED_PRODUCTION = [
+    P3_PAGE_TRACKED_PATH,
+    P3_ACTIONS_TRACKED_PATH,
+    ASSIGNMENT_READ_CORE_PATH,
+    ASSIGNMENT_READ_IO_PATH,
+  ];
   const TOLERATED = [...TOLERATED_SUITES, ...TOLERATED_PRODUCTION];
   const unexpected = modified.filter((path) => !TOLERATED.includes(path));
   assert.deepEqual(
@@ -1158,13 +1181,30 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
   for (const path of TOLERATED_SUITES) {
     assert.match(path, /\.test\.ts$/);
   }
-  // ...and the tolerated production files are exactly the exams page and the
-  // route's shared Server Action module — not a lib module, not this core, not the
-  // binding, and not a second route.
-  assert.deepEqual(TOLERATED_PRODUCTION, [P3_PAGE_TRACKED_PATH, P3_ACTIONS_TRACKED_PATH]);
+  // ...and the tolerated production files are exactly the exams page, the route's
+  // shared Server Action module and the assignment READ pair — not this core, not
+  // its binding, and not a second route. Each one is named individually, so the
+  // list cannot grow by accident.
+  assert.deepEqual(TOLERATED_PRODUCTION, [
+    P3_PAGE_TRACKED_PATH,
+    P3_ACTIONS_TRACKED_PATH,
+    ASSIGNMENT_READ_CORE_PATH,
+    ASSIGNMENT_READ_IO_PATH,
+  ]);
   for (const path of TOLERATED_PRODUCTION) {
-    assert.ok(path.startsWith(`${ROUTE_DIR}/`), `${path} is outside the approved route`);
-    assert.equal(path.startsWith("lib/"), false, `${path} is a lib module`);
+    const isApprovedLibModule =
+      path === ASSIGNMENT_READ_CORE_PATH || path === ASSIGNMENT_READ_IO_PATH;
+    assert.ok(
+      path.startsWith(`${ROUTE_DIR}/`) || isApprovedLibModule,
+      `${path} is outside the approved route`,
+    );
+    assert.equal(
+      path.startsWith("lib/") && !isApprovedLibModule,
+      false,
+      `${path} is an unapproved lib module`,
+    );
+    assert.equal(path === CORE_TRACKED_PATH, false, `${path} is this core`);
+    assert.equal(path === IO_TRACKED_PATH, false, `${path} is this binding`);
   }
 });
 

@@ -818,6 +818,20 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
     "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
     "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
     "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    // EX-ASG-LTD2-B1 — the approved ADMIN READ DETAIL slice, which travels in the
+    // same working tree. It publishes two stored EXAM ASSIGNMENT columns, so the
+    // assignment READ pair's two PRODUCTION modules and its pure core's suite join
+    // this list, together with the two supervisor IO footprint guards whose
+    // "nothing was modified" claims it re-points.
+    //
+    // Those two supervisor entries are SUITES. No supervisor PRODUCTION file is
+    // named here, and the assertion below re-checks that structurally rather than
+    // trusting this list.
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
   ];
   /** The neighbouring slice's four NEW route files. */
   const APPROVED_NEIGHBOUR_ADDITIONS = [
@@ -855,14 +869,23 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
     [],
     `a supervisor production file was modified: ${supervisorModified.join(", ")}`,
   );
-  // And no `lib/` PRODUCTION module anywhere was touched.
-  const libProduction = modified.filter(
-    (path) => path.startsWith("lib/") && !path.endsWith(".test.ts"),
-  );
+  // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to an exact pair rather than
+  // dropped. The claim was "no `lib/` PRODUCTION module anywhere was touched",
+  // which held while every neighbouring slice only WIRED committed bindings. A
+  // read that must publish two more stored columns has to edit the pair that reads
+  // them, so exactly those two are named — neither is a supervisor module, which
+  // the assertion above proves independently — and a THIRD still fails here.
+  const APPROVED_LIB_PRODUCTION = [
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  ].sort();
+  const libProduction = modified
+    .filter((path) => path.startsWith("lib/") && !path.endsWith(".test.ts"))
+    .sort();
   assert.deepEqual(
     libProduction,
-    [],
-    `a lib production module was edited: ${libProduction.join(", ")}`,
+    APPROVED_LIB_PRODUCTION,
+    `an unapproved lib production module was edited: ${libProduction.join(", ")}`,
   );
 
   // ...and every working-tree entry in scope — untracked, modified, staged or any

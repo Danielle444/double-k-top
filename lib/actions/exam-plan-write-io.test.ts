@@ -942,14 +942,31 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
     // which module this guard is about: no reader gained a caller, no writer was
     // edited, and no schema, migration, auth, capability or policy file is named.
     `${P3_ROUTE_DIR}/exam-assignment-ui.contract.test.ts`,
+    `${P3_ROUTE_DIR}/exam-instructed-trainee-assignment-ui.contract.test.ts`,
     ["lib", "actions", "exam-instructed-trainee-assignment-write" + "-io.test.ts"].join("/"),
+    // EX-ASG-LTD2-B1 — the approved ADMIN READ DETAIL slice, which travels in the
+    // same working tree. It publishes two stored columns the assignment READ pair
+    // already reached, so that pair's two PRODUCTION modules and its pure core's
+    // suite join this list, together with the two supervisor footprint guards
+    // whose "nothing was modified" claims it re-points. The two production entries
+    // are the reason the approved-production list below grows from two to four.
+    ["lib", "exam", "admin-exam-assignment-read" + "-core.ts"].join("/"),
+    ["lib", "exam", "admin-exam-assignment-read" + "-core.test.ts"].join("/"),
+    ["lib", "actions", "exam-assignment-read" + "-io.ts"].join("/"),
+    ["lib", "actions", "exam-supervisor-read" + "-io.test.ts"].join("/"),
+    ["lib", "actions", "exam-supervisor-write" + "-io.test.ts"].join("/"),
   ];
-  // RE-POINTED by EX-SES-UI-2 from ONE approved production file to TWO, both named
-  // EXACTLY: a third production file still cannot enter this list unnoticed, and
-  // every other tolerated path is still a guard suite.
+  // RE-POINTED by EX-SES-UI-2 from ONE approved production file to TWO, and AGAIN
+  // by EX-ASG-LTD2-B1 to FOUR — the assignment READ pair it must edit to publish
+  // two more stored columns. All four are named EXACTLY: a fifth production file
+  // still cannot enter this list unnoticed, every other tolerated path is still a
+  // guard suite, and THIS binding and its pure core are re-asserted
+  // byte-identical below.
   const TOLERATED_PRODUCTION = [
     `${P3_ROUTE_DIR}/page.tsx`,
     `${P3_ROUTE_DIR}/actions.ts`,
+    ["lib", "exam", "admin-exam-assignment-read" + "-core.ts"].join("/"),
+    ["lib", "actions", "exam-assignment-read" + "-io.ts"].join("/"),
   ];
   for (const path of TOLERATED) {
     assert.ok(

@@ -84,6 +84,11 @@ const APPROVED_MODIFIED_FILES = [
   `${ROUTE_DIR_PREFIX}exam-plan-create.contract.test.ts`,
   `${ROUTE_DIR_PREFIX}exam-session-create.contract.test.ts`,
   `${ROUTE_DIR_PREFIX}exam-session-edit-delete.contract.test.ts`,
+  // EX-ASG-LTD2-B1 re-points this route's instructed-trainee contract suite too:
+  // that suite's blanket ban on naming the examinee's stored lesson subject is
+  // narrowed to the three files that could WRITE one, so the PAGE may display it.
+  // The suite is a guard, not a caller — this binding still has exactly one.
+  `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-ui.contract.test.ts`,
   `lib/actions/${IO_TEST_NAME}`,
   "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
   "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
@@ -93,6 +98,21 @@ const APPROVED_MODIFIED_FILES = [
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  // EX-ASG-LTD2-B1 — the approved ADMIN READ DETAIL slice, which travels in the
+  // same working tree. It publishes two stored columns the assignment READ pair
+  // already reached, so that pair's two PRODUCTION modules and its pure core's
+  // suite join this list, together with the two supervisor footprint guards whose
+  // "nothing was modified" claims it re-points.
+  //
+  // They are the FIRST `lib/` production entries here, which is why assertion 7
+  // below is re-pointed from "every `lib/` entry is a suite" to an exact pair.
+  // Stage A's own binding and core are NOT among them and stay byte-identical,
+  // which assertion 8 re-checks independently.
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
 ];
 
 /** Every path either slice is allowed to have touched, in any state. */
@@ -936,14 +956,24 @@ test("25. the four files are TRACKED, and only the approved wiring paths differ"
     `the slice modified: ${unapprovedModified.join(", ")}`,
   );
 
-  // 7. ...and the list cannot quietly grow into a production file under `lib/`:
-  //    every approved `lib/` entry is a guard SUITE, checked structurally rather
-  //    than by trusting the literal above.
+  // 7. ...and the list cannot quietly grow into an arbitrary production file
+  //    under `lib/`. RE-POINTED by EX-ASG-LTD2-B1 and NARROWED rather than
+  //    dropped: the claim was "every approved `lib/` entry is a guard SUITE",
+  //    which held while every slice in this tree only WIRED committed bindings.
+  //    A read that must publish two more stored columns has to edit the pair that
+  //    reads them, so exactly TWO `lib/` production modules are named — both
+  //    belonging to the assignment READ path — and a THIRD still fails here.
+  const APPROVED_LIB_PRODUCTION = [
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
+  ];
   for (const rel of APPROVED_MODIFIED_FILES) {
     assert.equal(
-      rel.startsWith("lib/") && !rel.endsWith(".test.ts"),
+      rel.startsWith("lib/") &&
+        !rel.endsWith(".test.ts") &&
+        !APPROVED_LIB_PRODUCTION.includes(rel),
       false,
-      `a lib production module is on the approved list: ${rel}`,
+      `an unapproved lib production module is on the approved list: ${rel}`,
     );
   }
 

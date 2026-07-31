@@ -193,10 +193,16 @@ export interface EligibleExamTraineeListView {
  * link is resolved to the fixed placeholder exactly once, in this module, so no
  * consumer has to decide what to render for it.
  *
- * Note what has NO field and therefore cannot arrive: `Student.id`, the
+ * `instructionTopic` and `discipline` are the two DETAIL values the detailed
+ * create writer stores on an examinee's row. They are read here because a
+ * manager looking at a session must be able to see what was actually stored —
+ * a value that exists but is never displayed is indistinguishable from one that
+ * was never written, and this list is the only surface that shows the row at all.
+ *
+ * Note what still has NO field and therefore cannot arrive: `Student.id`, the
  * identity number, the phone, any parent or guardian detail, the group, the
- * instruction topic, the discipline, the pairing index, the source practice
- * role, the notes, `planId`, `courseOfferingId`, `createdAt` and `updatedAt`.
+ * pairing index, the source practice role, the notes, `planId`,
+ * `courseOfferingId`, `createdAt` and `updatedAt`.
  */
 export interface StoredAdminExamAssignmentRow {
   readonly assignmentId: string;
@@ -204,6 +210,8 @@ export interface StoredAdminExamAssignmentRow {
   readonly role: "EXAMINEE" | "INSTRUCTED_TRAINEE";
   readonly traineeName: string | null;
   readonly horseName: string | null;
+  readonly instructionTopic: string | null;
+  readonly discipline: string | null;
   readonly orderIndex: number;
 }
 
@@ -215,6 +223,14 @@ export interface StoredAdminExamAssignmentRow {
  * is genuinely optional on the stored row for roles this slice does not write,
  * and inventing a horse name would be worse than showing none.
  *
+ * `instructionTopic` and `discipline` are nullable for the same honest reason and
+ * are NEVER given a placeholder here: a historical row that is missing a value the
+ * exam actually demanded is a real gap, and this module publishes the gap as
+ * `null` rather than papering over it with fixed text. What a consumer says about
+ * that `null` — nothing at all, or an explicit diagnostic — is the consumer's
+ * decision, made against the DEFINITION's requirements, which this module cannot
+ * see and deliberately does not join.
+ *
  * There is deliberately no `studentId`, and no field for anything the header's
  * exclusion list names.
  */
@@ -224,6 +240,8 @@ export interface AdminExamAssignmentRow {
   readonly role: "EXAMINEE" | "INSTRUCTED_TRAINEE";
   readonly traineeName: string;
   readonly horseName: string | null;
+  readonly instructionTopic: string | null;
+  readonly discipline: string | null;
   readonly orderIndex: number;
 }
 
@@ -384,6 +402,12 @@ function toTraineeOption(row: StoredEligibleExamTraineeRow): EligibleExamTrainee
  * The role is carried VERBATIM — no mapping table, no default and no fallback —
  * so an unexpected role is reported as itself rather than being relabelled as
  * the one this slice happens to write.
+ *
+ * The two detail values go through the SAME `toOptionalText` the horse uses, so
+ * they are carried byte-for-byte with `undefined` collapsed to `null` and nothing
+ * else changed. No role is consulted while shaping them: this module publishes
+ * what the row holds, and WHICH roles a surface chooses to show a detail for is
+ * that surface's decision, not a silent erasure made here.
  */
 function toAssignmentRow(row: StoredAdminExamAssignmentRow): AdminExamAssignmentRow {
   return Object.freeze({
@@ -392,6 +416,8 @@ function toAssignmentRow(row: StoredAdminExamAssignmentRow): AdminExamAssignment
     role: row.role,
     traineeName: toTraineeName(row.traineeName),
     horseName: toOptionalText(row.horseName),
+    instructionTopic: toOptionalText(row.instructionTopic),
+    discipline: toOptionalText(row.discipline),
     orderIndex: toOrderIndex(row.orderIndex),
   });
 }

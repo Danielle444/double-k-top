@@ -140,7 +140,28 @@ const APPROVED_MODIFIED_FILES = [
   // which module this guard is about: no reader gained a caller, no writer was
   // edited, and no schema, migration, auth, capability or policy file is named.
   `${ROUTE_DIR_PREFIX}exam-assignment-ui.contract.test.ts`,
+  // ...and that slice's OWN contract suite, which EX-ASG-LTD2-B1 re-points: the
+  // detail values it now displays are the examinee's, so the suite's blanket ban
+  // on naming them is narrowed to the files that could WRITE one.
+  `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-ui.contract.test.ts`,
   "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  // EX-ASG-LTD2-B1 — the approved ADMIN READ DETAIL slice, which travels in the
+  // same working tree. It publishes two stored columns the assignment READ pair
+  // already reached, so that pair's two PRODUCTION modules and its pure core's
+  // suite join this list, together with the two supervisor footprint guards whose
+  // "nothing was modified" claims it re-points.
+  //
+  // Nothing here changes which module THIS guard is about: this reader gained no
+  // caller, neither it nor its pure core was edited — both are re-asserted
+  // byte-identical below — and no schema, migration, auth, session, capability or
+  // policy file appears. Every path is ASSEMBLED, the assignment core's two most
+  // sharply of all, because the committed read guard sweeps `app/`, `lib/` and
+  // `components/` for that core's name and must keep reporting exactly one caller.
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+  "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
 ];
 
 /**
@@ -902,9 +923,17 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
   // RE-POINTED by EX-SES-UI-2 from ONE approved production file to TWO: the page,
   // and the route's shared Server Action module that slice extends. Both are named
   // EXACTLY — no directory, no prefix — so a third production file still fails.
+  // RE-POINTED AGAIN by EX-ASG-LTD2-B1, from TWO approved production files to
+  // FOUR. The two additions are the assignment READ pair — a pure core and its
+  // binding — which that slice must edit to publish two more stored columns. They
+  // are named EXACTLY, they are not this reader's own modules (those two are
+  // asserted byte-identical above and remain so), and a FIFTH production file
+  // still fails here.
   const APPROVED_PRODUCTION = [
     `${ROUTE_DIR_PREFIX}page.tsx`,
     `${ROUTE_DIR_PREFIX}actions.ts`,
+    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.ts",
   ];
   for (const path of APPROVED_MODIFIED_FILES) {
     assert.ok(
