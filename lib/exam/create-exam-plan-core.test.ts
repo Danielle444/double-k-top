@@ -1114,6 +1114,16 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     ["lib", "actions", "admin-exam-session-read" + "-io.test.ts"].join("/"),
     ["lib", "actions", "exam-session-write" + "-io.test.ts"].join("/"),
     ["lib", "actions", "exam-definition-read" + "-io.test.ts"].join("/"),
+    // EX-ASG-UI1 adds FOUR further tolerated paths, every one of them a GUARD
+    // SUITE — so the approved-production list below is unchanged at two. That
+    // slice's own four new route files are ADDITIONS, which this
+    // modifications-only diff correctly does not report. The two assignment guard
+    // paths are ASSEMBLED for the sharpest reason of all: both pinned their caller
+    // lists at EXACTLY ZERO before it.
+    `${ROUTE_DIR}/exam-session-edit-delete.contract.test.ts`,
+    ["lib", "actions", "exam-assignment-read" + "-io.test.ts"].join("/"),
+    ["lib", "actions", "exam-assignment-write" + "-io.test.ts"].join("/"),
+    ["lib", "exam", "exam-supervisor-write" + "-core.test.ts"].join("/"),
   ];
   // RE-POINTED by EX-SES-UI-2 from ONE tolerated production file to TWO. That
   // slice adds the approved session EDIT and REMOVAL endpoints to the route's

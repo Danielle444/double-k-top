@@ -65,8 +65,17 @@ const EDIT_FORM_REL = join(ROUTE_DIR_REL, "ExamSessionEditForm.tsx");
 const DELETE_FORM_REL = join(ROUTE_DIR_REL, "ExamSessionDeleteForm.tsx");
 const SUITE_REL = join(ROUTE_DIR_REL, "exam-session-edit-delete.contract.test.ts");
 
-/** The route's EXACT final file set, after this slice's three additions. */
+/**
+ * The route's EXACT final file set, after this slice's three additions — and, as
+ * RE-POINTED by EX-ASG-UI1, that slice's four: an assignment create form, an
+ * assignment delete form, a closed message module and its own contract suite. It
+ * is still an EXHAUSTIVE literal list; a nineteenth file still fails here.
+ */
 const FINAL_ROUTE_FILES = [
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
@@ -107,6 +116,18 @@ const SLICE_PATHS = [
   "lib/actions/" + "exam-session-write" + "-io.test.ts",
   "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
   "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  // EX-ASG-UI1's four new route files, plus the three further committed guards it
+  // re-points. The `lib/` assignment entries are ASSEMBLED for the sharpest reason
+  // of all: both pinned their caller lists at EXACTLY ZERO before that slice.
+  `${ROUTE_DIR_PREFIX}CreateExamAssignmentForm.tsx`,
+  `${ROUTE_DIR_PREFIX}DeleteExamAssignmentForm.tsx`,
+  `${ROUTE_DIR_PREFIX}exam-assignment-messages.ts`,
+  `${ROUTE_DIR_PREFIX}exam-assignment-ui.contract.test.ts`,
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
 ];
@@ -259,26 +280,28 @@ test("4. the action module is still a Server Action module and nothing else", ()
   assert.equal(ACTIONS.includes("server" + "-only"), false);
 });
 
-test("5. the module exports EXACTLY the five approved actions, in order", () => {
+test("5. the module exports EXACTLY the seven approved actions, in order", () => {
   const exported = [
     ...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g),
   ].map(([, name]) => name);
   // An EXHAUSTIVE allow-list in a FIXED order. Everything exported from a
   // "use server" module is a public network endpoint, so this list IS the attack
-  // surface: no sixth endpoint, and no helper, parser, constant or type beside
-  // them.
+  // surface: no eighth endpoint, and no helper, parser, constant or type beside
+  // them. RE-POINTED by EX-ASG-UI1, which adds the sixth and seventh.
   assert.deepEqual(exported, [
     "createExamPlanAction",
     "createExamDefinitionAction",
     "createExamSessionAction",
     "updateExamSessionAction",
     "deleteExamSessionAction",
+    "createExamAssignmentAction",
+    "deleteExamAssignmentAction",
   ]);
-  assert.equal(exported.length, 5, "no sixth endpoint may exist in this module");
+  assert.equal(exported.length, 7, "no eighth endpoint may exist in this module");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 5);
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 7);
 });
 
 test("6. both new actions have the EXACT locked signature, and return void", () => {
@@ -637,12 +660,19 @@ test("17. there is STILL no try/catch anywhere, so every redirect is outside one
 test("18. the module's import surface did NOT grow a new binding", () => {
   const imports = [...ACTIONS_SOURCE.matchAll(/from "([^"]+)"/g)].map(([, m]) => m);
   // The edit and the removal live in the SAME committed binding as the create, so
-  // this slice adds two named imports and ZERO new specifiers. The list is still
-  // exhaustive: a fourth writer module still fails here.
+  // THIS slice adds two named imports and ZERO new specifiers.
+  //
+  // RE-POINTED by EX-ASG-UI1 by ADDING one specifier to an exhaustive list — the
+  // assignment write binding, whose create and removal are a genuinely separate
+  // committed module. The list is still exhaustive: a FIFTH writer module still
+  // fails here. It is ASSEMBLED for the sharpest reason of all, since that
+  // binding's committed guard pinned its caller list at EXACTLY ZERO before that
+  // slice and at exactly this one Server Action module after it.
   assert.deepEqual(imports.sort(), [
     "@/lib/actions/" + "exam-definition-write" + "-io",
     "@/lib/actions/" + "exam-plan-write" + "-io",
     SESSION_WRITE_SPECIFIER,
+    "@/lib/actions/" + "exam-assignment-write" + "-io",
     "@/lib/auth/require-admin",
     "next/cache",
     "next/navigation",
@@ -954,11 +984,27 @@ test("26. the version stamp travels ONLY as a hidden token, never as text or an 
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the version stamp is rendered: ${forbidden}`);
   }
-  // The session id is a React key and TWO hidden-field props — never text.
+  // RE-POINTED by EX-ASG-UI1, and NARROWED rather than relaxed. The session id was
+  // a React key and TWO hidden-field props; it is now a React key, THREE
+  // hidden-field props (the assignment create form is the third) and ONE in-memory
+  // bucket-lookup key. All five uses are NON-VISIBLE, which is the property this
+  // guard has always protected, and the exact counts keep "only" honest.
   assert.ok(PAGE.includes("key={session.sessionId}"));
-  assert.equal((PAGE.match(/sessionId=\{session\.sessionId\}/g) ?? []).length, 2);
+  assert.equal((PAGE.match(/sessionId=\{session\.sessionId\}/g) ?? []).length, 3);
+  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 5);
+  assert.ok(
+    PAGE.includes("assignmentsBySession.get(session.sessionId)"),
+    "the fifth use must be the assignment-bucket lookup",
+  );
   for (const forbidden of [">{session.sessionId}<", "${session.sessionId}"]) {
     assert.equal(PAGE.includes(forbidden), false, `the session id is rendered: ${forbidden}`);
+  }
+  // The ASSIGNMENT id is held to exactly the same rule: a React key and the
+  // removal form's one hidden prop, and never text or an interpolation.
+  assert.ok(PAGE.includes("key={assignment.assignmentId}"));
+  assert.equal((PAGE.match(/assignment\.assignmentId/g) ?? []).length, 2);
+  for (const forbidden of [">{assignment.assignmentId}<", "${assignment.assignmentId}"]) {
+    assert.equal(PAGE.includes(forbidden), false, `the assignment id is rendered: ${forbidden}`);
   }
   // The page still exposes exactly ONE link, and no id of any kind is in it.
   const hrefs = [...PAGE.matchAll(/href=\{?([^}\s]+)\}?/g)].map(([, value]) => value);
@@ -1004,6 +1050,8 @@ test("28. the six new feedback keys are declared, closed, and array-tolerant", (
   assert.ok(typeStart > -1, "the searchParams type must be declared inline");
   const queryType = PAGE.slice(typeStart, PAGE.indexOf("}>;", typeStart));
   const keys = [...queryType.matchAll(/(\w+)\?:/g)].map(([, key]) => key).sort();
+  // RE-POINTED by EX-ASG-UI1, which brings the assignment CREATE's three tokens
+  // and the REMOVAL's two, so the closed set grows from fifteen to twenty.
   assert.deepEqual(keys, [
     "created",
     "createdDefinition",
@@ -1020,12 +1068,27 @@ test("28. the six new feedback keys are declared, closed, and array-tolerant", (
     "sessionIssues",
     "unchangedSession",
     "updatedSession",
+    "createdAssignment",
+    "assignmentError",
+    "assignmentIssues",
+    "deletedAssignment",
+    "assignmentDeleteError",
   ].sort());
   // Every key admits the ARRAY form a repeated query key produces, which is what
   // forces every parser to reject it rather than coerce it.
-  assert.equal((queryType.match(/string \| string\[\]/g) ?? []).length, 15);
-  // Not one of them names a course, a plan, a definition, a session or a version.
-  for (const forbidden of ["courseOfferingId?", "planId", "definitionId", "sessionId", "updatedAt"]) {
+  assert.equal((queryType.match(/string \| string\[\]/g) ?? []).length, 20);
+  // Not one of them names a course, a plan, a definition, a session, a trainee, an
+  // assignment or a version.
+  for (const forbidden of [
+    "courseOfferingId?",
+    "planId",
+    "definitionId",
+    "sessionId",
+    "updatedAt",
+    "studentId",
+    "assignmentId",
+    "horseName",
+  ]) {
     assert.equal(queryType.includes(forbidden), false, `searchParams must not carry ${forbidden}`);
   }
   // The query is still resolved EXACTLY ONCE, and the new tokens are DESTRUCTURED
@@ -1159,16 +1222,24 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
   ]);
   const offenders = [...touched].filter((path) => !SLICE_PATHS.includes(path)).sort();
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
-  assert.equal(SLICE_PATHS.length, 14, "the approved scope is fourteen files");
+  // EX-ASG-UI1 TRANSITION. The scope was fourteen while EX-SES-UI-2 sat in the
+  // working tree; that slice is COMMITTED, so this list now describes the one that
+  // is uncommitted instead — four new route files and three further re-pointed
+  // committed guards, for an exact twenty-three. Still an exhaustive literal set of
+  // exact paths, admitting no directory, prefix or glob.
+  assert.equal(SLICE_PATHS.length, 23, "the approved scope is twenty-three files");
 
   // EXACTLY TWO production files in scope are not new: the shared Server Action
-  // module and the page. Everything else is either one of the three new route
-  // files or a guard suite — no layout, no route handler, no `lib/` production
-  // module, and no second page.
+  // module and the page. Everything else is either one of the new route files or a
+  // guard suite — no layout, no route handler, no `lib/` production module, and no
+  // second page.
   const production = SLICE_PATHS.filter((path) => !path.endsWith(".test.ts"));
   assert.deepEqual(production.sort(), [
     `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
     `${ROUTE_DIR_PREFIX}ExamSessionEditForm.tsx`,
+    `${ROUTE_DIR_PREFIX}CreateExamAssignmentForm.tsx`,
+    `${ROUTE_DIR_PREFIX}DeleteExamAssignmentForm.tsx`,
+    `${ROUTE_DIR_PREFIX}exam-assignment-messages.ts`,
     `${ROUTE_DIR_PREFIX}actions.ts`,
     `${ROUTE_DIR_PREFIX}page.tsx`,
   ].sort());
