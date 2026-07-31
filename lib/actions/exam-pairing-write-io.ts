@@ -84,14 +84,16 @@
  * who edits this file.
  *
  * ===========================================================================
- * THE PRISMA SURFACE — FOUR READ SHAPES, ONE COLUMN EVER WRITTEN
+ * THE PRISMA SURFACE — FIVE READ SHAPES, ONE COLUMN EVER WRITTEN
  * ===========================================================================
  *   1. ONE `examPlan.findUnique` by the VERIFIED offering id, selecting `id`;
  *   2. ONE `examAssignment.findFirst` per assignment id, scoped by the RELATION
  *      to the server-resolved plan, selecting four columns;
  *   3. ONE `examAssignment.findMany` for the session's EXAMINEE rows, selecting
  *      two columns;
- *   4. the writes: `examAssignment.updateMany` statements whose `data` names
+ *   4. ONE `examAssignment.findMany` for the session's INSTRUCTED_TRAINEE rows,
+ *      selecting the SAME two columns — EX-PAIR-1TO1's only new read;
+ *   5. the writes: `examAssignment.updateMany` statements whose `data` names
  *      EXACTLY ONE column — `pairingIndex` — and nothing else.
  *
  * `orderIndex` IS NEVER WRITTEN AND NEVER READ. It is not selected by any
@@ -113,12 +115,13 @@
  *
  * THE PAIRING WRITE IS ONE INTERACTIVE TRANSACTION, and it is the only place two
  * rows are touched. Inside it, in order: no OTHER examinee of the session may
- * hold the chosen index; the examinee row must still hold the expected state
- * (and is UPDATED only when the index is being allocated); and the instructed row
- * must still hold the index the decision was made from. Any failed condition
- * THROWS a module-private sentinel, which rolls the whole transaction back — so a
- * half-written pair cannot survive — and is translated to `false` outside, which
- * the pure core reports as a stale write.
+ * hold the chosen index; the examinee row must still hold the expected state and
+ * is UPDATED to the chosen index on BOTH paths; no OTHER instructed trainee of
+ * the session may hold that index; and the instructed row must still hold the
+ * index the decision was made from. Any failed condition THROWS a module-private
+ * sentinel, which rolls the whole transaction back — so a half-written pair
+ * cannot survive — and is translated to `false` outside, which the pure core
+ * reports as a stale write.
  *
  * THE UNPAIR WRITE IS ONE STATEMENT and needs no transaction: it clears
  * `pairingIndex` on the INSTRUCTED row alone, conditional on the exact index it
@@ -135,20 +138,47 @@
  * written by any statement here, and no publication column is read or written.
  *
  * ===========================================================================
- * THE HONEST LIMIT OF THE UNIQUENESS RULE
+ * THE HONEST LIMIT OF THE UNIQUENESS RULES
  * ===========================================================================
- * "Two examinees of one session never share a pairing index" is enforced by the
- * pure core over the rows this module read, and re-checked inside the
- * transaction immediately before the write. The schema declares NO unique
- * constraint over `(sessionId, pairingIndex)` — adding one would be a migration,
- * which this slice must not make — so two transactions that allocate at exactly
- * the same instant can still, in principle, choose the same number.
+ * TWO rules are enforced, and their concurrency guarantees are NOT the same.
+ * Both are decided by the pure core over rows this module read, and both are
+ * re-checked inside the transaction; the difference is whether the transaction
+ * can also SERIALIZE two rival writers, which — with no unique constraint, no
+ * isolation-level change and no raw SQL — depends entirely on whether the two
+ * rivals contend for one ROW LOCK.
  *
- * That window is narrow and is stated rather than papered over: no unique index,
- * no `SERIALIZABLE` isolation, no row lock, no advisory lock and no retry loop is
+ * "ONE EXAMINEE HAS AT MOST ONE INSTRUCTED TRAINEE" (EX-PAIR-1TO1) IS
+ * SERIALIZED. Two managers pairing two different instructed trainees to the SAME
+ * examinee both reach condition 2, which UPDATES that examinee's row; the second
+ * one BLOCKS on PostgreSQL's row lock until the first commits or rolls back.
+ * That is why condition 2 is an update on the reuse path as well as the
+ * allocation path, and why condition 3 is issued AFTER it: under READ COMMITTED
+ * each statement takes a fresh snapshot, so the loser's claimant count — run once
+ * the lock is released — already contains the winner's committed pairing and
+ * refuses. Neither manager can observe a half-applied pair, and the loser writes
+ * nothing at all.
+ *
+ * "TWO EXAMINEES OF ONE SESSION NEVER SHARE A PAIRING INDEX" IS NOT, and this is
+ * the pre-existing window the slice does not close. Two ALLOCATIONS to two
+ * DIFFERENT examinees of one session contend for no common row, so both may pick
+ * the same free number at the same instant. The result is not a wrong pairing —
+ * a shared index resolves to NOBODY, and the pure core refuses every later
+ * request touching it as ambiguous — but it is a state a manager must repair.
+ * Closing it needs a `@@unique([sessionId, pairingIndex])` and therefore a
+ * MIGRATION, which this slice must not make.
+ *
+ * A THIRD window is outside any pairing-time check and is stated so nobody looks
+ * for it here: a concurrently CREATED instructed trainee. That writer stores no
+ * pairing index, so it can never claim one explicitly — but in a session holding
+ * exactly ONE examinee, an index-less trainee reads as that examinee's partner
+ * through the fallback. A row inserted one millisecond after this transaction
+ * commits produces the same state, so no lock taken here could prevent it; the
+ * one-to-one rule is enforced against it on the NEXT write, which refuses.
+ *
+ * No `SERIALIZABLE` isolation, no advisory lock, no raw SQL and no retry loop is
  * added here, and adding one would be a separate approved change. What IS
- * guaranteed is that no write ever proceeds from a view of the rows that has
- * already changed, and that a failed condition writes nothing at all.
+ * guaranteed in every case is that no write proceeds from a view of the rows that
+ * has already changed, and that a failed condition writes nothing at all.
  *
  * ===========================================================================
  * ERRORS: TWO SHAPES CLASSIFIED, EVERYTHING ELSE PROPAGATES
@@ -197,6 +227,7 @@ import {
   setExamInstructedTraineePairingWithDeps,
   type ExamPairingAssignmentFacts,
   type ExamPairingExamineeFacts,
+  type ExamPairingInstructedTraineeFacts,
   type ExamPairingWriteCommand,
   type ExamUnpairWriteCommand,
   type ResolvedExamPairingPlan,
@@ -362,7 +393,35 @@ async function findSessionExaminees(
 }
 
 /**
- * The ATOMIC pairing write: ONE interactive transaction, three conditions, and at
+ * EX-PAIR-1TO1 — every INSTRUCTED_TRAINEE row of ONE session under the
+ * SERVER-RESOLVED PLAN, reduced to its id and its pairing index.
+ *
+ * The mirror image of the examinee read beside it, statement for statement: the
+ * role is a CONDITION rather than a filter applied afterwards, the session id is
+ * the one the SERVER read off the instructed-trainee row, the plan relation sits
+ * in the same `where` clause, and the select is the SAME TWO columns — no
+ * student, no name, no horse, no topic and no `orderIndex`.
+ *
+ * The row this request is editing is deliberately INCLUDED: the pure core needs
+ * to tell "this examinee is claimed by somebody else" from "this examinee is
+ * claimed by the very trainee asking", and it can only do that if its own row is
+ * in the set. Filtering it out here would move that decision into this module.
+ */
+async function findSessionInstructedTrainees(
+  planId: string,
+  sessionId: string,
+): Promise<readonly ExamPairingInstructedTraineeFacts[]> {
+  const rows = await prisma.examAssignment.findMany({
+    where: { sessionId, role: ROLE_INSTRUCTED_TRAINEE, session: { planId } },
+    select: { id: true, pairingIndex: true },
+    orderBy: { id: "asc" },
+  });
+
+  return rows.map((row) => ({ assignmentId: row.id, pairingIndex: row.pairingIndex }));
+}
+
+/**
+ * The ATOMIC pairing write: ONE interactive transaction, FOUR conditions, and at
  * most two rows — each `data` payload naming EXACTLY the pairing column.
  *
  * In order, on the SAME transaction client:
@@ -371,19 +430,29 @@ async function findSessionExaminees(
  *     last line of defence for "two examinees never share a pairing index", and
  *     it runs BEFORE anything is written, so a rival never causes a rollback of
  *     work that should not have started;
- *  2. THE EXAMINEE ROW. When the index is being ALLOCATED
- *     (`expectedExamineePairingIndex === null`) it is written here, conditional on
- *     the row still holding NO index — so two concurrent allocations cannot both
- *     succeed on the same examinee. When the index is being REUSED, the row is
- *     only COUNTED, never written: rewriting the same value would touch a row
- *     this request has no business modifying;
- *  3. THE INSTRUCTED ROW, conditional on its id, its session, its role, the plan
+ *  2. THE EXAMINEE ROW IS CLAIMED, by an UPDATE, on BOTH paths — written to the
+ *     allocated index while it still holds none, or written to the index it
+ *     already holds while it still holds exactly that. The reuse case is a
+ *     no-value-change statement and exists for its ROW LOCK: it is what makes
+ *     condition 3 a fresh read, and it is why two managers claiming ONE examinee
+ *     are serialized rather than racing;
+ *  3. EX-PAIR-1TO1 — NO OTHER instructed trainee of the session may hold the
+ *     chosen index. Deliberately AFTER the lock: a rival transaction is blocked
+ *     at 2 until this one ends, and under READ COMMITTED a statement issued after
+ *     that block sees the rival's committed pairing;
+ *  4. THE INSTRUCTED ROW, conditional on its id, its session, its role, the plan
  *     and the exact index it held when the decision was made.
  *
  * Every condition that fails THROWS the module-private sentinel, which aborts and
  * rolls back the transaction — so the examinee can never keep an index the
- * instructed trainee did not receive — and is translated to `false` outside,
- * which the pure core reports as a stale write and NEVER retries.
+ * instructed trainee did not receive, and a refused one-to-one claim provably
+ * leaves the trainee's PREVIOUS pairing untouched — and is translated to `false`
+ * outside, which the pure core reports as a stale write and NEVER retries.
+ *
+ * A SWITCH FROM EXAMINEE A TO B NEEDS NO SEPARATE RELEASE. The trainee's ONE
+ * index is both its claim on A and its claim on B, so condition 4's single
+ * `updateMany` releases A and claims B in one statement, in one transaction —
+ * there is no instant at which the trainee is paired to both or to neither.
  *
  * `orderIndex` is not read, not selected and not written by any statement here,
  * and neither is any other assignment column.
@@ -405,37 +474,50 @@ async function pairInstructedTrainee(command: ExamPairingWriteCommand): Promise<
         throw new ExamPairingConditionFailed();
       }
 
-      // 2. The examinee row: allocated (written) or reused (only confirmed).
-      if (command.expectedExamineePairingIndex === null) {
-        const allocated = await tx.examAssignment.updateMany({
-          where: {
-            id: command.examineeAssignmentId,
-            sessionId: command.sessionId,
-            role: ROLE_EXAMINEE,
-            pairingIndex: null,
-            session: { planId: command.planId },
-          },
-          data: { pairingIndex: command.pairingIndex },
-        });
-        if (allocated.count !== 1) {
-          throw new ExamPairingConditionFailed();
-        }
-      } else {
-        const held = await tx.examAssignment.count({
-          where: {
-            id: command.examineeAssignmentId,
-            sessionId: command.sessionId,
-            role: ROLE_EXAMINEE,
-            pairingIndex: command.expectedExamineePairingIndex,
-            session: { planId: command.planId },
-          },
-        });
-        if (held !== 1) {
-          throw new ExamPairingConditionFailed();
-        }
+      // 2. THE EXAMINEE ROW — CLAIMED, and claimed by an UPDATE on both paths.
+      //
+      //    When the index is being ALLOCATED it is written, conditional on the
+      //    row still holding none. When it is being REUSED the row is written to
+      //    the value it ALREADY HOLDS, conditional on it still holding exactly
+      //    that — a no-value-change statement whose purpose is the ROW LOCK, not
+      //    the data. See the header: it is what makes step 3 below a fresh read
+      //    rather than a stale one under READ COMMITTED, and it is the only way
+      //    to serialize two managers claiming one examinee without a schema
+      //    uniqueness constraint, an isolation level or raw SQL.
+      const claimed = await tx.examAssignment.updateMany({
+        where: {
+          id: command.examineeAssignmentId,
+          sessionId: command.sessionId,
+          role: ROLE_EXAMINEE,
+          pairingIndex: command.expectedExamineePairingIndex,
+          session: { planId: command.planId },
+        },
+        data: { pairingIndex: command.pairingIndex },
+      });
+      if (claimed.count !== 1) {
+        throw new ExamPairingConditionFailed();
       }
 
-      // 3. The instructed row, conditional on the state the decision used.
+      // 3. EX-PAIR-1TO1 — NO OTHER instructed trainee of the session may hold
+      //    the chosen index. This is the one-to-one rule's last line of defence,
+      //    and it runs AFTER the examinee row is locked on purpose: a rival
+      //    transaction claiming the same examinee is blocked at step 2 until this
+      //    one ends, and a statement issued after that block reads a snapshot
+      //    that already contains the rival's committed pairing.
+      const claimants = await tx.examAssignment.count({
+        where: {
+          sessionId: command.sessionId,
+          role: ROLE_INSTRUCTED_TRAINEE,
+          pairingIndex: command.pairingIndex,
+          id: { not: command.instructedAssignmentId },
+          session: { planId: command.planId },
+        },
+      });
+      if (claimants !== 0) {
+        throw new ExamPairingConditionFailed();
+      }
+
+      // 4. The instructed row, conditional on the state the decision used.
       const written = await tx.examAssignment.updateMany({
         where: {
           id: command.instructedAssignmentId,
@@ -514,11 +596,14 @@ async function unpairInstructedTrainee(
  *   7. ONE plan-scoped read of the examinee row, only when pairing;
  *   8. ONE plan-and-session-scoped read of the session's EXAMINEE rows, only when
  *      pairing;
- *   9. the pure decision — roles, session, reuse or allocation, or a refusal;
- *  10. a no-op issues ZERO statements;
- *  11. otherwise ONE conditional write: a single `updateMany` to unpair, or one
+ *   9. ONE plan-and-session-scoped read of the session's INSTRUCTED_TRAINEE rows,
+ *      only when pairing — the one-to-one rule's facts;
+ *  10. the pure decision — roles, session, reuse or allocation, the one-to-one
+ *      rule, or a refusal;
+ *  11. a no-op issues ZERO statements;
+ *  12. otherwise ONE conditional write: a single `updateMany` to unpair, or one
  *      transaction to pair;
- *  12. a failed condition -> the core's stale-write refusal, never a retry.
+ *  13. a failed condition -> the core's stale-write refusal, never a retry.
  *
  * Only two failures are classified — the offering not-found and the lifecycle
  * denial. Every other error propagates unchanged, so a real defect is never
@@ -539,6 +624,7 @@ export async function setExamInstructedTraineePairing(
       findExamPlanByCourseOfferingId,
       findAssignmentForPlan,
       findSessionExaminees,
+      findSessionInstructedTrainees,
       pairInstructedTrainee,
       unpairInstructedTrainee,
       isCourseNotFoundError,

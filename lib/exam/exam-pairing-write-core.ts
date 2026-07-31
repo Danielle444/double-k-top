@@ -49,6 +49,36 @@
  * statement in this slice.
  *
  * ===========================================================================
+ * EX-PAIR-1TO1 — THE RELATIONSHIP IS ONE-TO-ONE, AND THAT IS ENFORCED HERE
+ * ===========================================================================
+ * The clarified business rule is that an examinee teaches EXACTLY ONE instructed
+ * trainee, and an instructed trainee is taught by EXACTLY ONE examinee. Two
+ * instructed trainees pointing at one examinee is not an ordinary product case;
+ * it is a state the operational reader cannot render deterministically, because
+ * time, topic and discipline are derived from the pair.
+ *
+ * "Already paired" is NOT re-derived here. The question "which examinee does
+ * this instructed trainee resolve to?" already has exactly ONE committed answer —
+ * the block timetable core's pairing resolution — and this module ASKS it rather
+ * than restating it, so a stored-index match and the single-examinee FALLBACK
+ * (an instructed trainee with no stored index, in a session holding exactly one
+ * examinee, reads as paired to that examinee) cannot mean one thing to the reader
+ * and another to the writer.
+ *
+ * The consequence is deliberate and stated rather than discovered later: in a
+ * session holding ONE examinee and TWO instructed trainees, the second trainee
+ * ALREADY reads as that examinee's partner through the fallback, so pairing the
+ * first one explicitly is REFUSED. That session violates the one-to-one rule
+ * before this operation is even asked, and this write path fails closed instead
+ * of authoring the pairing the fallback was already implying. Repairing such a
+ * session means removing the surplus instructed trainee, which is a different
+ * slice's write and deliberately not reachable from here.
+ *
+ * The refusal is the fixed code `examinee_already_paired`, and it carries NO id,
+ * name or count: which trainee holds the examinee is not the requester's
+ * business, and echoing it would turn a refusal into a roster read.
+ *
+ * ===========================================================================
  * THE CALLER SUPPLIES A REQUEST, NEVER A GRANT — AND NEVER AN INDEX
  * ===========================================================================
  * The only arguments besides the dependency bundle are a REQUESTED
@@ -81,10 +111,11 @@
  *   8. findAssignmentForPlan(plan, examinee)   — only when pairing
  *   9. no row                                  -> examinee_assignment_not_found
  *  10. findSessionExaminees(plan, session)     — the session's EXAMINEE facts
- *  11. decide, purely, from those facts alone
- *  12. no change                               -> NO_CHANGE, with ZERO writes
- *  13. the ONE conditional write (pair or unpair)
- *  14. zero rows changed                       -> stale_write, never a retry
+ *  11. findSessionInstructedTrainees(...)      — the session's INSTRUCTED facts
+ *  12. decide, purely, from those facts alone
+ *  13. no change                               -> NO_CHANGE, with ZERO writes
+ *  14. the ONE conditional write (pair or unpair)
+ *  15. zero rows changed                       -> stale_write, never a retry
  *
  * The consequences are the point:
  *  - NOTHING about an exam is read for a course the actor may not access, so
@@ -106,9 +137,9 @@
  * When pairing to an examinee:
  *
  *  1. if that examinee ALREADY carries a positive `pairingIndex`, and NO OTHER
- *     examinee of the session carries the same one, that index is REUSED — this
- *     is what lets SEVERAL instructed trainees accompany one examinee, which is
- *     an ordinary product case and never a conflict;
+ *     examinee of the session carries the same one, that index is REUSED — so
+ *     re-stating an existing pair, or moving a trainee back onto an examinee it
+ *     is the only claimant of, never renumbers anybody;
  *  2. if that examinee carries NO index, the SMALLEST POSITIVE INTEGER not
  *     currently held by any examinee of the session is allocated, and written to
  *     the examinee and the instructed trainee together;
@@ -136,9 +167,16 @@
  * UNPAIRING TOUCHES EXACTLY ONE ROW
  * ===========================================================================
  * Unpairing clears `pairingIndex` on the INSTRUCTED-TRAINEE row only. The
- * examinee's index is deliberately LEFT ALONE: it may still be held by other
- * instructed trainees, it is the examinee's own stable label, and clearing it
- * would silently unpair people this request never named.
+ * examinee's index is deliberately LEFT ALONE: it is the examinee's own stable
+ * label, it is what the examinee's slot and wave are already reported under, and
+ * clearing it would rewrite a row this request never named.
+ *
+ * RELEASING THE EXAMINEE IS EXACTLY WHAT THIS ACHIEVES ANYWAY, and it is why the
+ * one-to-one rule needs nothing extra on the unpair path: an examinee is
+ * "claimed" by whichever instructed trainee RESOLVES to it, so clearing the
+ * trainee's index removes the only claim — and a switch from examinee A to B is
+ * one write that releases A and claims B in the same statement, because the
+ * trainee's single index is both the release and the claim.
  *
  * There is no dependency here that can clear an examinee's index at all, so this
  * is structural rather than a rule someone has to remember.
@@ -166,6 +204,12 @@
  * that no longer holds. That is `stale_write`, and it is NOT retried — retrying
  * would overwrite their newer pairing with this call's older decision. The
  * honest answer tells the manager to reload.
+ *
+ * THE ONE-TO-ONE RULE IS DECIDED HERE AND RE-CHECKED AT THE WRITE. This module
+ * decides from rows it READ, which is a snapshot; the boundary's pairing write is
+ * declared ATOMIC and is where the same rule must hold against rows as they are
+ * at write time. Nothing in this module assumes the snapshot is still true — a
+ * write that finds it is not returns `false`, which is already `stale_write`.
  *
  * ===========================================================================
  * ONLY TWO KNOWN FAILURES ARE CLASSIFIED — EVERYTHING ELSE PROPAGATES
@@ -197,6 +241,13 @@
 // it exists solely so the two role literals below are checked against the
 // committed role vocabulary rather than being stale strings of their own.
 import type { ExamAssignmentRole } from "./exam-domain-core";
+// EX-PAIR-1TO1 — the COMMITTED pairing resolution, imported rather than
+// restated. It is a PURE function of two arrays of `{ assignmentId,
+// pairingIndex }` and imports no clock, no database and no environment, so this
+// module's purity is unaffected. Asking it is what makes "already paired" mean
+// the SAME thing to the writer that it already means to every reader, including
+// the single-examinee fallback that no local re-implementation would remember.
+import { resolveExamPairings } from "./exam-block-timetable-core";
 
 /**
  * The two roles this operation reasons about, fixed here and never derived from
@@ -246,6 +297,21 @@ export interface ExamPairingExamineeFacts {
 }
 
 /**
+ * One INSTRUCTED_TRAINEE row of the session, reduced to the only two things the
+ * one-to-one rule needs: which row it is, and which index it holds.
+ *
+ * The id is what separates "the trainee this request is editing" — whose own
+ * existing claim is a no-op, never a conflict — from "somebody else", who is
+ * exactly what the rule refuses. Deliberately the SAME two fields the committed
+ * pairing resolution accepts, so this set can be handed to it unchanged and no
+ * mapper stands between the writer's view and the reader's.
+ */
+export interface ExamPairingInstructedTraineeFacts {
+  readonly assignmentId: string;
+  readonly pairingIndex: number | null;
+}
+
+/**
  * Everything the pure decision needs, and nothing else.
  *
  * `examinee === null` IS the unpair request: there is no separate mode flag, so
@@ -254,11 +320,17 @@ export interface ExamPairingExamineeFacts {
  * `sessionExaminees` is the complete set of EXAMINEE rows of the instructed
  * trainee's session — unordered, and treated as a set. When unpairing it is
  * irrelevant and may be empty.
+ *
+ * `sessionInstructedTrainees` is the complete set of INSTRUCTED_TRAINEE rows of
+ * that same session, INCLUDING the one being edited. It is what the one-to-one
+ * rule is answered from, and it is likewise irrelevant to an unpair — releasing
+ * an examinee can never over-subscribe one — so it may be empty there too.
  */
 export interface ExamPairingDecisionInput {
   readonly instructed: ExamPairingAssignmentFacts;
   readonly examinee: ExamPairingAssignmentFacts | null;
   readonly sessionExaminees: readonly ExamPairingExamineeFacts[];
+  readonly sessionInstructedTrainees: readonly ExamPairingInstructedTraineeFacts[];
 }
 
 // ===========================================================================
@@ -271,7 +343,8 @@ export type ExamPairingDecisionRefusalCode =
   | "instructed_role_mismatch"
   | "examinee_role_mismatch"
   | "different_sessions"
-  | "ambiguous_pairing_index";
+  | "ambiguous_pairing_index"
+  | "examinee_already_paired";
 
 /**
  * What the caller must do about it.
@@ -383,6 +456,38 @@ function isIndexHeldByAnotherExaminee(
 }
 
 /**
+ * EX-PAIR-1TO1 — is this examinee ALREADY the partner of some OTHER instructed
+ * trainee of the session?
+ *
+ * The rule is NOT re-derived: the committed pairing resolution is asked, over the
+ * session's stored rows exactly as they are, and its examinee -> trainees map is
+ * read back. That is what makes the writer agree with every reader on all three
+ * of its cases at once — a stored index that matches exactly one examinee, the
+ * single-examinee fallback for a trainee with no stored index, and an index that
+ * matches several examinees resolving to nobody.
+ *
+ * `input.instructed.assignmentId` is EXCLUDED, and that exclusion is the whole
+ * difference between "this examinee is taken" and "this examinee is taken BY THE
+ * VERY TRAINEE ASKING": re-stating one's own pairing, and moving back onto an
+ * examinee one is already the sole claimant of, must not be refused.
+ *
+ * Returns a BOOLEAN and nothing else. Which trainee holds the examinee is never
+ * returned, counted or carried into a result.
+ */
+function isExamineeClaimedByAnotherInstructedTrainee(
+  input: ExamPairingDecisionInput,
+  examineeAssignmentId: string,
+): boolean {
+  const pairing = resolveExamPairings(
+    input.sessionExaminees,
+    input.sessionInstructedTrainees,
+  );
+  const claimants = pairing.instructedTraineesOfExaminee.get(examineeAssignmentId);
+  if (claimants === undefined) return false;
+  return claimants.some((assignmentId) => assignmentId !== input.instructed.assignmentId);
+}
+
+/**
  * Decide, purely and totally. Mutates nothing — not the input, not the examinee
  * array, not one of its entries — reads no clock, and returns a FROZEN,
  * JSON-safe object.
@@ -468,10 +573,17 @@ export function decideExamInstructedTraineePairing(
     }
     if (instructed.pairingIndex === examinee.pairingIndex) {
       // Already paired with exactly this examinee's index. Nothing is written.
+      // Checked BEFORE the one-to-one rule on purpose: a request that is already
+      // satisfied writes nothing, so it cannot make an over-subscribed session
+      // any worse, and refusing a manager's double-click would be noise.
       return freezeDecision({
         kind: "NO_CHANGE" as const,
         pairingIndex: examinee.pairingIndex,
       });
+    }
+    // EX-PAIR-1TO1 — the examinee may not already belong to somebody else.
+    if (isExamineeClaimedByAnotherInstructedTrainee(input, examinee.assignmentId)) {
+      return refuseDecision("examinee_already_paired");
     }
     return freezeDecision({
       kind: "PAIR_WITH_EXISTING_INDEX" as const,
@@ -486,6 +598,14 @@ export function decideExamInstructedTraineePairing(
   // overwriting it: both would be a guess.
   if (examinee.pairingIndex !== null) {
     return refuseDecision("ambiguous_pairing_index");
+  }
+
+  // EX-PAIR-1TO1 on the ALLOCATION path too. An examinee holding no index can
+  // still be claimed — by the single-examinee fallback, under which every
+  // index-less instructed trainee of a one-examinee session reads as its
+  // partner. Allocating here would author a SECOND partner for it.
+  if (isExamineeClaimedByAnotherInstructedTrainee(input, examinee.assignmentId)) {
+    return refuseDecision("examinee_already_paired");
   }
 
   // The examinee has no label yet: allocate the smallest positive integer no
@@ -611,13 +731,32 @@ export interface SetExamInstructedTraineePairingDeps {
   ): Promise<readonly ExamPairingExamineeFacts[]>;
 
   /**
+   * Every INSTRUCTED_TRAINEE row of ONE session under the GIVEN PLAN, reduced to
+   * its id and its pairing index, and INCLUDING the row this request is editing.
+   *
+   * Used for the one-to-one rule and for nothing else. It is a set of ids and
+   * integers: no student, no name and no order reaches the decision through it,
+   * so "who already teaches this examinee" can be ANSWERED here without ever
+   * being NAMED.
+   */
+  findSessionInstructedTrainees(
+    planId: string,
+    sessionId: string,
+  ): Promise<readonly ExamPairingInstructedTraineeFacts[]>;
+
+  /**
    * The ATOMIC pairing write: apply the command's index to the instructed row —
    * and, when the command allocates one, to the examinee row as well — with
    * every condition evaluated by the database inside ONE transaction.
    *
+   * The ONE-TO-ONE rule is a condition OF THIS WRITE too, not only of the
+   * decision above: no instructed trainee other than the commanded one may hold
+   * the commanded index at write time.
+   *
    * Returns whether the pair was actually written. `false` means a concurrent
-   * writer moved one of the two rows, and the orchestration reports that rather
-   * than retrying. Called AT MOST ONCE per invocation.
+   * writer moved one of the rows the decision depended on, or claimed the
+   * examinee first, and the orchestration reports that rather than retrying.
+   * Called AT MOST ONCE per invocation.
    */
   pairInstructedTrainee(command: ExamPairingWriteCommand): Promise<boolean>;
 
@@ -654,6 +793,7 @@ export type SetExamInstructedTraineePairingRefusalCode =
   | "examinee_role_mismatch"
   | "different_sessions"
   | "ambiguous_pairing_index"
+  | "examinee_already_paired"
   | "stale_write";
 
 /** What THIS call did. */
@@ -797,24 +937,34 @@ export async function setExamInstructedTraineePairingWithDeps(
       ? []
       : await deps.findSessionExaminees(plan.id, instructed.sessionId);
 
-  // 11. The pure decision, from those facts alone.
+  // 11. The session's INSTRUCTED_TRAINEE facts, scoped identically, and read for
+  //     the ONE-TO-ONE rule. Read ONLY when pairing, for the same reason: an
+  //     unpair releases an examinee and can never over-subscribe one, so it
+  //     issues no such query either.
+  const sessionInstructedTrainees =
+    examinee === null
+      ? []
+      : await deps.findSessionInstructedTrainees(plan.id, instructed.sessionId);
+
+  // 12. The pure decision, from those facts alone.
   const decision = decideExamInstructedTraineePairing({
     instructed,
     examinee,
     sessionExaminees,
+    sessionInstructedTrainees,
   });
 
   if (decision.kind === "REFUSE") {
     return refuse(decision.code);
   }
 
-  // 12. Already in the requested state: ZERO statements are issued, and the
+  // 13. Already in the requested state: ZERO statements are issued, and the
   //     stored index is reported as it stands.
   if (decision.kind === "NO_CHANGE") {
     return succeed("NO_CHANGE", decision.pairingIndex);
   }
 
-  // 13a. UNPAIR — one conditional write, on the instructed row only.
+  // 14a. UNPAIR — one conditional write, on the instructed row only.
   if (decision.kind === "UNPAIR") {
     const cleared = await deps.unpairInstructedTrainee({
       planId: plan.id,
@@ -823,7 +973,7 @@ export async function setExamInstructedTraineePairingWithDeps(
       expectedInstructedPairingIndex: decision.expectedInstructedPairingIndex,
     });
 
-    // 14. Zero rows: another manager changed the pairing in the gap. NOT
+    // 15. Zero rows: another manager changed the pairing in the gap. NOT
     //     retried — retrying would overwrite their newer state.
     if (!cleared) {
       return refuse("stale_write");
@@ -831,7 +981,7 @@ export async function setExamInstructedTraineePairingWithDeps(
     return succeed("UNPAIRED", null);
   }
 
-  // 13b. PAIR — one atomic write, conditional on both rows still being what this
+  // 14b. PAIR — one atomic write, conditional on both rows still being what this
   //      decision was made from. `examinee` is non-null on this branch by
   //      construction: only the pairing arms of the decision can be reached with
   //      an examinee present.
@@ -849,7 +999,7 @@ export async function setExamInstructedTraineePairingWithDeps(
     pairingIndex: decision.pairingIndex,
   });
 
-  // 14. Same rule for the pairing write, for the same reason.
+  // 15. Same rule for the pairing write, for the same reason.
   if (!paired) {
     return refuse("stale_write");
   }
