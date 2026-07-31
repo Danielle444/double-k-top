@@ -554,7 +554,7 @@ export function emptyInstructorExamReadDto(): InstructorExamReadDto {
  * selected day. Every denial and every empty state returns exactly this.
  */
 export function emptyTraineeExamDayDto(): TraineeExamDayDto {
-  return buildTraineeExamDayDto(emptyTraineeProjection(), null, null, emptyDisplayNames());
+  return buildTraineeExamDayDto(emptyTraineeProjection(), null, null, emptyDisplayNames(), null);
 }
 
 // ===========================================================================
@@ -790,8 +790,21 @@ export async function readTraineeExamDayWithDeps(
   // 7. The committed narrowing. `instructorNames` is EMPTY on purpose: the
   //    responsible instructor's display name falls back to the value the live
   //    adapter already carries, so this reader issues no instructor query.
-  return buildTraineeExamDayDto(projection, payload.beginnerDetails, arenas, {
-    studentNames: usableNameMap(studentNames),
-    instructorNames: emptyNameMap(),
-  });
+  //
+  //    `storedAssignmentDetails` is handed over WHOLE rather than filtered to
+  //    the day: the builder attaches it by EXACT session id per row, so a row
+  //    the projection already excluded — another date, an unresolved block, an
+  //    unpublished lesson — is never looked up and can contribute nothing. The
+  //    day filter is the projection's, and duplicating it here would create a
+  //    second visibility rule that could drift from it.
+  return buildTraineeExamDayDto(
+    projection,
+    payload.beginnerDetails,
+    arenas,
+    {
+      studentNames: usableNameMap(studentNames),
+      instructorNames: emptyNameMap(),
+    },
+    payload.storedAssignmentDetails,
+  );
 }

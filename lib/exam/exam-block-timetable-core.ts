@@ -466,27 +466,149 @@ export interface TimetableInstructedTrainee {
 }
 
 /**
+ * WHO IS PAIRED WITH WHOM in one block — the pairing question on its own,
+ * separated from the slot-inheritance answer that consumes it.
+ *
+ * Both directions are derived from the SAME per-trainee resolution, so they
+ * cannot disagree: `instructedTraineesOfExaminee` is literally the inverse of
+ * `examineeOfInstructedTrainee`, never a second walk of the pairing indexes.
+ *
+ * Only the ASSIGNMENT IDS appear here. A pairing is a relationship between two
+ * assignment rows; a student id, a name, a horse, a topic or a time is the
+ * caller's business and is never resolved by this core.
+ */
+export interface ExamBlockPairing {
+  /** instructed-trainee `assignmentId` → its paired EXAMINEE `assignmentId`. */
+  readonly examineeOfInstructedTrainee: ReadonlyMap<string, string>;
+  /**
+   * examinee `assignmentId` → the paired INSTRUCTED_TRAINEE `assignmentId`s,
+   * in the input order of `instructed`. An examinee with no paired trainee has
+   * NO entry rather than an empty one.
+   */
+  readonly instructedTraineesOfExaminee: ReadonlyMap<string, readonly string[]>;
+}
+
+/** The examinee side of the pairing question, indexed once per block. */
+interface ExamineePairingIndex {
+  readonly byPairingIndex: ReadonlyMap<number, string>;
+  readonly ambiguous: ReadonlySet<number>;
+  /** The block's ONLY examinee, when it has exactly one. Otherwise `null`. */
+  readonly soleExamineeAssignmentId: string | null;
+}
+
+/**
+ * Index the examinees by `pairingIndex`, recording every index that identifies
+ * MORE THAN ONE of them.
+ *
+ * A pairing index shared by two examinees identifies no single examinee, so it
+ * is recorded as ambiguous and resolves NOTHING — the first row is never
+ * silently preferred.
+ */
+function indexExamineePairings(
+  examinees: readonly TimetablePairedExaminee[],
+): ExamineePairingIndex {
+  const byPairingIndex = new Map<number, string>();
+  const ambiguous = new Set<number>();
+  const list = Array.isArray(examinees) ? examinees : [];
+  for (const examinee of list) {
+    if (!isPresentId(examinee?.assignmentId) || !isInteger(examinee?.pairingIndex)) continue;
+    const pairing = examinee.pairingIndex as number;
+    if (byPairingIndex.has(pairing)) ambiguous.add(pairing);
+    else byPairingIndex.set(pairing, examinee.assignmentId);
+  }
+  return {
+    byPairingIndex,
+    ambiguous,
+    soleExamineeAssignmentId:
+      list.length === 1 && isPresentId(list[0]?.assignmentId) ? list[0].assignmentId : null,
+  };
+}
+
+/**
+ * The EXAMINEE one instructed trainee is paired with, or `null`.
+ *
+ * THE ONE PLACE the pairing rule is expressed:
+ *   1. a stated `pairingIndex` matching EXACTLY ONE examinee resolves to it;
+ *   2. NO stated pairing, in a block holding exactly one examinee, resolves to
+ *      that examinee — the only unambiguous fallback;
+ *   3. anything else resolves to nothing.
+ *
+ * Case 3 deliberately includes a trainee whose `pairingIndex` matches no
+ * examinee, or matches several, EVEN when the block holds exactly one examinee:
+ * a stated-but-unmatched pairing is a mis-pairing to be surfaced, not an
+ * invitation to guess. Nothing is ever resolved by name or by array position.
+ */
+function pairedExamineeOf(
+  index: ExamineePairingIndex,
+  trainee: TimetableInstructedTrainee,
+): string | null {
+  if (!isInteger(trainee?.pairingIndex)) return index.soleExamineeAssignmentId;
+  const pairing = trainee.pairingIndex as number;
+  if (index.ambiguous.has(pairing)) return null;
+  return index.byPairingIndex.get(pairing) ?? null;
+}
+
+/**
+ * Resolve the pairing of one block, in BOTH directions.
+ *
+ * TIMETABLE-FREE ON PURPOSE. Pairing is a property of the assignment rows and
+ * of nothing else, so it is answerable for an UNRESOLVED block too — which is
+ * exactly what an operational reader needs, since such a block still has real
+ * pairs even though nobody in it has an exact personal time.
+ *
+ * A duplicated instructed-trainee `assignmentId` resolves ONCE, first entry
+ * wins, so the result stays deterministic for malformed input. Never throws,
+ * never mutates its inputs; the returned maps and arrays are frozen values that
+ * the caller may read but must not extend.
+ */
+export function resolveExamPairings(
+  examinees: readonly TimetablePairedExaminee[],
+  instructed: readonly TimetableInstructedTrainee[],
+): ExamBlockPairing {
+  const index = indexExamineePairings(examinees);
+  const instructedList = Array.isArray(instructed) ? instructed : [];
+
+  const examineeOfInstructedTrainee = new Map<string, string>();
+  const instructedTraineesOfExaminee = new Map<string, string[]>();
+  for (const trainee of instructedList) {
+    if (!isPresentId(trainee?.assignmentId)) continue;
+    if (examineeOfInstructedTrainee.has(trainee.assignmentId)) continue;
+    const examineeAssignmentId = pairedExamineeOf(index, trainee);
+    if (examineeAssignmentId === null) continue;
+    examineeOfInstructedTrainee.set(trainee.assignmentId, examineeAssignmentId);
+    const partners = instructedTraineesOfExaminee.get(examineeAssignmentId);
+    if (partners === undefined) {
+      instructedTraineesOfExaminee.set(examineeAssignmentId, [trainee.assignmentId]);
+    } else {
+      partners.push(trainee.assignmentId);
+    }
+  }
+
+  const inverse = new Map<string, readonly string[]>();
+  for (const [examineeAssignmentId, partners] of instructedTraineesOfExaminee) {
+    inverse.set(examineeAssignmentId, Object.freeze([...partners]));
+  }
+
+  return Object.freeze({
+    examineeOfInstructedTrainee: examineeOfInstructedTrainee as ReadonlyMap<string, string>,
+    instructedTraineesOfExaminee: inverse as ReadonlyMap<string, readonly string[]>,
+  });
+}
+
+/**
  * Resolve the slots INHERITED by instructed trainees.
  *
  * An instructed trainee never consumes a parallel lane and never appears in
  * `waves[].assignmentIds` — a lane is an examinee being examined, and the
  * instructed trainee is part of that examinee's exam rather than a second one.
  *
- * Resolution, in order:
- *   1. a trainee whose `pairingIndex` matches EXACTLY ONE examinee inherits
- *      that examinee's slot verbatim;
- *   2. a trainee with NO pairing at all, in a block holding exactly one
- *      examinee, inherits that examinee's slot — the only unambiguous fallback;
- *   3. anything else yields NO slot.
- *
- * Case 3 deliberately includes a trainee whose `pairingIndex` matches no
- * examinee, or matches several, even when the block holds exactly one examinee:
- * a stated-but-unmatched pairing is a mis-pairing to be surfaced, not an
- * invitation to guess. Nothing is ever resolved by name or by array position,
- * and an unresolved pairing never throws.
+ * WHO a trainee inherits FROM is decided by {@link pairedExamineeOf} and by
+ * nothing else, so this function and {@link resolveExamPairings} cannot drift:
+ * they share one rule rather than restating it twice. What is added here is
+ * only the SLOT lookup — and an unsuccessful timetable resolves nothing at all.
  *
  * Returns a deeply frozen array in the input order of `instructed`, containing
- * only the trainees that resolved. An unsuccessful timetable resolves nothing.
+ * only the trainees that resolved.
  */
 export function resolveInstructedTraineeSlots(
   timetable: ExamBlockTimetable,
@@ -496,42 +618,19 @@ export function resolveInstructedTraineeSlots(
   const empty = Object.freeze([] as ExamTimetableSlot[]);
   if (!timetable.ok) return empty;
 
-  const examineeList = Array.isArray(examinees) ? examinees : [];
   const instructedList = Array.isArray(instructed) ? instructed : [];
   if (instructedList.length === 0) return empty;
 
   const slotByAssignmentId = new Map<string, ExamTimetableSlot>();
   for (const slot of timetable.slots) slotByAssignmentId.set(slot.assignmentId, slot);
 
-  // A pairing index shared by two examinees identifies no single examinee, so
-  // it is recorded as ambiguous and resolves nothing.
-  const examineeByPairing = new Map<number, string>();
-  const ambiguousPairings = new Set<number>();
-  for (const examinee of examineeList) {
-    if (!isPresentId(examinee?.assignmentId) || !isInteger(examinee?.pairingIndex)) continue;
-    const pairing = examinee.pairingIndex as number;
-    if (examineeByPairing.has(pairing)) ambiguousPairings.add(pairing);
-    else examineeByPairing.set(pairing, examinee.assignmentId);
-  }
-
-  const soleExaminee =
-    examineeList.length === 1 && isPresentId(examineeList[0]?.assignmentId)
-      ? examineeList[0].assignmentId
-      : null;
+  const index = indexExamineePairings(examinees);
 
   const resolved: ExamTimetableSlot[] = [];
   for (const trainee of instructedList) {
     if (!isPresentId(trainee?.assignmentId)) continue;
 
-    let sourceAssignmentId: string | null = null;
-    if (isInteger(trainee.pairingIndex)) {
-      const pairing = trainee.pairingIndex as number;
-      sourceAssignmentId = ambiguousPairings.has(pairing)
-        ? null
-        : (examineeByPairing.get(pairing) ?? null);
-    } else {
-      sourceAssignmentId = soleExaminee;
-    }
+    const sourceAssignmentId = pairedExamineeOf(index, trainee);
     if (sourceAssignmentId === null) continue;
 
     const source = slotByAssignmentId.get(sourceAssignmentId);

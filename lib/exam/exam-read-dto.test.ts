@@ -42,6 +42,10 @@ import {
 import { adaptTeachingPracticeExamSources } from "./exam-tp-source-adapter-core";
 import { projectLiveBeginnerRows } from "./exam-live-beginner-adapter-core";
 import { projectTraineeExamDay, type StoredExamBlockDetail } from "./exam-trainee-view-core";
+import type {
+  StoredExamAssignmentOperationalRow,
+  StoredExamBlockOperationalDetail,
+} from "./exam-stored-adapter-core";
 import {
   projectGeneralSchedule,
   type ProjectionSession,
@@ -95,6 +99,10 @@ const REJECTED_PARTICIPANT_ID = "SECRET-REJECTED-PARTICIPANT-s19";
 const ARENA_MISMATCH = "SECRET-ARENA-MISMATCH-t20";
 const ARENA_GHOST = "SECRET-ARENA-GHOST-u21";
 const ARENA_UNRELATED = "SECRET-ARENA-UNRELATED-v22";
+/** A horse on an assignment detail keyed to one session and declaring another. */
+const MISMATCHED_HORSE = "SECRET-HORSE-MISMATCH-w23";
+/** A horse on a stored assignment list a BEGINNER row must never consume. */
+const GHOST_HORSE = "SECRET-HORSE-GHOST-x24";
 
 /** A parent phone with deliberately awkward spacing — it must survive verbatim. */
 const RAW_PARENT_PHONE = " 050-123 4567 ";
@@ -344,6 +352,139 @@ const STORED_DETAILS = new Map<string, StoredExamBlockDetail>([
   ],
 ]);
 
+// ===========================================================================
+// EX-OPS-READ-MVP — the ASSIGNMENT-LEVEL operational sibling
+// ===========================================================================
+
+function operationalRow(over: {
+  readonly assignmentId?: string | null;
+  readonly studentId: string | null;
+  readonly role: "EXAMINEE" | "INSTRUCTED_TRAINEE";
+  readonly horseName?: string | null;
+  readonly instructionTopic?: string | null;
+  readonly discipline?: string | null;
+  readonly personalStartTime?: string | null;
+  readonly personalEndTime?: string | null;
+  readonly pairedStudentIds?: readonly string[];
+}): StoredExamAssignmentOperationalRow {
+  return {
+    assignmentId: over.assignmentId ?? null,
+    studentId: over.studentId,
+    role: over.role,
+    horseName: over.horseName ?? null,
+    instructionTopic: over.instructionTopic ?? null,
+    discipline: over.discipline ?? null,
+    personalStartTime: over.personalStartTime ?? null,
+    personalEndTime: over.personalEndTime ?? null,
+    pairedStudentIds: over.pairedStudentIds ?? [],
+  };
+}
+
+/**
+ * The sibling assignment lookup. It deliberately also holds a MISMATCHED entry,
+ * a BEGINNER key and an unrelated key, so the attachment rules are tested
+ * against a lookup wider than the rows being narrowed.
+ */
+const ASSIGNMENT_DETAILS = new Map<string, StoredExamBlockOperationalDetail>([
+  [
+    "s1",
+    {
+      source: "STORED",
+      sessionId: "s1",
+      assignments: [
+        operationalRow({
+          assignmentId: ASSIGNMENT_ID,
+          studentId: SELF_ID,
+          role: "EXAMINEE",
+          horseName: "סוסה כחולה",
+          instructionTopic: "עצירה",
+          discipline: "אילוף",
+          personalStartTime: "09:00",
+          personalEndTime: "09:20",
+        }),
+        operationalRow({
+          assignmentId: "a-unknown",
+          // An id with NO resolvable name: the row must survive nameless.
+          studentId: UNKNOWN_ID,
+          role: "EXAMINEE",
+          horseName: "סוס אלמוני",
+          personalStartTime: "09:40",
+          personalEndTime: "10:00",
+        }),
+      ],
+    },
+  ],
+  [
+    "s2",
+    {
+      source: "STORED",
+      sessionId: "s2",
+      assignments: [
+        operationalRow({
+          assignmentId: "a-s2-1",
+          studentId: OTHER_ID,
+          role: "EXAMINEE",
+          horseName: "סוס ירוק",
+          instructionTopic: "מעברים",
+          discipline: "קפיצה",
+          personalStartTime: "10:45",
+          personalEndTime: "11:05",
+          pairedStudentIds: [INSTRUCTED_ID],
+        }),
+        operationalRow({
+          assignmentId: "a-s2-2",
+          studentId: INSTRUCTED_ID,
+          role: "INSTRUCTED_TRAINEE",
+          // INHERITED by the committed adapter, never stored on this row.
+          instructionTopic: "מעברים",
+          discipline: "קפיצה",
+          personalStartTime: "10:45",
+          personalEndTime: "11:05",
+          pairedStudentIds: [OTHER_ID],
+        }),
+      ],
+    },
+  ],
+  [
+    // An UNRESOLVED block: real people, real horse, NO personal time at all.
+    "s3",
+    {
+      source: "STORED",
+      sessionId: "s3",
+      assignments: [
+        operationalRow({
+          assignmentId: "a-s3-1",
+          studentId: OTHER_ID,
+          role: "EXAMINEE",
+          horseName: "סוס ללא שעה",
+        }),
+      ],
+    },
+  ],
+  [
+    // Keyed to `s-mismatch` but DECLARING another session: it must fail closed.
+    "s-mismatch",
+    {
+      source: "STORED",
+      sessionId: "s-something-else",
+      assignments: [
+        operationalRow({ studentId: SELF_ID, role: "EXAMINEE", horseName: MISMATCHED_HORSE }),
+      ],
+    },
+  ],
+  [
+    // A beginner row must never consume a stored assignment list.
+    "tp:l1",
+    {
+      source: "STORED",
+      sessionId: "tp:l1",
+      assignments: [
+        operationalRow({ studentId: SELF_ID, role: "EXAMINEE", horseName: GHOST_HORSE }),
+      ],
+    },
+  ],
+]);
+
 const BEGINNER_DETAILS = new Map<string, BeginnerDetail>([
   ["tp:l1", beginnerDetail()],
   [
@@ -451,6 +592,7 @@ function payload(over: Partial<ExamPlanPayload> = {}): ExamPlanPayload {
     publishedAt: 1_700_000_000_000,
     sessions: SESSIONS,
     storedDetails: STORED_DETAILS,
+    storedAssignmentDetails: ASSIGNMENT_DETAILS,
     beginnerDetails: BEGINNER_DETAILS,
     conflictSessions: [
       conflictSession("s1"),
@@ -530,7 +672,13 @@ function traineeProjection(viewer: string | null = SELF_ID) {
 }
 
 function traineeDto(viewer: string | null = SELF_ID) {
-  return buildTraineeExamDayDto(traineeProjection(viewer), BEGINNER_DETAILS, SESSION_DISPLAY, NAMES);
+  return buildTraineeExamDayDto(
+    traineeProjection(viewer),
+    BEGINNER_DETAILS,
+    SESSION_DISPLAY,
+    NAMES,
+    ASSIGNMENT_DETAILS,
+  );
 }
 
 function rowById(rows: readonly TraineeExamDayRowDto[], sessionId: string): TraineeExamDayRowDto {
@@ -676,7 +824,13 @@ test("a blank participant id is neither named nor counted", () => {
 });
 
 test("an unusable name lookup resolves nothing and never invents a name", () => {
-  const dto = buildTraineeExamDayDto(traineeProjection(), BEGINNER_DETAILS, SESSION_DISPLAY, null);
+  const dto = buildTraineeExamDayDto(
+    traineeProjection(),
+    BEGINNER_DETAILS,
+    SESSION_DISPLAY,
+    null,
+    ASSIGNMENT_DETAILS,
+  );
   const row = rowById(dto.allRows, "s1");
   assert.deepEqual(row.examineeNames, []);
   assert.equal(row.examineeCount, 3);
@@ -866,15 +1020,28 @@ test("a blank arena becomes null, never an empty string", () => {
     BEGINNER_DETAILS,
     new Map([["s1", { sessionId: "s1", arena: "   " }]]),
     NAMES,
+    ASSIGNMENT_DETAILS,
   );
   assert.equal(rowById(dto.allRows, "s1").arena, null);
 });
 
 test("a missing display entry yields arena null", () => {
-  const dto = buildTraineeExamDayDto(traineeProjection(), BEGINNER_DETAILS, new Map(), NAMES);
+  const dto = buildTraineeExamDayDto(
+    traineeProjection(),
+    BEGINNER_DETAILS,
+    new Map(),
+    NAMES,
+    ASSIGNMENT_DETAILS,
+  );
   assert.equal(rowById(dto.allRows, "s1").arena, null);
   // ...as does no lookup at all.
-  const none = buildTraineeExamDayDto(traineeProjection(), BEGINNER_DETAILS, null, NAMES);
+  const none = buildTraineeExamDayDto(
+    traineeProjection(),
+    BEGINNER_DETAILS,
+    null,
+    NAMES,
+    ASSIGNMENT_DETAILS,
+  );
   assert.equal(rowById(none.allRows, "s1").arena, null);
 });
 
@@ -1224,7 +1391,15 @@ test("no builder performs authorization", () => {
   }
   // Behavioural: a builder never throws and never refuses — it only narrows.
   assert.doesNotThrow(() => buildAdminExamReadDto(payload(), NAMES));
-  assert.doesNotThrow(() => buildTraineeExamDayDto(traineeProjection(), BEGINNER_DETAILS, SESSION_DISPLAY, NAMES));
+  assert.doesNotThrow(() =>
+    buildTraineeExamDayDto(
+      traineeProjection(),
+      BEGINNER_DETAILS,
+      SESSION_DISPLAY,
+      NAMES,
+      ASSIGNMENT_DETAILS,
+    ),
+  );
 });
 
 test("every DTO is plain JSON data", () => {
@@ -1271,7 +1446,13 @@ test("output is deterministic", () => {
 
 test("no input is mutated", () => {
   const before = inputSnapshot();
-  buildTraineeExamDayDto(traineeProjection(), BEGINNER_DETAILS, SESSION_DISPLAY, NAMES);
+  buildTraineeExamDayDto(
+    traineeProjection(),
+    BEGINNER_DETAILS,
+    SESSION_DISPLAY,
+    NAMES,
+    ASSIGNMENT_DETAILS,
+  );
   buildAdminExamReadDto(payload(), NAMES);
   buildInstructorExamReadDto(payload(), NAMES);
   assert.equal(inputSnapshot(), before);
@@ -1500,4 +1681,138 @@ test("ProjectionSession was not widened by this slice", () => {
   ]);
   // The committed cores know nothing about this DTO layer.
   assert.equal(projectionSource.includes("exam-read-dto"), false);
+});
+
+// ===========================================================================
+// EX-OPS-READ-MVP — the assignment-level operational rows
+// ===========================================================================
+
+test("a stored row carries the complete assignment rows for every role", () => {
+  const trainee = rowById(traineeDto().allRows, "s1");
+  const admin = buildAdminExamReadDto(payload(), NAMES).rows.find((r) => r.sessionId === "s1");
+  assert.ok(admin !== undefined);
+
+  assert.deepEqual(
+    trainee.assignments.map((a) => [
+      a.participantName,
+      a.role,
+      a.horseName,
+      a.instructionTopic,
+      a.discipline,
+      a.personalStartTime,
+      a.personalEndTime,
+    ]),
+    [
+      ["אני חניך", "EXAMINEE", "סוסה כחולה", "עצירה", "אילוף", "09:00", "09:20"],
+      // UNKNOWN_ID resolves to no name: the row survives, nameless.
+      [null, "EXAMINEE", "סוס אלמוני", null, null, "09:40", "10:00"],
+    ],
+  );
+  // The trainee and the operational readings are the SAME contract.
+  assert.deepEqual(admin.assignments, trainee.assignments);
+  // ...and the unresolved student id itself is never emitted as a name.
+  assert.equal(JSON.stringify(trainee.assignments).includes(UNKNOWN_ID), false);
+});
+
+test("a paired instructed trainee reads its partner, inherited topic and inherited time", () => {
+  const row = rowById(traineeDto().allRows, "s2");
+  const [examinee, instructed] = row.assignments;
+
+  assert.equal(examinee.role, "EXAMINEE");
+  assert.equal(examinee.pairedParticipantName, "נועה ברק");
+  assert.deepEqual(examinee.pairedParticipantNames, ["נועה ברק"]);
+
+  assert.equal(instructed.role, "INSTRUCTED_TRAINEE");
+  assert.equal(instructed.participantName, "נועה ברק");
+  assert.equal(instructed.pairedParticipantName, "אורי לוי");
+  assert.deepEqual(instructed.pairedParticipantNames, ["אורי לוי"]);
+  assert.equal(instructed.instructionTopic, "מעברים");
+  assert.equal(instructed.discipline, "קפיצה");
+  assert.equal(instructed.horseName, null);
+  assert.equal(instructed.personalStartTime, "10:45");
+  assert.equal(instructed.personalEndTime, "11:05");
+});
+
+test("an UNRESOLVED block keeps its assignment rows for an operational role only", () => {
+  const admin = buildAdminExamReadDto(payload(), NAMES);
+  const unresolved = admin.rows.find((r) => r.sessionId === "s3");
+  assert.ok(unresolved !== undefined);
+  assert.equal(unresolved.timetableStatus, "UNRESOLVED");
+  assert.deepEqual(
+    unresolved.assignments.map((a) => [a.participantName, a.horseName, a.personalStartTime]),
+    [["אורי לוי", "סוס ללא שעה", null]],
+  );
+  // The committed trainee core hides the row itself, so it carries none.
+  assert.equal(
+    traineeDto().allRows.some((r) => r.sessionId === "s3"),
+    false,
+  );
+});
+
+test("the assignment detail attaches by EXACT session id and fails closed", () => {
+  const dto = traineeDto();
+  // Keyed to `s-mismatch` while DECLARING another session: nothing attaches, and
+  // the horse it carries never appears anywhere.
+  assert.equal(JSON.stringify(dto).includes(MISMATCHED_HORSE), false);
+  // A BEGINNER row never consumes a stored assignment list.
+  assert.deepEqual(rowById(dto.allRows, "tp:l1").assignments, []);
+  assert.equal(JSON.stringify(dto).includes(GHOST_HORSE), false);
+
+  // A missing lookup, an empty one and an unusable one all yield empty lists.
+  for (const lookup of [null, undefined, new Map(), { get: 1 } as never]) {
+    const none = buildTraineeExamDayDto(
+      traineeProjection(),
+      BEGINNER_DETAILS,
+      SESSION_DISPLAY,
+      NAMES,
+      lookup,
+    );
+    assert.deepEqual(rowById(none.allRows, "s1").assignments, []);
+  }
+});
+
+test("a row with no resolvable partner name exposes no partner at all", () => {
+  const lookup = new Map<string, StoredExamBlockOperationalDetail>([
+    [
+      "s1",
+      {
+        source: "STORED",
+        sessionId: "s1",
+        assignments: [
+          operationalRow({
+            studentId: SELF_ID,
+            role: "EXAMINEE",
+            // A partner whose id is in NO name table.
+            pairedStudentIds: [UNKNOWN_ID],
+          }),
+        ],
+      },
+    ],
+  ]);
+  const dto = buildTraineeExamDayDto(
+    traineeProjection(),
+    BEGINNER_DETAILS,
+    SESSION_DISPLAY,
+    NAMES,
+    lookup,
+  );
+  const [row] = rowById(dto.allRows, "s1").assignments;
+  assert.equal(row.pairedParticipantName, null);
+  assert.deepEqual(row.pairedParticipantNames, []);
+  assert.equal(JSON.stringify(dto).includes(UNKNOWN_ID), false);
+});
+
+test("the assignment rows are frozen, freshly allocated and plain JSON", () => {
+  const dto = traineeDto();
+  const row = rowById(dto.allRows, "s1");
+  assert.ok(Object.isFrozen(row.assignments));
+  assert.ok(Object.isFrozen(row.assignments[0]));
+  assert.ok(Object.isFrozen(row.assignments[0].pairedParticipantNames));
+  assert.deepEqual(findNonPlainJsonPaths(dto), []);
+  // No two empty lists are the same object.
+  const empties = dto.allRows.filter((r) => r.assignments.length === 0);
+  assert.ok(empties.length > 1);
+  assert.notEqual(empties[0].assignments, empties[1].assignments);
+  // The caller's own lookup is never frozen behind its back.
+  assert.equal(Object.isFrozen(ASSIGNMENT_DETAILS), false);
 });

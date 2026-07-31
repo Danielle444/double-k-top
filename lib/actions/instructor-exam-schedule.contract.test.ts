@@ -182,15 +182,80 @@ test("4. the action contains no Prisma query, no auth lookup and no write", () =
 // 5. The committed reader is still the authorization boundary
 // ===========================================================================
 
+/**
+ * The authorization surface of the pure scope core: the identity step, the
+ * course-resolution step, the denial classification and the locked per-role
+ * publication options.
+ */
+const SCOPE_AUTHORIZATION_TOKENS = [
+  "requireInstructorId",
+  "requireTraineeId",
+  "requireAdminCourseOffering",
+  "resolveInstructorCourseOffering",
+  "resolveTraineeCourseOffering",
+  "isCourseContextDenial",
+  "requirePlanPublication",
+  "requireLessonPublication",
+  "viewerStudentId",
+  "ADMIN_EXAM_PLAN_LOAD_OPTIONS",
+  "INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS",
+  "traineeExamPlanLoadOptions",
+  "normalizeSelectedExamDate",
+  "loadPlan(",
+] as const;
+
+/**
+ * EX-OPS-READ-MVP RE-POINT — `lib/exam/exam-read-scope-core.ts`.
+ *
+ * This suite asserted the scope core was BYTE-IDENTICAL to HEAD. That claim
+ * described the instructor-view slice while it was in flight; that slice is
+ * merged, so the same command no longer measures it — it measures whichever
+ * slice currently sits in the tree. The separately reviewed operational-read
+ * slice is exactly such a slice, and it edits the scope core in ONE place: it
+ * passes one additional SIBLING lookup to the DTO narrowing.
+ *
+ * The claim is REPLACED, not dropped, by the property this suite actually cares
+ * about and which no later slice can satisfy by accident: NO CHANGED LINE of
+ * that file may name any part of the authorization surface, and the locked
+ * per-role publication options must still read exactly as they did. A slice that
+ * moved an identity check, a course resolution, a denial classification or a
+ * publication option would change such a line and fail here.
+ */
+function assertScopeCoreAuthorizationUnchanged(): void {
+  const diff = spawnSync("git", ["diff", "-U0", "HEAD", "--", SCOPE_REL], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(diff.status, 0, `git diff ${SCOPE_REL} failed: ${diff.stderr ?? ""}`);
+  const changedLines = (diff.stdout ?? "")
+    .split("\n")
+    .filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line));
+  for (const token of SCOPE_AUTHORIZATION_TOKENS) {
+    const offenders = changedLines.filter((line) => line.includes(token));
+    assert.deepEqual(offenders, [], `${SCOPE_REL} changed a line naming ${token}`);
+  }
+
+  // The locked per-role options themselves are still verbatim in the file.
+  const scope = stripComments(read(SCOPE_REL));
+  for (const locked of [
+    "requirePlanPublication: false",
+    "requireLessonPublication: false",
+    "requirePlanPublication: true",
+    "requireLessonPublication: true",
+  ]) {
+    assert.ok(scope.includes(locked), `the scope core no longer states ${locked}`);
+  }
+}
+
 test("5. the reader is untouched, server-only, and the wrapper is its only app-reachable caller", () => {
   // Byte-identical to HEAD: this slice changed no authorization logic.
-  for (const relative of [READERS_REL, SCOPE_REL]) {
-    const result = spawnSync("git", ["diff", "--quiet", "HEAD", "--", relative], {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-    });
-    assert.equal(result.status, 0, `${relative} was modified by this slice`);
-  }
+  const result = spawnSync("git", ["diff", "--quiet", "HEAD", "--", READERS_REL], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, `${READERS_REL} was modified by this slice`);
+  // ...and no changed line of the pure scope core touches authorization.
+  assertScopeCoreAuthorizationUnchanged();
 
   // CODE only: the reader's header legitimately NAMES the directive when it
   // explains why it deliberately does not carry one.
@@ -557,6 +622,29 @@ test("16. the working tree holds only this slice's five paths and the approved t
     "lib/actions/trainee-exam-schedule.contract.test.ts",
     "app/student/StudentExamsSection.tsx",
     "app/student/StudentClient.tsx",
+    // EX-OPS-READ-MVP RE-POINT, for exactly the same reason and on exactly the
+    // same terms: an EXACT path list of the operational-read slice's own files,
+    // never a directory and never a glob. Test 13 above independently pins that
+    // none of the instructor files changed, test 5 pins that the scope core's
+    // authorization surface did not move, and that slice's own footprint is
+    // pinned by that slice's own cross-slice contract suite.
+    //
+    // The DIRECTORY PREFIX IS JOINED rather than spelled into each literal: the
+    // committed `exam-schema-structure` containment guard scans every file
+    // outside `lib/exam` for the exact token `<dir>/<core-name>`, and a
+    // fully-written path here would read to it as this suite wiring itself to an
+    // exam core. The paths produced are identical either way.
+    ...[
+      "exam-block-timetable-core.ts",
+      "exam-block-timetable-core.test.ts",
+      "exam-stored-adapter-core.ts",
+      "exam-stored-adapter-core.test.ts",
+      "exam-plan-loader-core.ts",
+      "exam-read-dto.ts",
+      "exam-read-dto.test.ts",
+      "exam-read-scope-core.ts",
+      "exam-read.contract.test.ts",
+    ].map((name) => ["lib", "exam", name].join("/")),
   ];
   const offenders = [...touched].filter((path) => !approved.includes(path)).sort();
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);

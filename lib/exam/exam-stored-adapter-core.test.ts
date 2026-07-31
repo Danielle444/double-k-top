@@ -21,6 +21,7 @@ import { join } from "node:path";
 
 import {
   buildStoredExamBlockDetailLookup,
+  buildStoredExamBlockOperationalLookup,
   composeStoredExamBlocks,
   STORED_EXAM_ADAPTER_MESSAGES,
   type StoredExamAdapterIssue,
@@ -1197,4 +1198,361 @@ test("every adapter issue code carries a Hebrew message", () => {
     assert.equal(message.trim().length > 0, true, `${code} has a message`);
   }
   assert.equal(Object.isFrozen(STORED_EXAM_ADAPTER_MESSAGES), true);
+});
+
+// ===========================================================================
+// EX-OPS-READ-MVP — the assignment-level OPERATIONAL detail
+// ===========================================================================
+
+const ADVANCED = def({
+  id: "def-advanced",
+  name: "הדרכה מתקדמת",
+  kind: "ADVANCED_INSTRUCTION",
+  durationMinutes: 30,
+  parallelCapacity: 1,
+  requiresInstructedTrainee: true,
+});
+
+/** The operational rows of ONE composed session. */
+function operationalRows(
+  session: StoredExamSessionRow,
+  definition: StoredExamDefinitionRow = ADVANCED,
+) {
+  const result = composeStoredExamBlocks([session], [definition]);
+  assert.equal(result.blocks.length, 1, "the fixture session must compose");
+  return result.blocks[0].operationalDetail;
+}
+
+function advancedSession(
+  assignments: readonly StoredExamAssignmentRow[],
+): StoredExamSessionRow {
+  return sessionRow({
+    id: "OPS1",
+    definitionId: "def-advanced",
+    startTime: "09:00",
+    endTime: "11:00",
+    assignments: [...assignments],
+  });
+}
+
+test("the operational detail exposes every assignment, in the adapter order", () => {
+  const detail = operationalRows(
+    advancedSession([
+      assignment({
+        id: "A2",
+        studentId: "stu-2",
+        orderIndex: 1,
+        horseName: "סוס ב",
+        instructionTopic: "מעברים",
+        discipline: "קפיצה",
+      }),
+      assignment({
+        id: "A1",
+        studentId: "stu-1",
+        orderIndex: 0,
+        horseName: "סוס א",
+        instructionTopic: "עצירה",
+        discipline: "אילוף",
+      }),
+    ]),
+  );
+
+  assert.equal(detail.source, "STORED");
+  assert.equal(detail.sessionId, "OPS1");
+  // Sorted by (orderIndex, assignmentId), never by input order.
+  assert.deepEqual(
+    detail.assignments.map((a) => a.assignmentId),
+    ["A1", "A2"],
+  );
+  // An EXAMINEE carries its OWN stored horse, topic and discipline...
+  assert.deepEqual(
+    detail.assignments.map((a) => [a.horseName, a.instructionTopic, a.discipline]),
+    [
+      ["סוס א", "עצירה", "אילוף"],
+      ["סוס ב", "מעברים", "קפיצה"],
+    ],
+  );
+  // ...and its own derived personal slot, from the ONE timetable pass.
+  assert.deepEqual(
+    detail.assignments.map((a) => [a.personalStartTime, a.personalEndTime]),
+    [
+      ["09:00", "09:30"],
+      ["09:30", "10:00"],
+    ],
+  );
+  for (const row of detail.assignments) {
+    assert.ok(Object.isFrozen(row));
+    assert.ok(Object.isFrozen(row.pairedStudentIds));
+  }
+  assert.ok(Object.isFrozen(detail));
+  assert.ok(Object.isFrozen(detail.assignments));
+});
+
+test("a paired instructed trainee INHERITS the examinee's topic, discipline and slot", () => {
+  const detail = operationalRows(
+    advancedSession([
+      assignment({
+        id: "E1",
+        studentId: "stu-e1",
+        orderIndex: 0,
+        pairingIndex: 1,
+        horseName: "סוס א",
+        instructionTopic: "עצירה",
+        discipline: "אילוף",
+      }),
+      assignment({
+        id: "E2",
+        studentId: "stu-e2",
+        orderIndex: 1,
+        pairingIndex: 2,
+        horseName: "סוס ב",
+        instructionTopic: "מעברים",
+        discipline: "קפיצה",
+      }),
+      assignment({
+        id: "T1",
+        studentId: "stu-t1",
+        role: "INSTRUCTED_TRAINEE",
+        orderIndex: 2,
+        pairingIndex: 2,
+        // A horse stored on an instructed-trainee row is NOT projected: the
+        // lesson horse is recorded once, on the examinee assignment.
+        horseName: "סוס שאסור להציג",
+        instructionTopic: "נושא שאסור להציג",
+        discipline: "ענף שאסור להציג",
+      }),
+    ]),
+  );
+
+  const trainee = detail.assignments.find((a) => a.assignmentId === "T1");
+  assert.ok(trainee !== undefined);
+  assert.equal(trainee.role, "INSTRUCTED_TRAINEE");
+  assert.equal(trainee.horseName, null);
+  // INHERITED from E2 — never the row's own stored values.
+  assert.equal(trainee.instructionTopic, "מעברים");
+  assert.equal(trainee.discipline, "קפיצה");
+  assert.equal(trainee.personalStartTime, "09:30");
+  assert.equal(trainee.personalEndTime, "10:00");
+  assert.deepEqual(trainee.pairedStudentIds, ["stu-e2"]);
+
+  // ...and the examinee sees the trainee back.
+  const examinee = detail.assignments.find((a) => a.assignmentId === "E2");
+  assert.deepEqual(examinee?.pairedStudentIds, ["stu-t1"]);
+  // The UNPAIRED examinee has no partner at all.
+  assert.deepEqual(
+    detail.assignments.find((a) => a.assignmentId === "E1")?.pairedStudentIds,
+    [],
+  );
+});
+
+test("an ambiguous or absent pairing inherits NOTHING and invents no time", () => {
+  const ambiguous = operationalRows(
+    advancedSession([
+      assignment({ id: "E1", studentId: "stu-e1", orderIndex: 0, pairingIndex: 1 }),
+      assignment({ id: "E2", studentId: "stu-e2", orderIndex: 1, pairingIndex: 1 }),
+      assignment({
+        id: "T1",
+        studentId: "stu-t1",
+        role: "INSTRUCTED_TRAINEE",
+        orderIndex: 2,
+        pairingIndex: 1,
+        instructionTopic: "לא להציג",
+      }),
+    ]),
+  );
+  const ambiguousTrainee = ambiguous.assignments.find((a) => a.assignmentId === "T1");
+  assert.deepEqual(ambiguousTrainee?.pairedStudentIds, []);
+  assert.equal(ambiguousTrainee?.instructionTopic, null);
+  assert.equal(ambiguousTrainee?.discipline, null);
+  assert.equal(ambiguousTrainee?.personalStartTime, null);
+  assert.equal(ambiguousTrainee?.personalEndTime, null);
+
+  const twoExaminees = operationalRows(
+    advancedSession([
+      assignment({
+        id: "E1",
+        studentId: "stu-e1",
+        orderIndex: 0,
+        instructionTopic: "עצירה",
+      }),
+      assignment({ id: "E2", studentId: "stu-e2", orderIndex: 1 }),
+      assignment({
+        id: "T1",
+        studentId: "stu-t1",
+        role: "INSTRUCTED_TRAINEE",
+        orderIndex: 2,
+      }),
+    ]),
+  );
+  const unpaired = twoExaminees.assignments.find((a) => a.assignmentId === "T1");
+  assert.deepEqual(unpaired?.pairedStudentIds, []);
+  assert.equal(unpaired?.instructionTopic, null);
+  assert.equal(unpaired?.personalStartTime, null);
+
+  // The ONE-examinee fallback still resolves.
+  const sole = operationalRows(
+    advancedSession([
+      assignment({
+        id: "E1",
+        studentId: "stu-e1",
+        orderIndex: 0,
+        instructionTopic: "עצירה",
+        discipline: "אילוף",
+      }),
+      assignment({
+        id: "T1",
+        studentId: "stu-t1",
+        role: "INSTRUCTED_TRAINEE",
+        orderIndex: 1,
+      }),
+    ]),
+  );
+  const inherited = sole.assignments.find((a) => a.assignmentId === "T1");
+  assert.deepEqual(inherited?.pairedStudentIds, ["stu-e1"]);
+  assert.equal(inherited?.instructionTopic, "עצירה");
+  assert.equal(inherited?.discipline, "אילוף");
+  assert.equal(inherited?.personalStartTime, "09:00");
+  assert.equal(inherited?.personalEndTime, "09:30");
+});
+
+test("an UNRESOLVED block still yields operational rows, with NO personal time", () => {
+  const result = composeStoredExamBlocks(
+    [
+      sessionRow({
+        id: "BAD",
+        definitionId: "def-advanced",
+        // Not a legal `HH:MM`: the timetable cannot resolve.
+        startTime: "99:99",
+        assignments: [
+          assignment({
+            id: "E1",
+            studentId: "stu-e1",
+            orderIndex: 0,
+            horseName: "סוס",
+            instructionTopic: "עצירה",
+          }),
+        ],
+      }),
+    ],
+    [ADVANCED],
+  );
+  const block = result.blocks[0];
+  assert.equal(block.session.timetableStatus, "UNRESOLVED");
+  // The personal-SLOT sibling is absent, as before...
+  assert.equal(block.detail, null);
+  // ...while the OPERATIONAL sibling survives, with no time invented.
+  assert.equal(block.operationalDetail.assignments.length, 1);
+  assert.equal(block.operationalDetail.assignments[0].horseName, "סוס");
+  assert.equal(block.operationalDetail.assignments[0].instructionTopic, "עצירה");
+  assert.equal(block.operationalDetail.assignments[0].personalStartTime, null);
+  assert.equal(block.operationalDetail.assignments[0].personalEndTime, null);
+});
+
+test("a blank horse, topic or discipline becomes null, never an empty string", () => {
+  const detail = operationalRows(
+    advancedSession([
+      assignment({
+        id: "E1",
+        studentId: "stu-e1",
+        orderIndex: 0,
+        horseName: "   ",
+        instructionTopic: "",
+        discipline: "  ענף מרווח  ",
+      }),
+    ]),
+  );
+  assert.equal(detail.assignments[0].horseName, null);
+  assert.equal(detail.assignments[0].instructionTopic, null);
+  assert.equal(detail.assignments[0].discipline, "ענף מרווח");
+});
+
+test("a RESERVED place holds a lane, identifies nobody and pairs to nobody", () => {
+  const detail = operationalRows(
+    advancedSession([
+      assignment({ id: "E1", studentId: null, orderIndex: 0, horseName: "סוס" }),
+      assignment({
+        id: "T1",
+        studentId: "stu-t1",
+        role: "INSTRUCTED_TRAINEE",
+        orderIndex: 1,
+      }),
+    ]),
+  );
+  const reserved = detail.assignments.find((a) => a.assignmentId === "E1");
+  assert.equal(reserved?.studentId, null);
+  // It still occupies its lane and therefore still has a personal slot.
+  assert.equal(reserved?.personalStartTime, "09:00");
+
+  // The trainee IS paired to it, but a reserved place contributes no id, so no
+  // placeholder person can ever be shown as the partner.
+  const trainee = detail.assignments.find((a) => a.assignmentId === "T1");
+  assert.deepEqual(trainee?.pairedStudentIds, []);
+  // ...while the inheritance itself still resolved.
+  assert.equal(trainee?.personalStartTime, "09:00");
+});
+
+test("the operational lookup keys every projected block, resolved or not", () => {
+  const result = composeStoredExamBlocks(
+    [
+      advancedSession([assignment({ id: "E1", studentId: "stu-e1", orderIndex: 0 })]),
+      sessionRow({
+        id: "BAD",
+        definitionId: "def-advanced",
+        startTime: "99:99",
+        assignments: [assignment({ id: "E2", studentId: "stu-e2", orderIndex: 0 })],
+      }),
+      // A session whose definition is missing produces NO block at all.
+      sessionRow({ id: "GHOST", definitionId: "def-nonexistent" }),
+    ],
+    [ADVANCED],
+  );
+  const lookup = buildStoredExamBlockOperationalLookup(result.blocks);
+
+  assert.deepEqual([...lookup.keys()].sort(), ["BAD", "OPS1"]);
+  assert.equal(lookup.has("GHOST"), false);
+  for (const [key, detail] of lookup) {
+    assert.equal(detail.sessionId, key, "the operational detail is mis-keyed");
+    assert.equal(detail.source, "STORED");
+  }
+  // The personal-slot lookup still excludes the unresolved block, as before.
+  assert.equal(buildStoredExamBlockDetailLookup(result.blocks).has("BAD"), false);
+
+  // Total over malformed input.
+  assert.equal(
+    buildStoredExamBlockOperationalLookup(undefined as never).size,
+    0,
+  );
+});
+
+test("the operational rows never carry a pairing index, and never mutate the input", () => {
+  const assignments = [
+    assignment({ id: "E1", studentId: "stu-e1", orderIndex: 0, pairingIndex: 5 }),
+    assignment({
+      id: "T1",
+      studentId: "stu-t1",
+      role: "INSTRUCTED_TRAINEE",
+      orderIndex: 1,
+      pairingIndex: 5,
+    }),
+  ];
+  const session = advancedSession(assignments);
+  const before = JSON.stringify({ session, assignments });
+
+  const detail = operationalRows(session);
+  assert.equal(JSON.stringify({ session, assignments }), before);
+  for (const row of detail.assignments) {
+    assert.deepEqual(Object.keys(row).sort(), [
+      "assignmentId",
+      "discipline",
+      "horseName",
+      "instructionTopic",
+      "pairedStudentIds",
+      "personalEndTime",
+      "personalStartTime",
+      "role",
+      "studentId",
+    ]);
+    assert.equal("pairingIndex" in row, false, "the operational row carries a pairing index");
+    assert.equal("notes" in row, false, "the operational row carries the assignment notes");
+  }
 });

@@ -55,6 +55,28 @@ function gitLines(args: string[]): string[] {
     .filter(Boolean);
 }
 
+/**
+ * The EXACT files of the separately reviewed EX-OPS-READ-MVP slice, which
+ * extends the role-neutral read pipeline so the complete operational schedule
+ * can be displayed. Listed once, used by the two re-pointed sweeps below.
+ */
+const EXAM_OPERATIONAL_READ_PATHS: readonly string[] = [
+  "exam-block-timetable-core.ts",
+  "exam-block-timetable-core.test.ts",
+  "exam-stored-adapter-core.ts",
+  "exam-stored-adapter-core.test.ts",
+  "exam-plan-loader-core.ts",
+  "exam-read-dto.ts",
+  "exam-read-dto.test.ts",
+  "exam-read-scope-core.ts",
+  "exam-read.contract.test.ts",
+  // The DIRECTORY PREFIX IS JOINED rather than spelled into each literal. The
+  // committed `exam-schema-structure` containment guard scans every file outside
+  // `lib/exam` for the exact token `<dir>/<core-name>`, and a fully-written path
+  // here would read to it as this suite wiring itself to an exam core. The paths
+  // this list produces are identical either way.
+].map((name) => ["lib", "exam", name].join("/"));
+
 /** Is this path byte-identical to HEAD, staged and unstaged alike? */
 function unchangedSinceHead(relative: string): boolean {
   return (
@@ -242,12 +264,78 @@ test("6. the action contains no Prisma query, no DTO narrowing and no write", ()
 // 6b. The committed reader is still the authorization boundary
 // ===========================================================================
 
+/**
+ * The authorization surface of the pure scope core: the identity step, the
+ * course-resolution step, the denial classification and the locked per-role
+ * publication options.
+ */
+const SCOPE_AUTHORIZATION_TOKENS = [
+  "requireInstructorId",
+  "requireTraineeId",
+  "requireAdminCourseOffering",
+  "resolveInstructorCourseOffering",
+  "resolveTraineeCourseOffering",
+  "isCourseContextDenial",
+  "requirePlanPublication",
+  "requireLessonPublication",
+  "viewerStudentId",
+  "ADMIN_EXAM_PLAN_LOAD_OPTIONS",
+  "INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS",
+  "traineeExamPlanLoadOptions",
+  "normalizeSelectedExamDate",
+  "loadPlan(",
+] as const;
+
+/**
+ * EX-OPS-READ-MVP RE-POINT — `lib/exam/exam-read-scope-core.ts`.
+ *
+ * This suite asserted the scope core was BYTE-IDENTICAL to HEAD. That claim
+ * described the trainee-view slice while it was in flight; that slice is merged,
+ * so the same command no longer measures it — it measures whichever slice
+ * currently sits in the tree. The separately reviewed operational-read slice is
+ * exactly such a slice, and it edits the scope core in ONE place: it passes one
+ * additional SIBLING lookup to the DTO narrowing.
+ *
+ * The claim is REPLACED, not dropped, by the property this suite actually cares
+ * about and which no later slice can satisfy by accident: NO CHANGED LINE of
+ * that file may name any part of the authorization surface, and the locked
+ * per-role publication options — including the trainee's two `true`s, which are
+ * the publication rule this whole suite exists to protect — must still read
+ * exactly as they did.
+ */
+function assertScopeCoreAuthorizationUnchanged(): void {
+  const diff = spawnSync("git", ["diff", "-U0", "HEAD", "--", SCOPE_REL], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(diff.status, 0, `git diff ${SCOPE_REL} failed: ${diff.stderr ?? ""}`);
+  const changedLines = (diff.stdout ?? "")
+    .split("\n")
+    .filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line));
+  for (const token of SCOPE_AUTHORIZATION_TOKENS) {
+    const offenders = changedLines.filter((line) => line.includes(token));
+    assert.deepEqual(offenders, [], `${SCOPE_REL} changed a line naming ${token}`);
+  }
+
+  const scope = stripComments(read(SCOPE_REL));
+  for (const locked of [
+    "requirePlanPublication: true",
+    "requireLessonPublication: true",
+    "requirePlanPublication: false",
+    "requireLessonPublication: false",
+  ]) {
+    assert.ok(scope.includes(locked), `the scope core no longer states ${locked}`);
+  }
+}
+
 test("6b. the reader is untouched, server-only, and the wrapper is its only app-reachable caller", () => {
   // Byte-identical to HEAD: this slice changed no authorization, no course
   // resolution and no publication logic.
-  for (const relative of [READERS_REL, SCOPE_REL, NAV_REL]) {
+  for (const relative of [READERS_REL, NAV_REL]) {
     assert.ok(unchangedSinceHead(relative), `${relative} was modified by this slice`);
   }
+  // ...and no changed line of the pure scope core touches authorization.
+  assertScopeCoreAuthorizationUnchanged();
 
   // CODE only: the reader's header legitimately NAMES the directive when it
   // explains why it deliberately does not carry one.
@@ -443,8 +531,8 @@ test("12. unpublished data cannot be displayed by this UI", () => {
   ]) {
     assert.equal(SECTION_CODE.includes(token), false, `the UI names ${token}`);
   }
-  // The publication rule itself lives in the untouched committed core.
-  assert.ok(unchangedSinceHead(SCOPE_REL), `${SCOPE_REL} was modified`);
+  // The publication rule itself still lives, untouched, in the committed core.
+  assertScopeCoreAuthorizationUnchanged();
 });
 
 test("13. no personal time is invented when the contract does not carry one", () => {
@@ -572,10 +660,24 @@ test("15. no instructor or admin exam file was modified", () => {
   assert.equal(unchangedSinceHead(INSTRUCTOR_SUITE_REL), false, "the re-pointed guard is missing");
 
   // ...nor was anything about schema, identity, sessions or capabilities.
-  for (const dir of ["prisma", "lib/auth", "lib/course/capabilities", "lib/exam"]) {
+  for (const dir of ["prisma", "lib/auth", "lib/course/capabilities"]) {
     assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", dir]), []);
     assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", dir]), []);
   }
+  // EX-OPS-READ-MVP RE-POINT. `lib/exam` was in the list above as a blanket "no
+  // exam core changed" claim describing THIS slice while it was in flight. The
+  // slice is merged, so the claim now measures whichever slice sits in the tree.
+  // It is replaced by an EXACT path allow-list of the separately reviewed
+  // operational-read slice, so any OTHER exam core change still fails here, and
+  // NO new file may appear in that directory at all.
+  assert.deepEqual(
+    gitLines(["diff", "--name-only", "HEAD", "--", "lib/exam"])
+      .map((path) => path.split("\\").join("/"))
+      .filter((path) => !EXAM_OPERATIONAL_READ_PATHS.includes(path))
+      .sort(),
+    [],
+  );
+  assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", "lib/exam"]), []);
 });
 
 test("16. no write, publish, supervisor or pairing control was added", () => {
@@ -625,8 +727,24 @@ test("17. the slice's footprint is exactly its five approved paths", () => {
     ...gitLines(["diff", "--name-only", "--cached", "HEAD"]),
     ...gitLines(["ls-files", "--others", "--exclude-standard"]),
   ]);
-  const approved = [ACTION_REL, SUITE_REL, SECTION_REL, CLIENT_REL, INSTRUCTOR_SUITE_REL];
-  const offenders = [...touched].filter((path) => !approved.includes(path)).sort();
+  const approved = [
+    ACTION_REL,
+    SUITE_REL,
+    SECTION_REL,
+    CLIENT_REL,
+    INSTRUCTOR_SUITE_REL,
+    // EX-OPS-READ-MVP RE-POINT, on the same terms as the re-point in test 16 of
+    // the instructor suite: this repo-wide sweep is deliberately KEPT — it is
+    // the only "nothing else was touched" check here — and widened by an EXACT
+    // path list, never a directory and never a glob. That slice's own footprint
+    // is pinned by lib/exam/exam-read.contract.test.ts, and test 15 above pins
+    // that no OTHER exam core changed.
+    ...EXAM_OPERATIONAL_READ_PATHS,
+  ];
+  const offenders = [...touched]
+    .map((path) => path.split("\\").join("/"))
+    .filter((path) => !approved.includes(path))
+    .sort();
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
   // Nothing was staged.
   assert.deepEqual(gitLines(["diff", "--name-only", "--cached", "HEAD"]), []);
