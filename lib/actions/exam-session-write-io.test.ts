@@ -53,6 +53,17 @@ const BOUND_CORE_RELS = [CORE_REL, UPDATE_CORE_REL, DELETE_CORE_REL];
  * them: the four of EX-SES-S2 and the four of EX-SES-S3.
  */
 const APPROVED_NEW_FILES = [
+  // EX-ADMIN-SRCDATE — the FOUR files this branch adds under `lib/`, and the
+  // guard suites it re-points. Nothing in the product could write an exam plan's
+  // Teaching-Practice date selection, so every plan held an empty one and
+  // beginner exams could not appear on any screen; the source-date decision core
+  // and its server-only binding are the smallest thing that fixes it. This
+  // reader/writer gained NO caller and NO field. ASSEMBLED, so this suite does
+  // not enrol itself in a caller list it exists to keep narrow.
+  "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+  "lib/exam/" + "admin-exam-source-date" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.test.ts",
   "lib/actions/exam-session-write-io.test.ts",
   "lib/actions/exam-session-write-io.ts",
   "lib/exam/create-exam-session-core.test.ts",

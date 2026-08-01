@@ -296,6 +296,7 @@ import {
 import { groupAdminExamSessionsByDay } from "@/lib/exam/admin-exam-session-grouping-core";
 import { readAdminExamPlan, readAdminExamWaveView } from "@/lib/actions/exam-role-readers";
 import type { AdminExamWaveView } from "@/lib/exam/admin-exam-wave-view-core";
+import { examBeginnerDatesSupportedForLevel } from "@/lib/actions/admin-exam-source-date-io";
 import {
   createExamPlanAction,
   createExamDefinitionAction,
@@ -308,6 +309,7 @@ import {
   setExamPlanPublicationAction,
   updateExamAssignmentDetailsAction,
   moveExamAssignmentAction,
+  replaceExamSourceDatesAction,
 } from "./actions";
 import { ExamPlanCreateForm } from "./ExamPlanCreateForm";
 import { ExamDefinitionCreateForm } from "./ExamDefinitionCreateForm";
@@ -344,6 +346,8 @@ import {
   examAssignmentEditFeedback,
   examAssignmentEditIssueTexts,
   examAssignmentOrderFeedback,
+  examSourceDatesFeedback,
+  examSourceDatesIssueTexts,
 } from "./exam-workspace-messages";
 import {
   EXAM_WORKSPACE_TABS,
@@ -356,6 +360,15 @@ import {
   collectUntimedExaminees,
   buildGeneralTimeline,
   groupTimelineByDefinition,
+  orderWorkspaceTimeline,
+  groupTimelineByDate,
+  parseWorkspaceGroupIndex,
+  parseAddAssignmentDisclosure,
+  collectDayLabels,
+  buildScheduleOverview,
+  beginnerRowsOnDate,
+  orderBeginnerRows,
+  NO_BEGINNER_ROWS,
   type ExamScheduleView,
   type ExamWave,
   type WorkspaceBeginnerRow,
@@ -899,7 +912,16 @@ const BLOCK_ARENA_LABEL = "מקום";
 const BLOCK_KIND_LABEL = "סוג מבחן";
 const BLOCK_PARALLEL_LABEL = "נבחנים במקביל";
 const BLOCK_ASSIGNED_LABEL = "נבחנים משובצים";
-const WAVE_LABEL = "גל";
+/**
+ * THE WAVE HEADING IS A TIME RANGE, AND NOTHING ELSE.
+ *
+ * There is deliberately no noun in front of it. The internal model still calls a
+ * group of simultaneously-examined people a wave — that is the committed
+ * timetable core's own vocabulary and it stays — but the WORD meant nothing to
+ * the managers reading this screen, who see a time and the people examined at it.
+ * This is a display-copy correction only: no derivation, no grouping and no
+ * ordering changed with it.
+ */
 const WAVE_TIME_SEPARATOR = "–";
 const POSITION_LABEL = "מיקום";
 const MOVE_UP_LABEL = "העלאה בסדר";
@@ -916,17 +938,15 @@ const GROUPING_FAILED_TEXT =
   "לא ניתן להציג כרגע את מפגשי המבחנים. יש לבדוק את נתוני המפגשים.";
 
 /**
- * The BEGINNER-EXAM region's own fixed sentence.
+ * The BEGINNER-EXAM region's heading.
  *
- * This branch adds NO beginner data and NO Teaching-Practice read. The region
- * below exists so the read-only projection a separate branch is building has ONE
- * named place to land in, and so that landing does not restructure the page
- * again. Beginner exams stay editable only on the existing Teaching Practice
- * screen.
+ * Its old single "these will be shown here read-only" sentence is GONE, replaced
+ * by the THREE distinguishable states below: a course level that has no beginner
+ * exams at all, a plan that has selected no Teaching-Practice days, and a plan
+ * whose selected days hold no lessons. One sentence could not tell those apart,
+ * and each has a different fix.
  */
 const BEGINNER_REGION_HEADING = "מבחני מתחילים";
-const BEGINNER_REGION_TEXT =
-  "מבחני המתחילים נגזרים מהתרגול המעשי ויוצגו כאן לקריאה בלבד. עריכה נעשית במסך התרגול המעשי.";
 
 
 /**
@@ -957,6 +977,98 @@ function presentTextOr(value: string | null, placeholder: string): string {
 
 const BEGINNER_READ_ONLY_TEXT =
   "מבחני מתחילים הם תצוגה בלבד. כל שינוי נעשה במסך התרגול המעשי.";
+
+// ===========================================================================
+// EX-ADMIN-SRCDATE — the source-date selection surface
+// ===========================================================================
+
+/**
+ * THE MISSING LINK, STATED PLAINLY.
+ *
+ * Beginner exams are a LIVE PROJECTION of Teaching Practice, and the exam plan
+ * stores exactly one beginner fact: which Teaching-Practice DAYS it runs as exam
+ * days. Until this control existed nothing in the product could write that fact,
+ * so every plan held an empty selection and the read pipeline projected NO
+ * beginner rows anywhere. The rows were not hidden by this page — they never
+ * existed.
+ *
+ * The control below is the smallest thing that fixes it: a list of the days the
+ * plan currently selects, each with a checkbox, and one field for adding a day.
+ * The submission is the COMPLETE set, so unchecking a day removes it and there is
+ * no second endpoint that could disagree about what is selected.
+ *
+ * IT CREATES NO TEACHING-PRACTICE DATA. It selects days that already have
+ * lessons; the committed writer refuses a day that has none. Nothing about a
+ * lesson, a child, a horse or a contact is written, copied or duplicated, and
+ * editing any of that stays on the Teaching-Practice screen exactly as before.
+ */
+const SOURCE_DATES_HEADING = "תאריכי מבחני מתחילים";
+const SOURCE_DATES_INTRO =
+  "מבחני המתחילים נגזרים מהתרגול המעשי. יש לבחור כאן את ימי התרגול המעשי שמתקיימים בהם מבחני מתחילים — רק ימים שנבחרו יופיעו בלוח.";
+const SOURCE_DATES_SELECTED_LABEL = "ימים שנבחרו";
+const SOURCE_DATES_KEEP_LABEL = "נבחר";
+const SOURCE_DATES_ADD_LABEL = "הוספת יום תרגול מעשי";
+const SOURCE_DATES_SAVE_TEXT = "שמירת התאריכים";
+const SOURCE_DATES_NONE_TEXT = "טרם נבחרו ימי תרגול מעשי עבור מבחני המתחילים.";
+const SOURCE_DATES_UNCHECK_HINT =
+  "הסרת הסימון מיום מסירה אותו מהרשימה בעת השמירה. שמירה ללא ימים מסומנים מבטלת את כל מבחני המתחילים בתוכנית.";
+
+/**
+ * The THREE states a manager must be able to tell apart, and why each exists.
+ *
+ * They are genuinely different problems with genuinely different fixes, and a
+ * single "no beginner exams" sentence would send a manager looking for the wrong
+ * one:
+ *
+ *  - the course LEVEL has no beginner exams at all — nothing to configure, and no
+ *    selection could ever help;
+ *  - no day is SELECTED — the fix is the control above;
+ *  - days are selected but no Teaching-Practice lesson was found on them — the
+ *    fix is on the Teaching-Practice screen, or the wrong days were chosen.
+ */
+const BEGINNER_LEVEL_UNSUPPORTED_TEXT =
+  "ברמת הקורס הזו אין מבחני מתחילים, ולכן אין תאריכים לבחור ולא יוצגו שיעורים.";
+const BEGINNER_NO_SOURCE_DATES_TEXT =
+  "לא נבחרו ימי תרגול מעשי, ולכן אין מבחני מתחילים בלוח. הבחירה נעשית בלשונית מופעים וזמנים.";
+const BEGINNER_NO_MATCHING_LESSONS_TEXT =
+  "נבחרו ימי תרגול מעשי, אך לא נמצאו בהם שיעורי תרגול מעשי. יש לבדוק את התאריכים או את מסך התרגול המעשי.";
+
+/**
+ * The two ARRANGEMENT sentences. Neither is an empty state: beginner lessons
+ * exist and are being shown somewhere else on the manager's own screen.
+ */
+const BEGINNER_IN_GENERAL_VIEW_TEXT =
+  "שעות מבחני המתחילים מופיעות בלו״ז הכללי למעלה. הפרטים המלאים מוצגים בתצוגות לפי סוג מבחן ולפי תאריך.";
+const BEGINNER_NONE_IN_VIEW_TEXT = "אין מבחני מתחילים בתאריך שנבחר.";
+
+// ===========================================================================
+// EX-ADMIN-UX-FIXES — the assignments disclosure
+// ===========================================================================
+
+/**
+ * THE ADD-ASSIGNMENT CONTROL, AND WHY IT IS A LINK RATHER THAN A FORM.
+ *
+ * The create forms used to sit permanently open under every block, at the bottom
+ * of a page that can run to many screens. They are now CLOSED BY DEFAULT and
+ * opened by one control at the TOP of the assignments workspace, which carries a
+ * closed disclosure token and no id.
+ *
+ * A `<Link>` and not a button: opening a form is a NAVIGATION and never a write,
+ * so a GET of it — a refresh, a back button, a bookmark — must be able to do
+ * exactly what it does here, which is render the same page with one more section
+ * visible. The forms themselves are unchanged and still sit behind the same
+ * lifecycle gate.
+ */
+const ADD_ASSIGNMENT_OPEN_TEXT = "הוספת שיבוץ";
+const ADD_ASSIGNMENT_CLOSE_TEXT = "סגירת טופס השיבוץ";
+const ADD_ASSIGNMENT_HINT_TEXT =
+  "טופס השיבוץ נפתח מתחת לכל מופע המוצג כעת. לסיום יש לסגור אותו.";
+
+/** What the general view tells a manager who came looking for the roster. */
+const GENERAL_VIEW_READ_ONLY_TEXT =
+  "לו״ז כללי הוא תצוגת מבנה היום בלבד. לשיבוץ נבחנים יש לעבור ללפי סוג מבחן או ללפי תאריך.";
+const GENERAL_VIEW_BEGINNER_LABEL = "מבחן מתחילים";
+const NO_SCHEDULE_ENTRIES_TEXT = "אין עדיין מופעים או שיעורי מתחילים להצגה.";
 
 /**
  * The DEFINITION facts that decide what a session may show and offer.
@@ -1065,11 +1177,18 @@ function BlockFacts({
  * The instructed trainee a person teaches is named INSIDE that person's entry and
  * never as an entry of its own — it is examined alongside them and holds no slot.
  */
-function ReadOnlyWave({ wave }: { wave: ExamWave }) {
+function ReadOnlyWave({
+  wave,
+  showTeachingLink,
+}: {
+  wave: ExamWave;
+  showTeachingLink: boolean;
+}) {
   return (
     <li className="rounded-lg border border-border bg-muted px-3 py-2">
+      {/* THE TIME RANGE, AND NO NOUN IN FRONT OF IT. See WAVE_TIME_SEPARATOR. */}
       <p className="text-xs font-semibold text-card-foreground">
-        {WAVE_LABEL} · {wave.startTime} {WAVE_TIME_SEPARATOR} {timeText(wave.endTime)}
+        {wave.startTime} {WAVE_TIME_SEPARATOR} {timeText(wave.endTime)}
       </p>
       <ul className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {wave.examinees.map((examinee) => (
@@ -1086,10 +1205,20 @@ function ReadOnlyWave({ wave }: { wave: ExamWave }) {
                 {DISCIPLINE_LABEL}: {storedDetailText(examinee.discipline)}
               </p>
             ) : null}
-            <p className="text-xs text-muted-foreground">
-              {TEACHES_LABEL}:{" "}
-              {examinee.instructedTraineeName ?? NO_TEACHING_LINK_TEXT}
-            </p>
+            {/*
+              THE TEACHING LINK, ONLY WHERE THE EXAM ASKS FOR ONE.
+
+              Gated on the DEFINITION's own requirement flag, or on this one
+              person already carrying a stored link — never on the mere presence
+              of an instructed-trainee row in the session, which would print an
+              empty, meaningless field on a riding or interface block.
+            */}
+            {showTeachingLink || examinee.instructedTraineeName !== null ? (
+              <p className="text-xs text-muted-foreground">
+                {TEACHES_LABEL}:{" "}
+                {examinee.instructedTraineeName ?? NO_TEACHING_LINK_TEXT}
+              </p>
+            ) : null}
           </li>
         ))}
       </ul>
@@ -1133,6 +1262,16 @@ export default async function CourseExamsPage({
     assignmentEdit?: string | string[];
     assignmentEditIssues?: string | string[];
     assignmentOrder?: string | string[];
+    // EX-ADMIN-UX-FIXES — ARRANGEMENT and DISCLOSURE only. `group` is an ORDINAL
+    // into whichever sub-tab list is on screen and never an id; `add` is the
+    // closed "1" that opens the create forms. Neither reaches a reader, opens a
+    // gate or influences a scope.
+    group?: string | string[];
+    add?: string | string[];
+    // EX-ADMIN-SRCDATE — the source-date replacement outcome, and its closed
+    // per-rule diagnostics.
+    sourceDates?: string | string[];
+    sourceDateIssues?: string | string[];
   }>;
 }) {
   const { courseOfferingId } = await params;
@@ -1404,6 +1543,14 @@ export default async function CourseExamsPage({
   const assignmentEditIssueTexts = examAssignmentEditIssueTexts(assignmentEditIssues);
   const assignmentOrderFeedback = examAssignmentOrderFeedback(assignmentOrder);
 
+  // EX-ADMIN-SRCDATE's outcome family, parsed by the same closed route-local
+  // module. Neither token is ever interpolated: each can only SELECT a constant
+  // sentence and a constant tone, never supply either — so a submitted date can
+  // never be echoed back onto the screen through a banner.
+  const { sourceDates, sourceDateIssues } = query;
+  const sourceDatesFeedback = examSourceDatesFeedback(sourceDates);
+  const sourceDatesIssueTexts = examSourceDatesIssueTexts(sourceDateIssues);
+
   /**
    * THE BEGINNER ROWS — a projection of Teaching Practice, read-only here.
    *
@@ -1481,6 +1628,11 @@ export default async function CourseExamsPage({
   // with a default, exactly like the section token.
   const scheduleView: ExamScheduleView = parseExamScheduleView(query.view);
 
+  // WHETHER the create forms are open. Closed to the exact string "1", and a
+  // DISCLOSURE rather than a permission: the lifecycle gate below still decides
+  // whether a create form exists at all, and this token cannot open one it closed.
+  const addAssignmentOpen = parseAddAssignmentDisclosure(query.add);
+
   // 10. ONE lifecycle evaluation, every display decision derived from it. The gate
   //    is the non-throwing policy question on the VERIFIED status, so an ARCHIVED
   //    offering keeps a readable, affordance-free page instead of an error. Each
@@ -1522,6 +1674,7 @@ export default async function CourseExamsPage({
   const boundUpdateExamAssignmentDetailsAction =
     updateExamAssignmentDetailsAction.bind(null, context.id);
   const boundMoveExamAssignmentAction = moveExamAssignmentAction.bind(null, context.id);
+  const boundReplaceExamSourceDatesAction = replaceExamSourceDatesAction.bind(null, context.id);
 
   /**
    * The three arrangements of the stored schedule, built ONCE from the committed
@@ -1529,8 +1682,53 @@ export default async function CourseExamsPage({
    * yields an empty timeline and the fixed sentence below says so.
    */
   const scheduleDays = grouping.ok ? grouping.days : [];
-  const timeline = buildGeneralTimeline(scheduleDays);
+
+  /**
+   * THE ONE ORDERING RULE, APPLIED ONCE.
+   *
+   * The committed grouping hands its days over date-ascending and its rows in the
+   * manager's own stored sequence. The workspace then puts the whole timeline
+   * into the order a manager actually reads a day in — DATE, then START TIME,
+   * then the sequence the rows already arrived in — using the route-local pure
+   * comparator, which is STABLE and therefore preserves that stored sequence for
+   * two blocks sharing a date and a clock time.
+   *
+   * It is applied HERE, once, to the ONE timeline every arrangement is derived
+   * from — the general overview, the by-type view, the by-date view and the
+   * assignments section alike — so no two surfaces can present a day differently.
+   * Nothing below sorts again, and nothing anywhere sorts by a display name.
+   */
+  const timeline = orderWorkspaceTimeline(buildGeneralTimeline(scheduleDays));
   const definitionGroups = groupTimelineByDefinition(timeline);
+  const timelineDays = groupTimelineByDate(timeline);
+
+  /**
+   * THE BEGINNER ROWS, IN THE SAME ORDER AND FROM THE SAME ONE READ.
+   *
+   * `beginnerRows` above is the committed admin reading's own projection. It is
+   * ORDERED here by the same rule and never re-read, so the beginner times in the
+   * general overview and the beginner detail in the by-date view are the same
+   * rows, in the same sequence, from the same request.
+   */
+  const orderedBeginnerRows = orderBeginnerRows(beginnerRows);
+  const dayLabels = collectDayLabels(timeline);
+  const scheduleOverview = buildScheduleOverview(timeline, orderedBeginnerRows, dayLabels);
+
+  /**
+   * THE THREE BEGINNER STATES, decided from facts this page already holds.
+   *
+   * The level question is DELEGATED — the committed containment predicate is
+   * asked through its one admin-facing binding rather than restated here, because
+   * a second opinion about which courses have beginner exams is exactly how two
+   * surfaces of one rule start disagreeing.
+   *
+   * `planView.sourceDates` is the committed admin reading's own report of the
+   * plan's selection, so "nothing is selected" and "nothing was found for what is
+   * selected" are read from the same one request that produced the rows.
+   */
+  const beginnerSupported = examBeginnerDatesSupportedForLevel(context.level);
+  const selectedSourceDates = planView.sourceDates;
+  const hasSourceDates = selectedSourceDates.length > 0;
 
   /**
    * Everything ONE block needs, assembled once and reused by every arrangement
@@ -1626,7 +1824,13 @@ export default async function CourseExamsPage({
         {waves.length > 0 ? (
           <ul className="mt-3 flex flex-col gap-2">
             {waves.map((wave) => (
-              <ReadOnlyWave key={wave.startTime} wave={wave} />
+              <ReadOnlyWave
+                key={wave.startTime}
+                wave={wave}
+                showTeachingLink={
+                  requirements !== undefined && requirements.requiresInstructedTrainee
+                }
+              />
             ))}
           </ul>
         ) : null}
@@ -1658,38 +1862,100 @@ export default async function CourseExamsPage({
    * Built from the SAME timeline and the SAME day grouping, so the two tabs can
    * never disagree about what exists or about sequence.
    */
-  interface ScheduleSection {
+  /**
+   * ONE sub-tab of the by-type or by-date view.
+   *
+   * `key` is a React key and never an href value. The LINK carries the sub-tab's
+   * POSITION instead, so no `ExamDefinition.id` and no other database id ever
+   * reaches the address bar — see the ordinal parser's own note on why.
+   */
+  interface ScheduleSubTab {
     readonly key: string;
-    readonly heading: string | null;
-    readonly subheading: string | null;
+    readonly label: string;
+    readonly sublabel: string | null;
     readonly entries: typeof timeline;
   }
 
-  const scheduleSections: readonly ScheduleSection[] =
+  /**
+   * THE SUB-TABS, and why the two grouped views have them at all.
+   *
+   * `לפי סוג מבחן` and `לפי תאריך` used to render EVERY group one after another,
+   * which made both of them the same very long page the workspace was split up to
+   * avoid — a manager looking for one exam type read all of them on the way. Each
+   * is now a compact row of sub-tabs with exactly ONE group on screen.
+   *
+   * The general view has no sub-tabs: it is one continuous chronology by
+   * definition, and slicing it would defeat its only purpose.
+   */
+  const scheduleSubTabs: readonly ScheduleSubTab[] =
     scheduleView === "type"
       ? definitionGroups.map((group) => ({
           key: group.definitionId,
-          heading: group.definitionName,
-          subheading: null,
+          label: group.definitionName,
+          sublabel: null,
           entries: group.entries,
         }))
       : scheduleView === "date"
-        ? scheduleDays.map((day) => ({
+        ? timelineDays.map((day) => ({
             key: day.dateKey,
-            heading: day.dayLabel,
-            subheading: day.dateLabel,
-            entries: timeline.filter((entry) => entry.dateKey === day.dateKey),
+            label: day.dayLabel,
+            sublabel: day.dateLabel,
+            entries: day.entries,
           }))
-        : [
-            {
-              key: "general",
-              heading: null,
-              subheading: null,
-              entries: timeline,
-            },
-          ];
+        : [];
 
-  /** The view switcher. Plain links carrying ONE closed token and never an id. */
+  /**
+   * WHICH sub-tab is open — a closed ordinal with a SAFE DEFAULT.
+   *
+   * Every unusable token falls back to position 0, which under the one ordering
+   * rule is the FIRST available exam type or the EARLIEST available date. A
+   * bookmark to a group that has since disappeared therefore lands on a real
+   * group rather than on an empty page.
+   */
+  const activeSubTabIndex = parseWorkspaceGroupIndex(query.group, scheduleSubTabs.length);
+  const activeSubTab: ScheduleSubTab | undefined = scheduleSubTabs[activeSubTabIndex];
+
+  /** The entries the SELECTED arrangement actually renders. */
+  const selectedEntries: typeof timeline =
+    scheduleView === "general" ? timeline : activeSubTab === undefined ? [] : activeSubTab.entries;
+
+  /**
+   * WHICH beginner rows the open arrangement shows in FULL.
+   *
+   * The general view shows their TIMES in the merged overview and no detail at
+   * all — it is a timetable. `לפי תאריך` shows the full read-only detail of the
+   * selected day, and `לפי סוג מבחן` shows every beginner lesson, because a
+   * beginner exam is a Teaching-Practice projection and belongs to no
+   * `ExamDefinition` that could give it a sub-tab of its own.
+   *
+   * All three are FILTERS of the one already-ordered list. No second query, no
+   * second reader and no duplicated row.
+   */
+  const beginnerRowsInView: readonly WorkspaceBeginnerRow[] =
+    scheduleView === "general"
+      ? NO_BEGINNER_ROWS
+      : scheduleView === "date"
+        ? beginnerRowsOnDate(
+            orderedBeginnerRows,
+            activeSubTab === undefined ? "" : activeSubTab.key,
+          )
+        : orderedBeginnerRows;
+
+  /**
+   * The query tail every in-view link has to carry so the workspace does not
+   * silently reset itself: the section, the arrangement and — where one exists —
+   * the open sub-tab.
+   */
+  const viewQuery = `tab=${activeTab}&view=${scheduleView}`;
+  const groupQuery = scheduleView === "general" ? viewQuery : `${viewQuery}&group=${activeSubTabIndex}`;
+
+  /**
+   * The view switcher. Plain links carrying ONE closed token and never an id.
+   *
+   * Switching the arrangement deliberately DROPS the sub-tab ordinal: position 3
+   * of the exam types is not position 3 of the dates, so carrying it across would
+   * land the manager on an unrelated group. The safe default takes over instead.
+   */
   function renderScheduleViewNav() {
     return (
       <nav aria-label="תצוגת הלו״ז" className="flex flex-wrap gap-2">
@@ -1712,13 +1978,175 @@ export default async function CourseExamsPage({
   }
 
   /**
+   * The SUB-TAB switcher of whichever grouped view is open.
+   *
+   * Renders nothing at all in the general view and nothing when there is only one
+   * group to choose from — a single sub-tab is a label pretending to be a control.
+   * Every link carries the section, the arrangement and ONE ordinal.
+   */
+  function renderScheduleSubTabNav() {
+    if (scheduleSubTabs.length < 2) return null;
+    return (
+      <nav
+        aria-label={EXAM_SCHEDULE_VIEW_LABELS[scheduleView]}
+        className="mt-3 flex flex-wrap gap-1.5"
+      >
+        {scheduleSubTabs.map((subTab, index) => (
+          <Link
+            key={subTab.key}
+            href={`${examsPath}?${viewQuery}&group=${index}`}
+            aria-current={index === activeSubTabIndex ? "true" : undefined}
+            className={
+              index === activeSubTabIndex
+                ? "rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground"
+                : "rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground"
+            }
+          >
+            {subTab.label}
+            {subTab.sublabel !== null ? (
+              <span className="ms-1 opacity-70">{subTab.sublabel}</span>
+            ) : null}
+          </Link>
+        ))}
+      </nav>
+    );
+  }
+
+  /** The heading of the ONE selected group, or nothing in the general view. */
+  function renderSelectedGroupHeading() {
+    if (scheduleView === "general" || activeSubTab === undefined) return null;
+    return (
+      <div className="mt-4 flex flex-wrap items-baseline gap-2 border-b border-border pb-2">
+        <span className="text-sm font-semibold text-card-foreground">{activeSubTab.label}</span>
+        {activeSubTab.sublabel !== null ? (
+          <span className="text-xs text-muted-foreground">{activeSubTab.sublabel}</span>
+        ) : null}
+      </div>
+    );
+  }
+
+  /**
    * The three arrangements, from the SAME timeline.
    *
    * `general` is the flat continuous list, `type` buckets it by exam definition
    * and `date` by stored day. None of them re-reads anything and none of them
    * sorts: each is the committed order, arranged.
    */
-  function renderScheduleViews() {
+  /**
+   * THE GENERAL VIEW — A TIMETABLE, AND NOTHING ELSE.
+   *
+   * It answers ONE question: what does this day look like. So it prints the date,
+   * the start, the derived end, the exam type, the place and how many people run
+   * in parallel — and it prints NO examinee, NO instructed trainee, NO horse, NO
+   * topic, NO branch, NO pairing and NO edit control of any kind. A manager
+   * reading it is reading a structure; the roster lives in the two grouped views,
+   * where it can actually be changed.
+   *
+   * BEGINNER Teaching-Practice exams are IN this chronology, interleaved with the
+   * stored blocks by time rather than listed after them, because a manager
+   * running the day needs one sequence and not two. They come from the SAME
+   * already-loaded admin reading the rest of the page uses — no second query, no
+   * second reader, no duplicated row — and their times are that reading's own.
+   * Their DETAIL is deliberately absent here and appears in the grouped views.
+   */
+  function renderGeneralSchedule() {
+    if (!grouping.ok) {
+      return <p className="mt-2 text-sm leading-relaxed text-danger">{GROUPING_FAILED_TEXT}</p>;
+    }
+    if (scheduleOverview.length === 0) {
+      return (
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          {NO_SCHEDULE_ENTRIES_TEXT}
+        </p>
+      );
+    }
+    return (
+      <>
+        <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+          {GENERAL_VIEW_READ_ONLY_TEXT}
+        </p>
+        <ul className="mt-3 flex flex-col gap-2">
+          {scheduleOverview.map((entry) =>
+            entry.kind === "SESSION" ? (
+              <li
+                key={entry.session.sessionId}
+                className="rounded-lg border border-border bg-card px-4 py-3"
+              >
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <span className="text-sm font-semibold text-card-foreground">
+                    {entry.startTime}
+                  </span>
+                  <span className="text-sm text-card-foreground">
+                    {entry.session.definitionName}
+                  </span>
+                </div>
+                <BlockFacts
+                  dayLabel={entry.dayLabel}
+                  dateLabel={entry.dateLabel}
+                  startTime={entry.startTime}
+                  endTime={describeBlock(entry.session).blockEndTime}
+                  arena={entry.session.arena}
+                  kind={kindText(
+                    requirementsByDefinition.get(entry.session.definitionId)?.kind ?? "",
+                  )}
+                  parallelCapacity={
+                    requirementsByDefinition.get(entry.session.definitionId)?.parallelCapacity ?? 0
+                  }
+                  assignmentCount={entry.session.assignmentCount}
+                />
+              </li>
+            ) : (
+              <li
+                key={`beginner:${entry.beginner.sessionId}`}
+                className="rounded-lg border border-dashed border-border bg-muted px-4 py-3"
+              >
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <span className="text-sm font-semibold text-card-foreground">
+                    {entry.startTime}
+                  </span>
+                  <span className="text-sm text-card-foreground">
+                    {kindText(entry.beginner.beginnerFormat)}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {GENERAL_VIEW_BEGINNER_LABEL}
+                  </span>
+                </div>
+                {/*
+                  DATE, TIME AND PLACE, and deliberately not one field more. No
+                  child, no participant, no horse and no contact appears in the
+                  overview — those are the by-date and by-type views' business.
+                */}
+                <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
+                  <DefinitionFact
+                    label={BLOCK_DATE_LABEL}
+                    value={`${entry.dayLabel} ${entry.dateLabel}`}
+                  />
+                  <DefinitionFact label={BLOCK_START_LABEL} value={entry.startTime} />
+                  <DefinitionFact
+                    label={BLOCK_END_LABEL}
+                    value={timeText(entry.beginner.displayEndTime)}
+                  />
+                  <DefinitionFact
+                    label={BLOCK_ARENA_LABEL}
+                    value={presentTextOr(entry.beginner.location, NO_ARENA_TEXT)}
+                  />
+                </dl>
+              </li>
+            ),
+          )}
+        </ul>
+      </>
+    );
+  }
+
+  /**
+   * The TWO GROUPED arrangements, read-only, with ONE group on screen.
+   *
+   * Both render from the SAME ordered timeline the general view does, sliced by
+   * the open sub-tab, so no arrangement can disagree with another about what
+   * exists or about sequence.
+   */
+  function renderGroupedSchedule() {
     if (!grouping.ok) {
       return <p className="mt-2 text-sm leading-relaxed text-danger">{GROUPING_FAILED_TEXT}</p>;
     }
@@ -1726,34 +2154,26 @@ export default async function CourseExamsPage({
       return <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{NO_SESSIONS_TEXT}</p>;
     }
     return (
-      <ul className="mt-4 flex flex-col gap-5">
-        {scheduleSections.map((section) => (
-          <li key={section.key}>
-            {section.heading !== null ? (
-              <div className="flex flex-wrap items-baseline gap-2 border-b border-border pb-2">
-                <span className="text-sm font-semibold text-card-foreground">
-                  {section.heading}
-                </span>
-                {section.subheading !== null ? (
-                  <span className="text-xs text-muted-foreground">{section.subheading}</span>
-                ) : null}
-              </div>
-            ) : null}
-            <ul className="mt-3 flex flex-col gap-2">
-              {section.entries.map((entry) => (
-                <li key={entry.session.sessionId}>
-                  {renderScheduleBlock({
-                    session: entry.session,
-                    dayLabel: entry.dayLabel,
-                    dateLabel: entry.dateLabel,
-                  })}
-                </li>
-              ))}
-            </ul>
-          </li>
-        ))}
-      </ul>
+      <>
+        {renderScheduleSubTabNav()}
+        {renderSelectedGroupHeading()}
+        <ul className="mt-3 flex flex-col gap-2">
+          {selectedEntries.map((entry) => (
+            <li key={entry.session.sessionId}>
+              {renderScheduleBlock({
+                session: entry.session,
+                dayLabel: entry.dayLabel,
+                dateLabel: entry.dateLabel,
+              })}
+            </li>
+          ))}
+        </ul>
+      </>
     );
+  }
+
+  function renderScheduleViews() {
+    return scheduleView === "general" ? renderGeneralSchedule() : renderGroupedSchedule();
   }
 
   return (
@@ -1928,6 +2348,19 @@ export default async function CourseExamsPage({
         </div>
       ) : null}
 
+      {sourceDatesFeedback !== null ? (
+        <div className={FEEDBACK_CLASS[sourceDatesFeedback.tone]}>
+          <p>{sourceDatesFeedback.message}</p>
+          {sourceDatesIssueTexts.length > 0 ? (
+            <ul className="mt-2 list-inside list-disc text-sm">
+              {sourceDatesIssueTexts.map((text) => (
+                <li key={text}>{text}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
       {!view.planExists ? (
         <div className="rounded-xl border border-dashed border-border bg-muted p-5">
           <h3 className="text-sm font-semibold text-card-foreground">
@@ -2087,6 +2520,137 @@ export default async function CourseExamsPage({
                 {renderScheduleViews()}
               </div>
 
+              {/* =============================================================
+                  EX-ADMIN-SRCDATE — WHICH TEACHING-PRACTICE DAYS ARE EXAM DAYS.
+
+                  The one stored beginner fact, and the reason beginner exams
+                  were invisible everywhere before this control existed. It is
+                  rendered in this section because it configures WHICH DAYS the
+                  plan covers, which is exactly what this section is about.
+
+                  It is shown ONLY when the course level actually has beginner
+                  exams — the committed containment predicate decides that, not
+                  this page — and the form ONLY when the lifecycle gate allows
+                  configuration. The committed writer re-runs both for itself.
+                  ============================================================= */}
+              {beginnerSupported ? (
+                <div className="rounded-xl border border-border bg-card p-5">
+                  <h3 className="text-sm font-semibold text-card-foreground">
+                    {SOURCE_DATES_HEADING}
+                  </h3>
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    {SOURCE_DATES_INTRO}
+                  </p>
+
+                  {!view.planExists ? (
+                    <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                      {NO_PLAN_PUBLICATION_TEXT}
+                    </p>
+                  ) : mayConfigure ? (
+                    /*
+                      ONE FORM, AND IT SUBMITS THE COMPLETE SET.
+
+                      Every currently-selected day is a CHECKED checkbox sharing
+                      the one field name, and the add field appends one more. The
+                      committed writer replaces the whole selection with whatever
+                      arrives, so unchecking a day removes it and there is no
+                      second endpoint that could disagree about what is selected.
+
+                      A date input and never a lesson picker: the only value this
+                      surface can express is a DAY. No Teaching-Practice row is
+                      nameable from here, and none is created, copied or
+                      duplicated by submitting.
+                    */
+                    <form
+                      action={boundReplaceExamSourceDatesAction}
+                      className="mt-4 flex flex-col gap-3"
+                    >
+                      <fieldset className="border-0 p-0">
+                        <legend className="text-xs font-medium text-card-foreground">
+                          {SOURCE_DATES_SELECTED_LABEL}
+                        </legend>
+                        {hasSourceDates ? (
+                          <>
+                            <ul className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                              {selectedSourceDates.map((selected) => (
+                                <li key={selected}>
+                                  <label className="flex items-center gap-2 rounded-lg bg-muted px-3 py-1.5 text-sm">
+                                    <input
+                                      type="checkbox"
+                                      name="date"
+                                      value={selected}
+                                      defaultChecked
+                                    />
+                                    <span className="text-card-foreground">{selected}</span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {SOURCE_DATES_KEEP_LABEL}
+                                    </span>
+                                  </label>
+                                </li>
+                              ))}
+                            </ul>
+                            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                              {SOURCE_DATES_UNCHECK_HINT}
+                            </p>
+                          </>
+                        ) : (
+                          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                            {SOURCE_DATES_NONE_TEXT}
+                          </p>
+                        )}
+                      </fieldset>
+
+                      <label className="flex flex-col gap-1 text-sm sm:max-w-xs">
+                        <span className="font-medium text-card-foreground">
+                          {SOURCE_DATES_ADD_LABEL}
+                        </span>
+                        {/*
+                          The SAME field name as the checkboxes above, so an added
+                          day joins the submitted set rather than replacing it. An
+                          empty date input submits an empty string, which the
+                          committed core refuses as an invalid date — so a save
+                          that only unchecks days must leave this field blank, and
+                          the hint above says exactly that.
+                        */}
+                        <input
+                          type="date"
+                          name="date"
+                          className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-card-foreground"
+                        />
+                      </label>
+
+                      <div>
+                        <button
+                          type="submit"
+                          className="rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground"
+                        >
+                          {SOURCE_DATES_SAVE_TEXT}
+                        </button>
+                      </div>
+                    </form>
+                  ) : hasSourceDates ? (
+                    <ul className="mt-3 flex flex-wrap gap-1.5">
+                      {selectedSourceDates.map((selected) => (
+                        <li
+                          key={selected}
+                          className="rounded-lg bg-muted px-3 py-1.5 text-sm text-card-foreground"
+                        >
+                          {selected}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                      {SOURCE_DATES_NONE_TEXT}
+                    </p>
+                  )}
+
+                  <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                    {BEGINNER_READ_ONLY_TEXT}
+                  </p>
+                </div>
+              ) : null}
+
               {/*
                 The two PER-SESSION affordances, behind the SAME single lifecycle
                 evaluation the create forms use. With `mayConfigure` false — an
@@ -2189,30 +2753,68 @@ export default async function CourseExamsPage({
                 <div className="mt-3">
                   {renderScheduleViewNav()}
                 </div>
-                {!grouping.ok ? (
+                {/*
+                  THE GENERAL VIEW IS READ-ONLY HERE TOO.
+
+                  `לו״ז כללי` is one arrangement of one schedule, and it means the
+                  same thing in both sections: a timetable. It therefore renders
+                  the SAME structural overview in the assignments section and
+                  carries no card, no name and no create form — the sentence it
+                  prints says where the editing is instead.
+                */}
+                {scheduleView === "general" ? (
+                  renderGeneralSchedule()
+                ) : !grouping.ok ? (
                   <p className="mt-2 text-sm leading-relaxed text-danger">{GROUPING_FAILED_TEXT}</p>
                 ) : timeline.length === 0 ? (
                   <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                     {NO_SESSIONS_TEXT}
                   </p>
                 ) : (
-                  <ul className="mt-4 flex flex-col gap-6">
-                    {scheduleSections.map((section) => (
-                    <li key={section.key}>
-                      {section.heading !== null ? (
-                        <div className="flex flex-wrap items-baseline gap-2 border-b border-border pb-2">
-                          <span className="text-sm font-semibold text-card-foreground">
-                            {section.heading}
+                  <>
+                    {renderScheduleSubTabNav()}
+
+                    {/*
+                      THE ADD-ASSIGNMENT CONTROL, AT THE TOP.
+
+                      One link, immediately under the sub-tabs, so a manager never
+                      has to scroll a whole exam day to reach the create form. It
+                      carries the section, the arrangement, the open sub-tab and
+                      ONE closed disclosure token — no session id, no definition
+                      id and no trainee id — so a GET of it can only re-render
+                      this same page with the forms shown.
+
+                      It is rendered ONLY when the lifecycle gate already allows
+                      configuration, so the control cannot advertise an action
+                      that is not available.
+                    */}
+                    {mayConfigure ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <Link
+                          href={
+                            addAssignmentOpen
+                              ? `${examsPath}?${groupQuery}`
+                              : `${examsPath}?${groupQuery}&add=1`
+                          }
+                          className={
+                            addAssignmentOpen
+                              ? "rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground"
+                              : "rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+                          }
+                        >
+                          {addAssignmentOpen ? ADD_ASSIGNMENT_CLOSE_TEXT : ADD_ASSIGNMENT_OPEN_TEXT}
+                        </Link>
+                        {addAssignmentOpen ? (
+                          <span className="text-xs text-muted-foreground">
+                            {ADD_ASSIGNMENT_HINT_TEXT}
                           </span>
-                          {section.subheading !== null ? (
-                            <span className="text-xs text-muted-foreground">
-                              {section.subheading}
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : null}
-                      <ul className="mt-3 flex flex-col gap-5">
-                    {section.entries.map((entry) => {
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {renderSelectedGroupHeading()}
+                    <ul className="mt-3 flex flex-col gap-5">
+                    {selectedEntries.map((entry) => {
                       const session = entry.session;
                       const { requirements, instructedRows, waves, untimed, blockEndTime } =
                         describeBlock(session);
@@ -2237,11 +2839,28 @@ export default async function CourseExamsPage({
                       // requirement nobody can state.
                       const requirementsUnknown = requirements === undefined;
 
-                      // The teaching-link picker is offered whenever this session's
-                      // exam asks for an instructed trainee OR one is already
-                      // stored, so a historical link is never stranded.
-                      const showTeachingLink =
-                        showInstructedTraineeForm || instructedRows.length > 0;
+                      // THE TEACHING LINK IS A PROPERTY OF THE EXAM DEFINITION.
+                      //
+                      // It used to be offered whenever the session held ANY
+                      // instructed-trainee row, which meant a riding or interface
+                      // block could show an empty "מדריך/ה את" field that its exam
+                      // never asks for — a field a manager cannot usefully fill
+                      // reads as something they forgot to do.
+                      //
+                      // The rule is now the DEFINITION's own requirement flag, read
+                      // from the definition reader this page already loaded. It is
+                      // NOT inferred from whether a pairing happens to exist: that
+                      // would make the field appear and disappear as rows are
+                      // assigned, on exams that never wanted it.
+                      //
+                      // The ONE exception is per PERSON and not per session: an
+                      // examinee that ALREADY carries a stored link keeps its own
+                      // field, whatever the definition now says, because a value
+                      // that exists and cannot be seen or cleared is worse than one
+                      // shown on a definition that has since changed. It can never
+                      // produce an EMPTY irrelevant field, because it is reached
+                      // only when there is something stored to show.
+                      const definitionWantsInstructedTrainee = showInstructedTraineeForm;
 
                       // The trainees this session's cards may offer. Narrowed to
                       // two display fields, from a bucket keyed by session id.
@@ -2300,7 +2919,8 @@ export default async function CourseExamsPage({
                                     className="rounded-lg border border-border bg-muted px-3 py-2"
                                   >
                                     {/*
-                                      THE WAVE TIME, PRINTED ONCE.
+                                      THE TIME, PRINTED ONCE, AND NO NOUN IN
+                                      FRONT OF IT.
 
                                       Two examinees examined together share this
                                       one heading and are laid out as two columns
@@ -2308,7 +2928,7 @@ export default async function CourseExamsPage({
                                       No card below repeats the time.
                                     */}
                                     <p className="text-xs font-semibold text-card-foreground">
-                                      {WAVE_LABEL} · {wave.startTime} {WAVE_TIME_SEPARATOR}{" "}
+                                      {wave.startTime} {WAVE_TIME_SEPARATOR}{" "}
                                       {timeText(wave.endTime)}
                                     </p>
                                     <ul className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -2444,7 +3064,10 @@ export default async function CourseExamsPage({
                                                   requirements.requiresLessonTopic
                                                 }
                                                 requiresDiscipline={requirements.requiresDiscipline}
-                                                showInstructedTrainee={showTeachingLink}
+                                                showInstructedTrainee={
+                                                  definitionWantsInstructedTrainee ||
+                                                  examinee.instructedTraineeAssignmentId !== null
+                                                }
                                                 instructedTraineeOptions={instructedChoices}
                                                 currentInstructedTraineeAssignmentId={
                                                   examinee.instructedTraineeAssignmentId
@@ -2468,11 +3091,14 @@ export default async function CourseExamsPage({
                                                     {DISCIPLINE_LABEL}: {disciplineText}
                                                   </p>
                                                 ) : null}
-                                                <p className="text-xs text-muted-foreground">
-                                                  {TEACHES_LABEL}:{" "}
-                                                  {examinee.instructedTraineeName ??
-                                                    NO_TEACHING_LINK_TEXT}
-                                                </p>
+                                                {definitionWantsInstructedTrainee ||
+                                                examinee.instructedTraineeName !== null ? (
+                                                  <p className="text-xs text-muted-foreground">
+                                                    {TEACHES_LABEL}:{" "}
+                                                    {examinee.instructedTraineeName ??
+                                                      NO_TEACHING_LINK_TEXT}
+                                                  </p>
+                                                ) : null}
                                               </div>
                                             )}
 
@@ -2560,10 +3186,19 @@ export default async function CourseExamsPage({
                               </div>
                             ) : null}
 
-                            {/* The two CREATE affordances, on their independent gates. */}
-                            <div className="mt-4 border-t border-border pt-3">
-                              {mayConfigure ? (
-                                requirementsUnknown ? (
+                            {/*
+                              The two CREATE affordances, on their independent
+                              gates — and now behind the DISCLOSURE as well.
+
+                              The disclosure is an extra condition on top of the
+                              lifecycle gate and never a replacement for it: with
+                              `mayConfigure` false no `add=1` can bring either form
+                              back, and each committed writer re-evaluates the same
+                              gate for itself regardless.
+                            */}
+                            {addAssignmentOpen && mayConfigure ? (
+                              <div className="mt-4 border-t border-border pt-3">
+                                {requirementsUnknown ? (
                                   <p className="text-xs leading-relaxed text-muted-foreground">
                                     לא ניתן לזהות את דרישות סוג המבחן של יחידה זו,
                                     ולכן אין כאן שיבוץ.
@@ -2577,28 +3212,26 @@ export default async function CourseExamsPage({
                                     requiresLessonTopic={requirements.requiresLessonTopic}
                                     requiresDiscipline={requirements.requiresDiscipline}
                                   />
-                                )
-                              ) : null}
+                                )}
 
-                              {mayConfigure && showInstructedTraineeForm ? (
-                                <div className="mt-3">
-                                  <CreateExamInstructedTraineeAssignmentForm
-                                    action={boundCreateInstructedTraineeAssignmentAction}
-                                    courseOfferingId={context.id}
-                                    sessionId={session.sessionId}
-                                    eligibleTrainees={eligibleView.trainees}
-                                  />
-                                </div>
-                              ) : null}
-                            </div>
+                                {showInstructedTraineeForm ? (
+                                  <div className="mt-3">
+                                    <CreateExamInstructedTraineeAssignmentForm
+                                      action={boundCreateInstructedTraineeAssignmentAction}
+                                      courseOfferingId={context.id}
+                                      sessionId={session.sessionId}
+                                      eligibleTrainees={eligibleView.trainees}
+                                    />
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
                           </div>
                         </li>
                       );
                     })}
-                      </ul>
-                    </li>
-                    ))}
-                  </ul>
+                    </ul>
+                  </>
                 )}
               </div>
 
@@ -2619,13 +3252,39 @@ export default async function CourseExamsPage({
                 <h3 className="text-sm font-semibold text-card-foreground">
                   {BEGINNER_REGION_HEADING}
                 </h3>
-                {beginnerRows.length === 0 ? (
+                {/*
+                  THE THREE DISTINGUISHABLE EMPTY STATES.
+
+                  They are different problems with different fixes, and a single
+                  "no beginner exams" sentence used to send a manager looking for
+                  the wrong one. The level question is delegated to the committed
+                  containment predicate; the other two are read from the SAME one
+                  admin reading that produced the rows, so what is said here can
+                  never disagree with what is shown below it.
+                */}
+                {!beginnerSupported ? (
                   <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                    {BEGINNER_REGION_TEXT}
+                    {BEGINNER_LEVEL_UNSUPPORTED_TEXT}
+                  </p>
+                ) : !hasSourceDates ? (
+                  <p className="mt-2 text-sm leading-relaxed text-warning">
+                    {BEGINNER_NO_SOURCE_DATES_TEXT}
+                  </p>
+                ) : orderedBeginnerRows.length === 0 ? (
+                  <p className="mt-2 text-sm leading-relaxed text-warning">
+                    {BEGINNER_NO_MATCHING_LESSONS_TEXT}
+                  </p>
+                ) : scheduleView === "general" ? (
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    {BEGINNER_IN_GENERAL_VIEW_TEXT}
+                  </p>
+                ) : beginnerRowsInView.length === 0 ? (
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    {BEGINNER_NONE_IN_VIEW_TEXT}
                   </p>
                 ) : (
                   <ul className="mt-3 flex flex-col gap-3">
-                    {beginnerRows.map((row) => (
+                    {beginnerRowsInView.map((row) => (
                       <li
                         key={row.sessionId}
                         className="rounded-lg border border-border bg-card px-4 py-3"

@@ -107,6 +107,13 @@ const SESSION_SLICE_PATHS = [
  * relaxed, so a second caller still fails there.
  */
 const SLICE_PATHS = [
+  // EX-ADMIN-SRCDATE — the TWO new `lib/` modules that let a manager select which
+  // Teaching-Practice days the plan runs as exam days, plus their suites.
+  // ASSEMBLED from pieces, for the reason this file's header records: those guards
+  // sweep raw source for their own module names and pin exact consumer lists, so a
+  // path written whole here would enrol this suite in one of them.
+  "lib/exam/" + "admin-exam-source-date" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.test.ts",
   // ===========================================================================
   // RE-POINTED by EX-PUB-UI-MVP, which wires the committed exam-plan publication
   // backend to this route. It re-points the export list, the binding count and
@@ -266,6 +273,13 @@ const SLICE_PATHS = [
   "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
   "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
   "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  // EX-ADMIN-SRCDATE ADDED two `lib/` production modules and MODIFIED no
+  // committed one: the pure source-date decision core, and its server-only
+  // binding. They are the ONE way a plan can gain a Teaching-Practice date, and
+  // without them every plan held an empty selection and beginner exams could
+  // not appear on any screen. ASSEMBLED, for the reason this header records.
+  "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.ts",
   // BLOCKER-1 also re-points the READ-PIPELINE guard suites whose claims the one
   // admin-only export makes obsolete. ASSEMBLED.
   "lib/exam/" + "exam-read" + "-dto.test.ts",
@@ -600,11 +614,26 @@ test("8. the route param is the ONLY scope input; the query is feedback only", (
       "assignmentEdit",
       "assignmentEditIssues",
       "assignmentOrder",
+      // ADDED by EX-ADMIN-UX-FIXES: two ARRANGEMENT keys. `group` is an ORDINAL into
+      // whichever sub-tab list is on screen — a POSITION and never an id, so no
+      // `ExamDefinition.id` reaches an href — and `add` is the closed literal that
+      // DISCLOSES the create form. Both go through closed parsers with safe defaults.
+      "group",
+      "add",
+      // ADDED by EX-ADMIN-SRCDATE: two closed FEEDBACK tokens for the one endpoint
+      // that replaces the plan's Teaching-Practice date selection. The issue token
+      // carries the backend's own rule CODES, and the page selects a fixed sentence
+      // per code, so no submitted value can be echoed onto the screen.
+      "sourceDates",
+      "sourceDateIssues",
     ].sort(),
   );
+  // RE-POINTED from 30 to 34 by EX-ADMIN-UX-FIXES and EX-ADMIN-SRCDATE, whose
+  // four keys are named above. Every one of them still admits the ARRAY form a
+  // repeated query key produces, which is what forces the parsers to reject it.
   assert.equal(
     (queryType.match(/string \| string\[\]/g) ?? []).length,
-    30,
+    34,
     "every feedback key must admit the array form a repeated key produces",
   );
   for (const forbidden of [
@@ -700,6 +729,12 @@ test("10. the page imports EXACTLY the twenty-six approved specifiers", () => {
     // ASSEMBLED: spelling this specifier whole would make THIS suite match the
     // committed reader guard's caller sweep, which must report exactly `page.tsx`.
     "@/lib/actions/" + "admin-exam-session-read" + "-io",
+    // EX-ADMIN-SRCDATE — the ONE admin-facing predicate that says whether this
+    // course level has beginner exams at all, so the workspace can tell "this
+    // level has none" apart from "no days are selected". ASSEMBLED, so this suite
+    // does not enrol itself as a caller. The page imports the PREDICATE only and
+    // never the writer beside it.
+    "@/lib/actions/" + "admin-exam-source-date" + "-io",
     // ASSEMBLED for the sharper reason still: the assignment read guard pinned its
     // caller list at EXACTLY ZERO before this slice, and at exactly `page.tsx`
     // after it.
@@ -826,8 +861,14 @@ test("13. EXACTLY the two approved Server Actions are reachable from the page", 
     "deleteExamPlan",
     "publishExamPlan",
     "unpublishExamPlan",
-    "sourceDate",
-    "SourceDate",
+    // RE-POINTED by EX-ADMIN-SRCDATE, and NARROWED to the TABLE rather than
+    // relaxed. Selecting which Teaching-Practice days a plan runs as exam days is
+    // now an approved endpoint of this route: nothing in the product could write
+    // that selection before, so every plan held an empty one and beginner exams
+    // could not appear on any screen. What must still be absent from every file
+    // here is the Prisma model itself, so the route names its own endpoint and its
+    // own display copy and reaches no table.
+    "examTeachingPracticeSourceDate",
     // RE-POINTED by EX-SES-UI-1: the blanket `examSession` / `ExamSession`
     // SUBSTRING bans are replaced by NARROW bans on the session work this page
     // still does not perform. The session CREATE is now an approved third
@@ -945,14 +986,24 @@ test("13. EXACTLY the two approved Server Actions are reachable from the page", 
   // one: the standalone pairing action, whose control was absorbed into the card.
   // Every remaining binding is still to `context.id`, the DB-VERIFIED offering,
   // and never to the raw route param.
-  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 11);
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 11);
+  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
+  // replacement, which is the only way a plan can gain a Teaching-Practice day
+  // and therefore the only way a beginner exam can appear anywhere at all.
+  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 12);
+  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
+  // replacement, which is the only way a plan can gain a Teaching-Practice day
+  // and therefore the only way a beginner exam can appear anywhere at all.
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 12);
   // The EIGHTH and NINTH, stated exactly as their neighbours are: HOISTED, so
   // "bound exactly once" stays true of the SOURCE however many cards React
   // renders from it.
   for (const name of [
     "updateExamAssignmentDetailsAction",
     "moveExamAssignmentAction",
+    // EX-ADMIN-SRCDATE appended a THIRTEENTH: the ONE endpoint that replaces the
+    // plan's Teaching-Practice date selection. Still EXHAUSTIVE, and still not a
+    // generic endpoint — it performs one operation and reads one field name.
+    "replaceExamSourceDatesAction",
   ]) {
     assert.ok(PAGE.includes(`${name}.bind(null, context.id)`), `${name} is not bound correctly`);
     assert.equal(
@@ -1024,16 +1075,32 @@ test("14. the page holds NO client state, and its only inline control is the pub
   // all: a fixed hidden direction, no pending UX, no validation, no confirmation.
   // An inventory stays strictly stronger than a ban: a FIFTH form, button or a
   // seventh input still fails here.
-  assert.equal((PAGE.match(/<form /g) ?? []).length, 4, "exactly four inline forms");
-  assert.equal((PAGE.match(/<\/form>/g) ?? []).length, 4, "all four inline forms are closed");
-  assert.equal((PAGE.match(/<button/g) ?? []).length, 4, "exactly four inline buttons");
+  // RE-POINTED by EX-ADMIN-SRCDATE, which renders its source-date control INLINE
+  // for exactly the reason the publication and move controls are: fixed field
+  // names, no pending UX, no client validation and no confirmation. An inventory
+  // stays strictly stronger than a ban.
+  assert.equal((PAGE.match(/<form/g) ?? []).length, 5, "exactly five inline forms");
+  // RE-POINTED by EX-ADMIN-SRCDATE, which renders its source-date control INLINE
+  // for exactly the reason the publication and move controls are: fixed field
+  // names, no pending UX, no client validation and no confirmation. An inventory
+  // stays strictly stronger than a ban.
+  assert.equal((PAGE.match(/<\/form>/g) ?? []).length, 5, "all five inline forms are closed");
+  // RE-POINTED by EX-ADMIN-SRCDATE, which renders its source-date control INLINE
+  // for exactly the reason the publication and move controls are: fixed field
+  // names, no pending UX, no client validation and no confirmation. An inventory
+  // stays strictly stronger than a ban.
+  assert.equal((PAGE.match(/<button/g) ?? []).length, 5, "exactly five inline buttons");
   // The two publication buttons carry no `aria-label`; the two move buttons carry
   // one each, because their visible content is a direction glyph.
   assert.equal((PAGE.match(/aria-label=\{MOVE_/g) ?? []).length, 2);
   // RE-POINTED from two to THREE by EX-PAIR-UI-MVP: the pairing form carries ONE
   // hidden field naming the instructed-trainee row it belongs to. A FOURTH still
   // fails, and the two `name="operation"` inputs are pinned separately below.
-  assert.equal((PAGE.match(/<input/g) ?? []).length, 6, "exactly six inline inputs");
+  // RE-POINTED by EX-ADMIN-SRCDATE, which renders its source-date control INLINE
+  // for exactly the reason the publication and move controls are: fixed field
+  // names, no pending UX, no client validation and no confirmation. An inventory
+  // stays strictly stronger than a ban.
+  assert.equal((PAGE.match(/<input/g) ?? []).length, 8, "exactly eight inline inputs");
   // ...and every one of the four the move controls carry is HIDDEN and holds one
   // of exactly two literals: the assignment it acts on, and a fixed direction.
   assert.equal((PAGE.match(/name="direction"/g) ?? []).length, 2);
@@ -1053,7 +1120,11 @@ test("14. the page holds NO client state, and its only inline control is the pub
   // left the page with the control, and the two move forms brought four of their
   // own — an assignment id and a direction each. The inventory is EXHAUSTIVE, so
   // a seventh named field on this page still fails here.
-  assert.equal((PAGE.match(/name="/g) ?? []).length, 6, "no seventh named field exists");
+  // RE-POINTED by EX-ADMIN-SRCDATE, which renders its source-date control INLINE
+  // for exactly the reason the publication and move controls are: fixed field
+  // names, no pending UX, no client validation and no confirmation. An inventory
+  // stays strictly stronger than a ban.
+  assert.equal((PAGE.match(/name="/g) ?? []).length, 8, "no ninth named field exists");
   assert.equal((PAGE.match(/name="instructedTraineeAssignmentId"/g) ?? []).length, 0);
   assert.equal((PAGE.match(/name="examineeAssignmentId"/g) ?? []).length, 0);
   assert.equal((PAGE.match(/name="assignmentId"/g) ?? []).length, 2);
@@ -1066,7 +1137,15 @@ test("14. the page holds NO client state, and its only inline control is the pub
   // held was the pairing one, and it moved to the examinee's card. The page is
   // back to collecting nothing a manager can type or choose.
   assert.equal((PAGE.match(/<select/g) ?? []).length, 0, "no inline picker may exist");
-  for (const forbidden of ["<textarea", 'type="text"', 'type="checkbox"']) {
+  // RE-POINTED by EX-ADMIN-SRCDATE, and NARROWED rather than relaxed. Choosing
+  // which days a plan runs beginner exams on is a CHOICE among days that already
+  // exist, so the control is one checkbox per selected day plus one date field —
+  // never free text. `type="text"` and `<textarea>` stay banned outright: nothing
+  // on this page collects a typed string, and the two allowed controls are pinned
+  // to EXACT counts here as well as by the input inventory above.
+  assert.equal((PAGE.match(/type="checkbox"/g) ?? []).length, 1, "exactly one checkbox");
+  assert.equal((PAGE.match(/type="date"/g) ?? []).length, 1, "exactly one date field");
+  for (const forbidden of ["<textarea", 'type="text"']) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not render ${forbidden}`);
   }
 
@@ -1086,9 +1165,12 @@ test("14. the page holds NO client state, and its only inline control is the pub
   // instructed-trainee roster — because an instructed trainee no longer has a
   // card of its own to carry it. Every one is still a server-bound action prop,
   // never an `action=` on markup that could reach anything but a Server Action.
+  // RE-POINTED from fourteen to FIFTEEN by EX-ADMIN-SRCDATE's one inline
+  // source-date form, which is bound to the same VERIFIED context id as its
+  // neighbours — never to the raw route param, which the bind counts above pin.
   assert.equal(
     (PAGE.match(/action=/g) ?? []).length,
-    14,
+    15,
     "action= must appear exactly fourteen times",
   );
   // Both move forms receive EXACTLY the hoisted bound action, and no other
@@ -1153,6 +1235,14 @@ test("15. the only navigation is the back link and the closed section/view links
   assert.deepEqual(
     hrefs,
     [
+      // RE-POINTED by EX-ADMIN-UX-FIXES, and still an EXACT inventory. The two
+      // grouped views gained one compact SUB-TAB link per group, and the
+      // assignments workspace gained one disclosure link that opens the create
+      // form from the top. Both carry CLOSED tokens only: the sub-tab carries an
+      // ORDINAL into the list on screen, and the disclosure carries the literal
+      // `1`. Neither can name a session, an assignment, a definition or a trainee.
+      "href={",
+      "href={`${examsPath}?${viewQuery}&group=${index}`}",
       "href={`${examsPath}?tab=${activeTab}&view=${token}`}",
       "href={`${examsPath}?tab=${token}`}",
       "href={dashboardHref}",
@@ -1271,16 +1361,19 @@ test("18. the definitions are rendered in the reader's order, unmodified", () =>
   // definition list or changes any order — one selects the instructed trainees
   // nobody teaches yet, the other partitions the timeline by stored day for the
   // by-date arrangement.
-  // RE-POINTED from two to THREE by the approved beginner projection: the third
-  // filter selects the committed admin reading's own BEGINNER rows by its own
-  // `source` discriminator. It re-orders nothing and reads nothing new.
+  // RE-POINTED from two to THREE by the approved beginner projection, and back to
+  // TWO by EX-ADMIN-UX-FIXES — a NARROWING rather than a relaxation: the by-date
+  // day partition moved OUT of the page and into the PURE route-local view
+  // module, whose own suite exercises it directly. The two filters left on the
+  // page are the unlinked instructed roster and the committed admin reading's own
+  // BEGINNER discriminator, and neither touches the definition list.
   assert.equal(
     (PAGE.match(/\.filter\(/g) ?? []).length,
-    3,
+    2,
     "the page filters something beyond the two approved partitions",
   );
   assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));
-  assert.ok(PAGE.includes("(entry) => entry.dateKey === day.dateKey"));
+  assert.ok(PAGE.includes('(row) => row.source === "BEGINNER"'));
   const definitionList = PAGE.slice(PAGE.indexOf("view.definitions.map("));
   assert.equal(
     definitionList.slice(0, definitionList.indexOf("</ul>")).includes(".filter("),

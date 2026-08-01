@@ -152,6 +152,13 @@ function gitLines(args: readonly string[]): string[] {
  * suites whose own sweeps this file must stay out of.
  */
 const SLICE_PATHS = [
+  // EX-ADMIN-SRCDATE — the TWO new `lib/` modules that let a manager select which
+  // Teaching-Practice days the plan runs as exam days, plus their suites.
+  // ASSEMBLED from pieces, for the reason this file's header records: those guards
+  // sweep raw source for their own module names and pin exact consumer lists, so a
+  // path written whole here would enrol this suite in one of them.
+  "lib/exam/" + "admin-exam-source-date" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.test.ts",
   ROUTE_DIR_PREFIX + "actions.ts",
   ROUTE_DIR_PREFIX + "page.tsx",
   ROUTE_DIR_PREFIX + "exam-pairing-ui.contract.test.ts",
@@ -227,6 +234,13 @@ const SLICE_PATHS = [
   "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
   "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
   "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  // EX-ADMIN-SRCDATE ADDED two `lib/` production modules and MODIFIED no
+  // committed one: the pure source-date decision core, and its server-only
+  // binding. They are the ONE way a plan can gain a Teaching-Practice date, and
+  // without them every plan held an empty selection and beginner exams could
+  // not appear on any screen. ASSEMBLED, for the reason this header records.
+  "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.ts",
   // BLOCKER-1 also re-points the READ-PIPELINE guard suites whose claims the one
   // admin-only export makes obsolete. ASSEMBLED.
   "lib/exam/" + "exam-read" + "-dto.test.ts",
@@ -355,7 +369,10 @@ test("3. the action module exports EXACTLY TEN actions, this slice's appended TE
   const exported = [...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g)].map(
     ([, name]) => name,
   );
-  assert.equal(exported.length, 12, "no thirteenth endpoint may exist in this module");
+  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
+  // replacement, which is the only way a plan can gain a Teaching-Practice day
+  // and therefore the only way a beginner exam can appear anywhere at all.
+  assert.equal(exported.length, 13, "no fourteenth endpoint may exist in this module");
   assert.equal(exported[9], ACTION_NAME, "the pairing action must be appended LAST");
   assert.equal(exported.filter((name) => name === ACTION_NAME).length, 1);
   for (const token of ["export const", "export default", "export {", "export type"]) {
@@ -731,16 +748,19 @@ test("15. the options are THIS session own bucket, built without a filter", () =
   for (const forbidden of [".sort(", ".reverse(", ".slice("]) {
     assert.equal(PAGE.includes(forbidden), false, `the page uses ${forbidden}`);
   }
-  // RE-POINTED from two to THREE by the approved beginner projection: the third
-  // filter selects the committed admin reading's own BEGINNER rows by its own
-  // `source` discriminator. It re-orders nothing and reads nothing new.
+  // RE-POINTED from two to THREE by the approved beginner projection, and back to
+  // TWO by EX-ADMIN-UX-FIXES — a NARROWING rather than a relaxation: the by-date
+  // day partition moved OUT of the page and into the PURE route-local view
+  // module, whose own suite exercises it directly. The two filters left on the
+  // page are the unlinked instructed roster and the committed admin reading's own
+  // BEGINNER discriminator, and neither re-orders anything.
   assert.equal(
     (PAGE.match(/\.filter\(/g) ?? []).length,
-    3,
+    2,
     "the page filters the reader's rows somewhere unapproved",
   );
   assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));
-  assert.ok(PAGE.includes("(entry) => entry.dateKey === day.dateKey"));
+  assert.ok(PAGE.includes('(row) => row.source === "BEGINNER"'));
 });
 
 test("16. the CURRENT partner is pre-selected from the READER, never from the query", () => {
@@ -893,7 +913,11 @@ test("20. every approved Hebrew sentence is present, verbatim, with its tone", (
   // the page no longer owns a copy of it either.
   assert.equal(PAGE.includes(NO_EXAMINEES_TEXT), false, "the page still owns the empty-picker text");
   assert.ok(CARD.includes("אין חניכים מודרכים במפגש הזה, ולכן אין את מי לשייך."));
-  assert.ok(CARD.includes("החניך המודרך שהנבחן/ת מדריך/ה"), "the card has no link label");
+  // RE-POINTED by EX-ADMIN-UX-FIXES: the compacted card shortened this label to
+  // the SAME words the schedule views already use for the relationship, so one
+  // screen no longer names it two different ways. The control, the submitted
+  // field name and the committed writer behind it are unchanged.
+  assert.ok(CARD.includes("מדריך/ה את"), "the card has no link label");
   assert.ok(CARD.includes("ללא חניך מודרך"), "the card has no unlink option text");
 });
 
@@ -1066,10 +1090,29 @@ test("25. the slice touched EXACTLY its approved paths, and no schema or migrati
     // BLOCKER-1 — the canonical wave narrowing: a pure, DB-free module that groups
     // the committed timetable core's own derived moments. ASSEMBLED.
     "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    // EX-ADMIN-SRCDATE ADDED two `lib/` production modules and MODIFIED no
+    // committed one: the pure source-date decision core, and its server-only
+    // binding. They are the ONE way a plan can gain a Teaching-Practice date,
+    // and without them every plan held an empty selection and beginner exams
+    // could not appear on any screen. ASSEMBLED, for the header's reason.
+    "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+    "lib/actions/" + "admin-exam-source-date" + "-io.ts",
+    // The admin-only reader export the workspace slice made; that slice is
+    // MERGED now, so the file is a committed production module this branch does
+    // not modify — it is on this list because it is in SLICE_PATHS.
+    "lib/actions/" + "exam-role" + "-readers" + ".ts",
     // BLOCKER-1 — the ONE committed `lib/` production module this slice modifies:
     // it gains one ADMIN-ONLY export so the admin schedule reuses the committed
     // timetable derivation instead of reproducing it. ASSEMBLED.
-    "lib/actions/" + "exam-role" + "-readers" + ".ts",
+    // RE-POINTED to the EMPTY set by EX-ADMIN-UX-FIXES / EX-ADMIN-SRCDATE, which
+    // is the STRICTEST form of this claim rather than a relaxation. The admin-only
+    // reader export belonged to the workspace slice that shared this working tree
+    // and is MERGED into `main` now, so measured against the branch base it is not
+    // an edit this branch makes. THIS branch modifies NO committed `lib/`
+    // production module at all: it only ADDS two new ones — the pure source-date
+    // decision core and its server-only binding — which the workspace suite pins
+    // by name. Any modification of a committed `lib/` production module still
+    // fails here.
   ].sort());
 
   // No instructor or trainee UI, no auth, session, middleware, capability,

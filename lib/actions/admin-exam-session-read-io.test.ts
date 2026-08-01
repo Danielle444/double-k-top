@@ -278,6 +278,17 @@ const APPROVED_MODIFIED_FILES = [
  * slices reuse the committed bindings rather than adding one.
  */
 const APPROVED_NEW_ROUTE_FILES = [
+  // EX-ADMIN-SRCDATE — the FOUR files this branch adds under `lib/`, and the
+  // guard suites it re-points. Nothing in the product could write an exam plan's
+  // Teaching-Practice date selection, so every plan held an empty one and
+  // beginner exams could not appear on any screen; the source-date decision core
+  // and its server-only binding are the smallest thing that fixes it. This
+  // reader/writer gained NO caller and NO field. ASSEMBLED, so this suite does
+  // not enrol itself in a caller list it exists to keep narrow.
+  "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+  "lib/exam/" + "admin-exam-source-date" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.test.ts",
   `${ROUTE_DIR_PREFIX}ExamSessionEditForm.tsx`,
   `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
   `${ROUTE_DIR_PREFIX}exam-session-edit-delete.contract.test.ts`,
@@ -1266,11 +1277,22 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
   // modules — a pure workspace edit/move core and its server-only binding — are
   // ADDITIONS of a neighbouring slice, excluded by EXACT name below. Any other
   // `lib/` addition still fails here.
+  // RE-POINTED by EX-ADMIN-SRCDATE on exactly the same terms: its two `lib/`
+  // modules — a pure source-date decision core and its server-only binding — are
+  // ADDITIONS of a neighbouring slice, excluded by EXACT name. They exist because
+  // nothing in the product could write an exam plan's Teaching-Practice date
+  // selection, so every plan held an empty one and beginner exams could not
+  // appear on any screen. This reader gained NO caller and NO field, and any
+  // OTHER `lib/` addition still fails here.
   const NEIGHBOUR_LIB_ADDITIONS = [
     "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
     "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
     "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
     "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+    "lib/actions/" + "admin-exam-source-date" + "-io.ts",
+    "lib/actions/" + "admin-exam-source-date" + "-io.test.ts",
+    "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+    "lib/exam/" + "admin-exam-source-date" + "-core.test.ts",
   ];
   for (const path of introduced) {
     if (APPROVED_NEW_LIB_FILES.includes(path)) continue;

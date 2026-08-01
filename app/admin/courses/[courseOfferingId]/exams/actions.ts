@@ -285,6 +285,7 @@ import {
   moveExamAssignment,
   setExamExamineeInstructedTrainee,
 } from "@/lib/actions/admin-exam-workspace-edit-io";
+import { replaceExamSourceDates } from "@/lib/actions/admin-exam-source-date-io";
 
 /**
  * EX-PAIR-UI-MVP — the ONE submitted value that means "no partner".
@@ -1486,4 +1487,103 @@ export async function moveExamAssignmentAction(
   // 6. Every other refusal is fully described by its code alone. No diagnostics
   //    list exists for a move, so there is no issues token.
   redirect(`${backPath}&assignmentOrder=${encodeURIComponent(result.code)}`);
+}
+
+/**
+ * EX-ADMIN-SRCDATE — REPLACE the COMPLETE Teaching-Practice date selection of the
+ * bound offering's exam plan.
+ *
+ * Returns `Promise<void>`, like its twelve neighbours: every outcome is expressed
+ * as a navigation, so the action holds no client-visible state and its signature
+ * cannot grow a `prevState` parameter.
+ *
+ * ===========================================================================
+ * ONE FIELD NAME, READ AS A LIST, AND DELIBERATELY NOT A SECOND
+ * ===========================================================================
+ * The mapping below reads `date` — repeated once per selected day — and NOTHING
+ * else. Absent, not filtered out but never looked for, are `courseOfferingId`
+ * (bound by the route), `planId` (derived server-side from the verified
+ * offering), every Teaching-Practice identifier, every participant, child, horse,
+ * contact, time, format and note, a level, a course date bound, an actor id and a
+ * version token. The committed writer's signature has two parameters and no
+ * third, so none of them is reachable even by a hand-crafted submission.
+ *
+ * THE SUBMISSION IS THE COMPLETE SET. `getAll` collects every checked day at
+ * once, so an unchecked day is expressed by its ABSENCE and no separate remove
+ * endpoint exists. An EMPTY submission is a legitimate selection meaning "this
+ * plan has no beginner dates" — which is exactly why the raw list is passed
+ * through rather than guarded against here.
+ *
+ * ===========================================================================
+ * NO COERCION
+ * ===========================================================================
+ * The entries are handed to the writer RAW. Nothing is wrapped in `String(...)`,
+ * defaulted with `??`, trimmed or filtered: the committed core validates every
+ * token as a real calendar date, checks it against the course period and against
+ * live Teaching-Practice data, collapses duplicates and refuses the WHOLE
+ * submission if any token is unusable. `String(...)` would instead turn a `File`
+ * from a multipart submission into the text `"[object File]"` and send that
+ * onward.
+ *
+ * ===========================================================================
+ * WHAT THIS ACTION DOES NOT DO
+ * ===========================================================================
+ * It calls ONE committed writer and nothing else. It reads no Prisma client,
+ * writes no row itself, creates NO Teaching-Practice data of any kind, restates
+ * none of the rules (the beginner course-level containment, the date validation,
+ * the course-period bounds, the practice-existence check, the duplicate collapse,
+ * the atomic replacement and the no-op rule are all the backend's), sends no
+ * notification, records no history and publishes nothing. It does NOT consult the
+ * plan's publication state either: publication is not authorization.
+ */
+export async function replaceExamSourceDatesAction(
+  courseOfferingId: string,
+  formData: FormData,
+): Promise<void> {
+  // 1. Authorize the manager BEFORE anything is read or written.
+  await requireAdmin();
+
+  // 2. The exams path of THIS offering, and the section to return to. The
+  //    selection is configured beside the blocks it produces, so the manager
+  //    lands back on the schedule section rather than at the top of the page.
+  const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
+  const backPath = `${examsPath}?tab=schedule`;
+
+  // 3. The committed writer. The bound offering id is a REQUEST: the writer runs
+  //    the admin boundary and the exact-offering lookup itself, applies the
+  //    course lifecycle WRITE gate on the VERIFIED status, asks the committed
+  //    beginner-level containment predicate before reading anything, resolves the
+  //    plan from that verified id, and replaces the whole selection in ONE
+  //    transaction. Every validation and concurrency decision is its own.
+  const result = await replaceExamSourceDates(courseOfferingId, formData.getAll("date"));
+
+  // 4. Success, in its two distinguishable forms. A real replacement revalidates
+  //    this ONE exams path — the beginner rows every view shows are derived from
+  //    the selection, so they change with it; a NO_CHANGE revalidates NOTHING,
+  //    because the writer issued no statement at all and a cache invalidation
+  //    would be a lie about what happened.
+  if (result.ok) {
+    if (result.outcome !== "NO_CHANGE") {
+      revalidatePath(examsPath);
+    }
+    redirect(`${backPath}&sourceDates=${result.outcome}`);
+  }
+
+  // 5. The one refusal that is NOT about this page: the offering does not exist,
+  //    so returning to its exams route would render a second not-found. The
+  //    manager goes to the course list, and the requested id is not reflected
+  //    back in the destination.
+  if (result.reason === "offering_not_found") {
+    redirect("/admin/courses?error=invalid");
+  }
+
+  // 6. Every other refusal carries its closed reason and, for a rejected
+  //    submission, the closed per-rule codes the backend produced. Neither
+  //    carries a submitted date: the page selects a fixed sentence per code and
+  //    can never echo a token back onto the screen.
+  const issues = result.issues.map((issue) => issue.code).join(",");
+  redirect(
+    `${backPath}&sourceDates=${encodeURIComponent(result.reason)}` +
+      (issues.length > 0 ? `&sourceDateIssues=${encodeURIComponent(issues)}` : ""),
+  );
 }

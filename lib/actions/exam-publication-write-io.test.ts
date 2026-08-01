@@ -175,6 +175,17 @@ const APPROVED_MODIFIED_GUARDS = [
  * `lib/actions` paths are ASSEMBLED for the same reason as every path above.
  */
 const APPROVED_NEIGHBOUR_ADDITIONS = [
+  // EX-ADMIN-SRCDATE — the FOUR files this branch adds under `lib/`, and the
+  // guard suites it re-points. Nothing in the product could write an exam plan's
+  // Teaching-Practice date selection, so every plan held an empty one and
+  // beginner exams could not appear on any screen; the source-date decision core
+  // and its server-only binding are the smallest thing that fixes it. This
+  // reader/writer gained NO caller and NO field. ASSEMBLED, so this suite does
+  // not enrol itself in a caller list it exists to keep narrow.
+  "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+  "lib/exam/" + "admin-exam-source-date" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.test.ts",
   ["lib", "exam", "exam-pairing-write" + "-core.ts"].join("/"),
   ["lib", "exam", "exam-pairing-write" + "-core.test.ts"].join("/"),
   ["lib", "actions", "exam-pairing-write" + "-io.ts"].join("/"),
@@ -337,6 +348,12 @@ const APPROVED_UI_SLICE_PATHS = [
   // as a caller of either.
   "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
   "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+  // ...and BLOCKER-1's two, which the successor-production assertion below has
+  // always named but this list did not: the canonical wave narrowing, and the ONE
+  // committed module the workspace slice edits so the admin schedule reuses the
+  // committed timetable derivation instead of reproducing it. ASSEMBLED.
+  "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+  "lib/actions/" + "exam-role" + "-readers.ts",
   // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
   // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
   // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
