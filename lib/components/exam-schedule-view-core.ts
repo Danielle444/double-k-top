@@ -272,6 +272,80 @@ export function listExamDates(
 }
 
 /**
+ * The EARLIEST date in a list, or `null` when there is none.
+ *
+ * `YYYY-MM-DD` is fixed-width and zero-padded, so plain string comparison is
+ * chronological: no `Date` is constructed, no timezone is consulted and no
+ * calendar arithmetic happens here — exactly as in the committed exam cores.
+ *
+ * It is TOTAL. A blank, whitespace-only or non-string entry contributes nothing
+ * rather than becoming "the earliest", so a malformed token can never be chosen
+ * as a default selection.
+ */
+export function earliestExamDate(
+  dates: readonly string[] | null | undefined,
+): string | null {
+  let earliest: string | null = null;
+  for (const date of asArray(dates)) {
+    if (!isPresent(date)) continue;
+    if (earliest === null || date < earliest) earliest = date;
+  }
+  return earliest;
+}
+
+/**
+ * The minimum a row must carry to be placed on a clock. Structural on purpose,
+ * exactly like {@link ExamNavigableRow}: the trainee row and the operational row
+ * both satisfy it.
+ */
+export interface ExamTimedRow {
+  readonly startTime: string;
+}
+
+/**
+ * A sortable key for one `HH:MM` block start.
+ *
+ * A legible zero-padded time sorts as itself. Anything else — absent, blank,
+ * malformed, not a string — sorts LAST under a token no real time can reach, so
+ * a defective row is never silently promoted to the top of a schedule and is
+ * never dropped either.
+ */
+function startTimeKey(value: unknown): string {
+  return typeof value === "string" && /^\d{2}:\d{2}$/.test(value) ? value : "99:99";
+}
+
+/**
+ * The rows of ONE day, ordered by block start ascending.
+ *
+ * ===========================================================================
+ * IT AGREES WITH THE SERVER — IT DOES NOT SECOND-GUESS IT
+ * ===========================================================================
+ * The read pipeline already emits each date's rows in the locked order
+ * `startTime`, `orderIndex`, `sessionId`. This is a STABLE sort on the first of
+ * those three keys alone, so on a contract that already arrives ordered it is a
+ * NO-OP, and on any contract it preserves the server's own order for every pair
+ * of rows that share a start time. It therefore cannot invent a second,
+ * disagreeing schedule: `orderIndex` and `sessionId` are never read here, and
+ * re-deriving them in a browser is exactly what would create one.
+ *
+ * It performs NO timetable arithmetic and NO pairing: it compares two `HH:MM`
+ * strings and nothing else. Live beginner rows and stored blocks are ordered by
+ * the same one rule, which is what interleaves them chronologically.
+ */
+export function sortExamRowsByStartTime<T extends ExamTimedRow>(
+  rows: readonly T[] | null | undefined,
+): readonly T[] {
+  const out = asArray(rows).filter((row): row is T => row !== null && row !== undefined);
+  // Array.prototype.sort is stable, which is what makes the tie-break "the order
+  // the contract already had" rather than a second rule stated here.
+  return [...out].sort((a, b) => {
+    const left = startTimeKey(a.startTime);
+    const right = startTimeKey(b.startTime);
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
+}
+
+/**
  * A navigation selection. `null` on either axis means "no constraint" — the
  * general view is simply both axes unconstrained, not a third code path.
  */
@@ -361,4 +435,212 @@ export function selectSelfAssignmentRow(
     (row) => row !== null && row !== undefined && row.isSelf === true,
   );
   return matches.length === 1 ? matches[0] : null;
+}
+
+// ===========================================================================
+// Live beginner rows — a SECOND kind of row, never a second kind of examinee
+// ===========================================================================
+
+/**
+ * Where ONE visible row came from.
+ *
+ * `STORED` is an `ExamSession` an admin built. `BEGINNER` is a LIVE projection
+ * of a Teaching-Practice lesson: it has no stored exam assignment, no exam
+ * definition and no timetable, and its people are not examinees. Declared here
+ * as a local union for the same reason every other type in this file is —
+ * so no client component reaches into the exam read pipeline's modules — and
+ * TypeScript still checks it agrees with the contract at every call site.
+ */
+export type ExamRowSourceView = "STORED" | "BEGINNER";
+
+/** The three live Teaching-Practice formats a beginner row can carry. */
+export type ExamBeginnerFormatView = "LUNGE" | "BEGINNER_PRIVATE" | "BEGINNER_GROUP";
+
+/**
+ * The Hebrew label for each format, EXHAUSTIVE over the union above, so adding a
+ * format without adding its label is a compile error rather than a blank on a
+ * schedule. The wording matches the committed exam label map.
+ */
+export const EXAM_BEGINNER_FORMAT_VIEW_LABELS: Readonly<
+  Record<ExamBeginnerFormatView, string>
+> = Object.freeze({
+  LUNGE: "לונג",
+  BEGINNER_PRIVATE: "מתחילים פרטני",
+  BEGINNER_GROUP: "מתחילים קבוצתי",
+});
+
+/**
+ * The Hebrew label for a format, or `null` for anything outside the union.
+ *
+ * FAIL-OPEN ON THE LABEL, NEVER ON THE DATA: an unrecognised token yields no
+ * label, and the caller shows the raw value it was given instead of hiding the
+ * row. A beginner lesson whose format nobody anticipated must still appear on a
+ * schedule.
+ */
+export function examBeginnerFormatLabel(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  return Object.prototype.hasOwnProperty.call(EXAM_BEGINNER_FORMAT_VIEW_LABELS, value)
+    ? EXAM_BEGINNER_FORMAT_VIEW_LABELS[value as ExamBeginnerFormatView]
+    : null;
+}
+
+/**
+ * ONE child of a live beginner lesson, as the schedules display them.
+ *
+ * Child and parent-contact detail is available to EVERY authorized exam-access
+ * role, trainees included — that is the committed product decision taken in the
+ * read layer, and this file neither re-opens it nor narrows it further. The gate
+ * is WHICH ROWS a role is handed, not which fields, so nothing here drops a
+ * value the contract chose to carry.
+ *
+ * `parentPhone` stays VERBATIM: it is not normalized, reformatted, masked or
+ * turned into a dial/WhatsApp target anywhere in this file or its renderer.
+ */
+export interface ExamBeginnerChildView {
+  /**
+   * The POSITIONAL display key the read layer assigns — `c0`, `c1`, … in the
+   * committed source order.
+   *
+   * It is deliberately NOT `childAssignmentId`. That is a database primary key
+   * and a write target; a renderer needs a stable key, not an identity, and the
+   * trainee contract no longer carries the id at all. Nothing in this file may
+   * read an id in its place.
+   */
+  readonly childKey: string;
+  readonly fullName: string;
+  readonly age: number | null;
+  readonly gender: string | null;
+  readonly childNotes: string | null;
+  readonly parentName: string | null;
+  readonly parentPhone: string | null;
+  readonly horseName: string | null;
+  readonly equipmentNotes: string | null;
+  readonly isAbsent: boolean;
+}
+
+/**
+ * ONE live beginner lesson's detail, as BOTH schedules display it.
+ *
+ * The first block of fields is the TRAINEE contract, verbatim. The three
+ * optional fields below it exist only on the ADMIN/INSTRUCTOR contract; a
+ * trainee row simply does not carry them, and the renderer additionally refuses
+ * to show them unless a caller explicitly asks for the operational view — two
+ * independent reasons a trainee can never be shown lesson notes or lesson
+ * publication state.
+ *
+ * There is deliberately NO date and NO time here. A beginner row's day and block
+ * window are the ROW's, they are already printed once by the card that owns it,
+ * and a second copy inside the detail is how two disagreeing times end up on one
+ * screen.
+ */
+export interface ExamBeginnerDetailView {
+  /**
+   * TRAINEE contract only — the SERVER's answer to "is this lesson mine".
+   *
+   * Optional because the admin/instructor contract does not carry it: an
+   * operational role has no single viewer to be relevant to. It is read, never
+   * computed: this file holds no viewer identity to compare against and no
+   * display name is consulted anywhere in it.
+   */
+  readonly isSelfRelevant?: boolean;
+  readonly beginnerFormat: ExamBeginnerFormatView;
+  readonly groupName: string | null;
+  readonly location: string | null;
+  readonly responsibleInstructorName: string | null;
+  /** Resolved display names of the PROJECTED participants, in source order. */
+  readonly participantNames: readonly string[];
+  /** The AUTHORITATIVE projected-participant count. May exceed the names. */
+  readonly participantCount: number;
+  readonly children: readonly ExamBeginnerChildView[];
+  /** ADMIN/INSTRUCTOR only — the raw Teaching-Practice token, verbatim. */
+  readonly practiceType?: string;
+  /** ADMIN/INSTRUCTOR only — the LESSON's own notes. */
+  readonly notes?: string | null;
+  /** ADMIN/INSTRUCTOR only — the LESSON's publication flag. */
+  readonly isPublished?: boolean;
+}
+
+/**
+ * The minimum a row must carry for its ORIGIN to be read. Structural, like every
+ * other row shape in this file.
+ */
+export interface ExamSourcedRow {
+  readonly source: ExamRowSourceView;
+}
+
+/**
+ * Is this a LIVE beginner row?
+ *
+ * Decided by the contract's own `source` field and nothing else. It is never
+ * inferred from an empty assignment list, from a missing definition name, from a
+ * missing timetable or from the presence of beginner detail: every one of those
+ * is also true of some stored block, and guessing would put a Teaching-Practice
+ * banner on a real exam.
+ */
+export function isBeginnerExamRow(row: ExamSourcedRow | null | undefined): boolean {
+  return row !== null && row !== undefined && row.source === "BEGINNER";
+}
+
+/** How many of these rows are live beginner rows. */
+export function countBeginnerRows(
+  rows: readonly ExamSourcedRow[] | null | undefined,
+): number {
+  let total = 0;
+  for (const row of asArray(rows)) {
+    if (isBeginnerExamRow(row)) total += 1;
+  }
+  return total;
+}
+
+/**
+ * The two failures that look identical on screen, told apart.
+ *
+ * - `NO_BEGINNER_ROWS_RETURNED` — the server sent none. The screen is right; the
+ *   question is upstream (the plan carries no Teaching-Practice source date, the
+ *   course is not Level 1, the lessons are not published, the day has none).
+ * - `BEGINNER_ROWS_NOT_RENDERED` — the server DID send them and the view put
+ *   none of them on screen. That is a UI defect, and it is the one this slice
+ *   exists to make impossible to mistake for the case above.
+ * - `BEGINNER_ROWS_RENDERED` — at least one arrived and at least one is shown.
+ */
+export type BeginnerRenderingVerdict =
+  | "NO_BEGINNER_ROWS_RETURNED"
+  | "BEGINNER_ROWS_NOT_RENDERED"
+  | "BEGINNER_ROWS_RENDERED";
+
+/**
+ * The counts BOTH survive the verdict, so a PARTIAL drop — some rows loaded,
+ * fewer rendered — is visible as two unequal numbers rather than being rounded
+ * off into a reassuring verdict.
+ */
+export interface BeginnerRenderingSummary {
+  readonly loadedBeginnerCount: number;
+  readonly renderedBeginnerCount: number;
+  readonly verdict: BeginnerRenderingVerdict;
+}
+
+/**
+ * Diagnose a screen showing no beginner entries.
+ *
+ * PURE, and deliberately NOT wired into either screen's output: a user-facing
+ * schedule carries no diagnostics, which is a locked property of both exam
+ * screens. This is the shape their tests assert against, so "the action returned
+ * nothing" and "the UI dropped it" can never again be the same observation.
+ *
+ * @param loadedRows   the rows the server actually returned.
+ * @param renderedRows the rows the view actually put on screen.
+ */
+export function summarizeBeginnerRendering(
+  loadedRows: readonly ExamSourcedRow[] | null | undefined,
+  renderedRows: readonly ExamSourcedRow[] | null | undefined,
+): BeginnerRenderingSummary {
+  const loadedBeginnerCount = countBeginnerRows(loadedRows);
+  const renderedBeginnerCount = countBeginnerRows(renderedRows);
+  const verdict: BeginnerRenderingVerdict =
+    loadedBeginnerCount === 0
+      ? "NO_BEGINNER_ROWS_RETURNED"
+      : renderedBeginnerCount === 0
+        ? "BEGINNER_ROWS_NOT_RENDERED"
+        : "BEGINNER_ROWS_RENDERED";
+  return Object.freeze({ loadedBeginnerCount, renderedBeginnerCount, verdict });
 }

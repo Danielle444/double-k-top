@@ -681,8 +681,53 @@ function traineeDto(viewer: string | null = SELF_ID) {
   );
 }
 
+/**
+ * EX-TRAINEE-ID-CONTAINMENT — locating a TRAINEE row without an internal id.
+ *
+ * The trainee contract no longer carries `sessionId`: it was `ExamSession.id`
+ * for a stored block and the synthetic `tp:<lessonId>` for a live beginner row,
+ * both database primary keys, and neither was ever rendered. These tests locate
+ * a row the way a READER does — by a value that is actually on it. Every fixture
+ * row has a distinct start time, so the mapping is stated ONCE here and each
+ * assertion keeps naming the same fixture row it always named.
+ *
+ * `tp:other` is deliberately mapped to a time NO fixture uses, so an
+ * "is-absent" assertion still names a row that genuinely is not there.
+ */
+const TRAINEE_ROW_START_TIMES: Readonly<Record<string, string>> = Object.freeze({
+  s1: "09:00",
+  s2: "10:45",
+  s3: "15:00",
+  "tp:l1": "11:00",
+  "tp:l2": "12:00",
+  "tp:l3": "13:00",
+  "tp:l4": "14:00",
+  "tp:l5": "16:00",
+  "tp:other": "23:59",
+});
+
+/** The trainee row corresponding to a fixture id, or `undefined`. */
+function traineeRow(
+  rows: readonly TraineeExamDayRowDto[],
+  fixtureId: string,
+): TraineeExamDayRowDto | undefined {
+  const startTime = TRAINEE_ROW_START_TIMES[fixtureId];
+  assert.ok(startTime !== undefined, `unknown fixture row ${fixtureId}`);
+  return rows.find((row) => row.startTime === startTime);
+}
+
+/** The fixture ids of these trainee rows, in order — for list assertions. */
+function traineeRowIds(rows: readonly TraineeExamDayRowDto[]): string[] {
+  return rows.map((row) => {
+    const match = Object.entries(TRAINEE_ROW_START_TIMES).find(
+      ([, startTime]) => startTime === row.startTime,
+    );
+    return match === undefined ? `unmapped:${row.startTime}` : match[0];
+  });
+}
+
 function rowById(rows: readonly TraineeExamDayRowDto[], sessionId: string): TraineeExamDayRowDto {
-  const row = rows.find((r) => r.sessionId === sessionId);
+  const row = traineeRow(rows, sessionId);
   assert.ok(row !== undefined, `expected a row for ${sessionId}`);
   return row;
 }
@@ -709,17 +754,17 @@ test("allRows carries every valid projected day row, in the projection's order",
   const dto = traineeDto();
 
   assert.deepEqual(
-    dto.allRows.map((r) => r.sessionId),
+    traineeRowIds(dto.allRows),
     projection.allRows.map((r) => r.session.sessionId),
   );
   // The unresolved stored row was hidden upstream and is not re-introduced.
-  assert.equal(dto.allRows.some((r) => r.sessionId === "s3"), false);
+  assert.equal(traineeRow(dto.allRows, "s3") !== undefined, false);
 });
 
 test("myRows is LITERALLY allRows.filter(isSelf)", () => {
   const dto = traineeDto();
   assert.deepEqual(dto.myRows, dto.allRows.filter((row) => row.isSelf));
-  assert.deepEqual(dto.myRows.map((r) => r.sessionId), ["s1", "tp:l2"]);
+  assert.deepEqual(traineeRowIds(dto.myRows), ["s1", "tp:l2"]);
 });
 
 test("myRows shares row OBJECT REFERENCES with allRows", () => {
@@ -933,8 +978,17 @@ test("beginner detail attaches ONLY by exact session id", () => {
   const dto = traineeDto();
   const row = rowById(dto.allRows, "tp:l1");
   assert.ok(row.beginner !== null);
-  assert.equal(row.beginner.sessionId, "tp:l1");
-  assert.equal(row.beginner.lessonId, "l1");
+  // EX-TRAINEE-ID-CONTAINMENT RE-POINT. This asserted `beginner.sessionId` and
+  // `beginner.lessonId` were the lesson's own ids — which is exactly the leak
+  // that had to go: `lessonId` is `TeachingPracticeLesson.id`, and `sessionId`
+  // is the synthetic `tp:<lessonId>` that carried it a second time. Neither was
+  // ever rendered, so the claim is REPLACED by the stronger pair: the attachment
+  // still happened (proved by the values that DID arrive), and neither id is on
+  // the contract at all.
+  assert.equal(row.beginner.groupName, "א");
+  assert.equal(row.beginner.location, "מגרש 2");
+  assert.equal("sessionId" in row.beginner, false, "the trainee detail carries a session id");
+  assert.equal("lessonId" in row.beginner, false, "the trainee detail carries a lesson id");
   // A stored row never consults the beginner lookup.
   assert.equal(rowById(dto.allRows, "s1").beginner, null);
 });
@@ -943,9 +997,10 @@ test("a MISSING beginner detail attaches nothing at all", () => {
   const row = rowById(traineeDto().allRows, "tp:l3");
   assert.equal(row.beginner, null);
   assert.equal(row.location, null);
-  // The compact row itself survives.
-  assert.equal(row.sessionId, "tp:l3");
+  // The compact row itself survives, and is still identifiable — by what it
+  // SHOWS, since the trainee contract carries no session id any more.
   assert.equal(row.startTime, "13:00");
+  assert.equal(row.source, "BEGINNER");
 });
 
 test("a MISMATCHED beginner detail fails closed", () => {
@@ -966,9 +1021,12 @@ test("a filtered / unseen beginner detail can never appear", () => {
 test("the trainee beginner detail carries the approved child and parent fields", () => {
   const row = rowById(traineeDto().allRows, "tp:l1");
   assert.ok(row.beginner !== null);
+  // EX-TRAINEE-ID-CONTAINMENT: `childAssignmentId` (a database primary key) is
+  // REMOVED from the trainee contract; `childKey` (a positional display key) is
+  // the replacement, and it carries no identity.
   assert.deepEqual(row.beginner.children, [
     {
-      childAssignmentId: "ca-1",
+      childKey: "c0",
       fullName: "ילד א",
       age: 8,
       gender: "F",
@@ -1333,9 +1391,17 @@ test("same-kind rows keep SEPARATE definition identity", () => {
     [first?.definitionName, second?.definitionName],
     ["מבחן ממשק", "מבחן ממשק מתקדם"],
   );
-  // The trainee contract keeps the same distinction.
+  // EX-TRAINEE-ID-CONTAINMENT: the trainee contract keeps the same distinction
+  // through `definitionName` alone. `definitionId` — `ExamDefinition.id`, a
+  // database primary key — is REMOVED from the trainee row: it was never
+  // rendered, and current product navigation dropped the by-exam-type view it
+  // would have driven.
   const trainee = traineeDto();
-  assert.notEqual(rowById(trainee.allRows, "s1").definitionId, rowById(trainee.allRows, "s2").definitionId);
+  assert.notEqual(
+    rowById(trainee.allRows, "s1").definitionName,
+    rowById(trainee.allRows, "s2").definitionName,
+  );
+  assert.equal("definitionId" in rowById(trainee.allRows, "s1"), false);
 });
 
 test("LUNGE and BEGINNER_GROUP keep their beginner-format breakdown", () => {
@@ -1625,9 +1691,16 @@ test("the one authorized consumer returns DTOs only, and never the internal payl
   // Every exported reader's return type is a role contract...
   const returnTypes = [...scopeCode.matchAll(/export async function \w+\([\s\S]*?\): (\w+<[^>]+>)/g)]
     .map((match) => match[1]);
+  // RE-POINTED by EX-TRAINEE-MULTIDAY-READ, additively: the pure scope core
+  // gained a FOURTH exported reader — the trainee's WHOLE published schedule in
+  // one load — and it returns the SAME `TraineeExamDayDto` the day reader
+  // returns. No role contract changed shape, no DTO gained a field, and the
+  // property this test exists for is untouched: every exported reader still
+  // returns a role contract and none returns the internal payload.
   assert.deepEqual(returnTypes, [
     "Promise<AdminExamReadDto>",
     "Promise<InstructorExamReadDto>",
+    "Promise<TraineeExamDayDto>",
     "Promise<TraineeExamDayDto>",
   ]);
   // ...the internal payload is NOT among them. It appears in exactly one place:
@@ -1770,7 +1843,7 @@ test("an UNRESOLVED block keeps its assignment rows for an operational role only
   );
   // The committed trainee core hides the row itself, so it carries none.
   assert.equal(
-    traineeDto().allRows.some((r) => r.sessionId === "s3"),
+    traineeRow(traineeDto().allRows, "s3") !== undefined,
     false,
   );
 });

@@ -54,6 +54,18 @@ const SCHEDULE_NAV_REL = "lib/components/ExamScheduleNav.tsx";
 const SCHEDULE_NAV_SUITE_REL = "lib/components/ExamScheduleNav.test.tsx";
 const PERSONAL_DETAIL_REL = "lib/components/ExamPersonalAssignmentDetail.tsx";
 const PERSONAL_DETAIL_SUITE_REL = "lib/components/ExamPersonalAssignmentDetail.test.tsx";
+/**
+ * EX-BEGINNER-EXAM-UI — the ONE shared renderer for a LIVE beginner row, mounted
+ * by the instructor screen and the trainee screen alike, and EX-TRAINEE-DATE-NAV
+ * — the trainee-only date sub-tabs, which this screen deliberately does NOT
+ * mount (it keeps the three-view bar above). Each is proven by its own render
+ * suite beside it; what this suite pins is that the instructor screen delegates
+ * the beginner layout rather than growing a copy of it.
+ */
+const BEGINNER_ROWS_REL = "lib/components/ExamBeginnerRows.tsx";
+const BEGINNER_ROWS_SUITE_REL = "lib/components/ExamBeginnerRows.test.tsx";
+const DATE_TABS_REL = "lib/components/ExamDateTabs.tsx";
+const DATE_TABS_SUITE_REL = "lib/components/ExamDateTabs.test.tsx";
 
 function read(relative: string): string {
   return readFileSync(join(REPO_ROOT, relative), "utf8");
@@ -307,11 +319,47 @@ function assertScopeCoreAuthorizationUnchanged(): void {
   const reindented = new Set([...removed].filter((line) => added.has(line)));
 
   for (const token of SCOPE_AUTHORIZATION_TOKENS) {
+    // EX-TRAINEE-MULTIDAY-READ RE-POINT — REMOVED lines only.
+    //
+    // This swept every changed line alike, which was right while no slice needed
+    // a new reader in that file: a line naming the authorization surface could
+    // only be an edit to an existing one. The approved multi-day TRAINEE read
+    // ADDS a reader, and a reader that did not name the identity step, the
+    // course resolver, the denial classification and the locked trainee options
+    // would be one that skipped authorization — so the old form is satisfiable
+    // here only by writing an UNSAFE reader.
+    //
+    // The half that protects this suite's own subject is KEPT AT FULL STRENGTH:
+    // no line naming the authorization surface may be REMOVED or REWRITTEN, so
+    // nothing about the INSTRUCTOR reading can be deleted, weakened or
+    // re-ordered. The added trainee lines are pinned where they belong — in
+    // `lib/actions/trainee-exam-schedule.contract.test.ts`, which additionally
+    // proves the new reader authorizes line-for-line as the trainee day reader
+    // does. The instructor's own publication literals are re-asserted verbatim
+    // immediately below, and the instructor SECTION and ACTION keep their strict
+    // claims in tests 13 and 16.
     const offenders = changedLines
+      .filter((line) => line.startsWith("-"))
       .filter((line) => line.includes(token))
       .map((line) => line.slice(1).trim())
       .filter((line) => !reindented.has(line) && !TOLERATED_CHANGED_LINES.has(line));
-    assert.deepEqual(offenders, [], `${SCOPE_REL} changed a line naming ${token}`);
+    assert.deepEqual(offenders, [], `${SCOPE_REL} REMOVED or rewrote a line naming ${token}`);
+    // No ADDED line may name an INSTRUCTOR-side authorization value at all: the
+    // approved slice is a trainee one, so a new instructor resolver, option
+    // producer or identity step appearing here is out of scope by construction.
+    if (/[Ii]nstructor/.test(token)) {
+      const addedInstructorLines = changedLines
+        .filter((line) => line.startsWith("+"))
+        .filter((line) => line.includes(token))
+        .map((line) => line.slice(1).trim())
+        .filter((line) => !reindented.has(line) && !TOLERATED_CHANGED_LINES.has(line))
+        .filter((line) => !line.startsWith("*") && !line.startsWith("//"));
+      assert.deepEqual(
+        addedInstructorLines,
+        [],
+        `${SCOPE_REL} added a line naming the instructor-side ${token}`,
+      );
+    }
   }
 
 
@@ -328,12 +376,47 @@ function assertScopeCoreAuthorizationUnchanged(): void {
 }
 
 test("5. the reader is untouched, server-only, and the wrapper is its only app-reachable caller", () => {
-  // Byte-identical to HEAD: this slice changed no authorization logic.
-  const result = spawnSync("git", ["diff", "--quiet", "HEAD", "--", READERS_REL], {
+  // EX-TRAINEE-MULTIDAY-READ RE-POINT — the byte-identical claim on the readers
+  // module, on the same terms as the scope-core re-point above: the approved
+  // multi-day TRAINEE read adds ONE binding there.
+  //
+  // The claim is REPLACED by the property it was standing in for, and this
+  // suite's own subject keeps it at full strength: the file's only difference
+  // from HEAD is ADDITIVE — no line may be removed or rewritten — and the
+  // INSTRUCTOR binding specifically is asserted byte-for-byte below.
+  const readersDiff = spawnSync("git", ["diff", "-U0", "HEAD", "--", READERS_REL], {
     cwd: REPO_ROOT,
     encoding: "utf8",
   });
-  assert.equal(result.status, 0, `${READERS_REL} was modified by this slice`);
+  assert.equal(readersDiff.status, 0, `git diff ${READERS_REL} failed`);
+  assert.deepEqual(
+    (readersDiff.stdout ?? "")
+      .split("\n")
+      .filter((line) => line.startsWith("-") && !line.startsWith("---"))
+      .map((line) => line.slice(1).trim())
+      .filter(Boolean),
+    [],
+    `${READERS_REL} lost or rewrote a line`,
+  );
+  // ...and no ADDED line touches the instructor binding: the whole addition is a
+  // trainee one.
+  const addedReaderLines = (readersDiff.stdout ?? "")
+    .split("\n")
+    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+    .map((line) => line.slice(1).trim());
+  for (const token of [
+    "requireCurrentInstructor",
+    "resolveInstructorCourseOffering",
+    "fetchInstructorDisplayNames",
+    "isInstructorExamCourseContextDenial",
+    "read" + "InstructorExamPlan",
+  ]) {
+    assert.deepEqual(
+      addedReaderLines.filter((line) => line.includes(token) && !line.startsWith("*")),
+      [],
+      `${READERS_REL} added a line naming the instructor-side ${token}`,
+    );
+  }
   // ...and no changed line of the pure scope core touches authorization.
   assertScopeCoreAuthorizationUnchanged();
 
@@ -574,8 +657,14 @@ test("10b. the complete operational schedule is rendered, through the ONE shared
   // names the rows are about to show. The claim is replaced by an EXACT list of
   // the two approved uses, which is stronger than a bare count — a third use, or
   // a different second one, fails here.
+  //
+  // EX-BEGINNER-EXAM-UI RE-POINT — the FIRST fragment gained its beginner guard.
+  // A live beginner row has no examinee and no instructed trainee at all, so the
+  // advanced summary was labelling a Teaching-Practice lesson's people "נבחנים",
+  // an exam role nobody assigned them. The length test itself is unchanged; what
+  // is new is that it is reached only for a STORED row. The count stays TWO.
   const APPROVED_ASSIGNMENT_USES = [
-    "{row.assignments.length === 0 && (",
+    "{!isBeginnerExamRow(row) && row.assignments.length === 0 && (",
     "<ExamAssignmentRows assignments={row.assignments} />",
   ];
   for (const fragment of APPROVED_ASSIGNMENT_USES) {
@@ -702,11 +791,18 @@ test("10e. the participant summary is not printed twice on one block", () => {
   // A block whose operational rows are rendered below already names every
   // examinee and every instructed trainee. The summary therefore survives ONLY
   // where it is the only place those names appear at all.
+  //
+  // EX-BEGINNER-EXAM-UI RE-POINT — the guard now ALSO requires a stored row, for
+  // the reason given in test 10b. This is strictly narrower than the claim it
+  // replaces: every block the old guard hid the summary on is still hidden, and
+  // live beginner rows — which have neither role — are hidden too.
   assert.ok(
-    SECTION_CODE.includes("{row.assignments.length === 0 && ("),
+    SECTION_CODE.includes("{!isBeginnerExamRow(row) && row.assignments.length === 0 && ("),
     "the duplicate participant summary was not removed",
   );
-  const guardStart = SECTION_CODE.indexOf("{row.assignments.length === 0 && (");
+  const guardStart = SECTION_CODE.indexOf(
+    "{!isBeginnerExamRow(row) && row.assignments.length === 0 && (",
+  );
   const guardEnd = SECTION_CODE.indexOf("</>", guardStart);
   assert.ok(guardEnd > guardStart, "the guarded summary block could not be located");
   const summary = SECTION_CODE.slice(guardStart, guardEnd);
@@ -727,6 +823,115 @@ test("10e. the participant summary is not printed twice on one block", () => {
     SECTION_CODE.indexOf("row.supervisorNames") > guardEnd,
     "the supervisor line disappeared or moved inside the guard",
   );
+});
+
+// ===========================================================================
+// 10g–10j. EX-BEGINNER-EXAM-UI — live beginner rows are RENDERED, and are not
+//          advanced blocks
+// ===========================================================================
+
+test("10g. a live beginner row is ROUTED to the beginner renderer, never to the advanced one", () => {
+  // The routing is a two-branch conditional on the CONTRACT's own `source`, so a
+  // beginner row cannot reach the wave/examinee renderer even by accident: the
+  // branches are mutually exclusive by construction.
+  assert.ok(
+    SECTION_CODE.includes("{isBeginnerExamRow(row) ? ("),
+    "the screen does not route on the row's own source",
+  );
+  assert.ok(
+    SECTION_CODE.includes("<ExamBeginnerRows detail={row.beginner} showOperationalDetail />"),
+    "a beginner row is not rendered at all",
+  );
+  // The advanced renderer sits in the OTHER branch of that same conditional.
+  const routeStart = SECTION_CODE.indexOf("{isBeginnerExamRow(row) ? (");
+  const beginnerRenderer = SECTION_CODE.indexOf("<ExamBeginnerRows", routeStart);
+  const advancedRenderer = SECTION_CODE.indexOf("<ExamAssignmentRows", routeStart);
+  const elseBranch = SECTION_CODE.indexOf(") : (", routeStart);
+  assert.ok(beginnerRenderer > routeStart && beginnerRenderer < elseBranch, "the beginner branch is wrong");
+  assert.ok(advancedRenderer > elseBranch, "the advanced renderer is not in the else branch");
+
+  // The ORIGIN is read from the contract and is never guessed from emptiness,
+  // from a missing definition name or from a missing timetable.
+  assert.ok(
+    SECTION_CODE.includes('from "@/lib/components/exam-schedule-view-core"'),
+    "the origin test is not the shared pure predicate",
+  );
+  for (const token of ['=== "BEGINNER"', '=== "STORED"', 'row.source ===', "row.kind ==="]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen re-implements the origin test: ${token}`);
+  }
+});
+
+test("10h. beginner rows sit in the SAME navigation and run chronologically with the exam blocks", () => {
+  // They are not a section of their own and not a fourth view: they flow through
+  // the very same `allRows` → nav → `filterExamRows` → `groupRowsByDate` path as
+  // every stored block, and the day's rows are then ordered by block start time.
+  assert.ok(
+    SECTION_CODE.includes("sortExamRowsByStartTime(group.rows).map((row) => {"),
+    "the day's rows are not ordered chronologically",
+  );
+  assert.equal(
+    (SECTION_CODE.match(/sortExamRowsByStartTime\(/g) ?? []).length,
+    1,
+    "the order is applied more than once, or somewhere other than the day's rows",
+  );
+  // The ordering rule itself lives in the PURE core, so this screen holds no
+  // comparator of its own to disagree with the trainee screen's.
+  for (const token of [".sort(", "localeCompare", "compareRows", "orderIndex"]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen re-implements ordering: ${token}`);
+  }
+  // No beginner-only branch exists ANYWHERE upstream of the row loop: there is
+  // exactly one filtered set and exactly one grouping.
+  assert.equal((SECTION_CODE.match(/filterExamRows\(/g) ?? []).length, 1);
+  assert.equal((SECTION_CODE.match(/groupRowsByDate\(/g) ?? []).length, 2);
+});
+
+test("10i. a beginner row is given NO invented exam role", () => {
+  // The advanced participant summary — the ONLY place this screen prints the two
+  // exam-role labels — is now unreachable for a beginner row.
+  const guard = "{!isBeginnerExamRow(row) && row.assignments.length === 0 && (";
+  const guardStart = SECTION_CODE.indexOf(guard);
+  assert.ok(guardStart >= 0, "the summary is no longer behind the beginner guard");
+  const guardEnd = SECTION_CODE.indexOf("</>", guardStart);
+  const summary = SECTION_CODE.slice(guardStart, guardEnd);
+  for (const label of ["נבחנים", "חניכים מדריכים"]) {
+    assert.ok(summary.includes(label), `${label} moved out of the guarded summary`);
+  }
+  assert.equal(
+    (SECTION_CODE.match(/נבחנים/g) ?? []).length,
+    1,
+    "an exam-role label is printed outside the guarded summary",
+  );
+  // ...and the two role TOKENS remain unrepresentable here (test 10b's claim,
+  // restated because it is what "no fake role" means at the type level).
+  for (const token of ["EXAMINEE", "INSTRUCTED_TRAINEE"]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen names ${token}`);
+  }
+});
+
+test("10j. rendering beginner rows adds NO request, NO writer and NO storage", () => {
+  // Still exactly one server call, still keyed by the course alone. Teaching
+  // Practice is the authoritative source and is never written from here.
+  const calls = SECTION_CODE.match(/getInstructorExamSchedule\([^)]*\)/g) ?? [];
+  assert.deepEqual(calls, ["getInstructorExamSchedule(selectedOfferingId)"]);
+  assert.equal((SECTION_CODE.match(/useEffect\(/g) ?? []).length, 1);
+  for (const token of [
+    "teaching-practice",
+    "TeachingPractice",
+    "lessonId",
+    "createLesson",
+    "updateLesson",
+    "deleteLesson",
+    "localStorage",
+    "sessionStorage",
+    "useMemo(",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen reaches ${token}`);
+  }
+  // The shared beginner renderer is read-only too: no control of any kind.
+  const renderer = stripComments(read(BEGINNER_ROWS_REL));
+  for (const token of ["<form", "<input", "<button", "onSubmit", "onClick", "use server", "prisma"]) {
+    assert.equal(renderer.includes(token), false, `the beginner renderer adds ${token}`);
+  }
 });
 
 test("10f. the instructor screen never references the TRAINEE-ONLY isSelf marker", () => {
@@ -775,7 +980,6 @@ test("11. no internal id and no raw contract object is rendered", () => {
     "childNotes",
     "equipmentNotes",
     "email",
-    "beginner",
     "children",
     "narrowingIssues",
     "loaderIssues",
@@ -786,6 +990,53 @@ test("11. no internal id and no raw contract object is rendered", () => {
     "publishedAt",
   ]) {
     assert.equal(SECTION_CODE.includes(token), false, `the UI reaches ${token}`);
+  }
+  // EX-BEGINNER-EXAM-UI RE-POINT — the bare token `beginner` LEAVES the sweep,
+  // and nothing else does.
+  //
+  // It was on the list because this screen had no reason to name the sibling
+  // beginner detail at all, and that turned out to be exactly the defect: live
+  // beginner rows arrived with their detail attached and the screen rendered
+  // none of it, so an instructor saw an empty card where a Teaching-Practice
+  // lesson should have been. Satisfying the old claim now means keeping that
+  // defect.
+  //
+  // The claim is REPLACED by an EXACT approved-use list, which is stronger than
+  // the ban it replaces: the detail is read ONCE, is handed WHOLE to the shared
+  // beginner renderer, and is never indexed into here — so every child, parent
+  // and contact field stays out of this file, which is why all of those tokens
+  // above stay swept. `parentName`, `parentPhone`, `childNotes`,
+  // `equipmentNotes` and `children` are still forbidden HERE and are rendered
+  // only inside `lib/components/ExamBeginnerRows.tsx`, whose own render suite
+  // pins exactly what it shows.
+  assert.ok(
+    SECTION_CODE.includes("<ExamBeginnerRows detail={row.beginner} showOperationalDetail />"),
+    "the instructor screen does not render the live beginner detail",
+  );
+  assert.ok(
+    SECTION_CODE.includes('from "@/lib/components/ExamBeginnerRows"'),
+    "the beginner detail is not the shared renderer",
+  );
+  assert.equal(
+    (SECTION_CODE.match(/row\.beginner/g) ?? []).length,
+    1,
+    "the beginner detail is read beyond the one approved hand-off",
+  );
+  assert.equal(
+    (SECTION_CODE.match(/<ExamBeginnerRows/g) ?? []).length,
+    1,
+    "a second beginner renderer was added",
+  );
+  for (const token of [
+    "row.beginner.",
+    "row.beginner?",
+    "beginner.children",
+    "beginner.notes",
+    "beginner.participantNames",
+    "beginnerFormat",
+    "beginnerChildCount",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen reaches into ${token}`);
   }
   // `planId` is read ONCE, as a null check, and is never placed on screen.
   assert.equal((SECTION_CODE.match(/planId/g) ?? []).length, 1);
@@ -949,6 +1200,26 @@ function approvedSlicePaths(): string[] {
     SCHEDULE_NAV_SUITE_REL,
     PERSONAL_DETAIL_REL,
     PERSONAL_DETAIL_SUITE_REL,
+    // EX-TRAINEE-DATE-NAV + EX-BEGINNER-EXAM-UI, on the same terms: an EXACT
+    // path list, never a directory and never a glob. Four `lib/components`
+    // leaves — the shared compact beginner presentation that makes live
+    // Teaching-Practice rows visible on BOTH screens, the trainee-only date
+    // sub-tabs, and the render suite beside each. The slice adds no route, no
+    // action, no reader and no `lib/exam` file; test 14 above independently pins
+    // that last part.
+    BEGINNER_ROWS_REL,
+    BEGINNER_ROWS_SUITE_REL,
+    DATE_TABS_REL,
+    DATE_TABS_SUITE_REL,
+    // EX-TRAINEE-MULTIDAY-READ, on the same terms: an EXACT path list. The
+    // approved smallest multi-day TRAINEE read touches the pure scope core (one
+    // ADDED reader), the readers binding (one ADDED binding), the trainee action
+    // and the scope core's own suite. Test 5 above independently pins that
+    // nothing instructor-side was added or removed in either production file.
+    SCOPE_REL,
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    READERS_REL,
+    "lib/actions/" + "trainee-exam-schedule" + ".ts",
     ];
 }
 

@@ -42,12 +42,17 @@ import {
   readAdminExamPlanWithDeps,
   readInstructorExamPlanWithDeps,
   readTraineeExamDayWithDeps,
+  readTraineeExamScheduleWithDeps,
   traineeExamPlanLoadOptions,
   type AdminExamReadDeps,
   type InstructorExamReadDeps,
   type TraineeExamReadDeps,
 } from "./exam-read-scope-core";
-import { findNonPlainJsonPaths, isPlainJsonDto } from "./exam-read-dto";
+import {
+  findNonPlainJsonPaths,
+  isPlainJsonDto,
+  type TraineeExamDayRowDto,
+} from "./exam-read-dto";
 import type { ExamPlanLoadInput, ExamPlanPayload } from "./exam-plan-loader-core";
 import type { ProjectionSession } from "./exam-schedule-projection-core";
 import type { BeginnerDetail } from "./exam-live-beginner-adapter-core";
@@ -254,6 +259,48 @@ function makeSpies(): Spies {
 
 function nameMap(entries: readonly (readonly [string, string])[]): ReadonlyMap<string, string> {
   return new Map(entries.map(([id, name]) => [id, name]));
+}
+
+/**
+ * EX-TRAINEE-ID-CONTAINMENT — locating a TRAINEE row without an internal id.
+ *
+ * The trainee contract no longer carries `sessionId`: it was `ExamSession.id`
+ * for a stored block and the synthetic `tp:<lessonId>` for a live beginner row,
+ * both database primary keys, and neither was ever rendered. These tests locate
+ * a row the way a READER does — by a value that is actually on it.
+ *
+ * `s1` and `s-mid` share a start time and belong to DIFFERENT payloads that no
+ * single DTO ever holds together, so the lookup stays unambiguous. `tp:other` is
+ * mapped to a time NO fixture uses, so an "is-absent" assertion still names a
+ * row that genuinely is not there.
+ */
+const TRAINEE_ROW_START_TIMES: Readonly<Record<string, string>> = Object.freeze({
+  s1: "09:00",
+  "tp:l1": "11:00",
+  "s-first": "07:30",
+  "tp:early": "08:00",
+  "s-late": "14:00",
+  "tp:other": "23:59",
+});
+
+/** The trainee row corresponding to a fixture id, or `undefined`. */
+function traineeRow(
+  rows: readonly TraineeExamDayRowDto[],
+  fixtureId: string,
+): TraineeExamDayRowDto | undefined {
+  const startTime = TRAINEE_ROW_START_TIMES[fixtureId];
+  assert.ok(startTime !== undefined, `unknown fixture row ${fixtureId}`);
+  return rows.find((row) => row.startTime === startTime);
+}
+
+/** The fixture ids of these trainee rows, in order — for list assertions. */
+function traineeRowIds(rows: readonly TraineeExamDayRowDto[]): string[] {
+  return rows.map((row) => {
+    const match = Object.entries(TRAINEE_ROW_START_TIMES).find(
+      ([, startTime]) => startTime === row.startTime,
+    );
+    return match === undefined ? `unmapped:${row.startTime}` : match[0];
+  });
 }
 
 function adminDeps(
@@ -679,7 +726,7 @@ test("18. the projection is asked for the EXACT date and the authenticated id", 
   );
   // Only the selected day survives...
   assert.deepEqual(
-    dto.allRows.map((row) => row.sessionId),
+    traineeRowIds(dto.allRows),
     ["s1"],
   );
   // ...and self-ness follows the SESSION-derived id, not a caller value.
@@ -709,7 +756,7 @@ test("19. no projection issue, diagnostic or EX-* code reaches the trainee DTO",
   );
   assert.deepEqual(Object.keys(dto), ["allRows", "myRows"]);
   assert.deepEqual(
-    dto.allRows.map((row) => row.sessionId),
+    traineeRowIds(dto.allRows),
     ["s1"],
   );
   const serialized = JSON.stringify(dto);
@@ -1008,7 +1055,22 @@ test("34–36. no reader accepts options, a plan id or an actor id", () => {
     // assignment ids and the DERIVED moments this same pipeline already computed,
     // so the admin schedule can reuse them instead of reproducing them. No shared
     // DTO gained a field and no role reading changed shape.
-    ["readAdminExamPlan", "readAdminExamWaveView", "readInstructorExamPlan", "readTraineeExamDay"],
+    //
+    // RE-POINTED AGAIN by EX-TRAINEE-MULTIDAY-READ, additively: a FIFTH reader
+    // returns the trainee's WHOLE published schedule in one load, so the date
+    // sub-tabs can offer the plan's real dates instead of the single day that
+    // had just been fetched. The day reader is KEPT beside it — it is committed
+    // public API and a single-day reading stays legitimate. No shared DTO gained
+    // a field: the new reader returns the SAME `TraineeExamDayDto` (asserted in
+    // M13), under the SAME authorization order and the SAME locked publication
+    // options (M5, M6).
+    [
+      "readAdminExamPlan",
+      "readAdminExamWaveView",
+      "readInstructorExamPlan",
+      "readTraineeExamDay",
+      "readTraineeExamSchedule",
+    ],
   );
   for (const { name, params } of signatures) {
     for (const forbidden of [
@@ -1032,6 +1094,9 @@ test("34–36. no reader accepts options, a plan id or an actor id", () => {
   assert.equal(paramsOf("read" + "AdminExamPlan"), "courseOfferingId: string,");
   assert.equal(paramsOf("read" + "InstructorExamPlan"), "requestedCourseOfferingId: string,");
   assert.equal(paramsOf("read" + "TraineeExamDay"), "selectedDate: string,");
+  // The FIFTH takes NOTHING AT ALL — the strongest form of this whole test's
+  // claim, since there is no caller-supplied value left to inspect.
+  assert.equal(paramsOf("read" + "TraineeExamSchedule"), "");
   // The fourth takes ONE course offering id and nothing else — no options, no
   // plan id, no actor id, which the loop above already re-checks by name.
   assert.equal(paramsOf("read" + "AdminExamWaveView"), "courseOfferingId: string,");
@@ -1259,7 +1324,7 @@ test("N4. an OFF-DATE beginner participant joins no trainee batch", async () => 
   );
   assert.deepEqual(spies.studentIdBatches[0], ["stu-1"]);
   assert.equal(
-    dto.allRows.some((row) => row.sessionId === "tp:other"),
+    traineeRow(dto.allRows, "tp:other") !== undefined,
     false,
   );
 });
@@ -1693,4 +1758,299 @@ test("the IO name lookups are batched, two-column and write nothing", () => {
   }
   // Display names are trimmed; the authoritative id is used verbatim.
   assert.ok(IO_CODE.includes("row.fullName.trim()"));
+});
+
+// ===========================================================================
+// EX-TRAINEE-MULTIDAY-READ — the trainee's WHOLE schedule, in ONE load
+// ===========================================================================
+
+const THIRD_DATE = "2026-08-01";
+
+/**
+ * A plan spanning THREE dates, deliberately built OUT of chronological order so
+ * nothing downstream can pass by accidentally preserving the input order.
+ *
+ * `THIRD_DATE` is the earliest and appears LAST; `OTHER_DATE` carries a live
+ * beginner row at 08:00 and a stored block at 14:00, so the interleaving of the
+ * two kinds is observable on a single date.
+ */
+function multiDatePayload(): ExamPlanPayload {
+  return makePayload({
+    sessions: [
+      storedSession({ sessionId: "s-mid", date: DATE, startTime: "09:00" }),
+      storedSession({ sessionId: "s-late", date: OTHER_DATE, startTime: "14:00", orderIndex: 5 }),
+      beginnerSession({
+        sessionId: "tp:early",
+        date: OTHER_DATE,
+        startTime: "08:00",
+        endTime: "09:00",
+        orderIndex: 1,
+      }),
+      storedSession({
+        sessionId: "s-first",
+        date: THIRD_DATE,
+        startTime: "07:30",
+        // Somebody ELSE's block, consistently: the participant lists and the
+        // slot detail agree, so it is visible to everyone and personal to
+        // nobody but stu-9.
+        examineeStudentIds: ["stu-9"],
+        instructedTraineeStudentIds: [],
+      }),
+    ],
+    storedDetails: new Map([
+      ["s-mid", storedDetail("s-mid", "stu-1")],
+      ["s-late", storedDetail("s-late", "stu-1")],
+      ["s-first", storedDetail("s-first", "stu-9")],
+    ]),
+    beginnerDetails: new Map([
+      ["tp:early", beginnerDetail({ sessionId: "tp:early", date: OTHER_DATE })],
+    ]),
+    conflictSessions: [
+      conflictSession("s-mid"),
+      conflictSession("s-late"),
+      conflictSession("s-first"),
+    ],
+    sourceDates: [OTHER_DATE],
+  });
+}
+
+test("M1. the schedule reader takes NO argument at all, and the day reader is KEPT", () => {
+  assert.equal(readTraineeExamScheduleWithDeps.length, 1); // (deps)
+  assert.equal(readTraineeExamDayWithDeps.length, 2); // (selectedDate, deps)
+  assert.equal(typeof readTraineeExamDayWithDeps, "function", "the day reader was removed");
+});
+
+test("M2. MULTIPLE published dates come back from ONE load", async () => {
+  const spies = makeSpies();
+  const dto = await readTraineeExamScheduleWithDeps(
+    traineeDeps(spies, { studentId: "stu-1", payload: multiDatePayload() }),
+  );
+  // Every date the plan holds is represented, ascending...
+  assert.deepEqual(
+    [...new Set(dto.allRows.map((row) => row.date))],
+    [THIRD_DATE, DATE, OTHER_DATE],
+  );
+  // ...and the plan was loaded EXACTLY ONCE, whatever the number of dates.
+  assert.equal(spies.loadInputs.length, 1, "the reader loads once per date");
+  assert.equal(spies.identityCalls, 1, "identity was resolved more than once");
+  assert.equal(spies.courseCalls, 1, "the course was resolved more than once");
+  // ...and the names were fetched in ONE batch, not one per date.
+  assert.equal(spies.studentIdBatches.length, 1, "a name query was issued per date");
+  assert.equal(
+    spies.order.filter((step) => step === "instructor-names").length,
+    0,
+    "the trainee reader issued an instructor lookup",
+  );
+});
+
+test("M3. rows are ordered by DATE ascending, then by the projection's own order", async () => {
+  const spies = makeSpies();
+  const dto = await readTraineeExamScheduleWithDeps(
+    traineeDeps(spies, { studentId: "stu-1", payload: multiDatePayload() }),
+  );
+  const dates = dto.allRows.map((row) => row.date);
+  assert.deepEqual([...dates].sort(), dates, "the dates are not ascending");
+});
+
+test("M4. a live beginner row and a stored block INTERLEAVE chronologically", async () => {
+  const spies = makeSpies();
+  const dto = await readTraineeExamScheduleWithDeps(
+    traineeDeps(spies, { studentId: "stu-1", payload: multiDatePayload() }),
+  );
+  const onOtherDate = dto.allRows.filter((row) => row.date === OTHER_DATE);
+  // 08:00 beginner BEFORE the 14:00 stored block — not a beginner section.
+  assert.deepEqual(
+    onOtherDate.map((row) => [row.startTime, row.source]),
+    [
+      ["08:00", "BEGINNER"],
+      ["14:00", "STORED"],
+    ],
+  );
+});
+
+test("M5. the AUTHORIZATION ORDER is identical to the day reader's", async () => {
+  const spies = makeSpies();
+  await readTraineeExamScheduleWithDeps(traineeDeps(spies, { payload: multiDatePayload() }));
+  // Identity, then the non-selectable course resolver, then the load. Never the
+  // other way round, and never a load before either.
+  assert.deepEqual(spies.order.slice(0, 3), ["trainee-identity", "trainee-course", "load"]);
+});
+
+test("M6. the LOCKED publication options are the day reader's, unchanged", async () => {
+  const spies = makeSpies();
+  await readTraineeExamScheduleWithDeps(
+    traineeDeps(spies, { studentId: "stu-7", verifiedId: "offering-verified" }),
+  );
+  const input = spies.loadInputs[0];
+  assert.equal(input.courseOfferingId, "offering-verified", "the load escaped the verified course");
+  assert.equal(input.options.requirePlanPublication, true, "a draft plan became readable");
+  assert.equal(input.options.requireLessonPublication, true, "a draft lesson became readable");
+});
+
+test("M7. an UNPUBLISHED plan still returns nothing at all", async () => {
+  const spies = makeSpies();
+  // The loader's own fail-closed answer to an unpublished plan: the empty payload.
+  const dto = await readTraineeExamScheduleWithDeps(
+    traineeDeps(spies, { payload: makePayload({ planId: null, publishedAt: null }) }),
+  );
+  assert.deepEqual(dto.allRows, []);
+  assert.deepEqual(dto.myRows, []);
+  // ...and it says nothing about a plan or its publication state.
+  assert.deepEqual(Object.keys(dto).sort(), ["allRows", "myRows"]);
+});
+
+test("M8. every denial returns the SAME empty contract, and never throws", async () => {
+  for (const options of [
+    { identityError: new DenialError() },
+    { courseError: new DenialError() },
+    { studentId: "   " },
+    { verifiedId: "   " },
+  ]) {
+    const spies = makeSpies();
+    const dto = await readTraineeExamScheduleWithDeps(traineeDeps(spies, options));
+    assert.deepEqual(dto.allRows, []);
+    assert.deepEqual(dto.myRows, []);
+  }
+});
+
+test("M9. a NON-denial failure propagates rather than reading as an empty schedule", async () => {
+  const spies = makeSpies();
+  await assert.rejects(
+    () =>
+      readTraineeExamScheduleWithDeps(
+        traineeDeps(spies, { identityError: new Error("infrastructure"), isDenial: () => false }),
+      ),
+    /infrastructure/,
+  );
+});
+
+test("M10. `myRows` is the SERVER's filter of `allRows`, sharing row identity", async () => {
+  const spies = makeSpies();
+  const dto = await readTraineeExamScheduleWithDeps(
+    traineeDeps(spies, { studentId: "stu-1", payload: multiDatePayload() }),
+  );
+  assert.deepEqual(
+    dto.myRows,
+    dto.allRows.filter((row) => row.isSelf),
+  );
+  // The SAME objects, never a second mapping.
+  for (const row of dto.myRows) {
+    assert.ok(dto.allRows.includes(row), "a personal row is not an allRows row");
+  }
+  // The viewer is on two different dates, and the personal view keeps both.
+  assert.deepEqual([...new Set(dto.myRows.map((row) => row.date))], [DATE, OTHER_DATE]);
+  // ...and a row that is somebody else's is NOT theirs.
+  assert.equal(
+    dto.allRows.some((row) => row.date === THIRD_DATE && row.isSelf),
+    false,
+    "a row belonging to another trainee was marked as the viewer's",
+  );
+});
+
+test("M11. `isSelf` follows the SIGNED SESSION's student id, not the request", async () => {
+  const payload = multiDatePayload();
+  const mine = await readTraineeExamScheduleWithDeps(
+    traineeDeps(makeSpies(), { studentId: "stu-1", payload }),
+  );
+  const theirs = await readTraineeExamScheduleWithDeps(
+    traineeDeps(makeSpies(), { studentId: "stu-9", payload }),
+  );
+  assert.notDeepEqual(
+    mine.myRows.map((row) => row.date),
+    theirs.myRows.map((row) => row.date),
+  );
+  // A stranger owns nothing, and the schedule itself is unchanged for them.
+  const nobody = await readTraineeExamScheduleWithDeps(
+    traineeDeps(makeSpies(), { studentId: "stu-nobody", payload }),
+  );
+  assert.deepEqual(nobody.myRows, []);
+  assert.equal(nobody.allRows.length, mine.allRows.length);
+});
+
+test("M12. LEVEL 2 carries no beginner row, on any date", async () => {
+  const spies = makeSpies();
+  await readTraineeExamScheduleWithDeps(
+    traineeDeps(spies, { courseLevel: 2, payload: multiDatePayload() }),
+  );
+  // The containment is the LOADER's, reached through the same locked option
+  // producer: this reader states no beginner rule of its own.
+  assert.equal(
+    spies.loadInputs[0].options.beginnerSourceEnabled,
+    false,
+    "a Level 2 course asked the loader for beginner rows",
+  );
+  // ...and Level 1 still does.
+  const level1 = makeSpies();
+  await readTraineeExamScheduleWithDeps(
+    traineeDeps(level1, { courseLevel: 1, payload: multiDatePayload() }),
+  );
+  assert.equal(level1.loadInputs[0].options.beginnerSourceEnabled, true);
+});
+
+test("M13. no id and no diagnostic is on the contract", async () => {
+  const spies = makeSpies();
+  const dto = await readTraineeExamScheduleWithDeps(
+    traineeDeps(spies, { studentId: "stu-1", payload: multiDatePayload() }),
+  );
+  const serialized = JSON.stringify(dto);
+  for (const token of [
+    "planId",
+    "studentId",
+    "instructorId",
+    "traineeId",
+    "courseOfferingId",
+    "viewerStudentId",
+    "publishedAt",
+    "diagnostics",
+    "storedAdapterIssues",
+    "loaderIssues",
+  ]) {
+    assert.equal(serialized.includes(token), false, `the contract carries ${token}`);
+  }
+  // `lessonId` and `sessionId` ARE on the committed trainee contract, and are
+  // deliberately NOT asserted away here: this reader must return the very same
+  // DTO the day reader returns, and narrowing it would be a second, disagreeing
+  // trainee contract. That neither ever reaches a SCREEN is proven where it
+  // belongs — in the beginner renderer's own suite and in the trainee section's
+  // contract suite, both of which pin the exact rendered fields.
+  const day = await readTraineeExamDayWithDeps(
+    DATE,
+    traineeDeps(makeSpies(), { studentId: "stu-1", payload: multiDatePayload() }),
+  );
+  assert.deepEqual(
+    Object.keys(day).sort(),
+    Object.keys(dto).sort(),
+    "the schedule reader returns a different contract shape from the day reader",
+  );
+});
+
+test("M14. the reader duplicates no timetable, pairing or ordering rule", () => {
+  const body = SCOPE_CODE.slice(
+    SCOPE_CODE.indexOf("export async function readTraineeExamScheduleWithDeps"),
+  );
+  for (const token of [
+    "addMinutes",
+    "parseInt",
+    "pairingIndex",
+    "resolvePairing",
+    "derivedBlockEndTime",
+    "timetableStatus",
+    "new Date",
+    "Date.now",
+    ".sort(",
+  ]) {
+    assert.equal(body.includes(token), false, `the schedule reader re-implements ${token}`);
+  }
+  // The date list and the per-date projection are the COMMITTED cores.
+  assert.ok(body.includes("listProjectionDates(payload.sessions)"));
+  assert.ok(
+    body.includes("projectTraineeExamDay(payload.sessions, payload.storedDetails, date, studentId)"),
+  );
+  assert.ok(body.includes("buildTraineeExamDayDto("));
+  // Exactly ONE load call and ONE name fetch in the whole body.
+  assert.equal((body.match(/deps\.loadPlan\(/g) ?? []).length, 1);
+  assert.equal((body.match(/deps\.fetchStudentDisplayNames\(/g) ?? []).length, 1);
+  // The plan's DECLARED source dates are deliberately not unioned in: a source
+  // date with no visible row would advertise a day holding nothing.
+  assert.equal(body.includes("sourceDates"), false, "the reader offers dates with no visible row");
 });

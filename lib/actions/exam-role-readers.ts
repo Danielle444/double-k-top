@@ -106,6 +106,7 @@ import {
   readAdminExamPlanWithDeps,
   readInstructorExamPlanWithDeps,
   readTraineeExamDayWithDeps,
+  readTraineeExamScheduleWithDeps,
   type AdminExamReadDto,
   type ExamPlanLoadFn,
   type InstructorExamReadDto,
@@ -289,6 +290,37 @@ export async function readTraineeExamDay(
   selectedDate: string,
 ): Promise<TraineeExamDayDto> {
   return readTraineeExamDayWithDeps(selectedDate, {
+    requireTraineeId: async () => (await requireCurrentTrainee()).id,
+    resolveTraineeCourseOffering,
+    isCourseContextDenial: isTraineeExamCourseContextDenial,
+    loadPlan,
+    fetchStudentDisplayNames: fetchStudentDisplayNamesByIds,
+  });
+}
+
+/**
+ * The TRAINEE reading of their WHOLE schedule — PUBLISHED PLANS AND PUBLISHED
+ * LESSONS ONLY, every date, in ONE load.
+ *
+ * IT TAKES NO PARAMETER AT ALL. The student id comes from the signed session and
+ * the course from the committed NON-SELECTABLE trainee resolver, exactly as
+ * above; removing the date removes the last argument, so there is nothing a
+ * caller can name — not another trainee, another course, another plan, a date, a
+ * range or a draft reading.
+ *
+ * THE DEPENDENCY BUNDLE IS BYTE-IDENTICAL to the day reader's, deliberately: the
+ * same identity source, the same resolver, the same denial classification, the
+ * same loader and the same single student-name fetch. A multi-date reading is
+ * therefore the same authorization with the same publication gates and the same
+ * Level-1 beginner containment — the pure scope core, not this binding, is where
+ * that is proven, and it reuses the committed day projection once per date over
+ * ONE loaded payload rather than reading once per date.
+ *
+ * The day reader above is KEPT: it is a committed public reader, and narrowing
+ * to a single day remains a legitimate reading that this one does not replace.
+ */
+export async function readTraineeExamSchedule(): Promise<TraineeExamDayDto> {
+  return readTraineeExamScheduleWithDeps({
     requireTraineeId: async () => (await requireCurrentTrainee()).id,
     resolveTraineeCourseOffering,
     isCourseContextDenial: isTraineeExamCourseContextDenial,

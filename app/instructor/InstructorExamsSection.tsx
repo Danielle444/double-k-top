@@ -3,14 +3,17 @@
 import { useEffect, useState } from "react";
 import { InstructorScheduleCourseSelector } from "@/app/instructor/InstructorScheduleCourseSelector";
 import { ExamAssignmentRows } from "@/lib/components/ExamAssignmentRows";
+import { ExamBeginnerRows } from "@/lib/components/ExamBeginnerRows";
 import {
   ExamScheduleNav,
   type ExamScheduleNavMode,
 } from "@/lib/components/ExamScheduleNav";
 import {
   filterExamRows,
+  isBeginnerExamRow,
   listExamDates,
   listExamDefinitionNames,
+  sortExamRowsByStartTime,
 } from "@/lib/components/exam-schedule-view-core";
 import {
   getInstructorExamSchedule,
@@ -96,10 +99,31 @@ import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates
  * are rendered below already names every examinee and every instructed trainee,
  * in their waves and with their horses; repeating those same names in a summary
  * line above them is noise that makes a schedule longer without making it say
- * anything more. The summary therefore survives ONLY on a block that carries no
- * operational rows — a live beginner row today — where it is the only place
- * those names appear at all. Supervisors are never in the operational rows, so
- * their line always stands.
+ * anything more. The summary therefore survives ONLY on a STORED block that
+ * carries no operational rows, where it is the only place those names appear at
+ * all. Supervisors are never in the operational rows, so their line always
+ * stands.
+ *
+ * ===========================================================================
+ * LIVE BEGINNER ROWS ARE A SECOND KIND OF ROW (EX-BEGINNER-EXAM-UI)
+ * ===========================================================================
+ * A beginner row is a LIVE projection of a Teaching-Practice lesson: no stored
+ * exam assignment, no exam definition, no computed timetable. Handing one to the
+ * wave/examinee renderer above therefore produced an empty block — which is
+ * exactly why beginner entries were invisible on this screen even when the
+ * server sent them, and why the advanced participant summary above them was
+ * calling a beginner lesson's people "נבחנים", a role nobody assigned them.
+ *
+ * The screen now ROUTES on the contract's own `source` field: a beginner row
+ * goes to `lib/components/ExamBeginnerRows`, the shared compact beginner
+ * presentation the trainee screen mounts too, and NEVER into the advanced
+ * renderer. It is shown in the SAME date/type navigation and interleaved
+ * chronologically with the advanced blocks by block start time, because an
+ * instructor runs one day, not two schedules.
+ *
+ * IT STAYS READ-ONLY. Teaching Practice remains the authoritative source: there
+ * is no beginner writer, no lesson edit control and no second request here — the
+ * detail rendered is the one this screen already fetched.
  */
 
 const LOADING_TEXT = "טוען לוח מבחנים...";
@@ -310,7 +334,12 @@ export function InstructorExamsSection() {
                 {formatHebrewDate(parseDateKey(group.date))}
               </p>
 
-              {group.rows.map((row) => {
+              {/* CHRONOLOGICAL, across BOTH kinds of row. Live beginner rows and
+                  stored blocks are ordered by the same one rule — block start
+                  time ascending, with the server's own order as the tie-break —
+                  so a beginner lesson sits where it actually happens in the day
+                  rather than in a section of its own. */}
+              {sortExamRowsByStartTime(group.rows).map((row) => {
                 const place = row.arena ?? row.location;
                 const statusLabel =
                   row.timetableStatus === null
@@ -341,8 +370,11 @@ export function InstructorExamsSection() {
                           place those names appear. A block with operational
                           rows names everyone below, in their waves and with
                           their horses, so printing the same names again here
-                          would be pure repetition. */}
-                      {row.assignments.length === 0 && (
+                          would be pure repetition — and a LIVE BEGINNER row has
+                          no examinee and no instructed trainee at all, so
+                          printing its people under those two labels would be
+                          two exam roles this screen invented. */}
+                      {!isBeginnerExamRow(row) && row.assignments.length === 0 && (
                         <>
                           <PeopleLine
                             label="נבחנים"
@@ -365,11 +397,24 @@ export function InstructorExamsSection() {
                       />
                     </div>
 
-                    {/* The block's COMPLETE operational schedule, verbatim and
-                        in the contract's own order. An empty list renders
-                        nothing, so a beginner row and a block with no stored
-                        assignment stay exactly as they were. */}
-                    <ExamAssignmentRows assignments={row.assignments} />
+                    {/* ROUTED BY THE CONTRACT'S OWN `source`.
+
+                        A LIVE BEGINNER ROW gets the dedicated compact beginner
+                        presentation — its source, its format, its group, its
+                        responsible instructor, its participants and the full
+                        operational child detail — and is NEVER handed to the
+                        advanced wave/examinee renderer, which has no stored
+                        assignment to draw and would print nothing.
+
+                        A STORED BLOCK keeps its COMPLETE operational schedule,
+                        verbatim and in the contract's own order. An empty list
+                        renders nothing, so a stored block with no assignment
+                        stays exactly as it was. */}
+                    {isBeginnerExamRow(row) ? (
+                      <ExamBeginnerRows detail={row.beginner} showOperationalDetail />
+                    ) : (
+                      <ExamAssignmentRows assignments={row.assignments} />
+                    )}
 
                     {statusLabel !== null && (
                       <p className="mt-2 text-xs text-muted-foreground">{statusLabel}</p>

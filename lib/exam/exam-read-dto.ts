@@ -394,6 +394,15 @@ export interface ExamReadDtoIssue {
  */
 export interface ExamBeginnerChildDto {
   readonly childAssignmentId: string;
+  /**
+   * The POSITIONAL display key — `c0`, `c1`, … in the committed source order.
+   *
+   * It is NOT an identifier: it addresses a position in a list the client
+   * already holds, is not a database value, cannot be used to query anything and
+   * reveals nothing. It exists so a client can key a list WITHOUT being handed
+   * `childAssignmentId`, which is what the trainee contract does.
+   */
+  readonly childKey: string;
   readonly fullName: string;
   readonly age: number | null;
   readonly gender: string | null;
@@ -407,16 +416,57 @@ export interface ExamBeginnerChildDto {
 }
 
 /**
+ * ONE child of a live beginner row as a TRAINEE may see them — every approved
+ * display value of {@link ExamBeginnerChildDto}, with the internal
+ * `childAssignmentId` removed.
+ *
+ * Declared by SUBTRACTION from the shared shape rather than re-listed, so a
+ * display field added upstream reaches trainees automatically and the two
+ * contracts cannot drift, while the one removed id can never come back by
+ * accident.
+ */
+export type TraineeExamBeginnerChildDto = Omit<ExamBeginnerChildDto, "childAssignmentId">;
+
+/**
  * The client-safe beginner detail a TRAINEE may see.
  *
  * `traineeId`, `childId`, `responsibleInstructorId`, `roleLabelOverrides`, the
  * lesson's own `notes` and `isPublished` are all ABSENT: the first three are
  * identities a trainee never needs, the fourth produces no visible label yet,
  * and the last two are operational state.
+ *
+ * ===========================================================================
+ * NO INTERNAL IDENTIFIER REACHES A TRAINEE (EX-TRAINEE-ID-CONTAINMENT)
+ * ===========================================================================
+ * `sessionId` and `lessonId` were here and are GONE. `lessonId` is
+ * `TeachingPracticeLesson.id`, a database primary key with no business meaning
+ * on a schedule; `sessionId` is the synthetic `tp:<lessonId>` token, which
+ * carries that same primary key inside it and therefore leaked it a second time.
+ * Neither was ever rendered, and neither is needed: the lesson is identified to
+ * a trainee by what it IS — its date, its time, its place, its group and its
+ * people — and the one mechanical use, a React list key, is served by the
+ * positional {@link ExamBeginnerChildDto.childKey} and the row's own
+ * `rowKey`. No replacement id was introduced.
+ *
+ * The ADMIN/INSTRUCTOR contract keeps both, unchanged: operational roles act on
+ * these rows, and that is a committed contract this narrowing does not touch.
  */
 export interface TraineeExamBeginnerDetailDto {
-  readonly sessionId: string;
-  readonly lessonId: string;
+  /**
+   * Whether the SERVER matched the signed-in trainee among this lesson's
+   * PROJECTED Teaching-Practice participants.
+   *
+   * It is the same answer the row-level `isSelf` carries, restated on the
+   * beginner block because that is the only place a beginner lesson's relevance
+   * is a meaningful concept: a beginner row has NO exam assignment, so there is
+   * no assignment-level marker to read and no role to infer one from.
+   *
+   * DECIDED SERVER-SIDE BY EXACT STUDENT-ID EQUALITY, against the identity proven
+   * from the signed session, and the id itself never leaves the server. NO
+   * DISPLAY NAME IS EVER COMPARED — two trainees who share a name resolve
+   * correctly because names are not what is matched.
+   */
+  readonly isSelfRelevant: boolean;
   readonly beginnerFormat: ExamBeginnerFormat;
   readonly groupName: string | null;
   readonly location: string | null;
@@ -433,13 +483,14 @@ export interface TraineeExamBeginnerDetailDto {
    * `participantNames.length` when a name could not be resolved.
    */
   readonly participantCount: number;
-  readonly children: readonly ExamBeginnerChildDto[];
+  readonly children: readonly TraineeExamBeginnerChildDto[];
 }
 
 /**
- * The beginner detail an ADMIN or INSTRUCTOR may see: the trainee contract plus
- * the operational state they act on — the raw practice type, the LESSON's own
- * notes and the lesson publication flag.
+ * The beginner detail an ADMIN or INSTRUCTOR may see: the trainee contract's
+ * DISPLAY values plus the operational state they act on — the raw practice type,
+ * the LESSON's own notes, the lesson publication flag, and the internal
+ * `sessionId` / `lessonId` / `childAssignmentId` a trainee is no longer handed.
  */
 export interface OperationalExamBeginnerDetailDto {
   readonly sessionId: string;
@@ -485,7 +536,21 @@ export interface OperationalExamBeginnerDetailDto {
  * from the conflict input, which this builder is not given.
  */
 export interface TraineeExamDayRowDto {
-  readonly sessionId: string;
+  /**
+   * The POSITIONAL display key — `<date>#<index within that date>`.
+   *
+   * `sessionId` was here and is GONE. For a stored block it was `ExamSession.id`
+   * and for a live beginner row the synthetic `tp:<lessonId>`, which carried the
+   * Teaching-Practice lesson's primary key inside it — both internal database
+   * identifiers, neither ever rendered, and neither needed: the ONE mechanical
+   * use was a React list key.
+   *
+   * This is NOT a replacement id. It addresses a position in a list the client
+   * already holds, it is not a database value, it cannot be used to query
+   * anything, and it is unique across the whole contract because it is qualified
+   * by the row's own visible date.
+   */
+  readonly rowKey: string;
   readonly source: ExamRowSource;
   readonly kind: ExamKind;
   readonly beginnerFormat: ExamBeginnerFormat | null;
@@ -499,7 +564,12 @@ export interface TraineeExamDayRowDto {
    * the real lesson end for a live beginner row.
    */
   readonly displayEndTime: string | null;
-  readonly definitionId: string | null;
+  /**
+   * `definitionId` — `ExamDefinition.id`, a database primary key — was here and
+   * is GONE. It was never rendered, and current product navigation dropped the
+   * by-exam-type view it would have driven; `definitionName` alone carries
+   * everything a trainee needs to know what the exam is called.
+   */
   readonly definitionName: string | null;
   /** The stored block's arena, from the narrow display sibling. `null` for a
    * live beginner row, which carries its own `location` instead. */
@@ -1107,10 +1177,27 @@ function readBeginnerDetail(
   return detail;
 }
 
+/**
+ * The POSITIONAL display key for one child, derived from its index in the
+ * committed source order.
+ *
+ * It is NOT an identifier. It addresses a position in a list the client already
+ * holds, it is not a database value, it cannot be used to query anything, and it
+ * reveals nothing about the child, the lesson or the practice assignment. That
+ * is exactly why it can stand where an internal id used to.
+ */
+function childDisplayKey(index: number): string {
+  return `c${index}`;
+}
+
 /** Narrow one child into the shared client-safe shape. */
-function buildChildDto(child: BeginnerDetail["children"][number]): ExamBeginnerChildDto {
+function buildChildDto(
+  child: BeginnerDetail["children"][number],
+  index: number,
+): ExamBeginnerChildDto {
   return Object.freeze({
     childAssignmentId: text(child?.childAssignmentId),
+    childKey: childDisplayKey(index),
     fullName: text(child?.fullName),
     age: numberOrNull(child?.age),
     gender: textOrNull(child?.gender),
@@ -1127,7 +1214,36 @@ function buildChildDto(child: BeginnerDetail["children"][number]): ExamBeginnerC
 /** Narrow the child list. Source order is preserved exactly. */
 function buildChildDtos(detail: BeginnerDetail): readonly ExamBeginnerChildDto[] {
   const list = Array.isArray(detail.children) ? detail.children : [];
-  return Object.freeze(list.map((child) => buildChildDto(child)));
+  return Object.freeze(list.map((child, index) => buildChildDto(child, index)));
+}
+
+/**
+ * The TRAINEE's child list — the SAME approved display values, with the internal
+ * `childAssignmentId` REMOVED.
+ *
+ * `childAssignmentId` is `TeachingPracticeChildAssignment.id`, a database
+ * primary key and a WRITE TARGET. It has no business meaning on a schedule and
+ * a trainee needs nothing from it: it existed here only as a React list key,
+ * which {@link ExamBeginnerChildDto.childKey} now provides without carrying an
+ * identity. Every user-visible value — the name, age, gender, horse, equipment,
+ * notes and the parent's name and phone — is carried through unchanged.
+ *
+ * The ADMIN/INSTRUCTOR contract keeps the id: operational roles act on these
+ * rows, and that is a committed contract this narrowing does not touch.
+ */
+function buildTraineeChildDtos(
+  detail: BeginnerDetail,
+): readonly TraineeExamBeginnerChildDto[] {
+  const list = Array.isArray(detail.children) ? detail.children : [];
+  return Object.freeze(
+    list.map((child, index) => {
+      // Built from the shared narrowing so the two contracts cannot drift on any
+      // DISPLAY value, then stripped of the one field a trainee must not hold.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructured only to omit it
+      const { childAssignmentId, ...traineeSafe } = buildChildDto(child, index);
+      return Object.freeze(traineeSafe);
+    }),
+  );
 }
 
 /**
@@ -1226,22 +1342,42 @@ export function buildTraineeExamDayDto(
     // consumes the STORED display sibling, which describes stored blocks only.
     const arena = source === "STORED" ? resolveArena(sessionDisplayDetails, sessionId) : null;
 
+    // The POSITIONAL row key, qualified by the row's OWN VISIBLE DATE. The
+    // builder narrows one date at a time, so `<date>#<index>` is unique across
+    // the whole contract even when several dates are concatenated — and it
+    // carries no database identity of any kind.
+    const rowKey = `${text(session.date)}#${allRows.length}`;
+
     allRows.push(
       Object.freeze({
-        sessionId,
+        rowKey,
         source,
         kind: session.kind,
         beginnerFormat: session.beginnerFormat ?? null,
         date: text(session.date),
         startTime: text(session.startTime),
         displayEndTime: displayEndTime(session),
-        definitionId: idOrNull(session.definitionId),
         definitionName: textOrNull(session.definitionName ?? null),
         arena,
         location: detail === null ? null : textOrNull(detail.location),
         isSelf,
         selfLabel: isSelf ? TRAINEE_SELF_ROW_LABEL : null,
-        selfRole: row.selfRole ?? null,
+        // NO INVENTED EXAM ROLE ON A LIVE BEGINNER ROW.
+        //
+        // The committed trainee projection marks a beginner participant with the
+        // role `EXAMINEE`, because that is the only vocabulary its row type has
+        // and it needed SOME token to say "this person is in this lesson". On a
+        // Teaching-Practice lesson there is no examinee and no instructed
+        // trainee, so carrying that token onto the client contract would state a
+        // role nobody assigned — and a screen reading it would print "נבחן" over
+        // a beginner lesson.
+        //
+        // Relevance is NOT lost: the row's own `isSelf` (which still drives
+        // `myRows`) and the beginner block's `isSelfRelevant` both carry it, and
+        // both come from the same server-side student-id match. The trainee's
+        // real personal window is likewise untouched below — it is the lesson's
+        // own interval, which is a TIME, not a role.
+        selfRole: source === "BEGINNER" ? null : (row.selfRole ?? null),
         selfStartTime: row.selfStartTime ?? null,
         selfEndTime: row.selfEndTime ?? null,
         examineeNames: examinees.names,
@@ -1263,15 +1399,20 @@ export function buildTraineeExamDayDto(
           detail === null || participants === null
             ? null
             : Object.freeze({
-                sessionId: text(detail.sessionId),
-                lessonId: text(detail.lessonId),
+                // The SERVER's own relevance answer for a lesson that has no
+                // exam assignment to hang one on. It is exactly the row-level
+                // `isSelf` the committed trainee core computed by matching the
+                // signed session's student id against the lesson's PROJECTED
+                // Teaching-Practice participants — restated here, never
+                // recomputed, and never derived from a display name.
+                isSelfRelevant: isSelf,
                 beginnerFormat: detail.beginnerFormat,
                 groupName: textOrNull(detail.groupName),
                 location: textOrNull(detail.location),
                 responsibleInstructorName: responsibleInstructorName(detail, names),
                 participantNames: participants.names,
                 participantCount: participants.count,
-                children: buildChildDtos(detail),
+                children: buildTraineeChildDtos(detail),
               }),
       }),
     );

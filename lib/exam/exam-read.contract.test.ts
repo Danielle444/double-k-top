@@ -82,6 +82,7 @@ import {
   findNonPlainJsonPaths,
   type ExamAssignmentOperationalRowDto,
   type TraineeExamAssignmentOperationalRowDto,
+  type TraineeExamDayRowDto,
 } from "./exam-read-dto";
 import { composeStoredExamBlocks } from "./exam-stored-adapter-core";
 import type {
@@ -838,6 +839,64 @@ const TRAINEE_FORBIDDEN_MARKERS = [STU, INS, HID, SRC, ASG, OPS, UNPUB] as const
 const OPERATIONAL_FORBIDDEN_MARKERS = [STU, INS, HID, SRC] as const;
 
 // ===========================================================================
+// EX-TRAINEE-ID-CONTAINMENT — locating a TRAINEE row without an internal id
+// ===========================================================================
+
+/**
+ * The trainee contract no longer carries `sessionId`.
+ *
+ * It was `ExamSession.id` for a stored block and the synthetic `tp:<lessonId>`
+ * for a live beginner row — both database primary keys, neither ever rendered,
+ * and the second leaked the Teaching-Practice lesson's own id inside it. These
+ * tests therefore locate a trainee row the way a READER does: by a value that is
+ * actually on it. Every fixture row has a distinct start time, so the mapping is
+ * stated ONCE here and each assertion below keeps naming the same fixture row it
+ * always named.
+ *
+ * The ADMIN/INSTRUCTOR contract still carries `sessionId`, and its assertions are
+ * deliberately left reading it — that asymmetry is itself part of what this file
+ * pins.
+ */
+const TRAINEE_ROW_START_TIMES: Readonly<Record<string, string>> = Object.freeze({
+  "sess-riding": "09:00",
+  "sess-advanced": "11:00",
+  "sess-interface": "13:00",
+  "sess-unresolved": "99:99",
+  "tp:lesson-lunge": "10:00",
+  "tp:lesson-group": "12:00",
+  "tp:lesson-hidden": "14:00",
+  "tp:lesson-unsupported": "16:00",
+  // `pairingSession(id, ...)` fixtures below (K6, SELF4–6): each test builds a
+  // ONE-SESSION payload in isolation via `traineeAssignments`/
+  // `operationalAssignments`, so sharing the fixture's own fixed "11:00" start
+  // time across these ids is safe — no two ever coexist in the same DTO.
+  "sess-k6": "11:00",
+  "sess-self4": "11:00",
+  "sess-self5": "11:00",
+  "sess-self6": "11:00",
+});
+
+/** The trainee row corresponding to a fixture id, or `undefined`. */
+function traineeRow(
+  rows: readonly TraineeExamDayRowDto[],
+  fixtureId: string,
+): TraineeExamDayRowDto | undefined {
+  const startTime = TRAINEE_ROW_START_TIMES[fixtureId];
+  assert.ok(startTime !== undefined, `unknown fixture row ${fixtureId}`);
+  return rows.find((row) => row.startTime === startTime);
+}
+
+/** The fixture ids of these trainee rows, in order — for list assertions. */
+function traineeRowIds(rows: readonly TraineeExamDayRowDto[]): string[] {
+  return rows.map((row) => {
+    const match = Object.entries(TRAINEE_ROW_START_TIMES).find(
+      ([, startTime]) => startTime === row.startTime,
+    );
+    return match === undefined ? `unmapped:${row.startTime}` : match[0];
+  });
+}
+
+// ===========================================================================
 // GROUP A — end-to-end STORED pipeline
 // ===========================================================================
 
@@ -883,7 +942,7 @@ test("A2. kind, duration and capacity come from the ExamDefinition, and identity
 
 test("A3. a positional break shifts every derived slot after it", async () => {
   const dto = await readTrainee();
-  const riding = dto.allRows.find((row) => row.sessionId === "sess-riding");
+  const riding = traineeRow(dto.allRows, "sess-riding");
   assert.ok(riding !== undefined);
   // The viewer is the SECOND examinee, so the 10-minute break after wave 0 moves
   // their personal slot from 09:15 to 09:25. A block-time fallback would have
@@ -897,7 +956,7 @@ test("A3. a positional break shifts every derived slot after it", async () => {
 
 test("A4. an instructed trainee inherits the PAIRED examinee's exact interval", async () => {
   const dto = await readTrainee();
-  const advanced = dto.allRows.find((row) => row.sessionId === "sess-advanced");
+  const advanced = traineeRow(dto.allRows, "sess-advanced");
   assert.ok(advanced !== undefined);
   assert.equal(advanced.selfRole, "INSTRUCTED_TRAINEE");
   // Paired to the SECOND examinee (pairingIndex 2), whose wave is 11:30–12:00.
@@ -936,14 +995,14 @@ test("A6. an UNRESOLVED stored block survives for operational roles and vanishes
 
   const trainee = await readTrainee();
   assert.equal(
-    trainee.allRows.some((row) => row.sessionId === "sess-unresolved"),
+    traineeRow(trainee.allRows, "sess-unresolved") !== undefined,
     false,
     "an unresolved block reached a trainee",
   );
   // The viewer IS assigned to it, and still sees nothing: no exact personal time
   // exists, and the block interval is never a fallback.
   assert.equal(
-    trainee.myRows.some((row) => row.sessionId === "sess-unresolved"),
+    traineeRow(trainee.myRows, "sess-unresolved") !== undefined,
     false,
   );
 });
@@ -1324,7 +1383,7 @@ test("E5. an UNPUBLISHED beginner lesson contributes nothing at all to a trainee
   const dto = await readTraineeExamDayWithDeps(DATE, traineeDeps(calls));
   // No session…
   assert.equal(
-    dto.allRows.some((row) => row.sessionId === "tp:lesson-hidden"),
+    traineeRow(dto.allRows, "tp:lesson-hidden") !== undefined,
     false,
   );
   // …no child detail, no participant name, no phone, no name-lookup id…
@@ -1345,21 +1404,24 @@ test("E5. an UNPUBLISHED beginner lesson contributes nothing at all to a trainee
 
 test("E6. a PUBLISHED beginner lesson stays fully visible to a trainee", async () => {
   const dto = await readTrainee();
-  const lunge = dto.allRows.find((row) => row.sessionId === "tp:lesson-lunge");
+  const lunge = dto.allRows.find((row) => row.source === "BEGINNER" && row.beginner?.groupName === "קבוצה א");
   assert.ok(lunge !== undefined);
   assert.equal(lunge.source, "BEGINNER");
   assert.equal(lunge.location, "מגרש לונג׳");
   // A beginner row keeps its own place and never consumes a stored arena.
   assert.equal(lunge.arena, null);
   assert.equal(lunge.beginner?.groupName, "קבוצה א");
-  assert.equal(lunge.beginner?.lessonId, "lesson-lunge");
+  // EX-TRAINEE-ID-CONTAINMENT: `lessonId` and `childAssignmentId` are database
+  // primary keys and no longer reach the trainee contract; the row is already
+  // located by a visible value (its `groupName`) above.
+  assert.equal("lessonId" in (lunge.beginner ?? {}), false);
   assert.deepEqual(lunge.beginner?.participantNames, ["אורי הצופה", "נועה לוי"]);
   assert.equal(lunge.beginner?.participantCount, 2);
   // The approved visible operational values, including the RAW parent phone.
   assert.equal(lunge.beginner?.children.length, 1);
   assert.equal(lunge.beginner?.children[0].parentPhone, "050-1111111");
   assert.equal(lunge.beginner?.children[0].parentName, "הורה מהשיעור");
-  assert.equal(lunge.beginner?.children[0].childAssignmentId, "child-assign-lunge-1");
+  assert.equal("childAssignmentId" in lunge.beginner!.children[0], false);
   assert.equal(lunge.beginnerChildCount, 1);
   // The responsible instructor's name survives without any instructor query.
   assert.equal(lunge.beginner?.responsibleInstructorName, "מדריכה אחראית מהמקור");
@@ -1388,7 +1450,7 @@ test("E7. a rejected Teaching-Practice participant appears in no trainee or admi
 test("E8. the DAY is the trainee's whole scope, and the committed projection owns it", async () => {
   const dto = await readTrainee();
   assert.deepEqual(
-    dto.allRows.map((row) => row.sessionId),
+    traineeRowIds(dto.allRows),
     ["sess-riding", "tp:lesson-lunge", "sess-advanced", "tp:lesson-group", "sess-interface"],
   );
   // No off-date row survives.
@@ -1407,7 +1469,7 @@ test("E8. the DAY is the trainee's whole scope, and the committed projection own
   );
   assert.deepEqual(
     projection.allRows.map((row) => row.session.sessionId),
-    dto.allRows.map((row) => row.sessionId),
+    traineeRowIds(dto.allRows),
   );
   assert.deepEqual(
     projection.allRows.map((row) => row.isSelf),
@@ -1433,15 +1495,20 @@ test("E9. myRows is LITERALLY allRows.filter(row => row.isSelf), by reference", 
     assert.equal(dto.myRows[i], expected[i], `myRows[${i}] is a copy, not the same row`);
   }
   assert.deepEqual(
-    dto.myRows.map((row) => row.sessionId),
+    traineeRowIds(dto.myRows),
     ["sess-riding", "tp:lesson-lunge", "sess-advanced"],
   );
-  // Every personal value is preserved exactly as the committed core computed it.
+  // Every personal value is preserved exactly as the committed core computed
+  // it — EXCEPT the middle row's `selfRole`. That row is `tp:lesson-lunge`, a
+  // LIVE beginner lesson: it has no exam assignment and no exam role, so
+  // carrying "EXAMINEE" onto it would be a role the DTO builder invented. The
+  // personal WINDOW is untouched (it is the lesson's own time, not a role), and
+  // relevance is untouched too — it is still in `myRows`.
   assert.deepEqual(
     dto.myRows.map((row) => [row.selfRole, row.selfStartTime, row.selfEndTime]),
     [
       ["EXAMINEE", "09:25", "09:40"],
-      ["EXAMINEE", "10:00", "11:00"],
+      [null, "10:00", "11:00"],
       ["INSTRUCTED_TRAINEE", "11:30", "12:00"],
     ],
   );
@@ -1450,7 +1517,7 @@ test("E9. myRows is LITERALLY allRows.filter(row => row.isSelf), by reference", 
 
 test("E10. another trainee's row is visible in allRows and absent from myRows", async () => {
   const dto = await readTrainee();
-  const iface = dto.allRows.find((row) => row.sessionId === "sess-interface");
+  const iface = traineeRow(dto.allRows, "sess-interface");
   assert.ok(iface !== undefined, "the other trainee's row must be visible in לו״ז כולל");
   assert.equal(iface.isSelf, false);
   assert.equal(iface.selfLabel, null);
@@ -1458,19 +1525,19 @@ test("E10. another trainee's row is visible in allRows and absent from myRows", 
   assert.equal(iface.selfStartTime, null);
   assert.equal(iface.selfEndTime, null);
   assert.equal(
-    dto.myRows.some((row) => row.sessionId === "sess-interface"),
+    traineeRow(dto.myRows, "sess-interface") !== undefined,
     false,
   );
 
   // A DIFFERENT viewer flips exactly the same rows, from the same projection.
   const other = await readTrainee({ studentId: OTHER });
   assert.deepEqual(
-    other.myRows.map((row) => row.sessionId),
+    traineeRowIds(other.myRows),
     ["sess-riding", "tp:lesson-lunge", "sess-advanced", "sess-interface"],
   );
   assert.deepEqual(
-    other.allRows.map((row) => row.sessionId),
-    dto.allRows.map((row) => row.sessionId),
+    traineeRowIds(other.allRows),
+    traineeRowIds(dto.allRows),
   );
 });
 
@@ -1542,19 +1609,40 @@ test("F2. no forbidden CHANNEL exists in the trainee contract", async () => {
     "EX-CALC",
     "EX-DEF",
     "EX-GRP",
+    // EX-TRAINEE-ID-CONTAINMENT — every internal identifier a trainee-facing
+    // BEGINNER row must never carry, checked on the WHOLE serialized contract
+    // (which includes every beginner row the fixtures produce).
+    "lessonId",
+    "sessionId",
+    "studentId",
+    "planId",
+    "courseOfferingId",
+    "pairingIndex",
+    "childAssignmentId",
+    "definitionId",
   ]) {
     assert.equal(serialized.includes(token), false, `the trainee DTO carries ${token}`);
   }
   // The row's exact field set is the committed one, and nothing more.
+  //
+  // EX-TRAINEE-ID-CONTAINMENT: `sessionId` — a database primary key (or, for a
+  // live beginner row, the synthetic `tp:<lessonId>` carrying ANOTHER primary
+  // key inside it) — is REMOVED. `rowKey` is the POSITIONAL display key that
+  // replaces it: it addresses a position in a list the client already holds,
+  // is not a database value, and cannot be used to query anything.
+  //
+  // `definitionId` — `ExamDefinition.id`, ALSO a database primary key — is
+  // REMOVED too: it was never rendered, and current product navigation dropped
+  // the by-exam-type view it would have driven. `definitionName` alone carries
+  // everything a trainee needs to know what the exam is called.
   assert.deepEqual(Object.keys(dto.allRows[0]), [
-    "sessionId",
+    "rowKey",
     "source",
     "kind",
     "beginnerFormat",
     "date",
     "startTime",
     "displayEndTime",
-    "definitionId",
     "definitionName",
     "arena",
     "location",
@@ -1573,7 +1661,7 @@ test("F2. no forbidden CHANNEL exists in the trainee contract", async () => {
   ]);
   // The ASSIGNMENT row's field set is exact too: the operational values and
   // NOTHING that identifies a row, a person or a pairing index.
-  const riding = dto.allRows.find((row) => row.sessionId === "sess-riding");
+  const riding = traineeRow(dto.allRows, "sess-riding");
   assert.ok(riding !== undefined && riding.assignments.length > 0);
   assert.deepEqual(Object.keys(riding.assignments[0]), [
     "participantName",
@@ -1608,11 +1696,13 @@ test("F3. the APPROVED visible values are still present", async () => {
 
 test("F4. the trainee child contract carries a display key, never the child's identity", async () => {
   const dto = await readTrainee();
-  const lunge = dto.allRows.find((row) => row.sessionId === "tp:lesson-lunge");
+  const lunge = dto.allRows.find((row) => row.source === "BEGINNER" && row.beginner?.groupName === "קבוצה א");
   const child = lunge?.beginner?.children[0];
   assert.ok(child !== undefined);
+  // EX-TRAINEE-ID-CONTAINMENT: `childAssignmentId` (a database primary key) is
+  // REMOVED; `childKey` (a positional display key) is the replacement.
   assert.deepEqual(Object.keys(child), [
-    "childAssignmentId",
+    "childKey",
     "fullName",
     "age",
     "gender",
@@ -1624,10 +1714,18 @@ test("F4. the trainee child contract carries a display key, never the child's id
     "isAbsent",
   ]);
   assert.equal("childId" in child, false, "the child's own identity reached a trainee");
-  // The trainee beginner detail carries no operational lesson state.
+  assert.equal(
+    "childAssignmentId" in child,
+    false,
+    "the child's write-target id reached a trainee",
+  );
+  // The trainee beginner detail carries no operational lesson state, and — as
+  // of EX-TRAINEE-ID-CONTAINMENT — no `sessionId` or `lessonId` either. Both
+  // were database primary keys with no business meaning on a schedule.
+  // `isSelfRelevant` is the server-derived replacement for "is this mine",
+  // which a live beginner lesson has no exam assignment to hang one on.
   assert.deepEqual(Object.keys(lunge?.beginner ?? {}), [
-    "sessionId",
-    "lessonId",
+    "isSelfRelevant",
     "beginnerFormat",
     "groupName",
     "location",
@@ -1636,6 +1734,8 @@ test("F4. the trainee child contract carries a display key, never the child's id
     "participantCount",
     "children",
   ]);
+  assert.equal("sessionId" in (lunge?.beginner ?? {}), false);
+  assert.equal("lessonId" in (lunge?.beginner ?? {}), false);
 });
 
 // ===========================================================================
@@ -1992,7 +2092,21 @@ test("H4. no exported reader returns the internal payload or accepts a forbidden
     // assignment ids and the DERIVED moments this same pipeline already computed,
     // so the admin schedule can reuse them instead of reproducing them. No shared
     // DTO gained a field and no role reading changed shape.
-    ["readAdminExamPlan", "readAdminExamWaveView", "readInstructorExamPlan", "readTraineeExamDay"],
+    //
+    // RE-POINTED AGAIN by EX-TRAINEE-MULTIDAY-READ, additively: a FIFTH reader
+    // returns the trainee's WHOLE published schedule in ONE load, so the trainee
+    // date sub-tabs can offer the plan's real dates instead of the single day
+    // that had just been fetched. The day reader is KEPT beside it, every
+    // existing signature is untouched, and the new one returns the SAME trainee
+    // DTO — asserted immediately below — so no role reading changed shape and no
+    // DTO gained a field.
+    [
+      "readAdminExamPlan",
+      "readAdminExamWaveView",
+      "readInstructorExamPlan",
+      "readTraineeExamDay",
+      "readTraineeExamSchedule",
+    ],
   );
   assert.deepEqual(
     signatures.map((s) => s.returns),
@@ -2003,6 +2117,10 @@ test("H4. no exported reader returns the internal payload or accepts a forbidden
       "Promise<AdminExamReadDto>",
       "Promise<AdminExamWaveView>",
       "Promise<InstructorExamReadDto>",
+      "Promise<TraineeExamDayDto>",
+      // EX-TRAINEE-MULTIDAY-READ — the fifth returns the SAME trainee contract
+      // as the day reader. A multi-date reading must not be a second,
+      // differently-shaped trainee contract.
       "Promise<TraineeExamDayDto>",
     ],
   );
@@ -2227,7 +2345,7 @@ test("I3. returned DTO objects and arrays are frozen — as MUTATION protection 
   // PRIVACY assertions live in group F, on the serialized VALUES.
   const [first] = trainee.allRows;
   assert.throws(() => {
-    (first as { sessionId: string }).sessionId = "tampered";
+    (first as { rowKey: string }).rowKey = "tampered";
   });
 });
 
@@ -2316,7 +2434,7 @@ test("I7. the trainee arena arrives through the NARROW sibling and nothing else"
   }
 
   const dto = await readTrainee();
-  const riding = dto.allRows.find((row) => row.sessionId === "sess-riding");
+  const riding = traineeRow(dto.allRows, "sess-riding");
   assert.equal(riding?.arena, "אולם מקורה");
   // EXACT session-id match only: a DUPLICATED claim wins for neither entry.
   const duplicated = buildTraineeExamArenaLookup([
@@ -2531,7 +2649,7 @@ async function operationalAssignments(sessions: readonly StoredExamSessionRow[],
 /** The assignment rows of ONE session, from the TRAINEE full-day reading. */
 async function traineeAssignments(sessions: readonly StoredExamSessionRow[], id: string) {
   const dto = await readTrainee({ sessions, sourceDates: [] });
-  const row = dto.allRows.find((r) => r.sessionId === id);
+  const row = traineeRow(dto.allRows, id);
   assert.ok(row !== undefined, `expected a trainee row for ${id}`);
   return row.assignments;
 }
@@ -2572,7 +2690,7 @@ test("K1. the INSTRUCTOR plan carries the complete assignment rows of every sess
 
 test("K2. the TRAINEE full-day view carries the SAME complete rows, for every visible row", async () => {
   const dto = await readTrainee();
-  const riding = dto.allRows.find((row) => row.sessionId === "sess-riding");
+  const riding = traineeRow(dto.allRows, "sess-riding");
   assert.ok(riding !== undefined);
   assert.deepEqual(
     riding.assignments.map((a) => a.participantName),
@@ -2581,7 +2699,7 @@ test("K2. the TRAINEE full-day view carries the SAME complete rows, for every vi
 
   // A row belonging to somebody ELSE is just as complete: the trainee schedule
   // is an operational schedule, not a privacy-narrowed list of names.
-  const iface = dto.allRows.find((row) => row.sessionId === "sess-interface");
+  const iface = traineeRow(dto.allRows, "sess-interface");
   assert.ok(iface !== undefined && iface.isSelf === false);
   assert.deepEqual(
     iface.assignments.map((a) => [a.participantName, a.horseName, a.personalStartTime]),
@@ -2762,14 +2880,14 @@ test("K6. a DUPLICATED examinee pairingIndex is ambiguous and resolves nothing",
   // to be that committed rule rather than a row this slice lost.
   const affected = await readTrainee({ sessions, sourceDates: [] });
   assert.equal(
-    affected.allRows.some((row) => row.sessionId === "sess-k6"),
+    traineeRow(affected.allRows, "sess-k6") !== undefined,
     false,
   );
 
   // A trainee who is NOT in the block sees it in the full schedule, and reads
   // exactly what the operational roles read.
   const bystander = await readTrainee({ sessions, sourceDates: [], studentId: OFFDAY });
-  const row = bystander.allRows.find((r) => r.sessionId === "sess-k6");
+  const row = traineeRow(bystander.allRows, "sess-k6");
   assert.ok(row !== undefined && row.isSelf === false);
   // A bystander marks NOBODY: every assignment of a block they are not in is
   // false, and the rows otherwise match the operational reading exactly.
@@ -2859,7 +2977,7 @@ test("K8. an UNRESOLVED block keeps its people and invents NO time for any of th
 
 test("SELF1. EXACTLY the viewer's own assignment is marked, by authoritative id", async () => {
   const dto = await readTrainee();
-  const riding = dto.allRows.find((row) => row.sessionId === "sess-riding");
+  const riding = traineeRow(dto.allRows, "sess-riding");
   assert.ok(riding !== undefined);
 
   const marked = riding.assignments.filter((row) => row.isSelf);
@@ -2946,7 +3064,7 @@ test("SELF5. an IDENTICAL display name on both rows does not confuse the marker"
     fetchStudentDisplayNames: async (ids) =>
       new Map(ids.map((id) => [id, "אותו שם בדיוק"])),
   });
-  const row = dto.allRows.find((r) => r.sessionId === "sess-self5");
+  const row = traineeRow(dto.allRows, "sess-self5");
   assert.ok(row !== undefined);
   assert.deepEqual(
     row.assignments.map((a) => a.participantName),
@@ -3079,7 +3197,7 @@ test("K10. PUBLICATION policy is untouched by the assignment rows", async () => 
   // The trainee still sees no unpublished lesson and no draft plan...
   const trainee = await readTrainee();
   assert.equal(
-    trainee.allRows.some((row) => row.sessionId === "tp:lesson-hidden"),
+    traineeRow(trainee.allRows, "tp:lesson-hidden") !== undefined,
     false,
   );
   assert.deepEqual(await readTrainee({ planPublishedAt: null }), emptyTraineeExamDayDto());

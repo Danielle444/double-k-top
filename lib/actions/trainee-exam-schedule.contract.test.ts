@@ -62,6 +62,17 @@ const SCHEDULE_NAV_SUITE_REL = "lib/components/ExamScheduleNav.test.tsx";
 const PERSONAL_DETAIL_REL = "lib/components/ExamPersonalAssignmentDetail.tsx";
 const PERSONAL_DETAIL_SUITE_REL = "lib/components/ExamPersonalAssignmentDetail.test.tsx";
 const NAV_SUITE_REL = "app/student/trainee-nav-visibility.test.ts";
+/**
+ * EX-TRAINEE-DATE-NAV — the trainee-only DATE sub-tabs, which replace the shared
+ * three-view bar on this screen, and EX-BEGINNER-EXAM-UI — the ONE shared
+ * compact renderer for a LIVE beginner row, which the instructor screen mounts
+ * too. Each is proven by its own render suite beside it; what this suite pins is
+ * that the trainee screen DELEGATES to them rather than growing copies.
+ */
+const DATE_TABS_REL = "lib/components/ExamDateTabs.tsx";
+const DATE_TABS_SUITE_REL = "lib/components/ExamDateTabs.test.tsx";
+const BEGINNER_ROWS_REL = "lib/components/ExamBeginnerRows.tsx";
+const BEGINNER_ROWS_SUITE_REL = "lib/components/ExamBeginnerRows.test.tsx";
 
 function read(relative: string): string {
   return readFileSync(join(REPO_ROOT, relative), "utf8");
@@ -103,8 +114,17 @@ const CLIENT_CODE = stripComments(CLIENT);
  * pieces where a whole literal would make an unrelated guard treat THIS file as
  * a call site.
  */
-const READER_CALL = new RegExp("\\bread" + "TraineeExamDay\\s*\\(");
-const READER_NAME = new RegExp("\\bread" + "TraineeExamDay\\b");
+const READER_CALL = new RegExp("\\bread" + "TraineeExamSchedule\\s*\\(");
+/**
+ * EX-TRAINEE-MULTIDAY-READ — BOTH trainee readers.
+ *
+ * The committed DAY reader is KEPT (public API, and a single-day reading stays
+ * legitimate); the SCHEDULE reader is the one the trainee UI now goes through.
+ * The caller sweep below must recognise EITHER name, so neither can acquire an
+ * unapproved caller unnoticed — recognising only the new one would have quietly
+ * opened the old one up.
+ */
+const READER_NAME = new RegExp("\\bread" + "TraineeExam(Day|Schedule)\\b");
 const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
 const GENERATED_CLIENT = ["@prisma", "client"].join("/");
 
@@ -150,10 +170,17 @@ test("1. the action calls the committed trainee reader and nothing else", () => 
   assert.deepEqual(specifiers, ["./exam-role-readers"]);
 
   // ...it exports exactly ONE function...
+  //
+  // EX-TRAINEE-MULTIDAY-READ RE-POINT — that one function is now the SCHEDULE
+  // reading. The day wrapper was REPLACED rather than joined: everything
+  // exported from a "use server" module becomes publicly callable over the
+  // network with a stable id, and a second endpoint returning a SUBSET of this
+  // one's data would be network surface nobody needs. The count stays ONE,
+  // which is the property this assertion exists to hold.
   const exported = [...ACTION_CODE.matchAll(/export async function (\w+)\(/g)].map(
     ([, name]) => name,
   );
-  assert.deepEqual(exported, ["getTraineeExamDaySchedule"]);
+  assert.deepEqual(exported, ["getTraineeExamSchedule"]);
 
   // ...and the reader is invoked exactly once, as the whole body.
   assert.equal(
@@ -163,26 +190,39 @@ test("1. the action calls the committed trainee reader and nothing else", () => 
   );
   assert.match(
     ACTION_CODE.replace(/\s+/g, " "),
-    /return read.{0,40}\(selectedDate\); \}/,
+    /return read.{0,40}\(\); \}/,
     "the wrapper must return the reader's result unchanged",
   );
-  // No other exam reader is reachable from here.
-  for (const other of ["read" + "AdminExamPlan", "read" + "InstructorExamPlan"]) {
+  // No other exam reader is reachable from here — including the DAY reader,
+  // which is KEPT in the readers module but is deliberately NOT published as a
+  // second Server Action.
+  for (const other of [
+    "read" + "AdminExamPlan",
+    "read" + "InstructorExamPlan",
+    "read" + "TraineeExamDay",
+  ]) {
     assert.equal(ACTION_CODE.includes(other), false, `the action reaches ${other}`);
   }
 });
 
-test("2. the action accepts EXACTLY one date value and nothing else", () => {
+test("2. the action accepts NO value at all", () => {
+  // EX-TRAINEE-MULTIDAY-READ RE-POINT — this asserted the ONE parameter was a
+  // date. The schedule reading takes none, which is the STRONGER form of the
+  // very property the assertion existed to hold: there is no longer any
+  // caller-supplied value to normalize, reject or reason about.
   const signature = ACTION_CODE.slice(
-    ACTION_CODE.indexOf("export async function getTraineeExamDaySchedule("),
+    ACTION_CODE.indexOf("export async function getTraineeExamSchedule("),
   );
   const params = signature.slice(signature.indexOf("(") + 1, signature.indexOf(")"));
-  assert.match(params.replace(/\s+/g, " ").trim(), /^selectedDate: string,?$/);
+  assert.equal(params.replace(/\s+/g, " ").trim(), "");
+  // ...and no date is reachable through the module either, so the UI cannot
+  // reintroduce a per-day request through this seam.
+  assert.equal(ACTION_CODE.includes("selectedDate"), false, "the action still names a date");
 });
 
 test("3. the action accepts no student id and no other actor identity", () => {
   const signature = ACTION_CODE.slice(
-    ACTION_CODE.indexOf("export async function getTraineeExamDaySchedule("),
+    ACTION_CODE.indexOf("export async function getTraineeExamSchedule("),
   );
   const params = signature.slice(signature.indexOf("(") + 1, signature.indexOf(")"));
   for (const forbidden of [
@@ -368,12 +408,96 @@ function assertScopeCoreAuthorizationUnchanged(): void {
   );
   const reindented = new Set([...removed].filter((line) => added.has(line)));
 
+  // EX-TRAINEE-MULTIDAY-READ RE-POINT — ADDED lines are separated from REMOVED
+  // ones.
+  //
+  // The sweep treated every changed line alike, which was right while no slice
+  // needed a new reader: a line naming the authorization surface could only be
+  // an edit to the existing one. The approved multi-day trainee read ADDS a
+  // reader, and a reader that did NOT name `requireTraineeId`,
+  // `resolveTraineeCourseOffering`, `isCourseContextDenial`,
+  // `traineeExamPlanLoadOptions` and `loadPlan` would be one that skipped the
+  // authorization — so the old form is satisfiable here only by writing an
+  // UNSAFE reader.
+  //
+  // The claim is SPLIT, and the half that protects the committed behaviour is
+  // kept at FULL strength:
+  //
+  //   - NO REMOVED LINE may name the authorization surface. Nothing about the
+  //     existing readers can be deleted, weakened or re-ordered, whatever else
+  //     the slice does. This is the original claim, unchanged.
+  //   - An ADDED line may name it ONLY inside the new trainee SCHEDULE reader,
+  //     and the check below then proves that reader's authorization lines are
+  //     the day reader's, verbatim — same steps, same order, same options. An
+  //     added line anywhere else in the file still fails.
   for (const token of SCOPE_AUTHORIZATION_TOKENS) {
     const offenders = changedLines
+      .filter((line) => line.startsWith("-"))
       .filter((line) => line.includes(token))
       .map((line) => line.slice(1).trim())
       .filter((line) => !reindented.has(line) && !TOLERATED_CHANGED_LINES.has(line));
-    assert.deepEqual(offenders, [], `${SCOPE_REL} changed a line naming ${token}`);
+    assert.deepEqual(offenders, [], `${SCOPE_REL} REMOVED or rewrote a line naming ${token}`);
+  }
+
+  const scopeCode = stripComments(read(SCOPE_REL));
+  /** The body of one reader in the pure scope core, by exact name. */
+  const readerBody = (name: string): string => {
+    const start = scopeCode.indexOf(`export async function ${name}(`);
+    assert.ok(start >= 0, `${name} was not found in ${SCOPE_REL}`);
+    const end = scopeCode.indexOf("\n}", start);
+    assert.ok(end > start, `${name} has no readable body`);
+    return scopeCode.slice(start, end);
+  };
+  const dayBody = readerBody("read" + "TraineeExamDayWithDeps");
+  const scheduleBody = readerBody("read" + "TraineeExamScheduleWithDeps");
+
+  // EVERY added CODE line naming the authorization surface lives inside the new
+  // reader. Comment lines are excluded on the same principle this whole suite
+  // already applies to every source it reads: a header that EXPLAINS which
+  // authorization it repeats is not an authorization decision, and the stripped
+  // body below is where the decisions themselves are compared.
+  const isCommentLine = (line: string): boolean =>
+    line.startsWith("*") || line.startsWith("//") || line.startsWith("/*");
+  for (const token of SCOPE_AUTHORIZATION_TOKENS) {
+    const addedOffenders = [...added]
+      .filter((line) => line.includes(token))
+      .filter((line) => !isCommentLine(line))
+      .filter((line) => !reindented.has(line) && !TOLERATED_CHANGED_LINES.has(line))
+      .filter((line) => !scheduleBody.includes(line));
+    assert.deepEqual(
+      addedOffenders,
+      [],
+      `${SCOPE_REL} added a line naming ${token} outside the new trainee schedule reader`,
+    );
+  }
+
+  // ...and the new reader's authorization is the day reader's, line for line.
+  // The DATE is the only thing it may legitimately lack.
+  const authorizationLines = (body: string): string[] =>
+    body
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => SCOPE_AUTHORIZATION_TOKENS.some((token) => line.includes(token)))
+      .filter((line) => !line.includes("normalizeSelectedExamDate"));
+  assert.deepEqual(
+    authorizationLines(scheduleBody),
+    authorizationLines(dayBody),
+    "the multi-day trainee reader does not authorize exactly as the day reader does",
+  );
+  // It states no publication rule of its own, and reaches no other role's.
+  for (const foreign of [
+    "adminExamPlanLoadOptions",
+    "instructorExamPlanLoadOptions",
+    "requireInstructorId",
+    "requireAdminCourseOffering",
+    "requirePlanPublication",
+    "requireLessonPublication",
+  ]) {
+    assert.equal(
+      scheduleBody.includes(foreign),
+      false,
+      `the multi-day trainee reader reaches ${foreign}`,
+    );
   }
 
 
@@ -429,9 +553,63 @@ function assertNavVisibilityOnlyGainedExamsId(): void {
 }
 
 test("6b. the reader is untouched, server-only, and the wrapper is its only app-reachable caller", () => {
-  // Byte-identical to HEAD: this slice changed no authorization, no course
-  // resolution and no publication logic.
-  assert.ok(unchangedSinceHead(READERS_REL), `${READERS_REL} was modified by this slice`);
+  // EX-TRAINEE-MULTIDAY-READ RE-POINT — the BYTE-IDENTICAL claim on the readers
+  // module.
+  //
+  // That claim said this slice changed no authorization, no course resolution
+  // and no publication logic, and it was expressible as byte-identity only while
+  // no slice needed a new reader binding. The approved multi-day trainee read
+  // needs exactly one, so byte-identity would now be satisfiable only by not
+  // doing the approved work.
+  //
+  // The claim is REPLACED by the property it was standing in for, checked
+  // directly rather than by proxy: the file's ONLY difference from HEAD is
+  // ADDITIVE, every pre-existing reader is still there with its dependency
+  // bundle intact, and the new binding is handed the SAME five dependencies as
+  // the day reader — same identity source, same non-selectable resolver, same
+  // denial classification, same loader, same single name fetch. A binding that
+  // swapped any of them, or a slice that quietly edited an existing reader,
+  // fails here.
+  const readersDiff = spawnSync("git", ["diff", "-U0", "HEAD", "--", READERS_REL], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(readersDiff.status, 0, `git diff ${READERS_REL} failed`);
+  const removedLines = (readersDiff.stdout ?? "")
+    .split("\n")
+    .filter((line) => line.startsWith("-") && !line.startsWith("---"))
+    .map((line) => line.slice(1).trim())
+    .filter(Boolean);
+  assert.deepEqual(removedLines, [], `${READERS_REL} lost a line: ${removedLines.join(" | ")}`);
+
+  const readersSource = stripComments(read(READERS_REL));
+  // Every committed reader is still declared, and the new one beside them.
+  for (const reader of [
+    "read" + "AdminExamPlan",
+    "read" + "AdminExamWaveView",
+    "read" + "InstructorExamPlan",
+    "read" + "TraineeExamDay",
+    "read" + "TraineeExamSchedule",
+  ]) {
+    assert.ok(
+      readersSource.includes(`export async function ${reader}(`),
+      `${reader} is no longer exported`,
+    );
+  }
+  // The two trainee bindings hand over the SAME dependency set. Compared as
+  // sorted property names, so a reordering is not a difference and a swapped,
+  // added or dropped dependency is.
+  const depsOf = (reader: string): string[] => {
+    const start = readersSource.indexOf(`export async function ${reader}(`);
+    assert.ok(start >= 0, `${reader} was not found`);
+    const body = readersSource.slice(start, readersSource.indexOf("\n}", start));
+    return [...body.matchAll(/^\s{4}(\w+)[,:]/gm)].map(([, name]) => name).sort();
+  };
+  assert.deepEqual(
+    depsOf("read" + "TraineeExamSchedule"),
+    depsOf("read" + "TraineeExamDay"),
+    "the schedule binding was given a different dependency bundle from the day binding",
+  );
   // ...and the navigation rule gained the one approved id and nothing else.
   assertNavVisibilityOnlyGainedExamsId();
   // ...and no changed line of the pure scope core touches authorization.
@@ -529,7 +707,26 @@ test('7. the "מבחנים" trainee entry exists EXACTLY once', () => {
   // and requires a PUBLISHED plan and PUBLISHED lessons. That is the property
   // this navigation change must not have moved, so it is re-checked here.
   assertScopeCoreAuthorizationUnchanged();
-  assert.ok(unchangedSinceHead(READERS_REL), "the reader changed alongside the navigation");
+  // EX-TRAINEE-MULTIDAY-READ RE-POINT — the byte-identity claim on the readers
+  // module, for the reason given in test 6b: the approved multi-day read ADDS a
+  // binding there. What this line was protecting — that the NAVIGATION change
+  // did not come with a quiet edit to an existing reader — is checked at full
+  // strength in 6b, which allows additions and forbids every removal or rewrite.
+  // Restated here so this test still fails if that ever stops holding.
+  const readersDiff = spawnSync("git", ["diff", "-U0", "HEAD", "--", READERS_REL], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(readersDiff.status, 0, `git diff ${READERS_REL} failed`);
+  assert.deepEqual(
+    (readersDiff.stdout ?? "")
+      .split("\n")
+      .filter((line) => line.startsWith("-") && !line.startsWith("---"))
+      .map((line) => line.slice(1).trim())
+      .filter(Boolean),
+    [],
+    "an existing reader was edited alongside the navigation",
+  );
 });
 
 test("8. every existing trainee navigation entry is still present", () => {
@@ -597,15 +794,25 @@ test("9. no exam route directory was created in any role area", () => {
 
 test("10. the empty state renders the exact approved Hebrew sentence", () => {
   assert.ok(
-    SECTION.includes('const EMPTY_TEXT = "עדיין לא פורסם לוח מבחנים ליום זה.";'),
+    SECTION.includes('const EMPTY_TEXT = "עדיין לא פורסם לוח מבחנים.";'),
     "the approved empty-state sentence is missing or was reworded",
   );
-  // It is the sentence shown whenever the DAY itself carries no visible row —
-  // missing, draft and denied alike, which is exactly what must not be told
-  // apart. The second sentence is reachable ONLY when the day IS visible and
-  // holds rows, so it can never stand in for the publication answer.
+  // EX-TRAINEE-MULTIDAY-READ RE-POINT — the WORDING of the two sentences.
+  //
+  // Both said "ליום זה" / "ביום זה" — "for this day" — because the screen had
+  // chosen a day and read exactly that one. It now loads the WHOLE published
+  // schedule, so a sentence scoped to a day would be telling a trainee that
+  // nothing is published TODAY when what the server actually said is that
+  // nothing is published for them AT ALL. The exact strings are re-pinned rather
+  // than loosened, and the property they exist for is unchanged and re-checked
+  // below: EMPTY_TEXT is the only sentence that touches publication.
+  //
+  // It is the sentence shown whenever the SCHEDULE itself carries no visible row
+  // — missing, draft and denied alike, which is exactly what must not be told
+  // apart. The other two are reachable ONLY when the schedule IS visible and
+  // holds rows, so neither can stand in for the publication answer.
   assert.ok(SECTION_CODE.includes("view.allRows.length === 0"));
-  assert.ok(SECTION.includes('const NO_SELF_TEXT = "אין לך שיבוץ למבחן ביום זה.";'));
+  assert.ok(SECTION.includes('const NO_SELF_TEXT = "אין לך שיבוץ למבחן.";'));
 
   // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — the two-way choice
   // `{dayIsEmpty ? EMPTY_TEXT : NO_SELF_TEXT}`. "לו״ז כולם" can now be narrowed
@@ -620,16 +827,18 @@ test("10. the empty state renders the exact approved Hebrew sentence", () => {
   // and from nowhere else, and every other outcome gets a sentence that says
   // nothing about publication.
   assert.ok(
-    SECTION_CODE.includes("const emptyText = dayIsEmpty"),
-    "the empty state no longer branches on the day itself first",
+    SECTION_CODE.includes("const emptyText = scheduleIsEmpty"),
+    "the empty state no longer branches on the loaded schedule first",
   );
   assert.ok(SECTION_CODE.includes("{emptyText}"), "the empty state is never rendered");
   assert.ok(SECTION.includes('const NO_MATCHING_ROWS_TEXT = "אין מבחנים בתצוגה שנבחרה.";'));
   // EMPTY_TEXT is named exactly twice — its declaration and the one branch — so
   // it cannot also be reached from a view selection.
   assert.equal((SECTION_CODE.match(/EMPTY_TEXT/g) ?? []).length, 2);
-  // `dayIsEmpty` reads the LOADED day, never the narrowed rows.
-  assert.ok(SECTION_CODE.includes("const dayIsEmpty = view !== null && view.allRows.length === 0;"));
+  // The flag reads the LOADED contract, never the narrowed rows.
+  assert.ok(
+    SECTION_CODE.includes("const scheduleIsEmpty = view !== null && view.allRows.length === 0;"),
+  );
 });
 
 test("11. loading and error states are fixed strings that expose no raw error", () => {
@@ -660,8 +869,8 @@ test("12. unpublished data cannot be displayed by this UI", () => {
   assert.deepEqual(specifiers.filter((value) => value.startsWith("@/lib/actions/")), [
     "@/lib/actions/trainee-exam-schedule",
   ]);
-  const calls = SECTION_CODE.match(/getTraineeExamDaySchedule\([^)]*\)/g) ?? [];
-  assert.deepEqual(calls, ["getTraineeExamDaySchedule(selectedDate)"]);
+  const calls = SECTION_CODE.match(/getTraineeExamSchedule\([^)]*\)/g) ?? [];
+  assert.deepEqual(calls, ["getTraineeExamSchedule()"]);
 
   // ...and the UI names no publication concept at all, so it can neither ask for
   // a draft nor label one.
@@ -745,31 +954,80 @@ test("14. no internal id and no raw contract object is rendered", () => {
     "equipmentNotes",
     "email",
     "phone",
-    "beginner",
     "children",
     "narrowingIssues",
     "diagnostics",
   ]) {
     assert.equal(SECTION_CODE.includes(token), false, `the UI reaches ${token}`);
   }
-  // `sessionId` is a React list key, which never reaches the DOM. Those are its
-  // ONLY appearances in the file, so it cannot be in a rendered position: an
-  // added use fails this count.
+  // EX-BEGINNER-EXAM-UI RE-POINT — the bare token `beginner` LEAVES the sweep,
+  // and nothing else does.
   //
-  // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — the count was ONE, when both trainee
-  // views shared a single row loop. The compact personal view is its own loop,
-  // so it needs its own list key; both are the SAME approved, non-rendering use.
-  assert.ok(SECTION_CODE.includes("key={row.sessionId}"), "the approved list key is missing");
-  assert.equal(
-    (SECTION_CODE.match(/key=\{row\.sessionId\}/g) ?? []).length,
-    2,
-    "the list key is not the only use of a session id",
+  // It was on the list because this screen had no reason to name the sibling
+  // beginner detail, and that turned out to be exactly the defect: live beginner
+  // rows arrived with their detail attached and the screen rendered none of it,
+  // so a trainee saw an empty card where a Teaching-Practice lesson should have
+  // been. Satisfying the old claim now means keeping that defect.
+  //
+  // The claim is REPLACED by an EXACT approved-use list, which is stronger than
+  // the ban it replaces: the detail is read TWICE — once per view — is handed
+  // WHOLE to the shared beginner renderer both times, and is never indexed into
+  // here. Every child, parent and contact field therefore stays out of this
+  // file, which is why `parentName`, `parentPhone`, `childNotes`,
+  // `equipmentNotes`, `childAssignmentId` and `children` all stay swept above.
+  // They are rendered only inside `lib/components/ExamBeginnerRows.tsx`, whose
+  // own render suite pins exactly what it shows — including that the committed
+  // trainee visibility decision on child and parent contact is preserved.
+  assert.ok(
+    SECTION_CODE.includes("<ExamBeginnerRows detail={row.beginner} />"),
+    "the trainee screen does not render the live beginner detail",
+  );
+  assert.ok(
+    SECTION_CODE.includes('from "@/lib/components/ExamBeginnerRows"'),
+    "the beginner detail is not the shared renderer",
   );
   assert.equal(
-    (SECTION_CODE.match(/sessionId/g) ?? []).length,
+    (SECTION_CODE.match(/row\.beginner/g) ?? []).length,
     2,
-    "a session id is used outside the two approved, non-rendering places",
+    "the beginner detail is read beyond the two approved hand-offs",
   );
+  assert.equal(
+    (SECTION_CODE.match(/<ExamBeginnerRows/g) ?? []).length,
+    2,
+    "a view stopped rendering beginner rows, or a third renderer was added",
+  );
+  // THE OPERATIONAL OPT-IN IS NEVER SET HERE. Lesson notes and lesson
+  // publication state are not on the trainee contract, and this screen must not
+  // ask for them even if they one day were.
+  assert.equal(
+    SECTION_CODE.includes("showOperationalDetail"),
+    false,
+    "the trainee screen asks for the operational beginner detail",
+  );
+  for (const token of [
+    "row.beginner.",
+    "row.beginner?",
+    "beginner.children",
+    "beginner.participantNames",
+    "beginnerFormat",
+    "beginnerChildCount",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen reaches into ${token}`);
+  }
+  // EX-TRAINEE-ID-CONTAINMENT RE-POINT — the list key is `row.rowKey`, not
+  // `row.sessionId`. The trainee contract no longer carries a session id at
+  // all: it was a database primary key (or, for a live beginner row, the
+  // synthetic `tp:<lessonId>` carrying ANOTHER primary key inside it), and the
+  // ONLY use it ever had here was as this very list key. `rowKey` is the
+  // POSITIONAL replacement — it addresses a position in a list the client
+  // already holds and carries no database identity.
+  assert.ok(SECTION_CODE.includes("key={row.rowKey}"), "the approved list key is missing");
+  assert.equal(
+    (SECTION_CODE.match(/key=\{row\.rowKey\}/g) ?? []).length,
+    2,
+    "the list key is not the only use of the row key",
+  );
+  assert.equal(SECTION_CODE.includes("sessionId"), false, "a session id is used in the screen");
   // The UI queries nothing itself.
   for (const token of [PRISMA_MODULE, GENERATED_CLIENT, "prisma."]) {
     assert.equal(SECTION_CODE.includes(token), false, `the UI reaches ${token}`);
@@ -798,7 +1056,13 @@ test("14b. the approved trainee display fields are the ones rendered", () => {
   }
   // Both trainee views are served from the SAME fetched contract...
   assert.ok(SECTION_CODE.includes("view.myRows") && SECTION_CODE.includes("view.allRows"));
-  assert.ok(SECTION.includes('const ALL_MODE_LABEL = "לו״ז כולם";'));
+  // EX-TRAINEE-DATE-NAV RE-POINT — `ALL_MODE_LABEL` / "לו״ז כולם". The general
+  // schedule is GONE from the trainee screen: the approved product rule gives a
+  // trainee exactly two views, "לפי תאריך" and "לו״ז שלי", so asserting the
+  // presence of a third label would pin the opposite of the approved work. The
+  // claim is REPLACED by the EXACT two-label membership, and by the strictly
+  // stronger absence check in test 14i below.
+  assert.ok(SECTION.includes('const DATE_MODE_LABEL = "לפי תאריך";'));
   assert.ok(SECTION.includes('const SELF_MODE_LABEL = "לו״ז שלי";'));
   // ...and no field the trainee contract does not carry is stubbed out. This
   // list was RE-POINTED by EX-ROLE-OP-UI-MVP: the contract now carries the horse,
@@ -920,8 +1184,11 @@ test('14e. "לו״ז שלי" is COMPACT: only the viewer\'s rows, and only their
   // and no full block schedule inside the personal card. Both live in the
   // "לו״ז כולם" branch, which is the only place `<ExamAssignmentRows>` and the
   // `PeopleLine` summary appear.
+  // EX-TRAINEE-DATE-NAV RE-POINT — the everyone view's mode token is now
+  // `"date"`, because that IS the view: one date at a time, and no general
+  // schedule to fall back to. The locator is otherwise unchanged.
   const personalStart = SECTION_CODE.indexOf('mode === "self" &&');
-  const personalEnd = SECTION_CODE.search(/mode === "all" &&\s+groups\.map\(/);
+  const personalEnd = SECTION_CODE.search(/mode === "date" &&\s+groups\.map\(/);
   assert.ok(personalStart >= 0 && personalEnd > personalStart, "the two view branches could not be located");
   const personal = SECTION_CODE.slice(personalStart, personalEnd);
   for (const token of ["<ExamAssignmentRows", "<PeopleLine", "examineeNames", "instructedTraineeNames"]) {
@@ -1024,43 +1291,82 @@ test('14f. "לו״ז שלי" finds the viewer through the SERVER-DERIVED assignm
   );
 });
 
-test('14g. "לו״ז כולם" navigates the loaded day, and never re-reads it', () => {
-  // The three options — everything, by exam type, by date — are the SHARED
-  // navigation bar over rows already in hand.
-  assert.ok(SECTION.includes('const ALL_FILTER_LABEL = "הכל";'));
+test('14g. "לפי תאריך" navigates the loaded day, and never re-reads it', () => {
+  // EX-TRAINEE-DATE-NAV RE-POINT — the three connected views, "הכל", and the
+  // shared `ExamScheduleNav`.
+  //
+  // Those claims described the trainee screen while it offered a general
+  // schedule, a by-exam-type schedule and a by-date schedule. The approved
+  // product rule gives a trainee exactly TWO views — "לפי תאריך" and
+  // "לו״ז שלי" — so a claim that a general option and an exam-type option are
+  // rendered here is one the approved work contradicts, and satisfying it would
+  // mean putting both back.
+  //
+  // The claim is REPLACED by the same property about the control that took their
+  // place: the date sub-tabs are the SHARED, separately tested `ExamDateTabs`
+  // over rows already in hand, they are scoped to the same one view, and — the
+  // part that actually mattered — navigating still issues NO request, which is
+  // re-checked in full below. The instructor screen keeps `ExamScheduleNav`
+  // unchanged; test 15 pins that this slice did not fork it.
   assert.ok(
-    SECTION_CODE.includes('from "@/lib/components/ExamScheduleNav"'),
-    "the screen does not mount the shared navigation bar",
+    SECTION_CODE.includes('from "@/lib/components/ExamDateTabs"'),
+    "the screen does not mount the shared date sub-tabs",
   );
   assert.equal(
-    (SECTION_CODE.match(/<ExamScheduleNav\s/g) ?? []).length,
+    (SECTION_CODE.match(/<ExamDateTabs\s/g) ?? []).length,
     1,
-    "a second navigation bar was added",
+    "a second navigation control was added",
   );
-  // The bar appears in "לו״ז כולם" ONLY: the personal view is already the
+  // The three-view bar is GONE from this screen entirely — not merely unused.
+  assert.equal(
+    SECTION_CODE.includes("ExamScheduleNav"),
+    false,
+    "the trainee screen still mounts the general/by-type navigation bar",
+  );
+  // The sub-tabs appear in "לפי תאריך" ONLY: the personal view is already the
   // shortest list on the screen.
   assert.ok(
-    SECTION_CODE.includes('mode === "all" && !dayIsEmpty && ('),
-    "the navigation bar is not scoped to the everyone view",
+    SECTION_CODE.includes('mode === "date" && !scheduleIsEmpty && ('),
+    "the date sub-tabs are not scoped to the date view",
   );
 
-  // The option lists and the narrowing come from the PURE view core, so this
+  // The option list and the narrowing come from the PURE view core, so this
   // screen holds no filtering rule of its own to disagree with the instructor
-  // screen's.
+  // screen's. The exam-type option list is no longer derived at all — there is
+  // no view left that could show it.
   assert.ok(SECTION_CODE.includes('from "@/lib/components/exam-schedule-view-core"'));
-  for (const call of ["listExamDefinitionNames(allRows)", "listExamDates(allRows)"]) {
-    assert.ok(SECTION_CODE.includes(call), `the options are not derived from the loaded day: ${call}`);
-  }
+  assert.ok(
+    SECTION_CODE.includes("listExamDates(allRows)"),
+    "the dates are not derived from the loaded day",
+  );
+  assert.equal(
+    SECTION_CODE.includes("listExamDefinitionNames"),
+    false,
+    "the screen still derives an exam-type option list",
+  );
   assert.ok(SECTION_CODE.includes("filterExamRows(allRows, {"), "the views are not one narrowing");
 
   // NAVIGATING ISSUES NO REQUEST. There is exactly one server call, it takes the
   // DATE and nothing else, and the load is keyed by that date alone — so no view
   // selection can re-read, widen or reach past the reader.
-  const calls = SECTION_CODE.match(/getTraineeExamDaySchedule\([^)]*\)/g) ?? [];
-  assert.deepEqual(calls, ["getTraineeExamDaySchedule(selectedDate)"]);
+  const calls = SECTION_CODE.match(/getTraineeExamSchedule\([^)]*\)/g) ?? [];
+  assert.deepEqual(calls, ["getTraineeExamSchedule()"]);
   assert.equal((SECTION_CODE.match(/useEffect\(/g) ?? []).length, 1);
-  assert.ok(SECTION_CODE.includes("}, [selectedDate]);"), "the load is no longer keyed by the date");
-  for (const token of ["navMode]", "navDate]", "navDefinitionName]", "mode]"]) {
+  // EX-TRAINEE-MULTIDAY-READ RE-POINT — the effect was keyed by the DATE, which
+  // is what made every date change a fresh request and left the sub-tabs holding
+  // exactly one date. The dependency list is now EMPTY, which is the strongest
+  // possible form of "navigating issues no request": there is no value left that
+  // could re-enter the effect at all.
+  assert.ok(
+    SECTION_CODE.includes("}, []);"),
+    "the schedule is not loaded exactly once, on mount",
+  );
+  assert.equal(
+    SECTION_CODE.includes("}, [selectedDate]);"),
+    false,
+    "the screen still re-reads the server per date",
+  );
+  for (const token of ["navMode]", "navDate]", "navDefinitionName]", "mode]", "activeDate]"]) {
     assert.equal(SECTION_CODE.includes(token), false, `the load now depends on ${token}`);
   }
   // ...and the narrowing runs over the contract as it ARRIVED.
@@ -1134,6 +1440,242 @@ test('14d. "לו״ז שלי" still identifies "mine" by the server-computed mark
 });
 
 // ===========================================================================
+// 14i–14m. EX-TRAINEE-DATE-NAV — exactly two views, and a date-only schedule
+// ===========================================================================
+
+test("14i. a trainee is offered EXACTLY TWO top-level views, and no other", () => {
+  // The two approved labels, and exactly one button each.
+  assert.ok(SECTION.includes('const DATE_MODE_LABEL = "לפי תאריך";'));
+  assert.ok(SECTION.includes('const SELF_MODE_LABEL = "לו״ז שלי";'));
+  assert.equal((SECTION_CODE.match(/\{DATE_MODE_LABEL\}/g) ?? []).length, 1);
+  assert.equal((SECTION_CODE.match(/\{SELF_MODE_LABEL\}/g) ?? []).length, 1);
+  // The mode union has exactly two members, so a third view is not
+  // representable, and every render branch is one of the two.
+  assert.ok(SECTION_CODE.includes('type DayMode = "date" | "self";'));
+  const modes = [...SECTION_CODE.matchAll(/mode === "(\w+)"/g)].map(([, name]) => name);
+  assert.deepEqual([...new Set(modes)].sort(), ["date", "self"]);
+});
+
+test("14j. the general and by-exam-type views are GONE — no label, no control, no state", () => {
+  // NEITHER LABEL EXISTS IN THE FILE AT ALL. Asserted on the RAW source rather
+  // than the stripped code, which is deliberately stricter than this suite's
+  // usual convention: a commented-out label is one keystroke from being a
+  // rendered one, and there is no legitimate reason for this screen to hold the
+  // text of a view it does not have.
+  for (const label of ["לו״ז כללי", "לפי סוג מבחן", "לו״ז כולם"]) {
+    assert.equal(SECTION.includes(label), false, `the trainee screen still holds ${label}`);
+  }
+  // ...and "הכל", the old general option inside the everyone view, is gone with
+  // the view it belonged to.
+  assert.equal(
+    SECTION_CODE.includes("ALL_FILTER_LABEL"),
+    false,
+    "the general filter option survived",
+  );
+  // No exam-type axis remains anywhere: no state, no option list, no filter.
+  for (const token of [
+    "navDefinitionName",
+    "listExamDefinitionNames",
+    "definitionNames",
+    "ExamScheduleNavMode",
+    "navMode",
+    'definitionName: nav',
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the exam-type axis survives as ${token}`);
+  }
+  // The one place a definition name still appears is the row's own TITLE, which
+  // is what an exam is called — not an axis to navigate by.
+  assert.equal((SECTION_CODE.match(/row\.definitionName/g) ?? []).length, 2);
+  // The narrowing states the exam-type axis as UNCONDITIONALLY unconstrained, so
+  // no selection can reintroduce it.
+  assert.ok(
+    SECTION_CODE.includes("definitionName: null,"),
+    "the exam-type axis is not hard-wired to unconstrained",
+  );
+});
+
+test("14k. the date sub-tabs default SAFELY to the earliest available date", () => {
+  // The default comes from the PURE core, which is where it is tested against
+  // month and year boundaries, blank tokens and an empty list.
+  assert.ok(
+    SECTION_CODE.includes("earliestExamDate(dates)"),
+    "the default is not the earliest available date",
+  );
+  // An explicit selection is honoured ONLY while the contract still carries it;
+  // anything else falls back to that earliest date. There is no "all dates"
+  // state to fall into.
+  assert.ok(
+    SECTION_CODE.includes(
+      "navDate !== null && dates.includes(navDate) ? navDate : earliestExamDate(dates)",
+    ),
+    "a stale or absent selection does not fall back to the earliest date",
+  );
+  // EX-TRAINEE-MULTIDAY-READ RE-POINT — the "a new day drops the selection"
+  // reset. There is no day to change any more: the schedule is loaded once and
+  // the contract does not move underneath the selection. The reset is therefore
+  // gone, and the stale-selection case it guarded is handled by the fallback
+  // above, which is checked on every render rather than only on a day change.
+  assert.equal(
+    SECTION_CODE.includes("setNavDate(null)"),
+    false,
+    "a selection reset survives, though there is no longer a day change to reset on",
+  );
+  // The setter is named exactly twice — where it is declared, and where it is
+  // handed to the sub-tabs — so the ONLY thing that can ever move the selection
+  // is a reader tapping a date.
+  assert.equal((SECTION_CODE.match(/setNavDate/g) ?? []).length, 2);
+  assert.ok(SECTION_CODE.includes("const [navDate, setNavDate] = useState<string | null>(null);"));
+  assert.ok(SECTION_CODE.includes("onSelectDate={setNavDate}"));
+  // The sub-tabs are always given the RESOLVED date, never the raw state, so the
+  // chip that is highlighted is the date that is actually being shown.
+  assert.ok(
+    SECTION_CODE.includes("<ExamDateTabs dates={dates} selectedDate={activeDate}"),
+    "the sub-tabs are not given the resolved selection",
+  );
+});
+
+test("14l. ONE date is shown at a time, ordered by start time", () => {
+  // The narrowing is by the RESOLVED date, so the view holds one date's rows and
+  // never the whole contract.
+  assert.ok(
+    SECTION_CODE.includes("date: activeDate,"),
+    "the view is not narrowed to the selected date",
+  );
+  // ...and those rows are ordered chronologically by the PURE core before they
+  // are grouped, so this screen holds no comparator of its own.
+  assert.ok(
+    SECTION_CODE.includes("groupRowsByDate(sortExamRowsByStartTime(filteredRows))"),
+    "the selected date's rows are not ordered by start time",
+  );
+  assert.equal((SECTION_CODE.match(/sortExamRowsByStartTime\(/g) ?? []).length, 1);
+  for (const token of [".sort(", "localeCompare", "orderIndex", "new Date(", "getTime()"]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen re-implements ordering: ${token}`);
+  }
+});
+
+test("14m. live beginner rows are ROUTED away from the advanced renderer, in BOTH views", () => {
+  // Two routing conditionals — one per view — each on the CONTRACT's own
+  // `source`, so a beginner row cannot reach the wave/examinee renderer or the
+  // personal-detail renderer even by accident.
+  assert.equal(
+    (SECTION_CODE.match(/\{isBeginnerExamRow\(row\) \? \(/g) ?? []).length,
+    2,
+    "a view does not route beginner rows to their own renderer",
+  );
+  // The ORIGIN is the shared pure predicate, never a guess from emptiness.
+  for (const token of ['=== "BEGINNER"', '=== "STORED"', "row.source ===", "row.kind ==="]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen re-implements the origin test: ${token}`);
+  }
+  // NO INVENTED ROLE. The two exam-role labels reach a beginner row through
+  // neither the self-role pill nor the participant summary.
+  assert.equal(
+    (SECTION_CODE.match(/isBeginnerExamRow\(row\) \|\| row\.selfRole === null/g) ?? []).length,
+    2,
+    "a beginner row can still be labelled with an exam role",
+  );
+  assert.ok(
+    SECTION_CODE.includes("{isBeginnerExamRow(row) ? (\n                    <ExamBeginnerRows") ||
+      /isBeginnerExamRow\(row\) \? \(\s*<ExamBeginnerRows/.test(SECTION_CODE),
+    "the beginner branch does not render the beginner detail first",
+  );
+  // The participant summary — the only place this screen prints "נבחנים" — sits
+  // in the STORED branch, so it can never describe a beginner lesson.
+  const storedBranch = SECTION_CODE.slice(SECTION_CODE.lastIndexOf(") : ("));
+  assert.ok(storedBranch.includes("row.assignments.length === 0 && ("), "the summary left the stored branch");
+  assert.equal((SECTION_CODE.match(/נבחנים/g) ?? []).length, 1);
+});
+
+test("14n. the personal view's beginner rows are the SERVER's relevance answer", () => {
+  // `myRows` is `allRows.filter(isSelf)` from the committed trainee core, which
+  // marked the row from the signed session's own student id. A beginner row is
+  // in it for exactly that reason and no other — this screen performs no
+  // matching of any kind, for beginner rows or for stored ones.
+  assert.match(
+    SECTION_CODE.replace(/\s+/g, " "),
+    /mode === "self" && myRows\.map\(\(row\) => \{/,
+    "the personal view is not the server's own row list",
+  );
+  assert.ok(SECTION_CODE.includes("const myRows = view === null ? [] : view.myRows;"));
+  // Nothing beginner-specific narrows or re-derives that list.
+  for (const token of [
+    "myRows.filter",
+    "myRows.find",
+    "myRows.some",
+    "myRows.concat",
+    "participantNames.includes",
+    "children.some",
+    "childName",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen re-derives relevance with ${token}`);
+  }
+  // ...and no viewer identity was introduced to compare with.
+  for (const token of ["viewerStudentId", "selfStudentId", "myName", "viewerName"]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen reaches ${token}`);
+  }
+});
+
+// ===========================================================================
+// 14o–14q. EX-TRAINEE-MULTIDAY-READ — one load, real dates, no picker
+// ===========================================================================
+
+test("14o. the WHOLE schedule is loaded ONCE, and a date change reads nothing", () => {
+  // ONE effect, ONE call, and an EMPTY dependency list — so no view selection,
+  // no date and no state of any kind can re-enter it.
+  assert.equal((SECTION_CODE.match(/useEffect\(/g) ?? []).length, 1);
+  assert.ok(SECTION_CODE.includes("}, []);"), "the load is not a mount-only effect");
+  const calls = SECTION_CODE.match(/getTraineeExamSchedule\([^)]*\)/g) ?? [];
+  assert.deepEqual(calls, ["getTraineeExamSchedule()"], "the schedule is read more than once");
+  // The action itself takes no argument, so a per-date request is not merely
+  // absent — it is unrepresentable through this seam.
+  assert.equal(
+    /getTraineeExamSchedule\(\s*[A-Za-z_$]/.test(SECTION_CODE),
+    false,
+    "a value is sent to the server",
+  );
+  // Nothing loops over dates issuing reads.
+  for (const token of [
+    "dates.map(",
+    "dates.forEach",
+    "Promise.all",
+    "for (const date",
+    "await getTrainee",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen reads per date via ${token}`);
+  }
+});
+
+test("14p. the sub-tabs are the plan's REAL dates, not one fetched day", () => {
+  // Derived from the loaded contract's own rows, so every tab has rows behind it
+  // and a date the publication gates hid is not offered at all.
+  assert.ok(SECTION_CODE.includes("const dates = listExamDates(allRows);"));
+  assert.ok(SECTION_CODE.includes("<ExamDateTabs dates={dates}"));
+  // The date the view shows is the one the tabs say is selected — one value,
+  // used for both, so the highlighted tab cannot disagree with the rows below.
+  assert.ok(SECTION_CODE.includes("selectedDate={activeDate}"));
+  assert.ok(SECTION_CODE.includes("date: activeDate,"));
+});
+
+test("14q. NO native date picker remains anywhere on the screen", () => {
+  for (const token of [
+    "<input",
+    'type="date"',
+    "<label",
+    "selectedDate,",
+    "setSelectedDate",
+    "getLocalDateKey",
+    "trainee-exam-day",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `a native date picker survives as ${token}`);
+  }
+  // The date-picker heading is gone from the rendered text too.
+  assert.equal(
+    />\s*תאריך\s*</.test(SECTION),
+    false,
+    "the date-picker label is still rendered",
+  );
+});
+
+// ===========================================================================
 // 15–17. Containment
 // ===========================================================================
 
@@ -1172,7 +1714,14 @@ test("15. no instructor or admin exam file was modified", () => {
   const instructorSuite = read(INSTRUCTOR_SUITE_REL);
   for (const claim of [
     "assertScopeCoreAuthorizationUnchanged",
-    '"--quiet", "HEAD", "--", READERS_REL',
+    // EX-TRAINEE-MULTIDAY-READ RE-POINT — the instructor suite's readers claim
+    // moved from `git diff --quiet` (byte-identity) to `git diff -U0` plus an
+    // EMPTY removed-line assertion, because the approved multi-day trainee read
+    // ADDS a binding to that shared file. What is pinned here is the same thing
+    // as before — that the instructor suite still HOLDS a readers-module claim
+    // and has not been quietly emptied while being re-pointed — so the token is
+    // updated to the command that claim now uses.
+    '"diff", "-U0", "HEAD", "--", READERS_REL',
     "approvedSlicePaths",
   ]) {
     assert.ok(
@@ -1192,7 +1741,34 @@ test("15. no instructor or admin exam file was modified", () => {
   // more — it is a dead permission that would let an unrelated exam-core edit
   // through. The blanket claim is RESTORED at full strength: no file under that
   // directory may change, and no new file may appear in it.
-  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", "lib/exam"]), []);
+  //
+  // EX-TRAINEE-MULTIDAY-READ RE-POINT, narrowly. The approved multi-day trainee
+  // read adds ONE reader to the pure scope core, so that ONE file — and its own
+  // suite — are named EXACTLY here, never a directory and never a glob. NO NEW
+  // FILE may appear under `lib/exam` at all: the claim below is unchanged on
+  // that axis, so a new core, a new adapter or a new DTO still fails. What that
+  // one file may contain is pinned far more tightly by
+  // `assertScopeCoreAuthorizationUnchanged` above, which proves no committed
+  // authorization line was removed or rewritten and that the added reader
+  // authorizes exactly as the day reader does.
+  const APPROVED_EXAM_CORE_PATHS = [
+    // The ONE production file: the pure scope core, which gains one reader.
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    // Its own suite, plus the two committed read-pipeline guard suites whose
+    // exported-reader lists this addition necessarily re-points. All three are
+    // TEST files — no production behaviour is behind any of them.
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read-" + "dto.test.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+  ];
+  const changedExamCores = gitLines(["diff", "--name-only", "HEAD", "--", "lib/exam"]).map((path) =>
+    path.split("\\").join("/"),
+  );
+  assert.deepEqual(
+    changedExamCores.filter((path) => !APPROVED_EXAM_CORE_PATHS.includes(path)),
+    [],
+    "an unapproved lib/exam file was modified",
+  );
   assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", "lib/exam"]), []);
 });
 
@@ -1218,19 +1794,42 @@ test("16. no write, publish, supervisor or pairing control was added", () => {
   ]) {
     assert.equal(SECTION_CODE.includes(token), false, `the UI adds a ${token} control`);
   }
-  // The ONE input on the screen is the day picker: a native date field, with no
-  // name attribute and no form around it, so it submits nothing anywhere.
-  assert.equal((SECTION_CODE.match(/<input/g) ?? []).length, 1, "a second input exists");
-  assert.ok(SECTION_CODE.includes('type="date"'), "the day picker is not a native date field");
-  assert.equal(SECTION_CODE.includes("name="), false, "the input is form-wired");
+  // EX-TRAINEE-MULTIDAY-READ RE-POINT — the native day picker is GONE.
+  //
+  // This asserted that the screen held EXACTLY ONE input and that it was a
+  // `type="date"` field. That picker existed only because the reader could serve
+  // one day at a time; keeping it would leave a second, competing date selector
+  // beside the sub-tabs — the very thing the approved product rule removes.
+  //
+  // The claim is REPLACED by the stronger one: the screen holds NO input at all,
+  // so there is nothing on it that can be typed into, submitted or form-wired,
+  // and the date sub-tabs are the only date selector that exists.
+  assert.equal((SECTION_CODE.match(/<input/g) ?? []).length, 0, "an input control exists");
+  assert.equal(SECTION_CODE.includes('type="date"'), false, "a native date picker survives");
+  assert.equal(SECTION_CODE.includes("<label"), false, "a form label survives");
+  assert.equal(SECTION_CODE.includes("name="), false, "a control is form-wired");
+  // ...and no local date state feeds a request any more.
+  for (const token of ["setSelectedDate", "getLocalDateKey", "onChange="]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the day picker survives as ${token}`);
+  }
   // The two buttons are the view switch and nothing else: both are type="button"
-  // and both only set local state.
+  // and both only set local state. The DATE sub-tabs are buttons too, and they
+  // live in their own separately tested component precisely so this count keeps
+  // measuring what it was written to measure.
   assert.equal((SECTION_CODE.match(/<button/g) ?? []).length, 2, "an unexpected button exists");
   assert.equal((SECTION_CODE.match(/type="button"/g) ?? []).length, 2);
-  assert.deepEqual(SECTION_CODE.match(/onClick=\{\(\) => setMode\("(all|self)"\)\}/g), [
-    'onClick={() => setMode("all")}',
+  // EX-TRAINEE-DATE-NAV RE-POINT — the everyone view's mode token is `"date"`.
+  // The shape is unchanged and still EXACT: two buttons, each setting one of two
+  // modes and doing nothing else.
+  assert.deepEqual(SECTION_CODE.match(/onClick=\{\(\) => setMode\("(date|self)"\)\}/g), [
+    'onClick={() => setMode("date")}',
     'onClick={() => setMode("self")}',
   ]);
+  // ...and no third mode is even representable.
+  assert.ok(
+    SECTION_CODE.includes('type DayMode = "date" | "self";'),
+    "the trainee screen has more or fewer than two top-level views",
+  );
   // And there is no second course picker: this screen has no course to pick.
   for (const token of ["TraineeCourseSelector", "listTraineeCourseOptions", "CourseSelector"]) {
     assert.equal(SECTION_CODE.includes(token), false, `the section opens its own course menu`);
@@ -1279,6 +1878,26 @@ test("17. the working tree holds only the approved paths of this slice and the o
     PERSONAL_DETAIL_SUITE_REL,
     NAV_REL,
     NAV_SUITE_REL,
+    // EX-TRAINEE-DATE-NAV + EX-BEGINNER-EXAM-UI, on the same terms: an EXACT
+    // path list, never a directory and never a glob. Four `lib/components`
+    // leaves — the trainee-only date sub-tabs that replaced the three-view bar,
+    // the shared compact beginner presentation that makes live
+    // Teaching-Practice rows visible on BOTH screens, and the render suite
+    // beside each. The slice adds no route, no action, no reader and no
+    // `lib/exam` file, and test 15 above independently pins that last part.
+    DATE_TABS_REL,
+    DATE_TABS_SUITE_REL,
+    BEGINNER_ROWS_REL,
+    BEGINNER_ROWS_SUITE_REL,
+    // EX-TRAINEE-MULTIDAY-READ, on the same terms: an EXACT path list. The
+    // approved smallest multi-day trainee read touches THREE production files
+    // beyond the section — the pure scope core (one added reader), the readers
+    // binding (one added binding) and this module's own action — plus the scope
+    // core's suite. Test 15 above independently pins that `lib/exam` gained no
+    // NEW file and lost no authorization line.
+    SCOPE_REL,
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    READERS_REL,
     // The nine `lib/exam` paths of the merged operational-READ slice are GONE
     // from this list for the reason given in test 15 above: they are dead
     // permissions now, and dropping them restores the sweep to full strength.
