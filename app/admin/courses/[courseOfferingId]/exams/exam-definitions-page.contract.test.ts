@@ -306,7 +306,6 @@ const PRISMA_MODULE = ["@/lib", "prisma"].join("/");
 const GENERATED_CLIENT = ["@prisma", "client"].join("/");
 const TP_ACTIONS_MODULE = ["lib/actions", "teaching-practice"].join("/");
 const LOADER_SYMBOL = "load" + "ExamPlan";
-const ADMIN_PLAN_READER = "read" + "AdminExamPlan";
 const ROLE_READERS_MODULE = "exam-role" + "-readers";
 const READ_IO_MODULE = "exam-read" + "-io";
 const READ_SCOPE_MODULE = "exam-read-scope" + "-core";
@@ -653,7 +652,7 @@ test("9. the page is a server component and declares force-dynamic", () => {
   assert.ok(PAGE.includes('export const dynamic = "force-dynamic"'));
 });
 
-test("10. the page imports EXACTLY the twenty-seven approved specifiers", () => {
+test("10. the page imports EXACTLY the twenty-six approved specifiers", () => {
   // RE-POINTED by EX-SES-UI-1, which adds FOUR: two more route-local files (the
   // session create form and its message table) and two committed `lib/` modules —
   // the admin session READ binding and the PURE day-grouping core.
@@ -709,8 +708,6 @@ test("10. the page imports EXACTLY the twenty-seven approved specifiers", () => 
     // BLOCKER-1 — the CANONICAL timetable read. ASSEMBLED, so this suite does not
     // enrol itself as a caller of the module it names.
     "@/lib/actions/" + "exam-role" + "-readers",
-    // The beginner rows' own DTO type. ASSEMBLED, for the reason above.
-    "@/lib/exam/" + "exam-rea" + "d-dto",
     "@/lib/course/admin-course-context",
     "@/lib/course/operation-policy-core",
     "@/lib/exam/admin-exam-session-grouping-core",
@@ -757,7 +754,8 @@ test("11. no database client and no other exam read pipeline is reachable", () =
   assert.ok(PAGE.includes(ROLE_READERS_MODULE), "the canonical read is not wired");
   assert.ok(PAGE.includes("read" + "AdminExamWaveView" + "("));
   for (const forbidden of [
-    "read" + "AdminExamPlan(",
+    // NOT banned by the approved beginner projection: the committed ADMIN READING
+    // is exactly how this page obtains the read-only beginner rows.
     "read" + "InstructorExamPlan(",
     "read" + "TraineeExamDay(",
   ]) {

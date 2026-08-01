@@ -295,7 +295,6 @@ import {
 } from "@/lib/actions/exam-assignment-read-io";
 import { groupAdminExamSessionsByDay } from "@/lib/exam/admin-exam-session-grouping-core";
 import { readAdminExamPlan, readAdminExamWaveView } from "@/lib/actions/exam-role-readers";
-import type { AdminExamReadDto } from "@/lib/exam/exam-read-dto";
 import type { AdminExamWaveView } from "@/lib/exam/admin-exam-wave-view-core";
 import {
   createExamPlanAction,
@@ -1228,7 +1227,11 @@ export default async function CourseExamsPage({
   //     Teaching-Practice reads to Level 1 in the loader, so a Level-2 offering
   //     receives none and this page adds no second level test of its own. No
   //     second query, no Teaching-Practice import and no writer is reached.
-  let planView: AdminExamReadDto;
+  // Typed FROM THE READER rather than from the narrowing module: the committed
+  // contract allows exactly one production module to name the read DTO, so that
+  // narrowing stays in one place. Naming the reader's own return type asks for
+  // precisely the rows this page is allowed to receive, and reaches nothing else.
+  let planView: Awaited<ReturnType<typeof readAdminExamPlan>>;
   try {
     planView = await readAdminExamPlan(context.id);
   } catch (error) {

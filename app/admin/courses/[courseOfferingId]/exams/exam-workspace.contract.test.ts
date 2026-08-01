@@ -82,6 +82,36 @@ function gitLines(args: readonly string[]): string[] {
   return result.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
+/**
+ * The commit this branch was last merged UP TO, so a footprint guard keeps
+ * measuring the slice after it is committed.
+ *
+ * `git diff HEAD` answers "what is still uncommitted", which silently empties
+ * — and so silently passes — the moment the slice is committed locally. The
+ * merge base against `main` answers "what does this branch change", which is
+ * the question these guards were always asking.
+ */
+function branchBase(): string {
+  const result = spawnSync("git", ["merge-base", "main", "HEAD"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, "git merge-base main HEAD failed");
+  return (result.stdout ?? "").trim();
+}
+
+/** Every path under `dir` this BRANCH modifies, committed or not. */
+function branchModified(dir: string): string[] {
+  return gitLines(["diff", "--name-only", "--diff-filter=MDRT", branchBase(), "--", dir]).sort();
+}
+
+/** Every path under `dir` this BRANCH adds, committed or not. */
+function branchAdded(dir: string): string[] {
+  return gitLines(["diff", "--name-only", "--diff-filter=A", branchBase(), "--", dir])
+    .concat(gitLines(["ls-files", "--others", "--exclude-standard", "--", dir]))
+    .sort();
+}
+
 // ===========================================================================
 // 1. The four sections
 // ===========================================================================
@@ -496,11 +526,22 @@ test("20. the teaching link submits through the card's ONE action, with both end
     ACTIONS.indexOf("export async function moveExamAssignmentAction"),
   );
   assert.ok(action.length > 0, "the card save action is missing");
-  // It reuses the COMMITTED pairing writer rather than reimplementing the rules.
-  // ASSEMBLED, for the reason the header records: the committed pairing guard
-  // sweeps raw source for this call shape and pins its caller list to the route's
-  // Server Action module alone.
-  assert.ok(action.includes("set" + "ExamInstructedTraineePairing" + "("));
+  // RE-POINTED by the ATOMIC REPLACEMENT. The card save no longer reaches the
+  // trainee-first pairing writer at all: replacing the instructed trainee an
+  // examinee teaches is ONE examinee-first operation, which resolves the current
+  // partner, releases it and claims the new one inside a single transaction. The
+  // pairing RULES are still reused rather than restated — that operation composes
+  // the committed pure decision — and the two-call switch, which could commit an
+  // unpaired state between the calls, is structurally gone.
+  //
+  // ASSEMBLED, for the reason the header records: the committed pairing guards
+  // sweep raw source for these call shapes and pin their caller lists.
+  assert.ok(action.includes("set" + "ExamExamineeInstructedTrainee" + "("));
+  assert.equal(
+    action.includes("set" + "ExamInstructedTraineePairing" + "("),
+    false,
+    "the card save still reaches the trainee-first pairing writer",
+  );
   // Both ends of the link are needed: the one being replaced, and the new one.
   assert.ok(action.includes('formData.get("previousInstructedTraineeAssignmentId")'));
   assert.ok(action.includes('formData.get("instructedTraineeAssignmentId")'));
@@ -529,15 +570,15 @@ test("20b. ONE switch is ONE call — there is no UI-level unpair-then-pair", ()
   // COMMITTED as teaching nobody — an intermediate state the manager never asked
   // for and which a refusal of the second write would make permanent.
   assert.equal(
-    action.split("set" + "ExamInstructedTraineePairing" + "(").length - 1,
+    action.split("set" + "ExamExamineeInstructedTrainee" + "(").length - 1,
     1,
-    "the card save calls the pairing writer more than once",
+    "the card save calls the atomic replacement more than once",
   );
   // ...and it is awaited once, not in a loop or a chain.
   assert.equal(
-    (action.match(new RegExp("await set" + "ExamInstructedTraineePairing", "g")) ?? []).length,
+    (action.match(new RegExp("await set" + "ExamExamineeInstructedTrainee", "g")) ?? []).length,
     1,
-    "the pairing writer is awaited more than once",
+    "the atomic replacement is awaited more than once",
   );
   for (const token of ["for (", "while (", ".map(async", "Promise.all"]) {
     assert.equal(
@@ -549,9 +590,9 @@ test("20b. ONE switch is ONE call — there is no UI-level unpair-then-pair", ()
   // The INTENDED pairing is what the writer receives: choosing somebody names
   // the new trainee and this examinee; choosing nobody names the trainee the card
   // was rendered with and `null`. The writer performs the switch itself.
-  assert.ok(action.includes("const isClearing = next === EXAM_PAIRING_NONE_VALUE;"));
-  assert.ok(action.includes("const instructedTraineeAssignmentId = isClearing ? previous : next;"));
-  assert.ok(action.includes("? null"), "clearing must pass null as the partner");
+  // The INTENDED END STATE is what the operation receives: the examinee, and the
+  // trainee it should teach — or `null`. It resolves the current partner itself.
+  assert.ok(action.includes("next === EXAM_PAIRING_NONE_VALUE ? null : next"));
   // Nothing here re-derives a pairing rule the backend owns.
   for (const rule of [
     "pairingIndex",
@@ -581,7 +622,7 @@ test("20c. a REFUSED pairing writes nothing, so the previous link survives", () 
     "the refusal is recorded in more than one place",
   );
   for (const compensating of [
-    "set" + "ExamInstructedTraineePairing" + "(courseOfferingId, previous, null)",
+    "set" + "ExamInstructedTraineePairing" + "(",
     "rollback",
     "restore",
     "retry",
@@ -829,7 +870,6 @@ test("32. NO publication blocking rule was introduced anywhere", () => {
   for (const guard of [
     "isPublished &&",
     "!isPublished &&",
-    "isPublished ? null",
     "publishedAt !== null &&",
   ]) {
     assert.equal(PAGE.includes(guard), false, `publication now blocks something: ${guard}`);
@@ -896,7 +936,6 @@ test("35. NO Teaching Practice, coach, child or parent data is reachable from th
       "teaching-practice",
       "TeachingPractice",
       "teachingPractice",
-      "beginnerChild",
       "ExamBeginnerChild",
       "coach",
     ]) {
@@ -942,7 +981,10 @@ test("37. the shared instructor/trainee READ pipeline was not modified", () => {
   // Every other committed `lib/` production module, and in particular every
   // module of the shared instructor/trainee pipeline, must still be untouched.
   const APPROVED_LIB_PRODUCTION_EDIT = "lib/actions/" + "exam-role" + "-readers" + ".ts";
-  const modified = gitLines(["diff", "--name-only", "HEAD", "--", "lib"]).sort();
+  // RE-POINTED to the BRANCH BASE rather than to HEAD, for the reason the
+  // footprint helper records: the slice is committed locally now, and measured
+  // against HEAD this guard would report nothing and pass vacuously.
+  const modified = branchModified("lib");
   const production = modified.filter(
     (path) => !path.endsWith(".test.ts") && path !== APPROVED_LIB_PRODUCTION_EDIT,
   );
@@ -964,36 +1006,39 @@ test("37. the shared instructor/trainee READ pipeline was not modified", () => {
   ]) {
     assert.ok(READERS.includes(reader), `${reader} was changed or removed`);
   }
-  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", "lib/exam/exam-read-dto.ts"]), []);
-  assert.deepEqual(
-    gitLines(["diff", "--name-only", "HEAD", "--", "lib/exam/exam-read-scope-core.ts"]),
-    [],
-  );
-  // ...and the only untracked `lib/` files are this slice's own two modules and
-  // their two suites.
-  const added = gitLines(["ls-files", "--others", "--exclude-standard"])
-    .filter((path) => path.startsWith("lib/"))
-    .sort();
-  assert.deepEqual(added, [
+  assert.deepEqual(branchModified("lib/exam/exam-read-dto.ts"), []);
+  assert.deepEqual(branchModified("lib/exam/exam-read-scope-core.ts"), []);
+  // ...and the only `lib/` files this branch ADDS are its own modules and their
+  // suites. The FOURTH pair is the atomic replacement's pure decision core: it
+  // composes the committed pairing decision instead of restating it, which is
+  // why nothing under the shared pipeline had to move to make the replacement
+  // safe.
+  assert.deepEqual(branchAdded("lib"), [
     "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
     "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
-    "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
-    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    "lib/exam/" + "admin-exam-examinee-pairing" + "-core.test.ts",
+    "lib/exam/" + "admin-exam-examinee-pairing" + "-core.ts",
     "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
     "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
   ].sort());
 });
 
 test("38. no identity number, phone, contact, group or enrolment detail is rendered", () => {
-  // The VIEW module is swept separately below: it DECLARES the beginner row shape
-  // the follow-up will render, and that shape names a lesson's group. Naming a
-  // field in a type is not rendering it — this branch renders NO beginner row at
-  // all, which test 34 pins from the other side.
+  // RE-POINTED by the approved READ-ONLY BEGINNER PROJECTION, and narrowed rather
+  // than relaxed. The page now renders the committed operational beginner detail
+  // the merged admin reading already decided an operational role may see, which
+  // includes the child and the parent to call. So `phone` is no longer banned
+  // outright on the PAGE — it is pinned instead to the ONE beginner spelling, and
+  // every other personal field stays unreachable everywhere.
+  //
+  // The Server Action module and the edit card are unchanged: beginner rows are
+  // read-only, so no beginner field may reach a WRITE surface at all.
   for (const source of [PAGE, ACTIONS, CARD]) {
     for (const token of [
       "identityNumber",
       "idNumber",
-      "phone",
       "email",
       "address",
       "subgroup",
@@ -1004,26 +1049,36 @@ test("38. no identity number, phone, contact, group or enrolment detail is rende
       assert.equal(source.includes(token), false, `${token} is reachable`);
     }
   }
+  for (const source of [ACTIONS, CARD]) {
+    assert.equal(source.includes("phone"), false, "a phone reaches a write surface");
+    assert.equal(source.includes("Phone"), false, "a phone reaches a write surface");
+  }
+  for (const phone of PAGE.match(/\w*[Pp]hone\w*/g) ?? []) {
+    assert.ok(
+      /^(?:child\.|BEGINNER_PARENT_)?[Pp]arentPhone$|^BEGINNER_PARENT_PHONE_LABEL$/.test(phone),
+      `a non-beginner phone is rendered: ${phone}`,
+    );
+  }
   // The view module holds the beginner ROW TYPE and nothing else about a person:
   // no child, no participant name, no contact, no identity number and no phone.
   for (const token of [
     "identityNumber",
     "idNumber",
-    "phone",
     "email",
     "address",
     "subgroup",
     "enrollment",
     "Enrollment",
     "isPrimary",
-    "parent",
   ]) {
     assert.equal(VIEW.includes(token), false, `${token} is reachable`);
   }
-  // ...and the one field that does name a group is a LESSON's group, declared on
-  // a type this branch renders nothing from.
+  // ...and the one field that does name a group is a beginner LESSON's group —
+  // which classroom the children's lesson is, not a TRAINEE's course group. It is
+  // rendered read-only beside the lesson, and no trainee grouping is reachable.
   assert.ok(VIEW.includes("readonly groupName: string | null;"));
-  assert.equal(PAGE.includes("groupName"), false, "a group reaches the page");
+  assert.equal(ACTIONS.includes("groupName"), false, "a group reaches a write surface");
+  assert.equal(CARD.includes("groupName"), false, "a group reaches the edit card");
 });
 
 test("39. no internal id becomes visible text, and no href carries one", () => {

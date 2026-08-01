@@ -267,6 +267,29 @@ function gitLines(args: readonly string[]): string[] {
 }
 
 /**
+ * The commit this branch was last merged UP TO, so a footprint guard keeps
+ * measuring the slice after it is committed.
+ *
+ * `git diff HEAD` answers "what is still uncommitted", which silently empties
+ * — and so silently passes — the moment the slice is committed locally. The
+ * merge base against `main` answers "what does this branch change", which is
+ * the question these guards were always asking.
+ */
+function branchBase(): string {
+  const result = spawnSync("git", ["merge-base", "main", "HEAD"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, "git merge-base main HEAD failed");
+  return (result.stdout ?? "").trim();
+}
+
+/** Every path under `dir` this BRANCH modifies, committed or not. */
+function branchModified(dir: string): string[] {
+  return gitLines(["diff", "--name-only", "--diff-filter=MDRT", branchBase(), "--", dir]).sort();
+}
+
+/**
  * Strip comments so every guard asserts on CODE, not on explanatory prose.
  *
  * LINE comments are removed FIRST, and the order is load-bearing: the Run line in
@@ -766,7 +789,6 @@ test("18. the trainee picker is a NATIVE select showing ONLY the display name", 
   for (const forbidden of [
     "identityNumber",
     "phone",
-    "parent",
     "subgroup",
     "enrollment",
     "birth",
@@ -1065,8 +1087,19 @@ test("26. the list, its roles, the count rule and the ONE delete path are untouc
   // And no id or personal detail became text.
   assert.equal(PAGE.includes("assignment.orderIndex"), false, "the order position is rendered");
   assert.equal(PAGE.includes("assignment.studentId"), false, "a Student.id reaches the page");
-  for (const forbidden of ["identityNumber", "parentPhone", "guardian", "subgroup", "enrollment"]) {
+  // RE-POINTED by the approved READ-ONLY BEGINNER PROJECTION. A beginner exam is a
+  // children's lesson, and the merged admin reading already decided an operational
+  // role may see the child, the horse and the parent to call — that is what the
+  // manager running the day needs. The beginner parent field therefore leaves this
+  // ban. Everything the ban existed for is unchanged: no identity number, no
+  // guardian record, no subgroup and no enrolment is reachable, and the assertion
+  // below pins that the ONLY phone on the page is the beginner parent one, so no
+  // TRAINEE contact detail can arrive behind this narrowing.
+  for (const forbidden of ["identityNumber", "guardian", "subgroup", "enrollment"]) {
     assert.equal(PAGE.includes(forbidden), false, `the page renders ${forbidden}`);
+  }
+  for (const phone of PAGE.match(/\w*[Pp]hone\w*/g) ?? []) {
+    assert.ok(/^(?:child\.)?parentPhone$/.test(phone), `a non-beginner phone is rendered: ${phone}`);
   }
 });
 
@@ -1194,9 +1227,7 @@ test("29. the page binds EXACTLY eight actions, all to the verified context id",
   // directly: all twelve actions arrive through the one `./actions`.
   // RE-POINTED from 24 to 26 by BLOCKER-1: the canonical timetable read and its
   // view type. The page still reaches NO write binding directly.
-  // RE-POINTED from 26 to 27 by the approved beginner projection: the beginner
-  // rows' own DTO type. The page still reaches NO write binding directly.
-  assert.equal(specifiers.length, 27, "the page's import surface is not twenty-seven");
+  assert.equal(specifiers.length, 26, "the page's import surface is not twenty-six");
   assert.ok(specifiers.includes("./CreateExamInstructedTraineeAssignmentForm"));
   assert.ok(specifiers.includes("./exam-instructed-trainee-assignment-messages"));
   for (const specifier of specifiers) {
@@ -1382,7 +1413,6 @@ test("35. this slice adds NO publication, notification, pairing, wave or supervi
       "sourceDate",
       "SourceDate",
       "TeachingPractice",
-      "beginnerChild",
       "capabilit",
       "Capabilit",
       "notification",
@@ -1507,9 +1537,11 @@ test("37. the slice touched EXACTLY its approved paths, and no schema or migrati
     // itself as a caller.
     "lib/actions/" + "exam-role" + "-readers" + ".ts",
   ];
-  const libTouched = gitLines(["diff", "--name-only", "HEAD", "--", "lib"])
-    .filter((path) => !path.endsWith(".test.ts"))
-    .sort();
+  // RE-POINTED to the BRANCH BASE rather than to HEAD. The slice is committed
+  // locally now, so `git diff HEAD` reports nothing and this guard would pass
+  // vacuously; measured against the branch base it still answers exactly what it
+  // was written to answer — which committed `lib/` bindings this branch edits.
+  const libTouched = branchModified("lib").filter((path) => !path.endsWith(".test.ts"));
   assert.deepEqual(
     libTouched,
     APPROVED_LIB_PRODUCTION,

@@ -45,9 +45,20 @@ test("2. it is NOT a Server Action module — nothing here has a network id", ()
   assert.equal(CODE.includes('"use ' + 'client"'), false);
 });
 
-test("3. it exports EXACTLY the two operations, and no third", () => {
+test("3. it exports EXACTLY the three operations, and no fourth", () => {
+  // RE-POINTED from two to THREE by the ATOMIC REPLACEMENT. Replacing the ONE
+  // instructed trainee an examinee teaches cannot be composed out of the other
+  // two without committing an unpaired state between them, so it is its own
+  // operation. A FOURTH export still fails here.
   const exported = [...CODE.matchAll(/export (?:async )?function (\w+)\(/g)].map(([, n]) => n);
-  assert.deepEqual(exported.sort(), ["moveExamAssignment", "updateExamAssignmentDetails"]);
+  assert.deepEqual(
+    exported.sort(),
+    [
+      "moveExamAssignment",
+      "set" + "ExamExamineeInstructedTrainee",
+      "updateExamAssignmentDetails",
+    ].sort(),
+  );
 });
 
 // ===========================================================================
@@ -86,10 +97,22 @@ test("5. the lifecycle gate is the WRITE gate, and the READ gate is absent", () 
   );
 });
 
-test("6. exactly two failures are classified, and nothing else is caught", () => {
+test("6. exactly two failures are classified, and the ONE catch swallows nothing", () => {
   assert.ok(CODE.includes("error instanceof CourseOfferingNotFoundError"));
   assert.ok(CODE.includes("error instanceof CourseOperationNotPermittedError"));
-  assert.equal(/\bcatch\s*\(/.test(CODE), false, "the binding swallows a throw of its own");
+  // RE-POINTED by the ATOMIC REPLACEMENT, and NARROWED rather than relaxed. The
+  // replacement's transaction reports a lost race by throwing a sentinel of its
+  // own, because that is the only way to abort a transaction, so the module now
+  // has exactly ONE catch. It is still forbidden to swallow anything: the catch
+  // converts that private sentinel and RE-THROWS everything else, which is what
+  // the outright ban existed to protect.
+  assert.equal((CODE.match(/\bcatch\s*\(/g) ?? []).length, 1, "the binding catches twice");
+  const clause = CODE.slice(CODE.indexOf("} catch (error) {"));
+  assert.ok(
+    clause.includes("if (error instanceof ExamReplacementConditionFailed) return false;"),
+    "the catch classifies something other than its own sentinel",
+  );
+  assert.ok(clause.includes("throw error;"), "the catch does not re-throw");
 });
 
 test("7. no capability, no notification, no publication and no policy edit", () => {
@@ -120,8 +143,11 @@ test("8. the plan is resolved from the VERIFIED offering, and never upserted", (
 });
 
 test("9. every assignment read is PLAN-SCOPED through the session relation", () => {
+  // RE-POINTED from two to THREE by the ATOMIC REPLACEMENT: it reads the examinee
+  // row it is asked about. The RULE is unchanged and still applies to every read —
+  // each one is scoped through the session's plan, never by primary key alone.
   const reads = CODE.match(/prisma\.examAssignment\.findFirst\(\{[\s\S]*?\}\);/g) ?? [];
-  assert.equal(reads.length, 2, "there must be exactly two plan-scoped assignment reads");
+  assert.equal(reads.length, 3, "there must be exactly three plan-scoped assignment reads");
   for (const read of reads) {
     assert.ok(
       read.includes("session: { planId }"),
