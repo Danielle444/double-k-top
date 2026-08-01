@@ -1016,6 +1016,12 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
     // a caller of either.
     "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
     "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
     "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
     "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
     "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
@@ -1035,7 +1041,22 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
     "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
     "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
     "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
-];
+    "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+    "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-read-" + "dto.test.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
+  ];
   // RE-POINTED by EX-SES-UI-2 from ONE approved production file to TWO, and AGAIN
   // by EX-ASG-LTD2-B1 to FOUR — the assignment READ pair it must edit to publish
   // two more stored columns. All four are named EXACTLY: a fifth production file
@@ -1069,7 +1090,18 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
     // as a caller of either.
     "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
     "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
-];
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
+  ];
   for (const path of TOLERATED) {
     assert.ok(
       path.endsWith(".test.ts") || TOLERATED_PRODUCTION.includes(path),

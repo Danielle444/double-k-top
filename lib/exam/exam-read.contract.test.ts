@@ -63,6 +63,7 @@ import {
   type ExamPlanLoadOptions,
   type ExamPlanPayload,
 } from "./exam-plan-loader-core";
+import { BEGINNER_SOURCE_COURSE_LEVEL } from "./exam-beginner-course-scope-core";
 import {
   buildTraineeExamArenaLookup,
   emptyAdminExamReadDto,
@@ -77,7 +78,11 @@ import {
   type TraineeExamDayDto,
   type TraineeExamReadDeps,
 } from "./exam-read-scope-core";
-import { findNonPlainJsonPaths } from "./exam-read-dto";
+import {
+  findNonPlainJsonPaths,
+  type ExamAssignmentOperationalRowDto,
+  type TraineeExamAssignmentOperationalRowDto,
+} from "./exam-read-dto";
 import { composeStoredExamBlocks } from "./exam-stored-adapter-core";
 import type {
   StoredExamDefinitionRow,
@@ -651,6 +656,12 @@ interface FixtureOverrides {
   readonly lessons?: readonly TeachingPracticeExamLessonRow[];
   readonly sourceDates?: readonly { readonly date: string }[];
   readonly failSessions?: Error;
+  /**
+   * The DB-verified offering's LEVEL, as each role resolver reports it. Defaults
+   * to the beginner level, so every fixture written before the containment gate
+   * existed keeps reading exactly the Teaching-Practice rows it was written for.
+   */
+  readonly courseLevel?: number;
 }
 
 class InfrastructureError extends Error {}
@@ -737,7 +748,7 @@ function adminDeps(
     requireAdminCourseOffering: async (courseOfferingId) => {
       calls.order.push(`admin-course:${courseOfferingId}`);
       if (over.adminError !== undefined) throw over.adminError;
-      return { id: COURSE_OFFERING_ID };
+      return { id: COURSE_OFFERING_ID, level: over.courseLevel ?? BEGINNER_SOURCE_COURSE_LEVEL };
     },
     loadPlan: loadPlanWith(calls, over),
     fetchStudentDisplayNames: studentNameFetch(calls),
@@ -758,7 +769,7 @@ function instructorDeps(
     resolveInstructorCourseOffering: async (requested) => {
       calls.order.push(`instructor-course:${requested}`);
       if (over.courseError !== undefined) throw over.courseError;
-      return { id: COURSE_OFFERING_ID };
+      return { id: COURSE_OFFERING_ID, level: over.courseLevel ?? BEGINNER_SOURCE_COURSE_LEVEL };
     },
     isCourseContextDenial: (error) => error instanceof CourseDenialError,
     loadPlan: loadPlanWith(calls, over),
@@ -784,7 +795,7 @@ function traineeDeps(
     resolveTraineeCourseOffering: async () => {
       calls.order.push("trainee-course");
       if (over.courseError !== undefined) throw over.courseError;
-      return { id: COURSE_OFFERING_ID };
+      return { id: COURSE_OFFERING_ID, level: over.courseLevel ?? BEGINNER_SOURCE_COURSE_LEVEL };
     },
     isCourseContextDenial: (error) => error instanceof CourseDenialError,
     loadPlan: loadPlanWith(calls, over),
@@ -801,12 +812,14 @@ const OPERATIONAL_OPTIONS: ExamPlanLoadOptions = Object.freeze({
   requirePlanPublication: false,
   requireLessonPublication: false,
   viewerStudentId: null,
+  beginnerSourceEnabled: true,
 });
 
 const TRAINEE_OPTIONS: ExamPlanLoadOptions = Object.freeze({
   requirePlanPublication: true,
   requireLessonPublication: true,
   viewerStudentId: VIEWER,
+  beginnerSourceEnabled: true,
 });
 
 async function readAdmin(over: FixtureOverrides = {}): Promise<AdminExamReadDto> {
@@ -1091,7 +1104,7 @@ test("C1. the admin reads a DRAFT plan, and only the resolver's offering id reac
   assert.deepEqual(calls.planArgs, [COURSE_OFFERING_ID]);
   // The locked admin options: draft plans AND unpublished lessons.
   assert.deepEqual(calls.loadOptions, [
-    { requirePlanPublication: false, requireLessonPublication: false, viewerStudentId: null },
+    { requirePlanPublication: false, requireLessonPublication: false, viewerStudentId: null, beginnerSourceEnabled: true },
   ]);
   assert.equal(dto.viewerRole, "ADMIN");
   assert.equal(dto.isPublished, false);
@@ -1198,7 +1211,7 @@ test("D2. the instructor may read a DRAFT plan under its OWN locked options", as
     instructorDeps(calls, { planPublishedAt: null }),
   );
   assert.deepEqual(calls.loadOptions, [
-    { requirePlanPublication: false, requireLessonPublication: false, viewerStudentId: null },
+    { requirePlanPublication: false, requireLessonPublication: false, viewerStudentId: null, beginnerSourceEnabled: true },
   ]);
   assert.equal(dto.isPublished, false);
   assert.ok(dto.rows.length > 0);
@@ -1288,7 +1301,7 @@ test("E3. the trainee reader receives NO caller-supplied offering id", async () 
   // The resolver takes no argument at all, and its verified id is the only scope.
   assert.deepEqual(calls.loadOfferingIds, [COURSE_OFFERING_ID]);
   assert.deepEqual(calls.loadOptions, [
-    { requirePlanPublication: true, requireLessonPublication: true, viewerStudentId: VIEWER },
+    { requirePlanPublication: true, requireLessonPublication: true, viewerStudentId: VIEWER, beginnerSourceEnabled: true },
   ]);
   // Arity is the contract: a date and the injected deps, and nothing else.
   assert.equal(readTraineeExamDayWithDeps.length, 2);
@@ -1572,6 +1585,9 @@ test("F2. no forbidden CHANNEL exists in the trainee contract", async () => {
     "personalEndTime",
     "pairedParticipantName",
     "pairedParticipantNames",
+    // The ONE trainee-only addition. A BOOLEAN - never an id, never a name
+    // comparison - so marking the viewer's own row opens no identifier channel.
+    "isSelf",
   ]);
 });
 
@@ -2247,6 +2263,7 @@ test("I5. planId comes ONLY from fetchPlan, and every plan-scoped dependency rec
   assert.deepEqual(calls.sourceDateArgs, [PLAN_ID]);
   // ...and the load input has no `planId` field a caller could have supplied.
   assert.deepEqual(Object.keys(calls.loadOptions[0]).sort(), [
+    "beginnerSourceEnabled",
     "requireLessonPublication",
     "requirePlanPublication",
     "viewerStudentId",
@@ -2443,6 +2460,43 @@ const ASSIGNMENT_ROW_KEYS = [
   "pairedParticipantNames",
 ] as const;
 
+/**
+ * The exact field set of one TRAINEE assignment row: the operational contract
+ * above plus EXACTLY ONE key, `isSelf`.
+ *
+ * Spelled as a SPREAD of the shared list rather than as a second literal, so the
+ * two cannot drift: a field added to the operational contract appears here
+ * automatically, and the only difference this suite tolerates between the roles
+ * is the one key named below.
+ *
+ * ADMIN AND INSTRUCTOR ROWS KEEP {@link ASSIGNMENT_ROW_KEYS} UNCHANGED — no
+ * `isSelf` and no other addition — which the cases below assert PER ROLE rather
+ * than assume.
+ */
+const TRAINEE_ASSIGNMENT_ROW_KEYS = [...ASSIGNMENT_ROW_KEYS, "isSelf"] as const;
+
+/**
+ * A trainee assignment row set, reduced to the SHARED operational contract by
+ * dropping the one trainee-only key.
+ *
+ * It exists so "both roles agree, field for field" can still be asserted as the
+ * strong claim it always was. The alternative - comparing only a few fields -
+ * would let a real divergence slip through unnoticed, so instead the ONE known
+ * difference is removed explicitly and everything else is still compared whole.
+ * Each call site separately asserts that the removed key was really there.
+ */
+function withoutIsSelf(
+  rows: readonly TraineeExamAssignmentOperationalRowDto[],
+): ExamAssignmentOperationalRowDto[] {
+  return rows.map((row) => {
+    // Destructured rather than deleted, so the discarded key is named in the
+    // source and the result is a fresh plain object with no leftover descriptor.
+    const { isSelf: _isSelf, ...rest } = row;
+    void _isSelf;
+    return rest as ExamAssignmentOperationalRowDto;
+  });
+}
+
 /** One ad-hoc stored session, so a pairing shape can be stated in one place. */
 function pairingSession(
   id: string,
@@ -2542,10 +2596,30 @@ test("K2. the TRAINEE full-day view carries the SAME complete rows, for every vi
 
   // BOTH roles agree, field for field, on the same session.
   const admin = await readAdmin();
+  const adminAssignments = admin.rows.find((row) => row.sessionId === "sess-riding")
+    ?.assignments;
+  // The ADMIN row set is UNCHANGED by the trainee-only marker...
   assert.deepEqual(
-    admin.rows.find((row) => row.sessionId === "sess-riding")?.assignments,
-    riding.assignments,
+    (adminAssignments ?? []).map((row) => Object.keys(row)),
+    (adminAssignments ?? []).map(() => [...ASSIGNMENT_ROW_KEYS]),
   );
+  // ...the trainee rows carry it, on exactly the viewer's own assignment...
+  assert.deepEqual(
+    riding.assignments.map((row) => Object.keys(row)),
+    riding.assignments.map(() => [...TRAINEE_ASSIGNMENT_ROW_KEYS]),
+  );
+  // EXACTLY the viewer's own assignment - the SECOND row here - and no other,
+  // even though all three sit in the same block at the same hour.
+  assert.deepEqual(
+    riding.assignments.map((row) => [row.participantName, row.isSelf]),
+    [
+      ["נועה לוי", false],
+      ["אורי הצופה", true],
+      ["דנה כהן", false],
+    ],
+  );
+  // ...and with that ONE key removed the two roles still agree FIELD FOR FIELD.
+  assert.deepEqual(adminAssignments, withoutIsSelf(riding.assignments));
   assert.ok(Object.isFrozen(riding.assignments));
   assert.ok(Object.isFrozen(riding.assignments[0]));
 });
@@ -2582,7 +2656,9 @@ test("K3. a PAIRED instructed trainee inherits the examinee topic, discipline an
   assert.deepEqual(first.pairedParticipantNames, []);
 
   // The trainee reading is identical.
-  assert.deepEqual(await traineeAssignments(SESSION_ROWS, "sess-advanced"), rows);
+  // The trainee reading is identical once the trainee-only marker is removed.
+  const traineeRows = await traineeAssignments(SESSION_ROWS, "sess-advanced");
+  assert.deepEqual(withoutIsSelf(traineeRows), rows);
 });
 
 test("K4. ONE examinee plus a null-pairing trainee resolves through the unambiguous fallback", async () => {
@@ -2695,7 +2771,10 @@ test("K6. a DUPLICATED examinee pairingIndex is ambiguous and resolves nothing",
   const bystander = await readTrainee({ sessions, sourceDates: [], studentId: OFFDAY });
   const row = bystander.allRows.find((r) => r.sessionId === "sess-k6");
   assert.ok(row !== undefined && row.isSelf === false);
-  assert.deepEqual(row.assignments, rows);
+  // A bystander marks NOBODY: every assignment of a block they are not in is
+  // false, and the rows otherwise match the operational reading exactly.
+  assert.deepEqual(row.assignments.map((a) => a.isSelf), [false, false, false]);
+  assert.deepEqual(withoutIsSelf(row.assignments), rows);
 });
 
 test("K7. SEVERAL instructed trainees may reference ONE examinee", async () => {
@@ -2766,6 +2845,190 @@ test("K8. an UNRESOLVED block keeps its people and invents NO time for any of th
   assert.equal(unresolved.endTime, "15:00");
 });
 
+// ===========================================================================
+// GROUP SELF — the TRAINEE-ONLY assignment `isSelf` marker
+// ===========================================================================
+//
+// The ROW-level `isSelf` says "the viewer is somewhere in this block". These
+// cases are about the ASSIGNMENT-level marker, which says WHICH row inside it is
+// theirs — the thing a block holding three people at the same minute cannot
+// otherwise express.
+//
+// Every case asserts the two properties together: the right row is marked, and
+// NO IDENTIFIER travelled to the client to achieve it.
+
+test("SELF1. EXACTLY the viewer's own assignment is marked, by authoritative id", async () => {
+  const dto = await readTrainee();
+  const riding = dto.allRows.find((row) => row.sessionId === "sess-riding");
+  assert.ok(riding !== undefined);
+
+  const marked = riding.assignments.filter((row) => row.isSelf);
+  assert.equal(marked.length, 1, "exactly one assignment is the viewer's own");
+  assert.equal(marked[0].participantName, "אורי הצופה");
+  // ...and every other assignment in the SAME block is false.
+  assert.equal(
+    riding.assignments.filter((row) => !row.isSelf).length,
+    riding.assignments.length - 1,
+  );
+});
+
+test("SELF2. a trainee with NO assignment in a visible block marks nothing", async () => {
+  const dto = await readTrainee({ studentId: OFFDAY });
+  const rows = dto.allRows.flatMap((row) => row.assignments);
+  assert.ok(rows.length > 0, "sanity: the bystander still reads the full schedule");
+  assert.deepEqual(
+    rows.filter((row) => row.isSelf),
+    [],
+    "a trainee who is in no block marks nobody",
+  );
+  // The rows themselves are still COMPLETE — the marker hides nothing.
+  for (const row of rows) {
+    assert.deepEqual(Object.keys(row), [...TRAINEE_ASSIGNMENT_ROW_KEYS]);
+  }
+});
+
+test("SELF3. an unresolvable viewer marks nothing rather than everything", async () => {
+  for (const studentId of ["", "   "]) {
+    const dto = await readTrainee({ studentId });
+    const rows = dto.allRows.flatMap((row) => row.assignments);
+    assert.deepEqual(
+      rows.filter((row) => row.isSelf),
+      [],
+      `a blank viewer id must mark nobody, not everybody (${JSON.stringify(studentId)})`,
+    );
+  }
+});
+
+test("SELF4. TWO parallel examinees at the SAME personal minute still resolve correctly", async () => {
+  // The case neither a name nor a time could separate: both ride the same wave,
+  // so `personalStartTime` and `personalEndTime` are identical on both rows.
+  // DEF_INTERFACE has parallelCapacity 2, so both examinees share ONE wave.
+  const sessions = [
+    Object.freeze({
+      ...pairingSession("sess-self4", [
+        assignment({ id: `a-${ASG}-s4a`, studentId: OTHER, role: "EXAMINEE", orderIndex: 0 }),
+        assignment({ id: `a-${ASG}-s4b`, studentId: VIEWER, role: "EXAMINEE", orderIndex: 1 }),
+      ]),
+      definitionId: DEF_INTERFACE,
+    }),
+  ];
+  const rows = await traineeAssignments(sessions, "sess-self4");
+  assert.equal(rows.length, 2);
+  assert.equal(
+    rows[0].personalStartTime,
+    rows[1].personalStartTime,
+    "sanity: both examinees start at the same minute",
+  );
+  assert.equal(
+    rows[0].personalEndTime,
+    rows[1].personalEndTime,
+    "sanity: both examinees end at the same minute",
+  );
+  // Only the id separates them, and the id is what decided.
+  assert.deepEqual(
+    rows.map((row) => row.isSelf),
+    [false, true],
+  );
+});
+
+test("SELF5. an IDENTICAL display name on both rows does not confuse the marker", async () => {
+  // Two DIFFERENT students whose display names resolve to the SAME string. A
+  // name comparison would mark both; an id comparison marks exactly one.
+  const sessions = [
+    pairingSession("sess-self5", [
+      assignment({ id: `a-${ASG}-s5a`, studentId: OTHER, role: "EXAMINEE", orderIndex: 0 }),
+      assignment({ id: `a-${ASG}-s5b`, studentId: VIEWER, role: "EXAMINEE", orderIndex: 1 }),
+    ]),
+  ];
+  const dto = await readTraineeExamDayWithDeps(DATE, {
+    ...traineeDeps(makeCalls(), { sessions, sourceDates: [] }),
+    // Both ids resolve to ONE name, so the rows are indistinguishable by name.
+    fetchStudentDisplayNames: async (ids) =>
+      new Map(ids.map((id) => [id, "אותו שם בדיוק"])),
+  });
+  const row = dto.allRows.find((r) => r.sessionId === "sess-self5");
+  assert.ok(row !== undefined);
+  assert.deepEqual(
+    row.assignments.map((a) => a.participantName),
+    ["אותו שם בדיוק", "אותו שם בדיוק"],
+  );
+  assert.deepEqual(
+    row.assignments.map((a) => a.isSelf),
+    [false, true],
+    "identity is the student id, never the display name",
+  );
+});
+
+test("SELF6. an assignment bound to NO student is never the viewer's", async () => {
+  const sessions = [
+    pairingSession("sess-self6", [
+      assignment({ id: `a-${ASG}-s6a`, studentId: null, role: "EXAMINEE", orderIndex: 0 }),
+      assignment({ id: `a-${ASG}-s6b`, studentId: VIEWER, role: "EXAMINEE", orderIndex: 1 }),
+    ]),
+  ];
+  const rows = await traineeAssignments(sessions, "sess-self6");
+  assert.deepEqual(
+    rows.map((row) => row.isSelf),
+    [false, true],
+  );
+});
+
+test("SELF7. the marker opens NO identifier channel in the serialized trainee DTO", async () => {
+  const dto = await readTrainee();
+  const serialized = JSON.stringify(dto);
+
+  // The viewer's OWN id is what this feature compares against, so it is the one
+  // most likely to leak. It must not appear anywhere in the payload.
+  assert.equal(serialized.includes(VIEWER), false, "the viewer student id reached the client");
+  for (const marker of TRAINEE_FORBIDDEN_MARKERS) {
+    assert.equal(serialized.includes(marker), false, `the trainee DTO carries ${marker}`);
+  }
+  for (const token of [
+    "viewerStudentId",
+    "studentId",
+    "assignmentId",
+    "enrollmentId",
+    "pairingIndex",
+    "pairedStudentIds",
+  ]) {
+    assert.equal(serialized.includes(token), false, `the trainee DTO carries ${token}`);
+  }
+});
+
+test("SELF8. the ADMIN and INSTRUCTOR contracts are untouched by the marker", async () => {
+  const admin = await readAdmin();
+  const instructor = await readInstructorExamPlanWithDeps(
+    COURSE_OFFERING_ID,
+    instructorDeps(makeCalls()),
+  );
+
+  for (const [role, rows] of [
+    ["admin", admin.rows.flatMap((row) => row.assignments)],
+    ["instructor", instructor.rows.flatMap((row) => row.assignments)],
+  ] as const) {
+    assert.ok(rows.length > 0, `sanity: ${role} produced no assignment row`);
+    for (const row of rows) {
+      assert.deepEqual(Object.keys(row), [...ASSIGNMENT_ROW_KEYS], `${role} key set changed`);
+      assert.equal("isSelf" in row, false, `${role} gained isSelf`);
+    }
+  }
+  // Neither operational payload mentions the field anywhere.
+  assert.equal(JSON.stringify(admin).includes("isSelf"), false);
+  assert.equal(JSON.stringify(instructor).includes("isSelf"), false);
+});
+
+test("SELF9. a live BEGINNER row is unaffected: no assignment row, so no marker", async () => {
+  const dto = await readTrainee();
+  const beginner = dto.allRows.filter((row) => row.source === "BEGINNER");
+  assert.ok(beginner.length > 0, "sanity: the fixture has a live beginner row");
+  for (const row of beginner) {
+    assert.deepEqual(row.assignments, [], "a beginner row carries no stored assignment");
+    // Its own ROW-level self state is the committed one and is untouched here.
+    assert.equal(typeof row.isSelf, "boolean");
+    assert.ok(row.beginner !== null, "the beginner detail is still attached");
+  }
+});
+
 test("K9. no pairing index, id or contact field is exposed on an assignment row", async () => {
   const admin = await readAdmin();
   const trainee = await readTrainee();
@@ -2776,7 +3039,12 @@ test("K9. no pairing index, id or contact field is exposed on an assignment row"
   ] as const) {
     assert.ok(rows.length > 0, `sanity: ${name} produced no assignment row`);
     for (const row of rows) {
-      assert.deepEqual(Object.keys(row), [...ASSIGNMENT_ROW_KEYS]);
+      // PER ROLE, deliberately: the admin row set is UNCHANGED by the trainee-only
+      // , and the trainee row set differs by exactly that one key.
+      assert.deepEqual(
+        Object.keys(row),
+        name === "trainee" ? [...TRAINEE_ASSIGNMENT_ROW_KEYS] : [...ASSIGNMENT_ROW_KEYS],
+      );
       for (const forbidden of [
         "pairingIndex",
         "assignmentId",
@@ -2833,12 +3101,12 @@ test("K10. PUBLICATION policy is untouched by the assignment rows", async () => 
   const traineeCalls = makeCalls();
   await readTraineeExamDayWithDeps(DATE, traineeDeps(traineeCalls));
   assert.deepEqual(traineeCalls.loadOptions, [
-    { requirePlanPublication: true, requireLessonPublication: true, viewerStudentId: VIEWER },
+    { requirePlanPublication: true, requireLessonPublication: true, viewerStudentId: VIEWER, beginnerSourceEnabled: true },
   ]);
   const instructorCalls = makeCalls();
   await readInstructorExamPlanWithDeps(COURSE_OFFERING_ID, instructorDeps(instructorCalls));
   assert.deepEqual(instructorCalls.loadOptions, [
-    { requirePlanPublication: false, requireLessonPublication: false, viewerStudentId: null },
+    { requirePlanPublication: false, requireLessonPublication: false, viewerStudentId: null, beginnerSourceEnabled: true },
   ]);
 });
 
@@ -2976,10 +3244,25 @@ test("K15. no schema, migration, writer, publication or notification file was to
     const offenders = touched.filter((path) => path === dir || path.startsWith(`${dir}/`));
     assert.deepEqual(offenders, [], `${dir} was modified: ${offenders.join(", ")}`);
   }
-  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the pattern also matches the GUARD SUITES
-  // of those writers, which that slice re-points, and the route's own publication
-  // contract suite. A suite is not a writer, so `.test.ts` files are excluded and
-  // every real production writer, publication and notification module still fails.
+  // MERGE RESOLUTION — both exclusions are kept, and the production claim is not
+  // weakened. The pattern matches the sibling write-slice GUARD SUITES this slice
+  // re-points, which are named EXACTLY below, and — since EX-ADMIN-WORKSPACE-UX
+  // re-points several more — every remaining `.test.ts` as well. A suite is not a
+  // writer, so a real production writer, publication module or notification
+  // module still fails this guard.
+  const REPOINTED_WRITE_SLICE_SUITES = [
+    "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  ];
+  for (const path of REPOINTED_WRITE_SLICE_SUITES) {
+    assert.match(path, /\.test\.ts$/, `${path} is not a guard suite`);
+  }
   const writeLike = touched
     .filter((path) => !path.endsWith(".test.ts"))
     .filter((path) =>
@@ -3013,6 +3296,39 @@ test("K16. the slice's footprint is exactly its approved read-pipeline paths", (
     // changes a role reading, a shared DTO or the payload's containment.
     "lib/actions/" + "exam-role" + "-readers.ts",
     "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    // EX-BEGINNER-EXAM-READ — the Level-1 beginner containment gate. The pure
+    // predicate is a NEW module; the loader and the three role readers gained the
+    // `beginnerSourceEnabled` option that carries it; the two suites below are
+    // the committed tests of exactly those modules, updated for the new field.
+    "lib/exam/exam-beginner-course-scope-core.ts",
+    "lib/exam/exam-beginner-course-scope-core.test.ts",
+    "lib/exam/exam-beginner-course-scope.contract.test.ts",
+    "lib/exam/exam-plan-loader-core.test.ts",
+    "lib/exam/exam-read-scope-core.test.ts",
+    // The same slice also carries the TRAINEE-ONLY assignment `isSelf`: the
+    // trainee view core surfaces the SERVER-DERIVED viewer id on its INTERNAL
+    // projection, and the narrowing turns it into ONE BOOLEAN per assignment row.
+    // No identifier is added to any client contract, and the admin and instructor
+    // row key sets are unchanged — both asserted above, on serialized output.
+    "lib/exam/exam-trainee-view-core.ts",
+    "lib/exam/exam-trainee-view-core.test.ts",
+    // The sibling slice-footprint guard suites this slice re-points, each named
+    // EXACTLY. They are guard suites only - no production module is listed.
+    "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+    "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   ];
   // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild, which shares this
   // working tree. It touches the route's own files and the exam guard suites, and
@@ -3028,13 +3344,21 @@ test("K16. the slice's footprint is exactly its approved read-pipeline paths", (
     (path) => !approved.includes(path) && !WORKSPACE_SLICE(path),
   );
   assert.deepEqual(offenders, [], `outside the approved scope: ${offenders.join(", ")}`);
-  // No `lib/exam` PRODUCTION file was created by this read-pipeline slice: every
-  // directory-listing guard there measures a file list, and it extends existing
-  // modules rather than adding one. The workspace slice's own two additions are
-  // named exactly, and a third still fails.
-  const created = gitLines(["ls-files", "--others", "--exclude-standard"]).sort();
-  const unexpected = created
-    .filter((path) => !WORKSPACE_SLICE(path))
-    .filter((path) => path !== "lib/exam/" + "admin-exam-wave-view" + "-core.ts");
-  assert.deepEqual(unexpected, [], `an unapproved file was created: ${unexpected.join(", ")}`);
+  // MERGE RESOLUTION — the union of the files the two slices CREATE, named
+  // EXACTLY. The assertion was once "nothing was created at all"; it stays an
+  // exact list rather than being dropped, so an unexpected new file still reddens
+  // this guard.
+  const CREATED = [
+    "lib/exam/exam-beginner-course-scope-core.ts",
+    "lib/exam/exam-beginner-course-scope-core.test.ts",
+    "lib/exam/exam-beginner-course-scope.contract.test.ts",
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+  ];
+  const created = gitLines(["ls-files", "--others", "--exclude-standard"])
+    .map((path) => path.split("\\").join("/"))
+    .sort();
+  const unexpected = created.filter(
+    (path) => !CREATED.includes(path) && !WORKSPACE_SLICE(path),
+  );
+  assert.deepEqual(unexpected, [], `unapproved new file: ${unexpected.join(", ")}`);
 });

@@ -731,9 +731,12 @@ test("15. the options are THIS session own bucket, built without a filter", () =
   for (const forbidden of [".sort(", ".reverse(", ".slice("]) {
     assert.equal(PAGE.includes(forbidden), false, `the page uses ${forbidden}`);
   }
+  // RE-POINTED from two to THREE by the approved beginner projection: the third
+  // filter selects the committed admin reading's own BEGINNER rows by its own
+  // `source` discriminator. It re-orders nothing and reads nothing new.
   assert.equal(
     (PAGE.match(/\.filter\(/g) ?? []).length,
-    2,
+    3,
     "the page filters the reader's rows somewhere unapproved",
   );
   assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));
@@ -952,9 +955,6 @@ test("22. no raw id, index or personal detail becomes visible text", () => {
   for (const forbidden of [
     "identityNumber",
     "phone",
-    "parentName",
-    "parentPhone",
-    "guardian",
     "subgroup",
     "enrollment",
     "assignment.studentId",

@@ -1274,7 +1274,10 @@ test("26. the version stamp travels ONLY as a hidden token, never as text or an 
   // rather than banned, and NEITHER re-orders anything the grouping core decided.
   // One selects the instructed trainees nobody teaches yet; the other partitions
   // the grouping's OWN timeline by its OWN stored day key.
-  assert.equal((PAGE.match(/\.filter\(/g) ?? []).length, 2);
+  // RE-POINTED from two to THREE by the approved beginner projection: the third
+  // filter selects the committed admin reading's own BEGINNER rows by its own
+  // `source` discriminator. It re-orders nothing and reads nothing new.
+  assert.equal((PAGE.match(/\.filter\(/g) ?? []).length, 3);
   assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));
   assert.ok(PAGE.includes("(entry) => entry.dateKey === day.dateKey"));
   // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the reader publishes no end time and the

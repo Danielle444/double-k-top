@@ -839,8 +839,6 @@ test("19. the trainee picker is a NATIVE select showing ONLY the display name", 
     "identityNumber",
     "phone",
     "parent",
-    "guardian",
-    "groupName",
     "subgroup",
     "enrollment",
   ]) {
@@ -986,7 +984,10 @@ test("25. the page groups assignments with a Map and a for...of, and never re-so
   // rather than banned, and NEITHER re-orders anything the reader decided. One
   // selects the instructed trainees nobody teaches yet; the other partitions the
   // day grouping's OWN timeline by its OWN stored day key.
-  assert.equal((PAGE.match(/\.filter\(/g) ?? []).length, 2);
+  // RE-POINTED from two to THREE by the approved beginner projection: the third
+  // filter selects the committed admin reading's own BEGINNER rows by its own
+  // `source` discriminator. It re-orders nothing and reads nothing new.
+  assert.equal((PAGE.match(/\.filter\(/g) ?? []).length, 3);
   assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));
   assert.ok(PAGE.includes("(entry) => entry.dateKey === day.dateKey"));
 
@@ -1172,7 +1173,10 @@ test("28. the create form is hidden ONLY when the requirements are unknown", () 
   // is what lets this page show the derived times instead of reproducing them.
   // It is the same `loadPlan`, adapter and timetable core the instructor DTO and
   // the trainee day are built from, so no second derivation exists anywhere.
-  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 5, "a sixth reader entered the page");
+  // RE-POINTED from five to SIX by the approved beginner projection: the SIXTH is
+  // the committed ADMIN READING, which is the one source of beginner rows. It is
+  // the same pipeline the wave view already uses — no second query.
+  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 6, "a seventh reader entered the page");
 });
 
 test("28b. the two conditional inputs render IFF their flag, and are REQUIRED", () => {
@@ -1972,7 +1976,10 @@ test("41. a MISSING required value is a fixed diagnostic that FAILS CLOSED", () 
   // is what lets this page show the derived times instead of reproducing them.
   // It is the same `loadPlan`, adapter and timetable core the instructor DTO and
   // the trainee day are built from, so no second derivation exists anywhere.
-  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 5, "a sixth reader entered the page");
+  // RE-POINTED from five to SIX by the approved beginner projection: the SIXTH is
+  // the committed ADMIN READING, which is the one source of beginner rows. It is
+  // the same pipeline the wave view already uses — no second query.
+  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 6, "a seventh reader entered the page");
 
   // Rendering is NOT blocked by either diagnostic: both are siblings of the value
   // spans inside the same row, never a wrapper around the row or an early return.

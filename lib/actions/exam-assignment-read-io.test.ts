@@ -762,6 +762,12 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
     // a caller of either.
     "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
     "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
     "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
     "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
     "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
@@ -788,7 +794,22 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
     "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
     "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
     "lib/actions/" + "exam-role" + "-readers.ts",
-].sort();
+    "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+    "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-read-" + "dto.test.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
+  ].sort();
 
   const modified = gitLines([
     "diff",
@@ -837,7 +858,30 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
     // reuses the committed timetable derivation instead of reproducing it. Its own
     // three `lib/` modules are ADDITIONS, which a modifications-only diff does not
     // report. Any OTHER modification still fails here. ASSEMBLED.
-    ["lib/actions/" + "exam-role" + "-readers.ts"].sort(),
+    // MERGE RESOLUTION — the UNION of both slices' approved lib production edits.
+    //
+    // RE-POINTED by EX-BEGINNER-EXAM-READ. The Level-1 beginner containment gate
+    // plus the trainee-only assignment `isSelf` marker MODIFY exactly these four
+    // lib/ production modules: the plan loader gains the containment option, the
+    // role scope core derives it from the DB-verified offering level, the trainee
+    // view core carries the server-derived viewer id on its INTERNAL projection,
+    // and the narrowing turns that id into one boolean per trainee assignment row.
+    // The slice's fifth production file - the pure course-level predicate - is a
+    // NEW file and so never appears in a diff against HEAD.
+    //
+    // Each is named EXACTLY - no directory, no prefix, no glob - so a FIFTH
+    // modified lib/ production module still fails here. None is a writer, a policy
+    // core, an auth module or a session module.
+    [
+      "lib/exam/" + "exam-plan-loader" + "-core.ts",
+      "lib/exam/" + "exam-read-dto" + ".ts",
+      "lib/exam/" + "exam-read-scope" + "-core.ts",
+      "lib/exam/" + "exam-trainee-view" + "-core.ts",
+      // EX-ADMIN-WORKSPACE-UX modifies exactly ONE further lib/ production module:
+      // the role-reader module gains one ADMIN-ONLY export so the admin schedule
+      // reuses the committed timetable derivation instead of reproducing it.
+      "lib/actions/" + "exam-role" + "-readers.ts",
+    ].sort(),
     `an unapproved lib production module was edited: ${libProduction.join(", ")}`,
   );
 

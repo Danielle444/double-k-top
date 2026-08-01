@@ -30,8 +30,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, sep } from "node:path";
 
 import {
-  ADMIN_EXAM_PLAN_LOAD_OPTIONS,
-  INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS,
+  adminExamPlanLoadOptions,
+  instructorExamPlanLoadOptions,
   buildTraineeExamArenaLookup,
   collectExamInstructorDisplayIds,
   collectExamStudentDisplayIds,
@@ -261,7 +261,11 @@ function adminDeps(
   options: {
     readonly verifiedId?: string;
     readonly payload?: ExamPlanPayload;
-    readonly requireAdminCourseOffering?: (id: string) => Promise<{ readonly id: string }>;
+    readonly requireAdminCourseOffering?: (
+      id: string,
+    ) => Promise<{ readonly id: string; readonly level: number }>;
+    /** The DB-verified offering's level. Defaults to the beginner level. */
+    readonly courseLevel?: number;
     readonly studentNames?: ReadonlyMap<string, string>;
     readonly instructorNames?: ReadonlyMap<string, string>;
     readonly onStudentNames?: () => Promise<ReadonlyMap<string, string>>;
@@ -274,7 +278,7 @@ function adminDeps(
         spies.order.push("admin-course");
         spies.adminRequests.push(id);
         spies.courseCalls += 1;
-        return { id: options.verifiedId ?? "offering-verified" };
+        return { id: options.verifiedId ?? "offering-verified", level: options.courseLevel ?? 1 };
       }),
     loadPlan: async (input) => {
       spies.order.push("load");
@@ -303,6 +307,8 @@ function instructorDeps(
     readonly identityError?: unknown;
     readonly courseError?: unknown;
     readonly isDenial?: (error: unknown) => boolean;
+    /** The DB-verified offering's level. Defaults to the beginner level. */
+    readonly courseLevel?: number;
     readonly studentNames?: ReadonlyMap<string, string>;
     readonly instructorNames?: ReadonlyMap<string, string>;
   } = {},
@@ -319,7 +325,7 @@ function instructorDeps(
       spies.instructorRequests.push(requested);
       spies.courseCalls += 1;
       if (options.courseError !== undefined) throw options.courseError;
-      return { id: options.verifiedId ?? "offering-verified" };
+      return { id: options.verifiedId ?? "offering-verified", level: options.courseLevel ?? 1 };
     },
     isCourseContextDenial: options.isDenial ?? ((error) => error instanceof DenialError),
     loadPlan: async (input) => {
@@ -357,6 +363,8 @@ function traineeDeps(
     readonly identityError?: unknown;
     readonly courseError?: unknown;
     readonly isDenial?: (error: unknown) => boolean;
+    /** The DB-verified offering's level. Defaults to the beginner level. */
+    readonly courseLevel?: number;
     readonly studentNames?: ReadonlyMap<string, string>;
     readonly onStudentNames?: () => Promise<ReadonlyMap<string, string>>;
   } = {},
@@ -372,7 +380,7 @@ function traineeDeps(
       spies.order.push("trainee-course");
       spies.courseCalls += 1;
       if (options.courseError !== undefined) throw options.courseError;
-      return { id: options.verifiedId ?? "offering-verified" };
+      return { id: options.verifiedId ?? "offering-verified", level: options.courseLevel ?? 1 };
     },
     isCourseContextDenial: options.isDenial ?? ((error: unknown) => error instanceof DenialError),
     loadPlan: async (input: ExamPlanLoadInput) => {
@@ -463,16 +471,19 @@ test("2. admin loads the VERIFIED offering id, never the requested string", asyn
   assert.equal(spies.loadInputs[0].courseOfferingId, "db-id");
 });
 
-test("3. admin publication options are false / false / null and are module constants", async () => {
+test("3. admin publication options are false / false / null and come from the module producer", async () => {
   const spies = makeSpies();
   await readAdminExamPlanWithDeps("o", adminDeps(spies));
   assert.deepEqual(spies.loadInputs[0].options, {
     requirePlanPublication: false,
     requireLessonPublication: false,
     viewerStudentId: null,
+    // The DB-verified offering is Level 1 in this fixture, so the beginner
+    // source is open. The two publication booleans are unaffected by it.
+    beginnerSourceEnabled: true,
   });
-  assert.equal(spies.loadInputs[0].options, ADMIN_EXAM_PLAN_LOAD_OPTIONS);
-  assert.ok(Object.isFrozen(ADMIN_EXAM_PLAN_LOAD_OPTIONS));
+  assert.deepEqual(spies.loadInputs[0].options, adminExamPlanLoadOptions(1));
+  assert.ok(Object.isFrozen(adminExamPlanLoadOptions(1)));
 });
 
 test("4. admin receives a narrowed DTO, never the internal payload", async () => {
@@ -518,8 +529,9 @@ test("8. instructor publication options are false / false / null", async () => {
     requirePlanPublication: false,
     requireLessonPublication: false,
     viewerStudentId: null,
+    beginnerSourceEnabled: true,
   });
-  assert.equal(spies.loadInputs[0].options, INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS);
+  assert.deepEqual(spies.loadInputs[0].options, instructorExamPlanLoadOptions(1));
 });
 
 test("9. every instructor denial produces the SAME empty DTO", async () => {
@@ -607,8 +619,9 @@ test("14. trainee publication options are true / true / the AUTHENTICATED id", a
     requirePlanPublication: true,
     requireLessonPublication: true,
     viewerStudentId: "stu-session",
+    beginnerSourceEnabled: true,
   });
-  assert.ok(Object.isFrozen(traineeExamPlanLoadOptions("x")));
+  assert.ok(Object.isFrozen(traineeExamPlanLoadOptions("x", 1)));
 });
 
 test("15. an illegible selectedDate returns empty with ZERO dependency calls", async () => {

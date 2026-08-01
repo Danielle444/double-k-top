@@ -65,7 +65,7 @@ export const EXAM_ASSIGNMENT_EDIT_SAVED_TEXT = "כל השינויים בכרטי
  * same whatever the backend's reason was.
  */
 export const EXAM_ASSIGNMENT_EDIT_PAIRING_FAILED_TEXT =
-  "פרטי הנבחן/ת נשמרו, אך שיוך החניך המודרך לא בוצע. השיוך הקודם נותר ללא שינוי. יש לרענן את הדף ולנסות שוב.";
+  "פרטי הנבחן/ת נשמרו, אך החלפת החניך המודרך לא בוצעה. השיוך הקודם נותר ללא שינוי. יש לרענן את הדף ולנסות שוב.";
 export const EXAM_ASSIGNMENT_EDIT_NO_CHANGE_TEXT =
   "לא בוצע שינוי — הפרטים שנשלחו זהים לפרטים השמורים.";
 

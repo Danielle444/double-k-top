@@ -1119,9 +1119,12 @@ test("26. page.tsx WIRES this form to the committed reader, grouping core and ac
   // the grouping's OWN timeline by its OWN stored day key for the by-date
   // arrangement, which is a partition of that order rather than a second opinion
   // about it.
+  // RE-POINTED from two to THREE by the approved beginner projection: the third
+  // filter selects the committed admin reading's own BEGINNER rows by its own
+  // `source` discriminator. It re-orders nothing and reads nothing new.
   assert.equal(
     (PAGE.match(/\.filter\(/g) ?? []).length,
-    2,
+    3,
     "the page filters the schedule somewhere unapproved",
   );
   assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));

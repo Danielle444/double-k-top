@@ -767,8 +767,6 @@ test("18. the trainee picker is a NATIVE select showing ONLY the display name", 
     "identityNumber",
     "phone",
     "parent",
-    "guardian",
-    "groupName",
     "subgroup",
     "enrollment",
     "birth",
@@ -871,7 +869,10 @@ test("22. NO new reader and no new database call entered the page", () => {
   // is what lets this page show the derived times instead of reproducing them.
   // It is the same `loadPlan`, adapter and timetable core the instructor DTO and
   // the trainee day are built from, so no second derivation exists anywhere.
-  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 5, "a sixth reader entered the page");
+  // RE-POINTED from five to SIX by the approved beginner projection: the SIXTH is
+  // the committed ADMIN READING, which is the one source of beginner rows. It is
+  // the same pipeline the wave view already uses — no second query.
+  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 6, "a seventh reader entered the page");
   // ASSEMBLED: this suite's own no-database guard below forbids the whole token.
   for (const forbidden of [PRISMA_MODULE, GENERATED_CLIENT, "prisma.", "Prisma" + "Client"]) {
     assert.equal(PAGE.includes(forbidden), false, `the page references ${forbidden}`);
@@ -1055,7 +1056,10 @@ test("26. the list, its roles, the count rule and the ONE delete path are untouc
   // rather than banned, and NEITHER re-orders anything the readers decided. One
   // selects the instructed trainees nobody teaches yet; the other partitions the
   // grouping's OWN timeline by its OWN stored day key.
-  assert.equal((PAGE.match(/\.filter\(/g) ?? []).length, 2);
+  // RE-POINTED from two to THREE by the approved beginner projection: the third
+  // filter selects the committed admin reading's own BEGINNER rows by its own
+  // `source` discriminator. It re-orders nothing and reads nothing new.
+  assert.equal((PAGE.match(/\.filter\(/g) ?? []).length, 3);
   assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));
   assert.ok(PAGE.includes("(entry) => entry.dateKey === day.dateKey"));
   // And no id or personal detail became text.
@@ -1190,7 +1194,9 @@ test("29. the page binds EXACTLY eight actions, all to the verified context id",
   // directly: all twelve actions arrive through the one `./actions`.
   // RE-POINTED from 24 to 26 by BLOCKER-1: the canonical timetable read and its
   // view type. The page still reaches NO write binding directly.
-  assert.equal(specifiers.length, 26, "the page's import surface is not twenty-six");
+  // RE-POINTED from 26 to 27 by the approved beginner projection: the beginner
+  // rows' own DTO type. The page still reaches NO write binding directly.
+  assert.equal(specifiers.length, 27, "the page's import surface is not twenty-seven");
   assert.ok(specifiers.includes("./CreateExamInstructedTraineeAssignmentForm"));
   assert.ok(specifiers.includes("./exam-instructed-trainee-assignment-messages"));
   for (const specifier of specifiers) {

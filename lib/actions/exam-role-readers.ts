@@ -102,7 +102,7 @@ import {
 } from "@/lib/course/actor-course-offering-core";
 import { loadExamPlan } from "@/lib/exam/exam-plan-loader-core";
 import {
-  ADMIN_EXAM_PLAN_LOAD_OPTIONS,
+  adminExamPlanLoadOptions,
   readAdminExamPlanWithDeps,
   readInstructorExamPlanWithDeps,
   readTraineeExamDayWithDeps,
@@ -217,7 +217,7 @@ export async function readAdminExamPlan(
  * that moment.
  *
  * IT DERIVES NOTHING. It runs the SAME `loadPlan` binding, under the SAME
- * `ADMIN_EXAM_PLAN_LOAD_OPTIONS`, that `readAdminExamPlan` above runs — so every
+ * `adminExamPlanLoadOptions`, that `readAdminExamPlan` above runs — so every
  * clock value it publishes is the committed block timetable core's own output,
  * reached through the committed adapter, and is identical to the time the
  * instructor DTO and the trainee day show for the same block. The pure narrowing
@@ -238,10 +238,13 @@ export async function readAdminExamWaveView(
 ): Promise<AdminExamWaveView> {
   return readAdminExamWaveViewWithDeps(courseOfferingId, {
     requireAdminCourseOffering,
-    loadPlan: (verifiedCourseOfferingId) =>
+    loadPlan: (verifiedCourseOfferingId, verifiedCourseLevel) =>
       loadPlan({
         courseOfferingId: verifiedCourseOfferingId,
-        options: ADMIN_EXAM_PLAN_LOAD_OPTIONS,
+        // The SAME committed options producer `readAdminExamPlan` above uses,
+        // derived from the SAME DB-verified level — so the beginner containment
+        // gate and every other load decision are identical for both readings.
+        options: adminExamPlanLoadOptions(verifiedCourseLevel),
       }),
   });
 }

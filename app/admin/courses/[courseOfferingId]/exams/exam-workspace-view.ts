@@ -272,28 +272,42 @@ export function collectUntimedExaminees(
 // ===========================================================================
 
 /**
- * ONE read-only beginner row, as the admin workspace will render it.
+ * ONE read-only beginner CHILD, as the admin workspace renders it.
  *
- * THE SHAPE IS THE INTEGRATION POINT, and it is declared now so the follow-up
- * slice changes ONE binding rather than the page's structure. Every field is a
- * NARROWING of what the committed operational DTO already publishes on a row
- * whose `source` is `"BEGINNER"` — that row's own `beginner` detail — so wiring
- * it is a mapping, and never a second query, a second reader or a second
- * derivation.
+ * These are the fields the committed operational beginner detail already
+ * publishes to an authorized admin, carried through UNCHANGED. The admin exam
+ * workspace is an operational screen — the manager running the day needs to know
+ * which child is on which horse and who to call — and the committed reader has
+ * already decided that an operational role may see them.
  *
- * WHAT IS DELIBERATELY ABSENT, and may never be added here:
+ * `childAssignmentId` is deliberately absent: it is a write target, and there is
+ * no beginner write on this route at all.
+ */
+export interface WorkspaceBeginnerChild {
+  readonly fullName: string;
+  readonly age: number | null;
+  readonly gender: string | null;
+  readonly childNotes: string | null;
+  readonly parentName: string | null;
+  readonly parentPhone: string | null;
+  readonly horseName: string | null;
+  readonly equipmentNotes: string | null;
+  readonly isAbsent: boolean;
+}
+
+/**
+ * ONE read-only beginner row, as the admin workspace renders it.
  *
- *   - the beginner CHILD list. It carries contact detail, and no admin exam
- *     surface has a product reason to render a child's contact;
- *   - the named participants. The COUNT answers "how big is this lesson"; the
- *     names would put other people's identities on a schedule screen that does
- *     not need them;
- *   - the lesson's notes, its id and its raw practice token. Those are Teaching
- *     Practice internals, and a workspace showing them would invite someone to
- *     try to edit the lesson here.
+ * Every field is a NARROWING of what the committed operational DTO publishes on
+ * a row whose `source` is `"BEGINNER"` — that row plus its own `beginner`
+ * detail. There is NO second query, NO second reader and NO derivation: the
+ * times are the DTO's own, exactly like every other clock on this page.
  *
- * The times are the DTO's own derived values, exactly like every other clock on
- * this page: nothing about a beginner row is computed by this route either.
+ * WHICH ROWS EXIST AT ALL is the merged loader's decision and never this
+ * route's: beginner Teaching-Practice exams are gated to Level 1 there, so a
+ * Level-2 offering simply receives none. This surface adds no second level test
+ * — a UI-level check would be a second opinion about a containment rule it does
+ * not own, and would go quietly wrong the moment that rule changed.
  */
 export interface WorkspaceBeginnerRow {
   readonly sessionId: string;
@@ -305,22 +319,13 @@ export interface WorkspaceBeginnerRow {
   readonly groupName: string | null;
   readonly location: string | null;
   readonly responsibleInstructorName: string | null;
+  readonly participantNames: readonly string[];
   readonly participantCount: number;
+  readonly children: readonly WorkspaceBeginnerChild[];
+  readonly notes: string | null;
+  readonly isPublished: boolean;
 }
 
-/**
- * The beginner rows this branch renders: NONE, and not by accident.
- *
- * The committed beginner COURSE-SCOPING rule — beginner Teaching-Practice exams
- * exist only for Level 1, so a Level-2 plan reads none whatever source dates it
- * selected — is NOT present in this branch's base. Reading beginner rows here
- * would therefore project them for every level, and a source date shared by two
- * plans would put one course's trainees, children and parent contacts under
- * another course's exam plan. That is a containment hole rather than a missing
- * feature, so this branch reads nothing and says so on screen.
- *
- * The follow-up rebases onto the scoped pipeline and replaces THIS ONE binding.
- */
 export const NO_BEGINNER_ROWS: readonly WorkspaceBeginnerRow[] = Object.freeze([]);
 
 // ===========================================================================

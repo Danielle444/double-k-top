@@ -2,6 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { ExamAssignmentRows } from "@/lib/components/ExamAssignmentRows";
+import { ExamPersonalAssignmentDetail } from "@/lib/components/ExamPersonalAssignmentDetail";
+import { ExamScheduleNav, type ExamScheduleNavMode } from "@/lib/components/ExamScheduleNav";
+import {
+  filterExamRows,
+  listExamDates,
+  listExamDefinitionNames,
+} from "@/lib/components/exam-schedule-view-core";
 import {
   getTraineeExamDaySchedule,
   type TraineeExamScheduleView,
@@ -75,14 +82,39 @@ import { formatHebrewDate, formatHebrewWeekday, getLocalDateKey, parseDateKey } 
  * contact detail, note or internal id is in them, none is rendered, and none is
  * even representable in the renderer's prop type.
  *
- * "לו״ז שלי" IS STILL THE SAME FILTER IT WAS: `view.myRows`, which the committed
- * trainee core computed server-side from the SIGNED SESSION and handed over as
- * the boolean `isSelf`. The viewer's own row keeps its existing ring, its
- * "השיבוץ שלי" label, its role and its exact personal window; the assignment
- * rows are shown BENEATH that, so the viewer's horse, topic, discipline and
- * partner are on their own block. NO NAME IS EVER COMPARED to find "mine" — the
- * screen holds no name of the viewer to compare with, and adding an id to the
- * contract just to highlight a line is exactly what the contract refuses.
+ * ===========================================================================
+ * THE TWO VIEWS ARE DELIBERATELY NOT THE SAME LAYOUT (EX-ROLE-SCHEDULE-REDESIGN)
+ * ===========================================================================
+ * "לו״ז כולם" stays the COMPLETE block schedule, now with compact navigation
+ * over the day already in hand: everything, by exam type, or by date. Those are
+ * NOT three reads — the day is fetched once and the shared navigation bar
+ * narrows the array in the browser, so a view can only ever show FEWER rows than
+ * "everything", never a row the server withheld.
+ *
+ * "לו״ז שלי" IS A DIFFERENT, MUCH SHORTER SCREEN. It used to render the entire
+ * all-participants structure with the viewer's row merely ringed inside it,
+ * which meant a trainee looking for their own horse read everyone else's first.
+ * It now renders only the rows that are the viewer's, and inside each only what
+ * that trainee must act on: the exam name, the date and time, the place, their
+ * role, their exact personal window, and — when the contract identifies their
+ * own assignment unambiguously — their horse, topic, discipline and the ONE
+ * person on the other side of the lesson. No wave, no other examinee, no
+ * participant summary.
+ *
+ * "MINE" IS THE SERVER'S ANSWER, AT BOTH LEVELS. Which ROWS appear is
+ * `view.myRows`, which the committed trainee core computed server-side from the
+ * SIGNED SESSION and handed over as the row-level boolean `isSelf`; the row
+ * keeps its ring, its "השיבוץ שלי" label, its role and its exact personal
+ * window. Which ASSIGNMENT inside a row is the viewer's is the read layer's
+ * answer too — the trainee contract marks it with an assignment-level `isSelf`,
+ * decided by exact student-id equality against that same proven identity, with
+ * the id never leaving the server. The screen passes the array through and reads
+ * that one boolean.
+ *
+ * NO NAME IS EVER COMPARED to find "mine", and no role, time, horse, topic,
+ * discipline, pairing or array position is used to guess it either. The screen
+ * holds no name and no id of the viewer to compare with, and none was added to
+ * the contract: `isSelf` is a boolean, not an identifier.
  *
  * STILL NOT CARRIED, and therefore still not stubbed here: any grade, any
  * feedback and any rating.
@@ -97,9 +129,17 @@ const EMPTY_TEXT = "עדיין לא פורסם לוח מבחנים ליום זה
  * an answer to "is there a schedule" — that question is EMPTY_TEXT's alone.
  */
 const NO_SELF_TEXT = "אין לך שיבוץ למבחן ביום זה.";
+/**
+ * Shown ONLY inside "לו״ז כולם", when the day IS visible and holds rows but the
+ * chosen exam type or date holds none of them. Like {@link NO_SELF_TEXT} it says
+ * nothing about publication, so it can never stand in for {@link EMPTY_TEXT}.
+ */
+const NO_MATCHING_ROWS_TEXT = "אין מבחנים בתצוגה שנבחרה.";
 
 const ALL_MODE_LABEL = "לו״ז כולם";
 const SELF_MODE_LABEL = "לו״ז שלי";
+/** The general option inside "לו״ז כולם": no exam type and no date constraint. */
+const ALL_FILTER_LABEL = "הכל";
 
 type ExamRow = TraineeExamScheduleView["allRows"][number];
 type DayMode = "all" | "self";
@@ -156,11 +196,22 @@ export function StudentExamsSection() {
   const [view, setView] = useState<TraineeExamScheduleView | null>(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(false);
+  // Navigation INSIDE "לו״ז כולם", over the day already in hand. It issues no
+  // request and can name no row the server did not send.
+  const [navMode, setNavMode] = useState<ExamScheduleNavMode>("all");
+  const [navDefinitionName, setNavDefinitionName] = useState<string | null>(null);
+  const [navDate, setNavDate] = useState<string | null>(null);
 
   useEffect(() => {
+    // A new day means the previous day's exam types and dates no longer exist:
+    // the view returns to the general one rather than staying pointed at a
+    // selection that is now meaningless.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setNavMode("all");
+    setNavDefinitionName(null);
+    setNavDate(null);
     if (selectedDate === "") {
       // A cleared picker asks for no day at all.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setView(null);
       setFailed(false);
       setLoading(false);
@@ -190,10 +241,36 @@ export function StudentExamsSection() {
     };
   }, [selectedDate]);
 
-  const visibleRows = view === null ? [] : mode === "self" ? view.myRows : view.allRows;
-  const groups = groupRowsByDate(visibleRows);
+  const allRows = view === null ? [] : view.allRows;
+  const myRows = view === null ? [] : view.myRows;
+  // The option lists are derived from THE LOADED DAY, so a view is offered only
+  // when there is something behind it.
+  const definitionNames = listExamDefinitionNames(allRows);
+  const dates = listExamDates(allRows);
+  // "הכל" is both axes unconstrained — not a third code path.
+  const filteredRows = filterExamRows(allRows, {
+    definitionName: navMode === "type" ? navDefinitionName : null,
+    date: navMode === "date" ? navDate : null,
+  });
+  const groups = groupRowsByDate(filteredRows);
   const dayIsEmpty = view !== null && view.allRows.length === 0;
-  const showEmpty = view !== null && !loading && !failed && groups.length === 0;
+  // Each view answers for itself: the personal view by its own rows, the
+  // everyone view by the rows its navigation left standing.
+  const showEmpty =
+    view !== null &&
+    !loading &&
+    !failed &&
+    (mode === "self" ? myRows.length === 0 : groups.length === 0);
+  /**
+   * WHICH sentence, and never a broader claim than the one this view can make.
+   * "The day is empty" is the ONLY answer that touches publication, and it is
+   * reachable from both views because it is true of the whole day.
+   */
+  const emptyText = dayIsEmpty
+    ? EMPTY_TEXT
+    : mode === "self"
+      ? NO_SELF_TEXT
+      : NO_MATCHING_ROWS_TEXT;
 
   return (
     <div className="flex flex-col gap-4">
@@ -252,14 +329,98 @@ export function StudentExamsSection() {
         </p>
       )}
 
+      {/* Navigation INSIDE "לו״ז כולם" only: the personal view is already the
+          shortest list on the screen and has nothing to narrow. */}
+      {!loading && !failed && mode === "all" && !dayIsEmpty && (
+        <ExamScheduleNav
+          allLabel={ALL_FILTER_LABEL}
+          mode={navMode}
+          onSelectMode={setNavMode}
+          definitionNames={definitionNames}
+          selectedDefinitionName={navDefinitionName}
+          onSelectDefinitionName={setNavDefinitionName}
+          dates={dates}
+          selectedDate={navDate}
+          onSelectDate={setNavDate}
+        />
+      )}
+
       {showEmpty && (
         <p className="rounded-2xl border border-border bg-card p-5 text-base text-muted-foreground">
-          {dayIsEmpty ? EMPTY_TEXT : NO_SELF_TEXT}
+          {emptyText}
         </p>
       )}
 
+      {/* ===================================================================
+          "לו״ז שלי" — the COMPACT personal view.
+
+          Only the viewer's own rows, and inside each only what that trainee
+          must act on. It deliberately renders NO participant summary, NO wave
+          and NO other examinee: the all-participants structure lives in
+          "לו״ז כולם", one tap away, and reprinting it here is exactly what made
+          the old personal view unreadable.
+          =================================================================== */}
       {!loading &&
         !failed &&
+        mode === "self" &&
+        myRows.map((row) => {
+          const place = row.arena ?? row.location;
+          const roleLabel = row.selfRole === null ? null : SELF_ROLE_LABELS[row.selfRole];
+          return (
+            <div
+              key={row.sessionId}
+              className={`rounded-2xl border bg-card p-4 shadow-sm ${
+                row.isSelf ? "border-primary ring-1 ring-primary" : "border-border"
+              }`}
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-base font-bold text-card-foreground">
+                  {row.definitionName ?? "מבחן"}
+                </p>
+                <p className="text-sm font-semibold text-muted-foreground">
+                  {row.startTime}
+                  {row.displayEndTime !== null && ` - ${row.displayEndTime}`}
+                </p>
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                {formatHebrewWeekday(parseDateKey(row.date))} ·{" "}
+                {formatHebrewDate(parseDateKey(row.date))}
+              </p>
+
+              {row.selfLabel !== null && (
+                <p className="mt-1 text-sm font-bold text-primary">
+                  {row.selfLabel}
+                  {roleLabel !== null && ` · ${roleLabel}`}
+                </p>
+              )}
+
+              {/* The viewer's EXACT personal window, and only when the contract
+                  carries it. Nothing here falls back to the block times above. */}
+              {row.selfStartTime !== null && (
+                <p className="text-sm font-bold text-primary">
+                  השעה שלך: {row.selfStartTime}
+                  {row.selfEndTime !== null && ` - ${row.selfEndTime}`}
+                </p>
+              )}
+
+              {place !== null && place.trim().length > 0 && (
+                <p className="mt-1 text-sm text-muted-foreground">מקום: {place}</p>
+              )}
+
+              {/* The viewer's OWN horse, topic, discipline and counterpart. The
+                  rows carry the SERVER's own `isSelf` marker, so the whole array
+                  is handed over verbatim and the renderer reads exactly one
+                  boolean to find the viewer — this screen passes no marker, no
+                  role and no time to select with. */}
+              <ExamPersonalAssignmentDetail assignments={row.assignments} />
+            </div>
+          );
+        })}
+
+      {!loading &&
+        !failed &&
+        mode === "all" &&
         groups.map((group) => (
           <div key={group.date} className="flex flex-col gap-2">
             <p className="text-base font-bold text-card-foreground">
@@ -308,23 +469,29 @@ export function StudentExamsSection() {
                     <p className="mt-1 text-sm text-muted-foreground">מקום: {place}</p>
                   )}
 
-                  <div className="mt-2 flex flex-col gap-1">
-                    <PeopleLine
-                      label="נבחנים"
-                      names={row.examineeNames}
-                      count={row.examineeCount}
-                    />
-                    <PeopleLine
-                      label="חניכים מודרכים"
-                      names={row.instructedTraineeNames}
-                      count={row.instructedTraineeCount}
-                    />
-                  </div>
+                  {/* The participant SUMMARY, and only where it is the only
+                      place those names appear. A block with operational rows
+                      names everyone below, in their waves and with their
+                      horses, so printing the same names again here would be
+                      pure repetition. */}
+                  {row.assignments.length === 0 && (
+                    <div className="mt-2 flex flex-col gap-1">
+                      <PeopleLine
+                        label="נבחנים"
+                        names={row.examineeNames}
+                        count={row.examineeCount}
+                      />
+                      <PeopleLine
+                        label="חניכים מודרכים"
+                        names={row.instructedTraineeNames}
+                        count={row.instructedTraineeCount}
+                      />
+                    </div>
+                  )}
 
                   {/* The block's COMPLETE operational schedule, verbatim and in
-                      the contract's own order. It is rendered identically in
-                      both views — "לו״ז שלי" differs by which ROWS reach here,
-                      never by what a row shows. An empty list renders nothing,
+                      the contract's own order — waves, examinee units and the
+                      trainee each one teaches. An empty list renders nothing,
                       so a beginner row stays exactly as it was. */}
                   <ExamAssignmentRows assignments={row.assignments} />
                 </div>

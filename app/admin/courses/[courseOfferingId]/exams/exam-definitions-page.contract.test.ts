@@ -653,7 +653,7 @@ test("9. the page is a server component and declares force-dynamic", () => {
   assert.ok(PAGE.includes('export const dynamic = "force-dynamic"'));
 });
 
-test("10. the page imports EXACTLY the twenty-six approved specifiers", () => {
+test("10. the page imports EXACTLY the twenty-seven approved specifiers", () => {
   // RE-POINTED by EX-SES-UI-1, which adds FOUR: two more route-local files (the
   // session create form and its message table) and two committed `lib/` modules —
   // the admin session READ binding and the PURE day-grouping core.
@@ -709,6 +709,8 @@ test("10. the page imports EXACTLY the twenty-six approved specifiers", () => {
     // BLOCKER-1 — the CANONICAL timetable read. ASSEMBLED, so this suite does not
     // enrol itself as a caller of the module it names.
     "@/lib/actions/" + "exam-role" + "-readers",
+    // The beginner rows' own DTO type. ASSEMBLED, for the reason above.
+    "@/lib/exam/" + "exam-rea" + "d-dto",
     "@/lib/course/admin-course-context",
     "@/lib/course/operation-policy-core",
     "@/lib/exam/admin-exam-session-grouping-core",
@@ -736,7 +738,9 @@ test("11. no database client and no other exam read pipeline is reachable", () =
     "prisma.",
     "PrismaClient",
     LOADER_SYMBOL,
-    ADMIN_PLAN_READER,
+    // NOT banned by the approved beginner projection: the committed ADMIN READING
+    // is exactly how this page obtains the read-only beginner rows, without a
+    // second query. Every OTHER pipeline entry point below stays forbidden.
     // RE-POINTED by BLOCKER-1, and NARROWED to what it always protected. The ban
     // on the ROLE-READER module existed because the page derived its own times
     // and therefore had no business in the read pipeline. It no longer derives
@@ -772,8 +776,13 @@ test("12. no Teaching Practice, student, instructor or contact dependency exists
     "ParentContact",
     "student",
     "Student",
-    "instructor",
-    "Instructor",
+    // `responsibleInstructorName` is part of the committed operational beginner
+    // detail this page now renders read-only, so the bare word leaves this ban.
+    // What it protected is asserted directly instead: no instructor ROUTE, no
+    // instructor READER and no instructor CONTACT is reachable.
+    "app/instructor",
+    "getInstructorContacts",
+    "readInstructorExamPlan",
     "capabilit",
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not reference ${forbidden}`);
@@ -1264,9 +1273,12 @@ test("18. the definitions are rendered in the reader's order, unmodified", () =>
   // definition list or changes any order — one selects the instructed trainees
   // nobody teaches yet, the other partitions the timeline by stored day for the
   // by-date arrangement.
+  // RE-POINTED from two to THREE by the approved beginner projection: the third
+  // filter selects the committed admin reading's own BEGINNER rows by its own
+  // `source` discriminator. It re-orders nothing and reads nothing new.
   assert.equal(
     (PAGE.match(/\.filter\(/g) ?? []).length,
-    2,
+    3,
     "the page filters something beyond the two approved partitions",
   );
   assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));

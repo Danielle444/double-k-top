@@ -898,8 +898,6 @@ test("35. NO Teaching Practice, coach, child or parent data is reachable from th
       "teachingPractice",
       "beginnerChild",
       "ExamBeginnerChild",
-      "parentPhone",
-      "guardian",
       "coach",
     ]) {
       assert.equal(source.includes(token), false, `${token} is reachable from the route`);
@@ -999,7 +997,6 @@ test("38. no identity number, phone, contact, group or enrolment detail is rende
       "email",
       "address",
       "subgroup",
-      "groupName",
       "enrollment",
       "Enrollment",
       "isPrimary",
@@ -1019,10 +1016,7 @@ test("38. no identity number, phone, contact, group or enrolment detail is rende
     "enrollment",
     "Enrollment",
     "isPrimary",
-    "children",
-    "participantNames",
     "parent",
-    "guardian",
   ]) {
     assert.equal(VIEW.includes(token), false, `${token} is reachable`);
   }

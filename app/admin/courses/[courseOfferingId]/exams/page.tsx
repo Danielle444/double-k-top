@@ -294,7 +294,8 @@ import {
   type EligibleExamTraineeListView,
 } from "@/lib/actions/exam-assignment-read-io";
 import { groupAdminExamSessionsByDay } from "@/lib/exam/admin-exam-session-grouping-core";
-import { readAdminExamWaveView } from "@/lib/actions/exam-role-readers";
+import { readAdminExamPlan, readAdminExamWaveView } from "@/lib/actions/exam-role-readers";
+import type { AdminExamReadDto } from "@/lib/exam/exam-read-dto";
 import type { AdminExamWaveView } from "@/lib/exam/admin-exam-wave-view-core";
 import {
   createExamPlanAction,
@@ -353,7 +354,6 @@ import {
   resolveExamWorkspaceTab,
   parseExamScheduleView,
   attachExamineesToWaves,
-  NO_BEGINNER_ROWS,
   collectUntimedExaminees,
   buildGeneralTimeline,
   groupTimelineByDefinition,
@@ -936,6 +936,26 @@ const BEGINNER_REGION_TEXT =
  * the rows as well as instead of them, so the read-only rule does not disappear
  * the moment the region stops being empty.
  */
+/** The labels one beginner row and one beginner child are described by. */
+const BEGINNER_GROUP_LABEL = "\u05e7\u05d1\u05d5\u05e6\u05d4";
+const BEGINNER_RESPONSIBLE_LABEL = "\u05de\u05d3\u05e8\u05d9\u05da/\u05d4 \u05d0\u05d7\u05e8\u05d0\u05d9/\u05ea";
+const BEGINNER_PARTICIPANTS_LABEL = "\u05de\u05e9\u05ea\u05ea\u05e4\u05d9\u05dd";
+const BEGINNER_AGE_LABEL = "\u05d2\u05d9\u05dc";
+const BEGINNER_PARENT_LABEL = "\u05d4\u05d5\u05e8\u05d4";
+const BEGINNER_PARENT_PHONE_LABEL = "\u05d8\u05dc\u05e4\u05d5\u05df \u05d4\u05d5\u05e8\u05d4";
+const BEGINNER_ABSENT_TEXT = "\u05e0\u05e2\u05d3\u05e8/\u05ea";
+const BEGINNER_DRAFT_TEXT = "\u05d4\u05e9\u05d9\u05e2\u05d5\u05e8 \u05d8\u05e8\u05dd \u05e4\u05d5\u05e8\u05e1\u05dd";
+
+/**
+ * ONE optional text value, or the caller's own placeholder.
+ *
+ * A blank once trimmed is "nothing stored", because a label followed by an empty
+ * run of spaces reads as a rendering bug rather than as data.
+ */
+function presentTextOr(value: string | null, placeholder: string): string {
+  return value === null || value.trim().length === 0 ? placeholder : value;
+}
+
 const BEGINNER_READ_ONLY_TEXT =
   "מבחני מתחילים הם תצוגה בלבד. כל שינוי נעשה במסך התרגול המעשי.";
 
@@ -1203,6 +1223,21 @@ export default async function CourseExamsPage({
     throw error;
   }
 
+  // 6c. The CANONICAL ADMIN READING of the same verified offering. It is the one
+  //     source of BEGINNER rows: the merged pipeline gates beginner
+  //     Teaching-Practice reads to Level 1 in the loader, so a Level-2 offering
+  //     receives none and this page adds no second level test of its own. No
+  //     second query, no Teaching-Practice import and no writer is reached.
+  let planView: AdminExamReadDto;
+  try {
+    planView = await readAdminExamPlan(context.id);
+  } catch (error) {
+    if (error instanceof CourseOfferingNotFoundError) {
+      notFound();
+    }
+    throw error;
+  }
+
   // 7. The day grouping. The committed core is the FINAL presentation-order
   //    authority — orderIndex, then start time, then definition name, then session
   //    id — so the page neither sorts nor re-orders what it renders. The core is
@@ -1367,16 +1402,44 @@ export default async function CourseExamsPage({
   const assignmentOrderFeedback = examAssignmentOrderFeedback(assignmentOrder);
 
   /**
-   * THE BEGINNER INTEGRATION POINT.
+   * THE BEGINNER ROWS — a projection of Teaching Practice, read-only here.
    *
-   * Bound to the frozen empty list, so the region renders its fixed sentence and
-   * this branch reads NO Teaching-Practice data of any kind. The follow-up
-   * replaces THIS ONE EXPRESSION with a mapping of the committed admin DTO's own
-   * beginner rows — the rows of `readAdminExamPlan` whose source is the beginner
-   * one, narrowed to `WorkspaceBeginnerRow` — and nothing else on this page
-   * moves. It stays a READ: no beginner control is added here, ever.
+   * Taken from the committed admin reading's own rows, narrowed to the fields
+   * this screen renders. `row.source === "BEGINNER"` is the DTO's own
+   * discriminator and the only test applied: WHICH beginner rows exist is the
+   * merged loader's Level-1 containment decision, and re-checking the level here
+   * would be a second opinion about a rule this route does not own.
    */
-  const beginnerRows: readonly WorkspaceBeginnerRow[] = NO_BEGINNER_ROWS;
+  const beginnerRows: readonly WorkspaceBeginnerRow[] = planView.rows
+    .filter((row) => row.source === "BEGINNER" && row.beginner !== null)
+    .map((row) => {
+      const detail = row.beginner as NonNullable<typeof row.beginner>;
+      return {
+        sessionId: row.sessionId,
+        date: row.date,
+        startTime: row.startTime,
+        displayEndTime: row.displayEndTime,
+        beginnerFormat: detail.beginnerFormat,
+        groupName: detail.groupName,
+        location: detail.location,
+        responsibleInstructorName: detail.responsibleInstructorName,
+        participantNames: detail.participantNames,
+        participantCount: detail.participantCount,
+        children: detail.children.map((child) => ({
+          fullName: child.fullName,
+          age: child.age,
+          gender: child.gender,
+          childNotes: child.childNotes,
+          parentName: child.parentName,
+          parentPhone: child.parentPhone,
+          horseName: child.horseName,
+          equipmentNotes: child.equipmentNotes,
+          isAbsent: child.isAbsent,
+        })),
+        notes: detail.notes,
+        isPublished: detail.isPublished,
+      };
+    });
 
   const dashboardHref = `/admin/courses/${encodeURIComponent(context.id)}`;
   const examsPath = `${dashboardHref}/exams`;
@@ -2557,7 +2620,107 @@ export default async function CourseExamsPage({
                   <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                     {BEGINNER_REGION_TEXT}
                   </p>
-                ) : null}
+                ) : (
+                  <ul className="mt-3 flex flex-col gap-3">
+                    {beginnerRows.map((row) => (
+                      <li
+                        key={row.sessionId}
+                        className="rounded-lg border border-border bg-card px-4 py-3"
+                      >
+                        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                          <span className="text-sm font-semibold text-card-foreground">
+                            {row.startTime}
+                          </span>
+                          <span className="text-sm text-card-foreground">
+                            {kindText(row.beginnerFormat)}
+                          </span>
+                          {row.isPublished ? null : (
+                            <span className="text-xs text-warning">{BEGINNER_DRAFT_TEXT}</span>
+                          )}
+                        </div>
+                        <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
+                          <DefinitionFact label={BLOCK_DATE_LABEL} value={row.date} />
+                          <DefinitionFact
+                            label={BLOCK_END_LABEL}
+                            value={timeText(row.displayEndTime)}
+                          />
+                          <DefinitionFact
+                            label={BLOCK_ARENA_LABEL}
+                            value={presentTextOr(row.location, NO_ARENA_TEXT)}
+                          />
+                          <DefinitionFact
+                            label={BEGINNER_GROUP_LABEL}
+                            value={presentTextOr(row.groupName, NO_HORSE_TEXT)}
+                          />
+                          <DefinitionFact
+                            label={BEGINNER_RESPONSIBLE_LABEL}
+                            value={presentTextOr(row.responsibleInstructorName, NO_HORSE_TEXT)}
+                          />
+                          <DefinitionFact
+                            label={BEGINNER_PARTICIPANTS_LABEL}
+                            value={String(row.participantCount)}
+                          />
+                        </dl>
+                        {row.participantNames.length > 0 ? (
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            {BEGINNER_PARTICIPANTS_LABEL}: {row.participantNames.join(", ")}
+                          </p>
+                        ) : null}
+                        {row.notes !== null && row.notes !== "" ? (
+                          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                            {row.notes}
+                          </p>
+                        ) : null}
+                        {row.children.length > 0 ? (
+                          <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {row.children.map((child) => (
+                              <li
+                                key={`${row.sessionId}:${child.fullName}:${child.parentPhone ?? ""}`}
+                                className="rounded-lg bg-muted px-3 py-2"
+                              >
+                                <p className="text-sm text-card-foreground">
+                                  {child.fullName}
+                                  {child.isAbsent ? ` · ${BEGINNER_ABSENT_TEXT}` : ""}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  סוס: {horseText(child.horseName)}
+                                </p>
+                                {child.age !== null ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    {BEGINNER_AGE_LABEL}: {String(child.age)}
+                                  </p>
+                                ) : null}
+                                {child.gender !== null && child.gender !== "" ? (
+                                  <p className="text-xs text-muted-foreground">{child.gender}</p>
+                                ) : null}
+                                {child.parentName !== null && child.parentName !== "" ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    {BEGINNER_PARENT_LABEL}: {child.parentName}
+                                  </p>
+                                ) : null}
+                                {child.parentPhone !== null && child.parentPhone !== "" ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    {BEGINNER_PARENT_PHONE_LABEL}: {child.parentPhone}
+                                  </p>
+                                ) : null}
+                                {child.equipmentNotes !== null && child.equipmentNotes !== "" ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    {child.equipmentNotes}
+                                  </p>
+                                ) : null}
+                                {child.childNotes !== null && child.childNotes !== "" ? (
+                                  <p className="text-xs leading-relaxed text-muted-foreground">
+                                    {child.childNotes}
+                                  </p>
+                                ) : null}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
                   {BEGINNER_READ_ONLY_TEXT}
                 </p>

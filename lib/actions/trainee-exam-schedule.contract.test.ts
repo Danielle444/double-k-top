@@ -45,6 +45,22 @@ const INSTRUCTOR_SUITE_REL = "lib/actions/instructor-exam-schedule.contract.test
  */
 const ASSIGNMENT_ROWS_REL = "lib/components/ExamAssignmentRows.tsx";
 const ASSIGNMENT_ROWS_SUITE_REL = "lib/components/ExamAssignmentRows.test.tsx";
+/**
+ * EX-ROLE-SCHEDULE-REDESIGN — the three shared leaves this screen now composes.
+ *
+ * The PURE view core owns the wave grouping, the examinee/instructed-trainee
+ * nesting, the navigation filtering and the FAIL-CLOSED self-selector; the
+ * navigation bar owns the compact filtering inside "לו״ז כולם"; the
+ * personal-detail renderer is what makes "לו״ז שלי" short. Each is proven by its
+ * own suite beside it — what this suite pins is that the trainee screen
+ * DELEGATES to them rather than growing copies of their rules.
+ */
+const VIEW_CORE_REL = "lib/components/exam-schedule-view-core.ts";
+const VIEW_CORE_SUITE_REL = "lib/components/exam-schedule-view-core.test.ts";
+const SCHEDULE_NAV_REL = "lib/components/ExamScheduleNav.tsx";
+const SCHEDULE_NAV_SUITE_REL = "lib/components/ExamScheduleNav.test.tsx";
+const PERSONAL_DETAIL_REL = "lib/components/ExamPersonalAssignmentDetail.tsx";
+const PERSONAL_DETAIL_SUITE_REL = "lib/components/ExamPersonalAssignmentDetail.test.tsx";
 const NAV_SUITE_REL = "app/student/trainee-nav-visibility.test.ts";
 
 function read(relative: string): string {
@@ -300,10 +316,66 @@ function assertScopeCoreAuthorizationUnchanged(): void {
   const changedLines = (diff.stdout ?? "")
     .split("\n")
     .filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line));
+  // NARROWED by EX-BEGINNER-EXAM-READ, on the axis this guard exists to protect.
+  //
+  // The claim is that no changed line may touch the AUTHORIZATION SURFACE. This
+  // slice changes that file in exactly three shapes, and NOTHING else:
+  //
+  //   1. each role resolver's RETURN TYPE widens from `{ readonly id: string }`
+  //      to the two-field `ResolvedExamCourseOffering`, so the reader can read the
+  //      DB-VERIFIED offering's LEVEL alongside its id;
+  //   2. the two locked per-role option CONSTANTS become option PRODUCERS taking
+  //      that level, because the Level-1 beginner containment gate cannot be a
+  //      compile-time constant;
+  //   3. the three call sites pass the level they just resolved.
+  //
+  // The authorization ORDER, the denial classification, the actor resolution and
+  // the four publication literals are all untouched — the literals are re-asserted
+  // verbatim below, and a pure RE-INDENTATION is recognised as such by comparing
+  // trimmed text rather than being waved through by a pattern.
+  //
+  // Every tolerated line is spelled out EXACTLY. A new resolver, a skipped call, a
+  // reordered step or a changed publication value matches none of them and still
+  // fails here.
+  const TOLERATED_CHANGED_LINES = new Set([
+    "readonly requireAdminCourseOffering: (",
+    "readonly resolveInstructorCourseOffering: (",
+    "readonly resolveTraineeCourseOffering: () => Promise<{ readonly id: string }>;",
+    "readonly resolveTraineeCourseOffering: () => Promise<ResolvedExamCourseOffering>;",
+    ") => Promise<{ readonly id: string }>;",
+    ") => Promise<ResolvedExamCourseOffering>;",
+    "export const ADMIN_EXAM_PLAN_LOAD_OPTIONS: ExamPlanLoadOptions = Object.freeze({",
+    "export const INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS: ExamPlanLoadOptions = Object.freeze({",
+    "export function adminExamPlanLoadOptions(courseLevel: unknown): ExamPlanLoadOptions {",
+    "export function instructorExamPlanLoadOptions(courseLevel: unknown): ExamPlanLoadOptions {",
+    "options: ADMIN_EXAM_PLAN_LOAD_OPTIONS,",
+    "options: INSTRUCTOR_EXAM_PLAN_LOAD_OPTIONS,",
+    "options: adminExamPlanLoadOptions(offering?.level),",
+    "options: instructorExamPlanLoadOptions(verifiedLevel),",
+    "options: traineeExamPlanLoadOptions(studentId),",
+    "options: traineeExamPlanLoadOptions(studentId, verifiedLevel),",
+    "authenticatedStudentId: string,",
+    "): ExamPlanLoadOptions {",
+  ]);
+  // A line whose TRIMMED text appears on BOTH sides of the diff is a pure
+  // re-indentation: the same code, moved. Recognised structurally rather than
+  // listed, so it cannot be used to smuggle a value change through.
+  const removed = new Set(
+    changedLines.filter((line) => line.startsWith("-")).map((line) => line.slice(1).trim()),
+  );
+  const added = new Set(
+    changedLines.filter((line) => line.startsWith("+")).map((line) => line.slice(1).trim()),
+  );
+  const reindented = new Set([...removed].filter((line) => added.has(line)));
+
   for (const token of SCOPE_AUTHORIZATION_TOKENS) {
-    const offenders = changedLines.filter((line) => line.includes(token));
+    const offenders = changedLines
+      .filter((line) => line.includes(token))
+      .map((line) => line.slice(1).trim())
+      .filter((line) => !reindented.has(line) && !TOLERATED_CHANGED_LINES.has(line));
     assert.deepEqual(offenders, [], `${SCOPE_REL} changed a line naming ${token}`);
   }
+
 
   const scope = stripComments(read(SCOPE_REL));
   for (const locked of [
@@ -335,33 +407,18 @@ function assertScopeCoreAuthorizationUnchanged(): void {
  * allow-list with a second module.
  */
 function assertNavVisibilityOnlyGainedExamsId(): void {
-  const diff = spawnSync("git", ["diff", "-U0", "HEAD", "--", NAV_REL], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-  });
-  assert.equal(diff.status, 0, `git diff ${NAV_REL} failed: ${diff.stderr ?? ""}`);
-  const changed = (diff.stdout ?? "")
-    .split("\n")
-    .filter((line) => /^[+-]/.test(line) && !/^(\+\+\+|---)/.test(line));
-
-  // COMMENT-ONLY lines are exempt: a rule whose reasoning changed must be
-  // allowed to say so. Everything else is held to the exact claim.
-  const isPureComment = (body: string): boolean =>
-    body.trim() === "" || /^\s*(\/\/|\/\*|\*|\*\/)/.test(body);
-
-  const removed = changed.filter((line) => line.startsWith("-")).map((line) => line.slice(1));
-  assert.deepEqual(
-    removed.filter((body) => !isPureComment(body)),
-    [],
-    `${NAV_REL} removed or rewrote a code line`,
-  );
-
-  const added = changed.filter((line) => line.startsWith("+")).map((line) => line.slice(1));
-  assert.deepEqual(
-    added.filter((body) => !isPureComment(body)).map((body) => body.trim()),
-    ['"exams",'],
-    `${NAV_REL} added a code line beyond the one approved id`,
-  );
+  // EX-ROLE-SCHEDULE-REDESIGN RE-POINT. This helper asserted that the working
+  // tree's diff of the navigation rule against HEAD was EXACTLY the one added
+  // `"exams"` id. That described the operational-UI slice while it was in
+  // flight; that slice is merged, so the same command no longer measures it —
+  // against the current HEAD the diff is EMPTY, and the helper failed on its own
+  // success. (It was already red at HEAD before this slice began.)
+  //
+  // The claim is REPLACED by the strictly stronger, durable pair it was standing
+  // in for: the navigation rule is BYTE-IDENTICAL to HEAD — this slice adds no
+  // navigation entry and unlocks nothing — and it is still a PURE module. Its
+  // exact allow-list membership is pinned independently by test 7 below.
+  assert.ok(unchangedSinceHead(NAV_REL), `${NAV_REL} was modified by this slice`);
 
   // The module is still PURE — its own suite proves this structurally, and it is
   // restated here because THIS suite's subject is what a trainee may reach.
@@ -548,11 +605,31 @@ test("10. the empty state renders the exact approved Hebrew sentence", () => {
   // apart. The second sentence is reachable ONLY when the day IS visible and
   // holds rows, so it can never stand in for the publication answer.
   assert.ok(SECTION_CODE.includes("view.allRows.length === 0"));
-  assert.ok(
-    SECTION_CODE.includes("{dayIsEmpty ? EMPTY_TEXT : NO_SELF_TEXT}"),
-    "the empty state is never rendered",
-  );
   assert.ok(SECTION.includes('const NO_SELF_TEXT = "אין לך שיבוץ למבחן ביום זה.";'));
+
+  // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — the two-way choice
+  // `{dayIsEmpty ? EMPTY_TEXT : NO_SELF_TEXT}`. "לו״ז כולם" can now be narrowed
+  // by exam type or by date, so a THIRD outcome exists: the day is visible and
+  // holds rows, but the chosen view holds none of them. Keeping the two-way
+  // choice would have printed "you have no exam assignment today" to a trainee
+  // who does — and, worse, would have made that sentence answerable by a view
+  // selection rather than by the server.
+  //
+  // The claim is REPLACED by the property it was standing in for, unchanged in
+  // strength: the sentence that touches PUBLICATION is reached from `dayIsEmpty`
+  // and from nowhere else, and every other outcome gets a sentence that says
+  // nothing about publication.
+  assert.ok(
+    SECTION_CODE.includes("const emptyText = dayIsEmpty"),
+    "the empty state no longer branches on the day itself first",
+  );
+  assert.ok(SECTION_CODE.includes("{emptyText}"), "the empty state is never rendered");
+  assert.ok(SECTION.includes('const NO_MATCHING_ROWS_TEXT = "אין מבחנים בתצוגה שנבחרה.";'));
+  // EMPTY_TEXT is named exactly twice — its declaration and the one branch — so
+  // it cannot also be reached from a view selection.
+  assert.equal((SECTION_CODE.match(/EMPTY_TEXT/g) ?? []).length, 2);
+  // `dayIsEmpty` reads the LOADED day, never the narrowed rows.
+  assert.ok(SECTION_CODE.includes("const dayIsEmpty = view !== null && view.allRows.length === 0;"));
 });
 
 test("11. loading and error states are fixed strings that expose no raw error", () => {
@@ -622,9 +699,26 @@ test("13. no personal time is invented when the contract does not carry one", ()
     assert.equal(SECTION_CODE.includes(fallback), false, `the UI invents a personal time: ${fallback}`);
   }
   // The block start/end are shown as the ROW's times, never relabelled as the
-  // viewer's own: exactly one personal-time line exists, and it reads only the
-  // two `self*` fields.
-  assert.equal((SECTION_CODE.match(/השעה שלך/g) ?? []).length, 1);
+  // viewer's own.
+  //
+  // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — this count was ONE, when both trainee
+  // views shared a single card. "לו״ז שלי" is now a different, much shorter card
+  // of its own, so the personal-time line exists once per view. The claim is
+  // replaced by the property it was standing in for: EVERY personal-time line is
+  // behind the same explicit non-null test on the same `self*` field, and there
+  // are exactly as many guards as lines.
+  const personalLines = (SECTION_CODE.match(/השעה שלך/g) ?? []).length;
+  assert.equal(personalLines, 2, "a personal-time line was added or dropped");
+  assert.equal(
+    (SECTION_CODE.match(/\{row\.selfStartTime !== null && \(/g) ?? []).length,
+    personalLines,
+    "a personal-time line is not behind its own explicit non-null test",
+  );
+  assert.equal(
+    (SECTION_CODE.match(/row\.selfEndTime !== null &&/g) ?? []).length,
+    personalLines,
+    "a personal end is rendered without its own explicit non-null test",
+  );
 });
 
 test("14. no internal id and no raw contract object is rendered", () => {
@@ -658,14 +752,23 @@ test("14. no internal id and no raw contract object is rendered", () => {
   ]) {
     assert.equal(SECTION_CODE.includes(token), false, `the UI reaches ${token}`);
   }
-  // `sessionId` is a React list key, which never reaches the DOM. That is its
-  // ONLY appearance in the file, so it cannot be in a rendered position: an
+  // `sessionId` is a React list key, which never reaches the DOM. Those are its
+  // ONLY appearances in the file, so it cannot be in a rendered position: an
   // added use fails this count.
+  //
+  // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — the count was ONE, when both trainee
+  // views shared a single row loop. The compact personal view is its own loop,
+  // so it needs its own list key; both are the SAME approved, non-rendering use.
   assert.ok(SECTION_CODE.includes("key={row.sessionId}"), "the approved list key is missing");
   assert.equal(
+    (SECTION_CODE.match(/key=\{row\.sessionId\}/g) ?? []).length,
+    2,
+    "the list key is not the only use of a session id",
+  );
+  assert.equal(
     (SECTION_CODE.match(/sessionId/g) ?? []).length,
-    1,
-    "a session id is used outside the one approved, non-rendering place",
+    2,
+    "a session id is used outside the two approved, non-rendering places",
   );
   // The UI queries nothing itself.
   for (const token of [PRISMA_MODULE, GENERATED_CLIENT, "prisma."]) {
@@ -723,25 +826,63 @@ test('14c. "לו״ז כולם" renders the COMPLETE operational schedule, throug
     SECTION_CODE.includes('from "@/lib/components/ExamAssignmentRows"'),
     "the trainee screen does not mount the shared renderer",
   );
+  assert.equal(
+    (SECTION_CODE.match(/<ExamAssignmentRows\s/g) ?? []).length,
+    1,
+    "a second, view-specific full-schedule renderer was added",
+  );
 
-  // ONE hand-off, inside the ONE row loop that BOTH views share. That is what
-  // makes "לו״ז כולם" complete and "לו״ז שלי" identical in content: the two
-  // views differ by which ROWS reach the loop (`view.myRows` vs `view.allRows`),
-  // never by what a row is allowed to show.
+  // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — the ONE-row-loop claim, and the
+  // `mode === "self" ? view.myRows : view.allRows` expression.
+  //
+  // Both described the state in which the two views were the SAME card with
+  // different rows in it. That is exactly what made "לו״ז שלי" unreadable: a
+  // trainee looking for their own horse was handed the whole day's
+  // all-participants structure with their row merely ringed inside it. The
+  // approved redesign makes the personal view a different, much shorter card, so
+  // a claim that the two views render identically is one the approved work
+  // contradicts.
+  //
+  // What REPLACES it is the property that actually mattered, and it is checked
+  // in full by test 14e below: the personal view still shows only rows the
+  // SERVER marked as the viewer's, and it can show no operational value that the
+  // server did not tie to the viewer. `row.assignments` is read exactly three
+  // times, each an EXACT approved use:
+  const APPROVED_ASSIGNMENT_USES = [
+    // "לו״ז כולם": the whole array, verbatim, to the shared renderer.
+    "<ExamAssignmentRows assignments={row.assignments} />",
+    // "לו״ז כולם": the participant summary is skipped when the rows below would
+    // reprint the very same names.
+    "{row.assignments.length === 0 && (",
+    // "לו״ז שלי": the whole array to the personal-detail renderer, which reaches
+    // it ONLY through the pure core's fail-closed self-selector.
+    "assignments={row.assignments}",
+  ];
+  for (const fragment of APPROVED_ASSIGNMENT_USES) {
+    assert.ok(SECTION_CODE.includes(fragment), `approved use is missing: ${fragment}`);
+  }
   assert.equal(
     (SECTION_CODE.match(/row\.assignments/g) ?? []).length,
-    1,
-    "the assignment rows are read somewhere beyond the one approved hand-off",
+    3,
+    "the assignment rows are read somewhere beyond the three approved uses",
   );
-  assert.equal(
-    (SECTION_CODE.match(/<ExamAssignmentRows/g) ?? []).length,
-    1,
-    "a second, view-specific renderer was added",
-  );
-  assert.ok(
-    SECTION_CODE.includes('mode === "self" ? view.myRows : view.allRows'),
-    "the two views are no longer the same rows, filtered",
-  );
+  // None of the three reaches INTO the array: the screen indexes, filters,
+  // slices, sorts and re-maps nothing.
+  for (const token of [
+    "row.assignments[",
+    "row.assignments.filter",
+    "row.assignments.map",
+    "row.assignments.slice",
+    "row.assignments.sort",
+    "row.assignments.find",
+    "row.assignments.some",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen reaches into ${token}`);
+  }
+  // The two views are still served from the SAME fetched contract, and the
+  // personal one is still the SERVER's own list.
+  assert.ok(SECTION_CODE.includes("const myRows = view === null ? [] : view.myRows;"));
+  assert.ok(SECTION_CODE.includes("const allRows = view === null ? [] : view.allRows;"));
 
   // THE SCREEN ITSELF DECIDES NOTHING ABOUT THEM, so it cannot grow a second,
   // disagreeing copy of the role labels, the personal window, the horse, the
@@ -760,6 +901,204 @@ test('14c. "לו״ז כולם" renders the COMPLETE operational schedule, throug
   for (const token of ["pairingIndex", "resolvePairing", "computePairing", "addMinutes", "parseInt"]) {
     assert.equal(SECTION_CODE.includes(token), false, `the screen duplicates ${token}`);
   }
+});
+
+// ===========================================================================
+// 14e–14g. EX-ROLE-SCHEDULE-REDESIGN — the compact personal view and the
+//          navigation inside "לו״ז כולם"
+// ===========================================================================
+
+test('14e. "לו״ז שלי" is COMPACT: only the viewer\'s rows, and only their own detail', () => {
+  // It renders `view.myRows` — the SERVER's own list — and nothing else.
+  assert.match(
+    SECTION_CODE.replace(/\s+/g, " "),
+    /mode === "self" && myRows\.map\(\(row\) => \{/,
+    "the personal view is not the server's own row list",
+  );
+
+  // It does NOT reprint the all-participants structure: no participant summary
+  // and no full block schedule inside the personal card. Both live in the
+  // "לו״ז כולם" branch, which is the only place `<ExamAssignmentRows>` and the
+  // `PeopleLine` summary appear.
+  const personalStart = SECTION_CODE.indexOf('mode === "self" &&');
+  const personalEnd = SECTION_CODE.search(/mode === "all" &&\s+groups\.map\(/);
+  assert.ok(personalStart >= 0 && personalEnd > personalStart, "the two view branches could not be located");
+  const personal = SECTION_CODE.slice(personalStart, personalEnd);
+  for (const token of ["<ExamAssignmentRows", "<PeopleLine", "examineeNames", "instructedTraineeNames"]) {
+    assert.equal(
+      personal.includes(token),
+      false,
+      `the personal view reprints the all-participants structure: ${token}`,
+    );
+  }
+
+  // What it DOES carry is exactly the approved short list: the exam name, the
+  // date, the block time, the place, the viewer's own label, role and personal
+  // window — and the viewer's own operational detail through the shared
+  // fail-closed renderer.
+  for (const fragment of [
+    "row.definitionName",
+    "row.date",
+    "row.startTime",
+    "row.displayEndTime",
+    "row.arena ?? row.location",
+    "row.selfLabel",
+    "row.selfRole",
+    "row.selfStartTime",
+    "row.selfEndTime",
+  ]) {
+    assert.ok(personal.includes(fragment), `the personal view dropped ${fragment}`);
+  }
+  assert.ok(
+    personal.includes("<ExamPersonalAssignmentDetail"),
+    "the personal view shows no horse, topic, discipline or counterpart",
+  );
+  assert.ok(
+    SECTION_CODE.includes('from "@/lib/components/ExamPersonalAssignmentDetail"'),
+    "the personal detail is not the shared renderer",
+  );
+  assert.equal(
+    (SECTION_CODE.match(/<ExamPersonalAssignmentDetail/g) ?? []).length,
+    1,
+    "a second personal-detail renderer was added",
+  );
+});
+
+test('14f. "לו״ז שלי" finds the viewer through the SERVER-DERIVED assignment marker', () => {
+  // EX-BEGINNER-EXAM-READ INTEGRATION. The trainee contract now marks the
+  // viewer's OWN assignment with `isSelf`, decided server-side by exact
+  // student-id equality against the identity proven from the signed session. The
+  // screen therefore hands over the rows and NOTHING else: the previous `role` /
+  // `startTime` / `endTime` selection props are gone, because there is no longer
+  // anything for the browser to select with.
+  assert.ok(
+    SECTION_CODE.includes("<ExamPersonalAssignmentDetail assignments={row.assignments} />"),
+    "the personal detail is not handed the rows verbatim",
+  );
+  const props = SECTION_CODE.slice(
+    SECTION_CODE.indexOf("<ExamPersonalAssignmentDetail"),
+    SECTION_CODE.indexOf("<ExamPersonalAssignmentDetail") + 400,
+  );
+  for (const forbidden of [
+    "role={",
+    "startTime={",
+    "endTime={",
+    "participantName=",
+    "viewerName=",
+    "studentId=",
+    "selfName=",
+    "isSelf={",
+  ]) {
+    assert.equal(props.includes(forbidden), false, `the personal detail is given ${forbidden}`);
+  }
+
+  // THE REMOVED HEURISTIC. The screen used to hand over `selfRole` plus the
+  // exact personal window so the browser could match the viewer's row among the
+  // block's assignments. Those three values are still RENDERED — as the viewer's
+  // own label and their own time, which is what they are for — but they no
+  // longer reach anything that SELECTS with them, and this file names no
+  // selection rule of any kind.
+  for (const token of [
+    "selectSelfAssignmentDetail",
+    "selectSelfAssignmentRow",
+    "ExamSelfMarker",
+    "isSelf ===",
+    "assignments.find",
+    "assignments.filter",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen selects the viewer by ${token}`);
+  }
+
+  // The row-level highlight is still the server's boolean, in BOTH views.
+  assert.equal(
+    (SECTION_CODE.match(/row\.isSelf \?/g) ?? []).length,
+    2,
+    "a view stopped deriving its highlight from the server marker",
+  );
+  // ...and every `isSelf` the screen names is READ from the contract. It builds
+  // none of its own.
+  assert.equal(
+    (SECTION_CODE.match(/isSelf/g) ?? []).length,
+    (SECTION_CODE.match(/row\.isSelf/g) ?? []).length,
+    "the screen names an isSelf that did not come from the contract row",
+  );
+});
+
+test('14g. "לו״ז כולם" navigates the loaded day, and never re-reads it', () => {
+  // The three options — everything, by exam type, by date — are the SHARED
+  // navigation bar over rows already in hand.
+  assert.ok(SECTION.includes('const ALL_FILTER_LABEL = "הכל";'));
+  assert.ok(
+    SECTION_CODE.includes('from "@/lib/components/ExamScheduleNav"'),
+    "the screen does not mount the shared navigation bar",
+  );
+  assert.equal(
+    (SECTION_CODE.match(/<ExamScheduleNav\s/g) ?? []).length,
+    1,
+    "a second navigation bar was added",
+  );
+  // The bar appears in "לו״ז כולם" ONLY: the personal view is already the
+  // shortest list on the screen.
+  assert.ok(
+    SECTION_CODE.includes('mode === "all" && !dayIsEmpty && ('),
+    "the navigation bar is not scoped to the everyone view",
+  );
+
+  // The option lists and the narrowing come from the PURE view core, so this
+  // screen holds no filtering rule of its own to disagree with the instructor
+  // screen's.
+  assert.ok(SECTION_CODE.includes('from "@/lib/components/exam-schedule-view-core"'));
+  for (const call of ["listExamDefinitionNames(allRows)", "listExamDates(allRows)"]) {
+    assert.ok(SECTION_CODE.includes(call), `the options are not derived from the loaded day: ${call}`);
+  }
+  assert.ok(SECTION_CODE.includes("filterExamRows(allRows, {"), "the views are not one narrowing");
+
+  // NAVIGATING ISSUES NO REQUEST. There is exactly one server call, it takes the
+  // DATE and nothing else, and the load is keyed by that date alone — so no view
+  // selection can re-read, widen or reach past the reader.
+  const calls = SECTION_CODE.match(/getTraineeExamDaySchedule\([^)]*\)/g) ?? [];
+  assert.deepEqual(calls, ["getTraineeExamDaySchedule(selectedDate)"]);
+  assert.equal((SECTION_CODE.match(/useEffect\(/g) ?? []).length, 1);
+  assert.ok(SECTION_CODE.includes("}, [selectedDate]);"), "the load is no longer keyed by the date");
+  for (const token of ["navMode]", "navDate]", "navDefinitionName]", "mode]"]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the load now depends on ${token}`);
+  }
+  // ...and the narrowing runs over the contract as it ARRIVED.
+  for (const token of [
+    "allRows.concat(",
+    "allRows.push(",
+    "view.allRows.concat(",
+    "view.allRows.push(",
+    "...allRows",
+    "...view.allRows",
+  ]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen builds rows with ${token}`);
+  }
+});
+
+test("14h. the participant summary is not printed twice on one block", () => {
+  // A block whose operational rows are rendered below already names every
+  // examinee and every instructed trainee, in their waves and with their horses.
+  assert.ok(
+    SECTION_CODE.includes("{row.assignments.length === 0 && ("),
+    "the duplicate participant summary was not removed",
+  );
+  const guardStart = SECTION_CODE.indexOf("{row.assignments.length === 0 && (");
+  const handOff = SECTION_CODE.indexOf("<ExamAssignmentRows");
+  assert.ok(handOff > guardStart, "the summary no longer sits above the operational rows");
+  const summary = SECTION_CODE.slice(guardStart, handOff);
+  assert.ok(summary.includes("row.examineeNames"), "the examinee summary moved out of the guard");
+  assert.ok(
+    summary.includes("row.instructedTraineeNames"),
+    "the trainee summary moved out of the guard",
+  );
+  // Both summary lines are inside the ONE guard: neither survives on a block
+  // whose rows are about to name the same people.
+  assert.equal(
+    (SECTION_CODE.match(/<PeopleLine/g) ?? []).length,
+    2,
+    "a participant summary line escaped the duplicate guard",
+  );
 });
 
 test('14d. "לו״ז שלי" still identifies "mine" by the server-computed marker, never by name', () => {
@@ -816,10 +1155,31 @@ test("15. no instructor or admin exam file was modified", () => {
   const adminExams = "app/admin/courses/[courseOfferingId]/exams";
   assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", adminExams]), []);
   assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", adminExams]), []);
-  // The only instructor-side file this slice touches at all is that slice's own
-  // guard suite, whose committed footprint claim was measured against a HEAD
-  // that no longer exists. Its authorization assertions are untouched.
-  assert.equal(unchangedSinceHead(INSTRUCTOR_SUITE_REL), false, "the re-pointed guard is missing");
+  // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — the instructor guard suite.
+  //
+  // This asserted that `INSTRUCTOR_SUITE_REL` was MODIFIED relative to HEAD: the
+  // operational-UI slice re-pointed that suite's footprint claim, and while that
+  // slice was in flight the modification was visible. It is an IN-FLIGHT claim by
+  // construction — once any such slice is committed the tree is clean and the
+  // assertion inverts — so it fails on its own success and can never hold again.
+  //
+  // It is REPLACED by the durable property it was standing in for: the
+  // instructor suite still EXISTS and still carries its authorization
+  // assertions, so no slice can have quietly emptied it while re-pointing a
+  // footprint list. The instructor ACTION and CLIENT keep the strict
+  // byte-identical claim just above, which is what actually protects the
+  // instructor surface.
+  const instructorSuite = read(INSTRUCTOR_SUITE_REL);
+  for (const claim of [
+    "assertScopeCoreAuthorizationUnchanged",
+    '"--quiet", "HEAD", "--", READERS_REL',
+    "approvedSlicePaths",
+  ]) {
+    assert.ok(
+      instructorSuite.includes(claim),
+      `the instructor guard suite no longer states ${claim}`,
+    );
+  }
 
   // ...nor was anything about schema, identity, sessions or capabilities.
   for (const dir of ["prisma", "lib/auth", "lib/course/capabilities"]) {
@@ -899,11 +1259,61 @@ test("17. the working tree holds only the approved paths of this slice and the o
     INSTRUCTOR_SECTION_REL,
     ASSIGNMENT_ROWS_REL,
     ASSIGNMENT_ROWS_SUITE_REL,
+    // EX-ROLE-SCHEDULE-REDESIGN RE-POINT, on the same terms: an EXACT path list,
+    // never a directory and never a glob. These six are that slice's own NEW
+    // paths — the pure view core that owns the wave grouping, the nesting and the
+    // filtering, the shared navigation bar, the compact personal-detail
+    // renderer, and the suite beside each of them. Every one is a
+    // `lib/components` leaf: the slice adds no route, no action, no reader and
+    // no `lib/exam` file, and test 15 above independently pins that last part.
+    //
+    // `NAV_REL` and `NAV_SUITE_REL` STAY on this list only as the merged
+    // operational-UI slice's paths; this slice touches neither, and
+    // `assertNavVisibilityOnlyGainedExamsId` now proves they are byte-identical
+    // to HEAD.
+    VIEW_CORE_REL,
+    VIEW_CORE_SUITE_REL,
+    SCHEDULE_NAV_REL,
+    SCHEDULE_NAV_SUITE_REL,
+    PERSONAL_DETAIL_REL,
+    PERSONAL_DETAIL_SUITE_REL,
     NAV_REL,
     NAV_SUITE_REL,
     // The nine `lib/exam` paths of the merged operational-READ slice are GONE
     // from this list for the reason given in test 15 above: they are dead
     // permissions now, and dropping them restores the sweep to full strength.
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+    "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-read-" + "dto.test.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
   ];
   const offenders = [...touched]
     .map((path) => path.split("\\").join("/"))

@@ -283,6 +283,7 @@ import { setExamInstructedTraineePairing } from "@/lib/actions/exam-pairing-writ
 import {
   updateExamAssignmentDetails,
   moveExamAssignment,
+  setExamExamineeInstructedTrainee,
 } from "@/lib/actions/admin-exam-workspace-edit-io";
 
 /**
@@ -1364,24 +1365,20 @@ export async function updateExamAssignmentDetailsAction(
     );
   }
 
-  // 5. The PAIRING leg — EXACTLY ONE call to the committed writer, and never two.
+  // 5. The TEACHING-LINK leg — EXACTLY ONE call, to the ATOMIC replacement.
   //
-  //    An explicit UI-level "unpair the old one, then pair the new one" was
-  //    removed: two writes mean two transactions, and between them the examinee
-  //    is COMMITTED as teaching nobody. If the second one were then refused, the
-  //    manager would be left with a link they never asked to delete. So the
-  //    intended pairing is handed to the writer directly and it performs the
-  //    switch inside its own transaction, under its own rules:
+  //    Not the trainee-first pairing writer, and never two calls. Replacing the
+  //    trainee an examinee teaches is ONE decision with TWO halves — release the
+  //    old one, claim the new one — and the committed one-to-one rule correctly
+  //    refuses the second half while the first is still in force. Splitting it in
+  //    the UI would commit the examinee as teaching NOBODY in between, and a
+  //    refusal of the second write would make that permanent.
   //
-  //      - choosing a trainee -> pair THAT trainee to THIS examinee. The writer
-  //        overwrites the trainee's own allocation conditionally, which is the
-  //        switch; it never touches whoever the examinee was linked to except
-  //        through its own one-to-one rule;
-  //      - choosing "nobody"  -> unpair the trainee the card was rendered with.
-  //
-  //    A REFUSAL therefore writes NOTHING and the previous pairing survives
-  //    intact — including the one-to-one refusal, which is the backend's rule
-  //    and is neither re-derived nor pre-empted here.
+  //    So the INTENDED end state is handed to one operation, which resolves the
+  //    current trainee itself and applies both halves inside ONE transaction. A
+  //    refusal writes nothing at all, so the pairing the card was rendered with
+  //    is still in force — including when the trainee chosen already belongs to
+  //    another examinee, which is refused rather than stolen.
   //
   //    Reached only when the card actually CARRIED the picker, proved by the
   //    presence of its hidden companion field, so a card whose exam has no
@@ -1395,21 +1392,10 @@ export async function updateExamAssignmentDetailsAction(
     const next = typeof submittedNext === "string" ? submittedNext : "";
 
     if (next !== previous) {
-      // WHICH instructed-trainee row the one call names, and WHAT it is being
-      // pointed at. Choosing somebody names the new trainee and this examinee;
-      // choosing nobody names the trainee the card was rendered with and `null`.
-      const isClearing = next === EXAM_PAIRING_NONE_VALUE;
-      const instructedTraineeAssignmentId = isClearing ? previous : next;
-      const examineeAssignmentId = isClearing
-        ? null
-        : typeof submittedAssignmentId === "string"
-          ? submittedAssignmentId
-          : "";
-
-      const outcome = await setExamInstructedTraineePairing(
+      const outcome = await setExamExamineeInstructedTrainee(
         courseOfferingId,
-        instructedTraineeAssignmentId,
-        examineeAssignmentId,
+        typeof submittedAssignmentId === "string" ? submittedAssignmentId : "",
+        next === EXAM_PAIRING_NONE_VALUE ? null : next,
       );
 
       if (outcome.ok) {
@@ -1418,19 +1404,18 @@ export async function updateExamAssignmentDetailsAction(
         if (outcome.code === "offering_not_found") {
           redirect("/admin/courses?error=invalid");
         }
-        // The write was refused, so NOTHING was written and the pairing the card
-        // was rendered with is still in force. The refusal CODE is deliberately
-        // not carried into the URL: the card reports one fixed sentence that
-        // says the details saved and the link did not, which is the whole of
-        // what a manager can act on.
+        // The write was refused, so NOTHING was written and the link the card was
+        // rendered with is still in force. The refusal CODE is deliberately not
+        // carried into the URL: the card reports one fixed sentence that says the
+        // details saved, the replacement did not, and the previous link remains.
         pairingRefused = true;
       }
     }
   }
 
   // 6. ONE honest outcome. Revalidate EXACTLY this exams path, then say which of
-  //    the three things actually happened — never a general "saved" when only
-  //    the detail leg succeeded.
+  //    the three things actually happened — never a general "saved" when only the
+  //    detail leg succeeded.
   revalidatePath(examsPath);
   const editToken = pairingRefused
     ? "PAIRING_FAILED"

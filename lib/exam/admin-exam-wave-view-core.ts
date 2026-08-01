@@ -277,8 +277,20 @@ export interface AdminExamWavePayloadInput {
 export interface ReadAdminExamWaveViewDeps {
   readonly requireAdminCourseOffering: (
     courseOfferingId: string,
-  ) => Promise<{ readonly id: string }>;
-  readonly loadPlan: (verifiedCourseOfferingId: string) => Promise<AdminExamWavePayloadInput>;
+  ) => Promise<{ readonly id: string; readonly level?: unknown }>;
+  /**
+   * The committed plan load, given BOTH the verified offering id and its
+   * DB-VERIFIED level.
+   *
+   * The level is carried through — never inspected here — because the committed
+   * loader options are what decide the beginner containment gate, and producing
+   * them from anything but the verified level would be a second opinion about a
+   * containment rule this module does not own.
+   */
+  readonly loadPlan: (
+    verifiedCourseOfferingId: string,
+    verifiedCourseLevel: unknown,
+  ) => Promise<AdminExamWavePayloadInput>;
 }
 
 /**
@@ -311,7 +323,7 @@ export async function readAdminExamWaveViewWithDeps(
     return emptyAdminExamWaveView();
   }
 
-  const payload = await deps.loadPlan(verifiedId);
+  const payload = await deps.loadPlan(verifiedId, offering?.level);
   const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
   const details = payload?.storedAssignmentDetails;
 

@@ -91,6 +91,17 @@ import {
   CourseOperationNotPermittedError,
 } from "@/lib/course/operation-policy-core";
 import {
+  setExamExamineeInstructedTraineeWithDeps,
+  type ExamReplacementAssignmentFacts,
+  type ExamReplacementClear,
+  type SetExamExamineeInstructedTraineeResult,
+} from "@/lib/exam/admin-exam-examinee-pairing-core";
+import type {
+  ExamPairingDecision,
+  ExamPairingExamineeFacts,
+  ExamPairingInstructedTraineeFacts,
+} from "@/lib/exam/exam-pairing-write-core";
+import {
   updateExamAssignmentDetailsWithDeps,
   moveExamAssignmentWithDeps,
   type ExistingExamAssignmentForEdit,
@@ -98,6 +109,8 @@ import {
   type MoveExamAssignmentResult,
   type UpdateExamAssignmentDetailsResult,
 } from "@/lib/exam/admin-exam-workspace-edit-core";
+
+export type { SetExamExamineeInstructedTraineeResult } from "@/lib/exam/admin-exam-examinee-pairing-core";
 
 export type {
   MoveExamAssignmentResult,
@@ -371,4 +384,206 @@ export function moveExamAssignment(
     isCourseNotFoundError,
     isOperationNotAllowedError,
   });
+}
+
+// ===========================================================================
+// 3. The ATOMIC instructed-trainee replacement
+// ===========================================================================
+
+/**
+ * The replacement's private ABORT signal — a class declared here and exported
+ * nowhere.
+ *
+ * A replacement writes TWO rows, so a failed condition must UNDO whatever has
+ * already been written in the same transaction. Throwing from inside
+ * `$transaction` is what rolls it back; catching that one class OUTSIDE turns it
+ * into an ordinary `false`, which the pure orchestration reports as a stale
+ * write. Any OTHER error keeps its identity and propagates.
+ */
+class ExamReplacementConditionFailed extends Error {}
+
+/**
+ * Read ONE assignment for the replacement, scoped by the SERVER-RESOLVED plan
+ * through the session relation.
+ *
+ * `findFirst` with the relation filter — never `findUnique({ where: { id } })` —
+ * so an assignment under ANOTHER course's plan reads as `null` rather than being
+ * found and then rejected by a comparison someone could later remove.
+ *
+ * FOUR columns. No `studentId`, no name, no horse, no topic, no discipline and
+ * no timestamp: a pairing decision needs identity, session, role and the index,
+ * and reading a person's details for it would put personal data in a place with
+ * no use for one.
+ */
+async function findReplacementAssignmentForPlan(
+  planId: string,
+  assignmentId: string,
+): Promise<ExamReplacementAssignmentFacts | null> {
+  const row = await prisma.examAssignment.findFirst({
+    where: { id: assignmentId, session: { planId } },
+    select: { id: true, sessionId: true, role: true, pairingIndex: true },
+  });
+  if (row === null) return null;
+  return {
+    assignmentId: row.id,
+    sessionId: row.sessionId,
+    role: row.role,
+    pairingIndex: row.pairingIndex,
+  };
+}
+
+/** Every EXAMINEE row of one session — the allocation and ambiguity input. */
+async function listReplacementSessionExaminees(
+  sessionId: string,
+): Promise<readonly ExamPairingExamineeFacts[]> {
+  const rows = await prisma.examAssignment.findMany({
+    where: { sessionId, role: "EXAMINEE" },
+    select: { id: true, pairingIndex: true },
+  });
+  return rows.map((row) => ({ assignmentId: row.id, pairingIndex: row.pairingIndex }));
+}
+
+/** Every INSTRUCTED_TRAINEE row of one session, the edited one included. */
+async function listReplacementSessionInstructedTrainees(
+  sessionId: string,
+): Promise<readonly ExamPairingInstructedTraineeFacts[]> {
+  const rows = await prisma.examAssignment.findMany({
+    where: { sessionId, role: "INSTRUCTED_TRAINEE" },
+    select: { id: true, pairingIndex: true },
+  });
+  return rows.map((row) => ({ assignmentId: row.id, pairingIndex: row.pairingIndex }));
+}
+
+/**
+ * Apply the WHOLE switch in ONE transaction.
+ *
+ * ATOMIC BY CONSTRUCTION, and that is the entire reason this function exists: a
+ * replacement clears the trainee that held the examinee and writes the new one,
+ * and BOTH statements are part of one `$transaction`. There is therefore no
+ * moment at which the examinee is COMMITTED as teaching nobody — a reader either
+ * sees the old partner or the new one, never neither.
+ *
+ * EVERY statement is CONDITIONAL on the exact state the pure decision was made
+ * from:
+ *
+ *   - the clear applies only while the old trainee still holds the exact index
+ *     the decision saw;
+ *   - the examinee row is claimed by an UPDATE, conditional on still holding the
+ *     index the decision expected — which is what serializes two managers
+ *     switching the same examinee at once;
+ *   - the new trainee's row is written only while it still holds what it held.
+ *
+ * A failed condition throws the private abort above, the transaction rolls back,
+ * and the caller reports a stale write. Nothing is ever half-applied.
+ *
+ * ONE column is written on each row. No role, no session, no student, no horse,
+ * no topic and no discipline is touched.
+ */
+async function applyExamExamineeInstructedTraineeReplacement(command: {
+  readonly clear: ExamReplacementClear | null;
+  readonly pair: ExamPairingDecision | null;
+  readonly examineeAssignmentId: string;
+  readonly sessionId: string;
+  readonly instructedTraineeAssignmentId: string | null;
+}): Promise<boolean> {
+  try {
+    await prisma.$transaction(async (tx) => {
+      // 1. RELEASE the trainee that currently holds this examinee — conditional
+      //    on it still holding exactly the index the decision saw.
+      if (command.clear !== null) {
+        const cleared = await tx.examAssignment.updateMany({
+          where: {
+            id: command.clear.instructedTraineeAssignmentId,
+            role: "INSTRUCTED_TRAINEE",
+            pairingIndex: command.clear.expectedPairingIndex,
+          },
+          data: { pairingIndex: null },
+        });
+        if (cleared.count !== 1) throw new ExamReplacementConditionFailed();
+      }
+
+      const pair = command.pair;
+      const instructedId = command.instructedTraineeAssignmentId;
+      if (pair === null || instructedId === null) return;
+      if (pair.kind !== "PAIR_WITH_EXISTING_INDEX" && pair.kind !== "PAIR_WITH_NEW_INDEX") {
+        // A `NO_CHANGE` or `REFUSE` arm never reaches a write; the pure decision
+        // has already turned both into an outcome of its own.
+        return;
+      }
+
+      // 2. CLAIM the examinee row, by an UPDATE on both paths. Allocation writes
+      //    the new index only while the row holds none; reuse writes the index it
+      //    already holds back to itself, which takes the same row lock and is what
+      //    blocks a rival transaction from claiming the same examinee.
+      const claimed = await tx.examAssignment.updateMany({
+        where: {
+          id: command.examineeAssignmentId,
+          role: "EXAMINEE",
+          pairingIndex: pair.expectedExamineePairingIndex,
+        },
+        data: { pairingIndex: pair.pairingIndex },
+      });
+      if (claimed.count !== 1) throw new ExamReplacementConditionFailed();
+
+      // 3. THE ONE-TO-ONE RULE'S LAST LINE OF DEFENCE, after the examinee row is
+      //    locked: no OTHER instructed trainee of this session may hold the index.
+      //    The trainee being replaced was released in step 1, inside this same
+      //    transaction, so it is correctly not counted here.
+      const rivals = await tx.examAssignment.count({
+        where: {
+          sessionId: command.sessionId,
+          role: "INSTRUCTED_TRAINEE",
+          pairingIndex: pair.pairingIndex,
+          id: { not: instructedId },
+        },
+      });
+      if (rivals !== 0) throw new ExamReplacementConditionFailed();
+
+      // 4. The new trainee's row, conditional on the state the decision used.
+      const written = await tx.examAssignment.updateMany({
+        where: {
+          id: instructedId,
+          role: "INSTRUCTED_TRAINEE",
+          pairingIndex: pair.expectedInstructedPairingIndex,
+        },
+        data: { pairingIndex: pair.pairingIndex },
+      });
+      if (written.count !== 1) throw new ExamReplacementConditionFailed();
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof ExamReplacementConditionFailed) return false;
+    throw error;
+  }
+}
+
+/**
+ * Set the ONE instructed trainee an examinee teaches — the atomic replacement.
+ *
+ * The whole decision order is the pure core's contract; this function supplies
+ * the effects and nothing else. It restates no pairing rule: the roles, the
+ * shared session, index reuse versus allocation, ambiguity and the one-to-one
+ * rule are all the committed pairing decision's, reached through that core.
+ */
+export function setExamExamineeInstructedTrainee(
+  courseOfferingId: string,
+  examineeAssignmentId: string,
+  nextInstructedTraineeAssignmentId: string | null,
+): Promise<SetExamExamineeInstructedTraineeResult> {
+  return setExamExamineeInstructedTraineeWithDeps(
+    courseOfferingId,
+    examineeAssignmentId,
+    nextInstructedTraineeAssignmentId,
+    {
+      requireCourseContext,
+      assertConfigurationAllowed,
+      findExamPlanByCourseOfferingId,
+      findAssignmentForPlan: findReplacementAssignmentForPlan,
+      listSessionExaminees: listReplacementSessionExaminees,
+      listSessionInstructedTrainees: listReplacementSessionInstructedTrainees,
+      applyReplacement: applyExamExamineeInstructedTraineeReplacement,
+      isCourseNotFoundError,
+      isOperationNotAllowedError,
+    },
+  );
 }

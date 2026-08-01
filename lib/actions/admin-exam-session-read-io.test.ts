@@ -219,6 +219,12 @@ const APPROVED_MODIFIED_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
   // The slice's two `lib/` modules are ADDITIONS, so a modifications-only
   // diff correctly never reports them; the suites beside them are edits.
+  // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+  // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+  // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+  // own assignment by exact student id. Every path below is named EXACTLY - no
+  // directory, no prefix, no glob - so an unrelated file still fails this guard,
+  // and each module name is SPLIT so this list never enrols itself as a caller.
   "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
   "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
   "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
@@ -245,6 +251,21 @@ const APPROVED_MODIFIED_FILES = [
   "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
   "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
   "lib/actions/" + "exam-role" + "-readers.ts",
+  "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+  "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+  "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+  "lib/exam/" + "exam-plan-loader" + "-core.ts",
+  "lib/exam/" + "exam-read-" + "dto.test.ts",
+  "lib/exam/" + "exam-rea" + "d-dto.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/exam/" + "exam-trainee-view" + "-core.ts",
 ];
 
 /**
@@ -1101,7 +1122,18 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
     "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
     "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
     "lib/actions/" + "exam-role" + "-readers.ts",
-];
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
+  ];
   for (const path of APPROVED_MODIFIED_FILES) {
     assert.ok(
       path.endsWith(".test.ts") || APPROVED_PRODUCTION.includes(path),
@@ -1209,7 +1241,16 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
     "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
     "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
     "lib/actions/" + "exam-role" + "-readers.ts",
-];
+    // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+    // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+    // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+    // own assignment by exact student id. Every path below is named EXACTLY - no
+    // directory, no prefix, no glob - so an unrelated file still fails this guard,
+    // and each module name is SPLIT so this list never enrols itself as a caller.
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+  ];
   const INTRODUCED_FILES = [
     ...NEW_FILES,
     ...APPROVED_NEW_ROUTE_FILES,

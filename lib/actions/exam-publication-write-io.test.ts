@@ -123,6 +123,12 @@ const APPROVED_MODIFIED_GUARDS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
   // The slice's two `lib/` modules are ADDITIONS, so a modifications-only
   // diff correctly never reports them; the suites beside them are edits.
+  // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+  // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+  // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+  // own assignment by exact student id. Every path below is named EXACTLY - no
+  // directory, no prefix, no glob - so an unrelated file still fails this guard,
+  // and each module name is SPLIT so this list never enrols itself as a caller.
   "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
   "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
   "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
@@ -142,6 +148,16 @@ const APPROVED_MODIFIED_GUARDS = [
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
   "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+  "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+  "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+  "lib/exam/" + "exam-read-" + "dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
 ].sort();
 
 /**
@@ -204,6 +220,15 @@ const APPROVED_NEIGHBOUR_ADDITIONS = [
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
   "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+  // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+  // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+  // own assignment by exact student id. Every path below is named EXACTLY - no
+  // directory, no prefix, no glob - so an unrelated file still fails this guard,
+  // and each module name is SPLIT so this list never enrols itself as a caller.
+  "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
 ].sort();
 
 /**
@@ -312,6 +337,16 @@ const APPROVED_UI_SLICE_PATHS = [
   // as a caller of either.
   "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
   "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+  // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+  // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+  // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+  // own assignment by exact student id. Every path below is named EXACTLY - no
+  // directory, no prefix, no glob - so an unrelated file still fails this guard,
+  // and each module name is SPLIT so this list never enrols itself as a caller.
+  "lib/exam/" + "exam-plan-loader" + "-core.ts",
+  "lib/exam/" + "exam-rea" + "d-dto.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.ts",
+  "lib/exam/" + "exam-trainee-view" + "-core.ts",
 ].sort();
 
 /** The ONE production module that may reach this backend, once the UI is wired. */
@@ -1148,18 +1183,34 @@ test("26. the slice modified ONLY guard suites — not one production file", () 
     ...new Set(APPROVED_UI_SLICE_PATHS.filter((path) => !path.endsWith(".test.ts"))),
   ].sort();
 
-  // RE-POINTED by EX-ADMIN-WORKSPACE-UX, and GROWN by an EXACT set rather than
-  // relaxed. The workspace rebuild adds three route-local production files and two
-  // NEW `lib/` modules; it modifies no committed `lib/` production module. Every
-  // entry is spelled in full, so a further production file still fails here.
+  // MERGE RESOLUTION — the union of both slices' approved production files, each
+  // named EXACTLY so a further one still fails here.
+  //
+  //  - EX-BEGINNER-EXAM-READ adds four `lib/` read-pipeline modules: the plan
+  //    loader gains the Level-1 beginner containment option, the role scope core
+  //    derives it from the DB-verified offering level, the trainee view core
+  //    carries the server-derived viewer id on its INTERNAL projection, and the
+  //    narrowing turns that id into one boolean per trainee assignment row;
+  //  - EX-ADMIN-WORKSPACE-UX adds three route-local production files, its own two
+  //    `lib/` modules and the ONE role-reader edit that exposes the canonical
+  //    timetable derivation.
+  //
+  // None of them is a publication module: THIS slice's own writer and core are
+  // still asserted byte-identical immediately below.
   assert.deepEqual(successorProduction.sort(), [
     `${ROUTE_DIR}/actions.ts`,
     `${ROUTE_DIR}/page.tsx`,
     `${ROUTE_DIR}/EditExamAssignmentCard.tsx`,
     `${ROUTE_DIR}/exam-workspace-view.ts`,
     `${ROUTE_DIR}/exam-workspace-messages.ts`,
-    'lib/actions/' + 'admin-exam-workspace-edit' + '-io.ts',
-    'lib/exam/' + 'admin-exam-workspace-edit' + '-core.ts',
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    "lib/actions/" + "exam-role" + "-readers.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-read-dto" + ".ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
   ].sort());
 
   for (const path of SLICE_FILES.filter(
@@ -1168,22 +1219,20 @@ test("26. the slice modified ONLY guard suites — not one production file", () 
     assert.equal(modified.includes(path), false, `${path} was modified`);
   }
 
-  // An ADDITION must not also be a MODIFICATION — that would mean the file already
-  // existed and the "addition" claim is stale. Route CONTRACT SUITES are excluded:
-  // EX-ADMIN-WORKSPACE-UX legitimately re-points several of them, and a suite that
-  // is re-pointed is an edit rather than a broken addition claim.
-  // An ADDITION must not also be a MODIFICATION — that would mean the file already
-  // existed and the "addition" claim is stale. The paths EX-ADMIN-WORKSPACE-UX
-  // legitimately EDITS are excluded: a re-pointed guard suite, this route's page
-  // and its Server Action module are edits rather than broken addition claims, and
-  // every one of them is named exactly in `APPROVED_UI_SLICE_PATHS`.
-  const WORKSPACE_EDITS = new Set([
+  // MERGE RESOLUTION, and the axis is the same on both sides: an ADDITION must not
+  // also be a MODIFICATION, because that would mean the file already existed and
+  // the "addition" claim is stale. What legitimately IS an edit is excluded by
+  // exact name — a re-pointed guard suite (either slice's), and this route's page
+  // and Server Action module, which EX-ADMIN-WORKSPACE-UX rewrites. Any addition
+  // outside those is still forbidden from being modified.
+  const APPROVED_EDITS = new Set([
+    ...APPROVED_MODIFIED_GUARDS,
     ...APPROVED_UI_SLICE_PATHS.filter((entry) => entry.endsWith(".test.ts")),
     `${ROUTE_DIR}/page.tsx`,
     `${ROUTE_DIR}/actions.ts`,
   ]);
   for (const path of APPROVED_NEIGHBOUR_ADDITIONS.filter(
-    (entry) => !WORKSPACE_EDITS.has(entry),
+    (entry) => !APPROVED_EDITS.has(entry),
   )) {
     assert.equal(modified.includes(path), false, `${path} was modified`);
   }

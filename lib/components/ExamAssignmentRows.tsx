@@ -1,27 +1,49 @@
 "use client";
 
 /**
- * EX-ROLE-OP-UI-MVP — the ONE renderer for a stored exam block's complete
- * operational assignment rows.
+ * EX-ROLE-SCHEDULE-REDESIGN — the ONE renderer for a stored exam block's
+ * operational schedule.
  *
  * IT IS SHARED BY THE INSTRUCTOR AND THE TRAINEE SCREEN ON PURPOSE. The read
  * layer hands both roles the SAME assignment contract — what differs between
  * them is WHICH ROWS each is given (publication, the selected day, the resolved
  * course), and that is decided server-side long before this file is reached. Two
  * hand-written copies of this layout would be two places for the Hebrew labels,
- * the missing-value rules and the pairing wording to drift apart, and a drift
- * here reads to a rider as a different schedule. So there is exactly one copy.
+ * the missing-value rules and the nesting to drift apart, and a drift here reads
+ * to a rider as a different schedule. So there is exactly one copy.
+ *
+ * ===========================================================================
+ * IT RENDERS OPERATIONAL REALITY, NOT ONE CARD PER DATABASE ROW
+ * ===========================================================================
+ * The contract is a FLAT array: one entry per stored assignment, examinees and
+ * instructed trainees side by side as equals. Rendered literally that prints the
+ * same lesson twice — once from the examinee's row and once from the trainee's —
+ * repeats the same time on every card, and leaves the reader to work out who is
+ * teaching whom. So the array is reshaped, by the pure sibling core, into what
+ * actually happens on the ground:
+ *
+ *   ONE WAVE  (its time stated exactly ONCE)
+ *     ├─ examinee unit — name, horse, topic, discipline, instructed trainee
+ *     └─ examinee unit — the parallel one, side by side on a wide screen
+ *
+ * AN INSTRUCTED TRAINEE NEVER GETS A CARD OF THEIR OWN — IN EITHER STATE. When
+ * they are PAIRED they are the person the examinee teaches, so they are rendered
+ * INSIDE that examinee's unit. When the read layer paired them with NOBODY they
+ * are rendered as a single compact WARNING LINE at the foot of their wave —
+ * plain text, no card markup, no unit markup, no grid cell, no role chip and no
+ * second visual block beside the examinee cards. They are not erased, because a
+ * real person missing from a real schedule is worse than a visible gap; they are
+ * simply never presented as a participant in their own right.
  *
  * ===========================================================================
  * IT CALCULATES NOTHING
  * ===========================================================================
  * There is no pairing rule, no timetable rule, no slot arithmetic, no duration,
- * no sort and no regrouping in this file. Every value below is rendered EXACTLY
- * as the committed cores decided it: the role, the horse, the inherited topic and
- * discipline, the exact personal start and end, and the RESOLVED pairing names.
- * The array is rendered in the order it arrives, because that order already IS
- * the operational order — re-sorting it here would invent a second, disagreeing
- * schedule out of presentation code.
+ * no sort and no name comparison in this file. Every value below is rendered
+ * EXACTLY as the committed cores decided it: the role, the horse, the inherited
+ * topic and discipline, the exact personal window and the RESOLVED pairing
+ * names. The waves themselves come from the pure core, which groups and nests
+ * but never reorders.
  *
  * `pairedParticipantNames` is the ONLY pairing field read. The contract also
  * carries `pairedParticipantName`, the single-partner convenience, and it is
@@ -34,8 +56,8 @@
  * PRIVACY: ONLY APPROVED DISPLAY VALUES ARE RENDERED
  * ===========================================================================
  * Rendered here: the participant's display name, the Hebrew role label, the
- * exact personal start and end time, the horse name, the instruction topic, the
- * discipline and the resolved paired participants' display names.
+ * wave's exact personal start and end time, the horse name, the instruction
+ * topic, the discipline and the resolved paired participants' display names.
  *
  * NOT rendered, and not even representable in the props below: any assignment,
  * student, session, definition, lesson, plan or course id, `pairingIndex`, any
@@ -45,35 +67,27 @@
  * appearing on screen by itself, and there is no `JSON.stringify` and no generic
  * object renderer here through which one could leak.
  *
+ * ===========================================================================
+ * EXTENDING IT LATER
+ * ===========================================================================
+ * A block that carries no stored assignment renders NOTHING at all — a live
+ * beginner row has none today, and a separately reviewed slice will hand this
+ * screen beginner rows of its own. That slice adds its own read-only renderer
+ * beside this one; nothing here needs to change to make room for it, and nothing
+ * here stubs a beginner placeholder in the meantime.
+ *
  * READ-ONLY BY CONSTRUCTION: no state, no effect, no event handler, no form, no
  * input, no button, no Server Action and no publication concept. It receives an
  * array and returns markup.
  */
+import {
+  groupExamAssignmentsIntoWaves,
+  type ExamAssignmentRowView,
+  type ExamExamineeUnitView,
+  type ExamWaveView,
+} from "./exam-schedule-view-core";
 
-/**
- * ONE participant of one stored exam block, as this renderer needs them.
- *
- * Structurally identical to the read layer's shared assignment contract, and
- * declared here rather than imported so no client component reaches into the
- * exam read pipeline's modules. TypeScript still checks the two agree at every
- * call site: a caller passes its own rows straight in, so a rename or a type
- * change upstream fails the build rather than silently blanking the screen.
- */
-export interface ExamAssignmentRowView {
-  /** The resolved display name, or `null` when it could not be resolved. */
-  readonly participantName: string | null;
-  readonly role: "EXAMINEE" | "INSTRUCTED_TRAINEE";
-  /** The examinee's horse. Always `null` on an instructed-trainee row. */
-  readonly horseName: string | null;
-  readonly instructionTopic: string | null;
-  readonly discipline: string | null;
-  /** The participant's EXACT personal start. Never the block start. */
-  readonly personalStartTime: string | null;
-  /** The participant's EXACT personal end. Never the block end. */
-  readonly personalEndTime: string | null;
-  /** Every resolved partner, in the resolved pairing order. */
-  readonly pairedParticipantNames: readonly string[];
-}
+export type { ExamAssignmentRowView } from "./exam-schedule-view-core";
 
 /** The approved Hebrew role labels. */
 const ROLE_LABELS: Record<ExamAssignmentRowView["role"], string> = {
@@ -81,15 +95,14 @@ const ROLE_LABELS: Record<ExamAssignmentRowView["role"], string> = {
   INSTRUCTED_TRAINEE: "חניך/ה מודרך/ת",
 };
 
+/** The label above the instructed trainee nested inside an examinee's unit. */
+const INSTRUCTED_TRAINEE_LABEL = "חניכים מודרכים";
+
 /**
- * The pairing line's label, by the role of the participant it sits under: an
- * instructed trainee INSTRUCTS their examinee, an examinee IS instructed by
- * theirs. The list itself is the same resolved pairing read from both sides.
+ * The WARNING prefix for an instructed trainee the read layer paired with
+ * nobody. It is a gap notice, never a participant heading — see {@link Wave}.
  */
-const PAIRED_LABELS: Record<ExamAssignmentRowView["role"], string> = {
-  EXAMINEE: "חניכים מודרכים",
-  INSTRUCTED_TRAINEE: "מדריך/ה את",
-};
+const UNPAIRED_TRAINEE_LABEL = "חניך/ה מודרך/ת ללא שיוך";
 
 /**
  * Shown INSTEAD of a name that the read layer could not resolve. It is neutral
@@ -99,9 +112,9 @@ const PAIRED_LABELS: Record<ExamAssignmentRowView["role"], string> = {
 const UNNAMED_PARTICIPANT_TEXT = "שם לא זמין";
 
 /**
- * Shown when the participant's personal window is not fully known. The block's
- * own start and end are NEVER substituted: a rider reading a time must be
- * reading their own assignment, not a layout convenience.
+ * Shown when a wave's window is not fully known. The block's own start and end
+ * are NEVER substituted: a rider reading a time must be reading their own
+ * assignment, not a layout convenience.
  */
 const NO_PERSONAL_TIME_TEXT = "שעה אישית טרם נקבעה";
 
@@ -110,17 +123,17 @@ const TOPIC_LABEL = "נושא";
 const DISCIPLINE_LABEL = "תחום";
 
 /**
- * The participant's personal window, or `null` when it is not fully known.
+ * The wave's window, or `null` when it is not fully known.
  *
  * BOTH ends are required. A half-known window rendered as "09:00 -" or as a bare
  * "09:00" would read as a decided time, so a missing end demotes the whole line
  * to {@link NO_PERSONAL_TIME_TEXT}. This is a formatting choice over two values
  * the read layer already decided — no time is computed, derived or defaulted.
  */
-function personalTimeText(row: ExamAssignmentRowView): string | null {
-  if (row.personalStartTime === null) return null;
-  if (row.personalEndTime === null) return null;
-  return `${row.personalStartTime} - ${row.personalEndTime}`;
+function waveTimeText(wave: ExamWaveView): string | null {
+  if (wave.startTime === null) return null;
+  if (wave.endTime === null) return null;
+  return `${wave.startTime} - ${wave.endTime}`;
 }
 
 /** One "label: value" detail, rendered only when the value is really there. */
@@ -135,49 +148,53 @@ function DetailChip({ label, value }: { label: string; value: string | null }) {
 }
 
 /**
- * ONE assignment row: who, in which role, at exactly which minutes, on which
- * horse, on which topic and discipline, paired with whom.
+ * The horse, topic and discipline of one participant.
  *
- * Every optional value is omitted when absent rather than stubbed with a
- * placeholder — a screen full of "לא הוגדר" tells a reader that a value exists
- * and is blank, when in truth the block simply does not carry it yet. The two
- * things that are always stated are the role and, when the personal window is
- * unknown, that it is not yet set.
+ * A wrapping row, so three short details read as one compact line on a wide
+ * phone and stack by themselves on a narrow one. Nothing here has a fixed
+ * width, so the unit can never overflow sideways. Every optional value is
+ * omitted when absent rather than stubbed with a placeholder — a screen full of
+ * "לא הוגדר" tells a reader that a value exists and is blank, when in truth the
+ * block simply does not carry it yet.
  */
-function AssignmentRow({ row }: { row: ExamAssignmentRowView }) {
-  const timeText = personalTimeText(row);
+function DetailChips({ row }: { row: ExamAssignmentRowView }) {
+  return (
+    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+      <DetailChip label={HORSE_LABEL} value={row.horseName} />
+      <DetailChip label={TOPIC_LABEL} value={row.instructionTopic} />
+      <DetailChip label={DISCIPLINE_LABEL} value={row.discipline} />
+    </div>
+  );
+}
+
+/**
+ * ONE examinee unit: the examinee, their horse, topic and discipline, and the
+ * instructed trainee they teach — nested INSIDE, never beside.
+ *
+ * It states NO TIME. The wave above owns the window, so two parallel examinees
+ * cannot print the same time twice.
+ */
+function ExamineeUnit({ unit }: { unit: ExamExamineeUnitView }) {
   return (
     <div className="rounded-xl border border-border bg-background p-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
         <p className="text-sm font-semibold text-card-foreground">
-          {row.participantName ?? UNNAMED_PARTICIPANT_TEXT}
+          {unit.examinee.participantName ?? UNNAMED_PARTICIPANT_TEXT}
         </p>
-        <p className="text-xs font-semibold text-muted-foreground">{ROLE_LABELS[row.role]}</p>
+        <p className="text-xs font-semibold text-muted-foreground">
+          {ROLE_LABELS[unit.examinee.role]}
+        </p>
       </div>
 
-      <p
-        className={`mt-1 text-xs font-semibold ${
-          timeText === null ? "text-muted-foreground" : "text-card-foreground"
-        }`}
-      >
-        {timeText ?? NO_PERSONAL_TIME_TEXT}
-      </p>
+      <DetailChips row={unit.examinee} />
 
-      {/* A wrapping row, so three short details read as one compact line on a
-          wide phone and stack by themselves on a narrow one. Nothing here has a
-          fixed width, so the card can never overflow sideways. */}
-      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
-        <DetailChip label={HORSE_LABEL} value={row.horseName} />
-        <DetailChip label={TOPIC_LABEL} value={row.instructionTopic} />
-        <DetailChip label={DISCIPLINE_LABEL} value={row.discipline} />
-      </div>
-
-      {/* The resolved pairing. An empty list renders NOTHING: a bare label with
-          no name behind it would suggest a partner the contract does not have. */}
-      {row.pairedParticipantNames.length > 0 && (
+      {/* The nested instructed trainee. An empty list renders NOTHING: a bare
+          label with no name behind it would suggest a trainee the contract does
+          not have. */}
+      {unit.instructedTraineeNames.length > 0 && (
         <p className="mt-1 text-xs text-card-foreground">
-          <span className="font-semibold">{PAIRED_LABELS[row.role]}: </span>
-          {row.pairedParticipantNames.map((name, index) => (
+          <span className="font-semibold">{INSTRUCTED_TRAINEE_LABEL}: </span>
+          {unit.instructedTraineeNames.map((name, index) => (
             <span key={`${index}-${name}`}>
               {index > 0 && ", "}
               {name}
@@ -190,24 +207,77 @@ function AssignmentRow({ row }: { row: ExamAssignmentRowView }) {
 }
 
 /**
- * The complete operational assignment rows of ONE exam block.
+ * ONE wave: its window stated ONCE, and every unit that happens inside it.
+ *
+ * The units sit in a grid that is ONE COLUMN on a phone and TWO from the `sm`
+ * breakpoint up, so two parallel examinees read side by side on a desktop and
+ * stack — still inside the same wave, still under the one time — on mobile.
+ *
+ * ===========================================================================
+ * AN UNPAIRED TRAINEE IS A WARNING, NOT A PARTICIPANT CARD
+ * ===========================================================================
+ * An instructed trainee NEVER renders as a participant in their own right — not
+ * when they are paired (they are nested inside their examinee's unit) and not
+ * when the read layer paired them with nobody. An unpaired one is instead a
+ * single compact WARNING LINE at the foot of their own wave: no card markup, no
+ * unit markup, no grid cell, no role chip, no detail chips, and no second block
+ * standing beside the examinee cards. It is deliberately NOT visually equal to
+ * an examinee — it is an operational gap somebody has to close, and the only
+ * reason it appears at all is that erasing a real person from a real schedule
+ * would be worse.
+ */
+function Wave({ wave }: { wave: ExamWaveView }) {
+  const timeText = waveTimeText(wave);
+  return (
+    <div className="rounded-2xl border border-border bg-card p-3">
+      <p
+        className={`text-xs font-semibold ${
+          timeText === null ? "text-muted-foreground" : "text-card-foreground"
+        }`}
+      >
+        {timeText ?? NO_PERSONAL_TIME_TEXT}
+      </p>
+
+      {wave.units.length > 0 && (
+        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {wave.units.map((unit, index) => (
+            <ExamineeUnit key={`${index}-${unit.examinee.participantName ?? ""}`} unit={unit} />
+          ))}
+        </div>
+      )}
+
+      {wave.unpairedInstructedRows.map((row, index) => (
+        <p key={`u-${index}-${row.participantName ?? ""}`} className="mt-2 text-xs text-warning">
+          {UNPAIRED_TRAINEE_LABEL}: {row.participantName ?? UNNAMED_PARTICIPANT_TEXT}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The complete operational schedule of ONE exam block, as waves.
  *
  * An EMPTY array renders nothing at all — not a heading, not an empty-state
  * sentence. A block legitimately carries no stored assignment (a live beginner
  * row never has one), and a "no participants" notice on such a block would be a
  * claim this renderer is in no position to make. The surrounding block card,
  * with its own date, name, time and place, still renders exactly as before.
+ *
+ * The prop is still the flat contract array, unchanged, so both role screens
+ * hand over `row.assignments` verbatim and neither of them knows what a wave is.
  */
 export function ExamAssignmentRows({
   assignments,
 }: {
   assignments: readonly ExamAssignmentRowView[];
 }) {
-  if (assignments.length === 0) return null;
+  const waves = groupExamAssignmentsIntoWaves(assignments);
+  if (waves.length === 0) return null;
   return (
     <div className="mt-2 flex flex-col gap-2">
-      {assignments.map((row, index) => (
-        <AssignmentRow key={`${index}-${row.participantName ?? ""}`} row={row} />
+      {waves.map((wave, index) => (
+        <Wave key={`${index}-${wave.startTime ?? ""}-${wave.endTime ?? ""}`} wave={wave} />
       ))}
     </div>
   );

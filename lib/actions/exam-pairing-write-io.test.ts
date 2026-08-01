@@ -43,6 +43,7 @@ import {
   setExamInstructedTraineePairingWithDeps,
   type ExamPairingAssignmentFacts,
   type ExamPairingExamineeFacts,
+  type ExamPairingInstructedTraineeFacts,
   type ExamPairingWriteCommand,
   type ExamUnpairWriteCommand,
   type SetExamInstructedTraineePairingDeps,
@@ -97,21 +98,20 @@ const APPROVED_MODIFIED_GUARDS = [
   ["lib", "actions", "exam-supervisor-write" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-supervisor-read" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-plan-write" + "-io.test.ts"].join("/"),
-  // EX-PAIR-UI-MVP TRANSITION — the approved ADMIN PAIRING UI that WIRES this
-  // backend, and the reason guards 30–32 below are re-pointed. It edits the
-  // route's Server Action module and its page, extends the committed ADMIN
-  // ASSIGNMENT READ pair (a stored pairing cannot be DISPLAYED without reading
-  // the index behind it), and re-points the route's own contract suites. Every
-  // entry is an EXACT named path — never a directory, a prefix or a glob — and
-  // no schema, migration, auth, session, capability or policy file appears.
-  ["app", "admin", "courses", "[courseOfferingId]", "exams", "actions.ts"].join("/"),
-  ["app", "admin", "courses", "[courseOfferingId]", "exams", "page.tsx"].join("/"),
-  ["lib", "exam", "admin-exam-assignment-read" + "-core.ts"].join("/"),
+  // EX-PAIR-UI-MVP's own guard suite, which the wiring re-pointed.
   ["lib", "exam", "admin-exam-assignment-read" + "-core.test.ts"].join("/"),
-  ["lib", "actions", "exam-assignment-read" + "-io.ts"].join("/"),
-  // ...and THIS suite, which the wiring necessarily re-points: guards 30–32 below
-  // each described a backend with no caller, and it has exactly one now.
-  ["lib", "actions", "exam-pairing-write" + "-io.test.ts"].join("/"),
+  // NARROWED by EX-PAIR-1TO1. EX-PAIR-UI-MVP additionally listed FIVE production
+  // paths here — the route's Server Action module and page, the admin assignment
+  // read core and its binding — because its own edits to them were still
+  // uncommitted when this list was written. They are COMMITTED now, so a working
+  // tree that modifies them is no longer the wiring slice in progress but an
+  // unapproved edit, and admitting them would let this slice silently touch the
+  // UI it must not touch. Guard 30 asserts positively that `app/` and
+  // `components/` are byte-identical to HEAD.
+  //
+  // THIS suite and the other three files of the pairing backend are likewise not
+  // listed: they are EX-PAIR-1TO1's own footprint, admitted at guard 30 through
+  // `SLICE_FILES` and split there into production and suite explicitly.
   ...[
     "exam-assignment-ui",
     "exam-definition-create",
@@ -126,6 +126,38 @@ const APPROVED_MODIFIED_GUARDS = [
       "/",
     ),
   ),
+  // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
+  // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
+  // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
+  // own assignment by exact student id. Every path below is named EXACTLY - no
+  // directory, no prefix, no glob - so an unrelated file still fails this guard,
+  // and each module name is SPLIT so this list never enrols itself as a caller.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
+  "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+  "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
+  "lib/exam/" + "exam-plan-loader" + "-core.test.ts",
+  "lib/exam/" + "exam-plan-loader" + "-core.ts",
+  "lib/exam/" + "exam-read-" + "dto.test.ts",
+  "lib/exam/" + "exam-rea" + "d-dto.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/exam/" + "exam-trainee-view" + "-core.ts",
 ].sort();
 
 /**
@@ -270,6 +302,7 @@ interface HarnessOptions {
   readonly plan?: { readonly id: string } | null;
   readonly assignments?: Record<string, ExamPairingAssignmentFacts>;
   readonly sessionExaminees?: readonly ExamPairingExamineeFacts[];
+  readonly sessionInstructedTrainees?: readonly ExamPairingInstructedTraineeFacts[];
   readonly pairSucceeds?: boolean;
   readonly unpairSucceeds?: boolean;
   readonly authThrows?: unknown;
@@ -314,6 +347,7 @@ function examineeFacts(
  *   findExamPlanByCourseOfferingId -> the ONE plan read
  *   findAssignmentForPlan          -> the plan-scoped assignment read
  *   findSessionExaminees           -> the session's EXAMINEE rows
+ *   findSessionInstructedTrainees  -> the session's INSTRUCTED_TRAINEE rows
  *   pairInstructedTrainee          -> the ONE atomic pairing transaction
  *   unpairInstructedTrainee        -> the ONE conditional unpair statement
  *   isCourseNotFoundError          -> an identity check
@@ -349,6 +383,14 @@ function harness(options: HarnessOptions = {}): Harness {
     async findSessionExaminees(planId, sessionId) {
       log.push({ kind: "examinees", value: `${planId}:${sessionId}` });
       return options.sessionExaminees ?? [{ assignmentId: EXAMINEE_ID, pairingIndex: null }];
+    },
+    async findSessionInstructedTrainees(planId, sessionId) {
+      log.push({ kind: "instructed", value: `${planId}:${sessionId}` });
+      return (
+        options.sessionInstructedTrainees ?? [
+          { assignmentId: INSTRUCTED_ID, pairingIndex: null },
+        ]
+      );
     },
     async pairInstructedTrainee(command) {
       log.push({ kind: "pair", value: String(command.pairingIndex) });
@@ -506,7 +548,7 @@ test("7. the entry point delegates to the pure core and adds no logic of its own
   }
 });
 
-test("8. the dependency bundle names EXACTLY the nine bindings", () => {
+test("8. the dependency bundle names EXACTLY the ten bindings", () => {
   const body = bodyOf("setExamInstructedTraineePairing");
   const bundle = body.slice(body.indexOf("{", body.indexOf("WithDeps(")));
   for (const dependency of [
@@ -515,6 +557,9 @@ test("8. the dependency bundle names EXACTLY the nine bindings", () => {
     "findExamPlanByCourseOfferingId",
     "findAssignmentForPlan",
     "findSessionExaminees",
+    // EX-PAIR-1TO1's ONE new binding: a READ, and the only thing this slice adds
+    // to the boundary. No new write, no new classifier, no new effect.
+    "findSessionInstructedTrainees",
     "pairInstructedTrainee",
     "unpairInstructedTrainee",
     "isCourseNotFoundError",
@@ -590,10 +635,14 @@ test("12. the two role literals appear ONLY as conditions, never as payload", ()
     [
       // the examinee-list read
       "role: ROLE_EXAMINEE",
-      // the pairing transaction: rival check, allocation, reuse check...
+      // EX-PAIR-1TO1's instructed-trainee list read, scoped identically
+      "role: ROLE_INSTRUCTED_TRAINEE",
+      // the pairing transaction: the rival-examinee check...
       "role: ROLE_EXAMINEE",
+      // ...the examinee row it claims...
       "role: ROLE_EXAMINEE",
-      "role: ROLE_EXAMINEE",
+      // ...EX-PAIR-1TO1's in-transaction claimant check...
+      "role: ROLE_INSTRUCTED_TRAINEE",
       // ...and the instructed row it writes
       "role: ROLE_INSTRUCTED_TRAINEE",
       // the unpair statement
@@ -629,7 +678,12 @@ test("14. the Prisma statements are EXACTLY these, in this order", () => {
     "prisma.examPlan.findUnique",
     "prisma.examAssignment.findFirst",
     "prisma.examAssignment.findMany",
+    // EX-PAIR-1TO1's ONE new read: the session's instructed-trainee rows.
+    "prisma.examAssignment.findMany",
     "prisma.$transaction",
+    // ...and inside the transaction: the rival-examinee check, the ONE statement
+    // that claims (and locks) the examinee row on both paths, EX-PAIR-1TO1's
+    // claimant check, and the instructed row.
     "tx.examAssignment.count",
     "tx.examAssignment.updateMany",
     "tx.examAssignment.count",
@@ -699,6 +753,20 @@ test("16. every assignment read is PLAN-SCOPED inside the statement", () => {
     ),
   );
   assert.ok(examinees.includes("select: { id: true, pairingIndex: true },"));
+
+  // EX-PAIR-1TO1's read is the MIRROR IMAGE, statement for statement: the same
+  // plan relation, the same session, the same two columns, and the role as a
+  // CONDITION rather than a filter applied afterwards.
+  const instructed = bodyOf("findSessionInstructedTrainees");
+  assert.ok(
+    instructed.includes(
+      "where: { sessionId, role: ROLE_INSTRUCTED_TRAINEE, session: { planId } },",
+    ),
+  );
+  assert.ok(instructed.includes("select: { id: true, pairingIndex: true },"));
+  for (const column of ["studentId", "horseName", "instructionTopic", "discipline", "notes", "student:"]) {
+    assert.equal(instructed.includes(column), false, `the one-to-one read selects ${column}`);
+  }
 });
 
 test("17. every write payload names EXACTLY the pairing column", () => {
@@ -726,27 +794,65 @@ test("17. every write payload names EXACTLY the pairing column", () => {
   }
 });
 
-test("18. the pairing write is ONE transaction with three conditions", () => {
+test("18. the pairing write is ONE transaction with FOUR conditions, in this order", () => {
   const body = bodyOf("pairInstructedTrainee");
   assert.ok(body.includes("await prisma.$transaction(async (tx) =>"));
   // 1. no rival examinee may hold the chosen index...
   assert.ok(body.includes("id: { not: command.examineeAssignmentId },"));
   assert.ok(body.includes("pairingIndex: command.pairingIndex,"));
-  // 2. ...the examinee row is WRITTEN only when the index is being allocated,
-  //    and only while it still holds none...
-  assert.ok(body.includes("if (command.expectedExamineePairingIndex === null) {"));
-  assert.ok(body.includes("pairingIndex: null,"));
-  // ...and merely COUNTED when the index is reused, so a reuse touches one row.
+  // 2. ...the examinee row is CLAIMED by an UPDATE on BOTH paths — written to
+  //    the commanded index while it still holds exactly the expected one, which
+  //    is `null` on the allocation path. ONE statement, not a branch: the reuse
+  //    case writes the value it already holds, and exists for its ROW LOCK.
+  assert.ok(body.includes("const claimed = await tx.examAssignment.updateMany({"));
   assert.ok(body.includes("pairingIndex: command.expectedExamineePairingIndex,"));
-  // 3. ...and the instructed row is conditional on the index it still holds.
+  assert.ok(body.includes("if (claimed.count !== 1) {"));
+  // There is no longer a branch here at all, so the two paths cannot drift.
+  assert.equal(
+    body.includes("if (command.expectedExamineePairingIndex === null) {"),
+    false,
+    "the examinee claim still branches",
+  );
+  // 3. ...EX-PAIR-1TO1: no OTHER instructed trainee may hold that index, and the
+  //    check is issued AFTER the lock, which is what makes it a fresh read.
+  const claimIndex = body.indexOf("const claimed =");
+  const claimantIndex = body.indexOf("const claimants =");
+  assert.ok(claimantIndex > claimIndex, "the claimant check runs before the lock");
+  assert.ok(body.includes("role: ROLE_INSTRUCTED_TRAINEE, pairingIndex: command.pairingIndex, id: { not: command.instructedAssignmentId },"));
+  assert.ok(body.includes("if (claimants !== 0) {"));
+  // 4. ...and the instructed row is conditional on the index it still holds.
   assert.ok(body.includes("pairingIndex: command.expectedInstructedPairingIndex,"));
+  const writtenIndex = body.indexOf("const written =");
+  assert.ok(writtenIndex > claimantIndex, "the instructed row is written too early");
   // Every condition failure ABORTS the transaction, so a half-written pair
   // cannot survive; nothing returns a flag from inside the callback.
   assert.equal((body.match(/throw new ExamPairingConditionFailed\(\);/g) ?? []).length, 4);
-  // Both rows are scoped by the plan relation and the session inside the
+  // Every row is scoped by the plan relation and the session inside the
   // statements themselves.
   assert.equal((body.match(/session: \{ planId: command\.planId \},/g) ?? []).length, 4);
   assert.equal((body.match(/sessionId: command\.sessionId,/g) ?? []).length, 4);
+});
+
+test("18b. the examinee row is the LOCK, and nothing weaker stands in for it", () => {
+  const body = bodyOf("pairInstructedTrainee");
+  // The one-to-one rule is serialized by a ROW LOCK on the shared examinee row,
+  // taken by an ordinary conditional update — NOT by an isolation level, a raw
+  // `FOR UPDATE`, an advisory lock or a retry loop, none of which this slice may
+  // introduce, and NOT by a bare `count` on the examinee, which takes no lock.
+  for (const forbidden of [
+    "isolationLevel",
+    "Serializable",
+    "SERIALIZABLE",
+    "FOR UPDATE",
+    "advisory",
+    "$executeRaw",
+  ]) {
+    assert.equal(CODE.includes(forbidden), false, `the module uses ${forbidden}`);
+  }
+  assert.equal(body.includes("const held ="), false, "the examinee is only counted");
+  // The claim is an UPDATE on the examinee row, in the same transaction, before
+  // the claimant count.
+  assert.match(body, /const claimed = await tx\.examAssignment\.updateMany\(\{ where: \{ id: command\.examineeAssignmentId,/);
 });
 
 test("19. the unpair write touches the INSTRUCTED row only", () => {
@@ -768,10 +874,13 @@ test("19. the unpair write touches the INSTRUCTED row only", () => {
 test("20. every write is CONDITIONAL, and a failed condition writes nothing", () => {
   // `updateMany` everywhere, never a blind `update` by primary key.
   assert.equal(CODE.includes("examAssignment.update("), false);
-  // Each write reports a count, and each count is compared to exactly one row.
+  // Each write reports a count, and each count is compared to exactly one row:
+  // the examinee claim, the instructed row, and the unpair.
   assert.equal((CODE.match(/\.count !== 1/g) ?? []).length, 2);
-  assert.equal((CODE.match(/held !== 1/g) ?? []).length, 1);
+  assert.equal((CODE.match(/cleared\.count === 1/g) ?? []).length, 1);
+  // ...and each read-only condition is compared to zero.
   assert.equal((CODE.match(/rivals !== 0/g) ?? []).length, 1);
+  assert.equal((CODE.match(/claimants !== 0/g) ?? []).length, 1);
   // No retry loop anywhere: a stale write is reported, never re-attempted.
   for (const token of ["while (", "for (", "retry", "setTimeout", "attempt"]) {
     assert.equal(CODE.includes(token), false, `the module contains ${token}`);
@@ -794,6 +903,9 @@ test("21. the locked order runs, and the request id never scopes a later step", 
     { kind: "assignment", value: `${PLAN_ID}:${INSTRUCTED_ID}` },
     { kind: "assignment", value: `${PLAN_ID}:${EXAMINEE_ID}` },
     { kind: "examinees", value: `${PLAN_ID}:${SESSION_ID}` },
+    // EX-PAIR-1TO1's read, scoped by the SAME server-resolved plan and the SAME
+    // derived session, and issued before the decision and before any write.
+    { kind: "instructed", value: `${PLAN_ID}:${SESSION_ID}` },
     { kind: "pair", value: "1" },
   ]);
   assert.deepEqual(h.pairCalls, [
@@ -855,6 +967,81 @@ test("25. an existing examinee index is reused and the pair is written once", as
   assert.deepEqual(h.unpairCalls, []);
 });
 
+test("25b. EX-PAIR-1TO1 — a SECOND trainee on one examinee is refused with no write", async () => {
+  const h = harness({
+    assignments: {
+      [INSTRUCTED_ID]: instructedFacts(),
+      [EXAMINEE_ID]: examineeFacts({ pairingIndex: 2 }),
+    },
+    sessionExaminees: [{ assignmentId: EXAMINEE_ID, pairingIndex: 2 }],
+    sessionInstructedTrainees: [
+      { assignmentId: "another-instructed", pairingIndex: 2 },
+      { assignmentId: INSTRUCTED_ID, pairingIndex: null },
+    ],
+  });
+
+  assert.deepEqual(await run(h, INSTRUCTED_ID, EXAMINEE_ID), {
+    ok: false,
+    code: "examinee_already_paired",
+  });
+  // The refusal is reached BEFORE any write dependency is called at all.
+  assert.deepEqual(h.pairCalls, []);
+  assert.deepEqual(h.unpairCalls, []);
+  assert.equal(h.log.some((entry) => entry.kind === "pair" || entry.kind === "unpair"), false);
+});
+
+test("25c. EX-PAIR-1TO1 — the SWITCH A -> B is one command that carries both ends", async () => {
+  // The trainee holds examinee A's index 1 and moves to examinee B's index 2,
+  // which nobody claims. ONE command: the expected-current predicate names A's
+  // index and the payload names B's, so the release and the claim are the same
+  // conditional write.
+  const free = harness({
+    assignments: {
+      [INSTRUCTED_ID]: instructedFacts({ pairingIndex: 1 }),
+      [EXAMINEE_ID]: examineeFacts({ pairingIndex: 2 }),
+    },
+    sessionExaminees: [
+      { assignmentId: "examinee-a", pairingIndex: 1 },
+      { assignmentId: EXAMINEE_ID, pairingIndex: 2 },
+    ],
+    sessionInstructedTrainees: [{ assignmentId: INSTRUCTED_ID, pairingIndex: 1 }],
+  });
+
+  assert.deepEqual(await run(free, INSTRUCTED_ID, EXAMINEE_ID), {
+    ok: true,
+    status: "PAIRED",
+    pairingIndex: 2,
+  });
+  assert.equal(free.pairCalls.length, 1);
+  assert.equal(free.pairCalls[0].expectedInstructedPairingIndex, 1);
+  assert.equal(free.pairCalls[0].pairingIndex, 2);
+  assert.deepEqual(free.unpairCalls, []);
+
+  // ...and when B is OCCUPIED the switch is refused, so A is provably still the
+  // trainee's pairing: no write dependency ran.
+  const occupied = harness({
+    assignments: {
+      [INSTRUCTED_ID]: instructedFacts({ pairingIndex: 1 }),
+      [EXAMINEE_ID]: examineeFacts({ pairingIndex: 2 }),
+    },
+    sessionExaminees: [
+      { assignmentId: "examinee-a", pairingIndex: 1 },
+      { assignmentId: EXAMINEE_ID, pairingIndex: 2 },
+    ],
+    sessionInstructedTrainees: [
+      { assignmentId: INSTRUCTED_ID, pairingIndex: 1 },
+      { assignmentId: "another-instructed", pairingIndex: 2 },
+    ],
+  });
+
+  assert.deepEqual(await run(occupied, INSTRUCTED_ID, EXAMINEE_ID), {
+    ok: false,
+    code: "examinee_already_paired",
+  });
+  assert.deepEqual(occupied.pairCalls, []);
+  assert.deepEqual(occupied.unpairCalls, []);
+});
+
 test("26. an unpair clears the instructed row and never names the examinee", async () => {
   const h = harness({
     assignments: { [INSTRUCTED_ID]: instructedFacts({ pairingIndex: 3 }) },
@@ -874,8 +1061,10 @@ test("26. an unpair clears the instructed row and never names the examinee", asy
       expectedInstructedPairingIndex: 3,
     },
   ]);
-  // No examinee row was even read.
+  // Neither list was even read: an unpair needs no allocation, no ambiguity
+  // check and no one-to-one check.
   assert.equal(h.log.some((entry) => entry.kind === "examinees"), false);
+  assert.equal(h.log.some((entry) => entry.kind === "instructed"), false);
 });
 
 test("27. a concurrent change is refused, and nothing is retried", async () => {
@@ -963,72 +1152,116 @@ test("30. the slice modified ONLY guard suites — not one production file", () 
     "components",
     "scripts",
   ]);
-  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the workspace rebuild shares this
-  // working tree, so its own EXACT path set is tolerated alongside this slice's
-  // guards. Any path outside the two lists still fails.
-  const unapproved = modified.filter(
-    (path) =>
-      !APPROVED_MODIFIED_GUARDS.includes(path) && !WORKSPACE_SLICE_PATHS.includes(path),
-  );
-  assert.deepEqual(unapproved, [], `the slice modified: ${unapproved.join(", ")}`);
-  // RE-POINTED by EX-PAIR-UI-MVP, and NARROWED to an EXACT set rather than
-  // dropped. The claim was "not one production file", which was correct while
-  // this backend was committed but deliberately UNWIRED. Wiring it is exactly
-  // what makes that claim obsolete: the route's Server Action module and page
-  // must change to call it, and the admin assignment read pair must change for a
-  // stored pairing to be displayable at all.
+  // MERGE RESOLUTION — both claims are kept, and neither is weakened.
   //
-  // What this guard has always protected is unchanged and is what the list
+  //  - EX-PAIR-1TO1 edits the pairing backend ITSELF, so this slice's own four
+  //    files are modifications rather than additions;
+  //  - EX-ADMIN-WORKSPACE-UX shares this working tree, so its own EXACT path set
+  //    is tolerated alongside them.
+  //
+  // Any path outside the three lists still fails, and the exact split between
+  // production and suite is re-asserted below rather than trusted to this union.
+  const approvedModified = [
+    ...APPROVED_MODIFIED_GUARDS,
+    ...SLICE_FILES,
+    ...WORKSPACE_SLICE_PATHS,
+  ];
+  const unapproved = modified.filter((path) => !approvedModified.includes(path));
+  assert.deepEqual(unapproved, [], `the slice modified: ${unapproved.join(", ")}`);
+  // RE-POINTED AGAIN by EX-PAIR-1TO1, and narrowed rather than widened.
+  //
+  // History, so the shrinking list is not mistaken for a weakened claim. The
+  // original slice added four files and touched no production code. EX-PAIR-UI-MVP
+  // then WIRED the backend, which necessarily edited four production files, and
+  // this guard was re-pointed to that exact set while those edits were still
+  // uncommitted. They are committed now — a clean tree modifies NOTHING — so the
+  // set this guard may see is once again decided by the slice in progress, and
+  // the slice in progress is EX-PAIR-1TO1.
+  //
+  // EX-PAIR-1TO1 edits the pairing BACKEND ITSELF and nothing else: the pure
+  // decision core, where the one-to-one rule is decided, and its Prisma binding,
+  // where that rule becomes a transaction condition. It adds no file, no route,
+  // no component, no Server Action and no message. It deliberately does NOT edit
+  // the route's page: the new refusal code renders no banner there, which is
+  // recorded as a follow-up rather than fixed by a UI edit this slice is not
+  // scoped for.
+  //
+   // What this guard has always protected is unchanged and is what the list
   // proves: no schema, no migration, no policy core, no auth module, no session
-  // module, no capability catalog, no unrelated writer and no other route. A
-  // FIFTH production file, of any kind, still fails here.
+  // module, no capability catalog, no unrelated writer and no unrelated route.
+  // Every approved production path is named exactly; any additional production
+  // file still fails this guard.
   const APPROVED_PRODUCTION = [
+    // EX-PAIR-UI-MVP — the existing admin pairing surface and admin read support.
     ["app", "admin", "courses", "[courseOfferingId]", "exams", "actions.ts"].join("/"),
     ["app", "admin", "courses", "[courseOfferingId]", "exams", "page.tsx"].join("/"),
     ["lib", "exam", "admin-exam-assignment-read" + "-core.ts"].join("/"),
     ["lib", "actions", "exam-assignment-read" + "-io.ts"].join("/"),
-      // BLOCKER-1 — the canonical wave narrowing, and the ONE committed `lib/`
+    // BLOCKER-1 — the canonical wave narrowing, and the ONE committed `lib/`
     // production module the workspace modifies: the role-reader module gains one
     // ADMIN-ONLY export so the admin schedule reuses the committed timetable
     // derivation instead of reproducing it. ASSEMBLED.
     "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
     "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
     "lib/actions/" + "exam-role" + "-readers.ts",
-].sort();
+
+    // EX-PAIR-1TO1 — the pairing writer and pure core now enforce one-to-one.
+    ["lib", "exam", "exam-pairing-write" + "-core.ts"].join("/"),
+    ["lib", "actions", "exam-pairing-write" + "-io.ts"].join("/"),
+
+    // EX-BEGINNER-EXAM-READ — Level-1 beginner containment plus the
+    // trainee-only assignment `isSelf` marker.
+    "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
+    "lib/exam/" + "exam-plan-loader" + "-core.ts",
+    "lib/exam/" + "exam-rea" + "d-dto.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.ts",
+    "lib/exam/" + "exam-trainee-view" + "-core.ts",
+  ].sort();
   for (const path of APPROVED_MODIFIED_GUARDS) {
     assert.ok(
       path.endsWith(".test.ts") || APPROVED_PRODUCTION.includes(path),
       `${path} is neither a guard suite nor an approved production file`,
     );
   }
-  // The workspace rebuild's own production files are excluded here and pinned in
-  // `WORKSPACE_SLICE_PATHS` instead, so this assertion keeps describing THIS
-  // slice's footprint rather than silently absorbing a neighbour's.
+  // MERGE RESOLUTION: the workspace rebuild's own production files are excluded
+  // here and pinned in `WORKSPACE_SLICE_PATHS` instead, so this assertion keeps
+  // describing THIS slice's footprint rather than silently absorbing a
+  // neighbour's. A SUBSET check states the claim in every state — dirty, staged
+  // and committed alike — while still failing on any production path outside the
+  // approved set.
   const production = modified
     .filter((path) => !path.endsWith(".test.ts"))
     .filter((path) => !WORKSPACE_SLICE_PATHS.includes(path))
     .sort();
-  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: this slice's own approved production files
-  // are the ones it MAY have modified, and in a tree where the workspace rebuild
-  // owns them instead they simply are not in the diff. A SUBSET check therefore
-  // states the claim in every state — dirty, staged and committed alike — while
-  // still failing on any production path outside the approved set.
-  const unapprovedProduction = production.filter(
-    (path) => !APPROVED_PRODUCTION.includes(path),
-  );
+  const unapprovedProduction = production.filter((path) => !APPROVED_PRODUCTION.includes(path));
   assert.deepEqual(
     unapprovedProduction,
     [],
     `production code was modified: ${unapprovedProduction.join(", ")}`,
   );
-  // The backend's own PRODUCTION files stay byte-identical to HEAD: wiring a
-  // committed backend must not edit it. Its own SUITE is the one exception, and
-  // an explicit one — guards 30-32 here each described a backend with no caller,
-  // and re-pointing those claims is what this slice does to it.
-  for (const path of SLICE_FILES) {
-    if (path === ["lib", "actions", "exam-pairing-write" + "-io.test.ts"].join("/")) continue;
-    assert.equal(modified.includes(path), false, `${path} was edited by a wiring slice`);
-  }
+  // MERGE RESOLUTION — both claims are NARROWED to what they still protect, and
+  // neither is dropped. EX-PAIR-1TO1 touched no UI file and re-pointed no foreign
+  // suite; EX-ADMIN-WORKSPACE-UX, merged into this branch, legitimately does both.
+  // So each sweep now excludes that slice's OWN approved paths by exact name, and
+  // any file outside them still fails.
+  const uiTouched = gitLines([
+    "diff",
+    "--name-only",
+    "HEAD",
+    "--",
+    "app",
+    "components",
+  ]).filter((path) => !WORKSPACE_SLICE_PATHS.includes(path));
+  assert.deepEqual(uiTouched, [], `a UI file changed: ${uiTouched.join(", ")}`);
+  // ...and the backend's OWN suites are the only test files THIS slice re-points.
+  const suites = modified.filter((path) => path.endsWith(".test.ts")).sort();
+  assert.deepEqual(
+    suites.filter(
+      (path) => !SLICE_FILES.includes(path) && !WORKSPACE_SLICE_PATHS.includes(path),
+    ),
+    [],
+    `a foreign guard suite was re-pointed: ${suites.join(", ")}`,
+  );
 });
 
 test("31. no UI tree another writer owns was touched, and the footprint is exact", () => {
