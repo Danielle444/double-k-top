@@ -87,6 +87,9 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
@@ -135,6 +138,9 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   // EX-ASG-UI1, the approved stored-assignment CREATE and REMOVAL UI. It adds two
   // forms, a closed message module and its own contract suite to this route, and
   // amends this suite's route file set, export list, import surface and
@@ -143,6 +149,7 @@ const SLICE_PATHS = [
   // committed guards pinned their caller lists at EXACTLY ZERO before this slice.
   "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
@@ -184,6 +191,49 @@ const SLICE_PATHS = [
   // ASSEMBLED, because that guard sweeps `app/`, `lib/` and `components/` for its
   // own module name and would otherwise enrol this suite as a caller.
   "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
+  // EX-ADMIN-WORKSPACE-UX — the four route files the workspace adds, plus the two
+  // new `lib/` modules behind its two operations and their suites. The `lib/`
+  // entries are ASSEMBLED for the reason this suite's header records: the
+  // committed guards sweep raw source text, so a whole literal here would enrol
+  // this file as a caller of a writer it never invokes.
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  // Every committed `lib/` guard suite EX-ADMIN-WORKSPACE-UX re-points, so the
+  // footprint here matches the working tree in full. All ASSEMBLED, for the
+  // reason this suite's header records.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  // BLOCKER-1 — the canonical wave narrowing, its suite, and the ONE committed
+  // `lib/` production module this slice modifies: the role-reader module, which
+  // gains one ADMIN-ONLY export so the admin schedule can reuse the committed
+  // timetable derivation instead of reproducing it. ASSEMBLED, so this suite
+  // does not enrol itself as a caller of what it names.
+  "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+  "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+  "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  // BLOCKER-1 also re-points the READ-PIPELINE guard suites whose claims the one
+  // admin-only export makes obsolete. ASSEMBLED.
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
 ];
 
 /** Strip comments so every guard asserts on CODE, not on explanatory prose. */
@@ -290,7 +340,7 @@ test("1. the four new files exist at the exact course-scoped route", () => {
   assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
 });
 
-test("2. the route directory holds EXACTLY the twenty-three approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-seven approved files", () => {
   // RE-POINTED by EX-SES-S4, not relaxed: the session-create slice added three
   // reviewed files to this route (a form, a message table and its own contract
   // suite), so the exact set grew from eight to eleven.
@@ -315,6 +365,7 @@ test("2. the route directory holds EXACTLY the twenty-three approved files", () 
     "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
@@ -335,6 +386,9 @@ test("2. the route directory holds EXACTLY the twenty-three approved files", () 
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);
 });
@@ -388,8 +442,12 @@ test("5. the module exports EXACTLY the eight approved actions, with exact signa
     "setExamPlanPublicationAction",
     // EX-PAIR-UI-MVP appended a TENTH: the admin pairing endpoint. Still EXHAUSTIVE.
     "setExamPairingAction",
+    // EX-ADMIN-WORKSPACE-UX appended an ELEVENTH and a TWELFTH: the ONE coherent
+    // examinee card save, and the one-step examinee move. Still EXHAUSTIVE.
+    "updateExamAssignmentDetailsAction",
+    "moveExamAssignmentAction",
   ]);
-  assert.equal(exported.length, 10, "no eleventh endpoint may exist in this module");
+  assert.equal(exported.length, 12, "no thirteenth endpoint may exist in this module");
   // Everything exported from a "use server" module is publicly callable, so the
   // export list is the attack surface: nothing else may leave this file.
   for (const token of ["export const", "export default", "export {", "export type"]) {
@@ -554,6 +612,11 @@ test("9. the action calls the committed writer with the bound id and the raw inp
       // instructed-trainee write binding's guard pinned its caller list at ZERO
       // before this slice, and at exactly this one Server Action module after it.
       "@/lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io",
+      // ADDED by EX-ADMIN-WORKSPACE-UX, assembled on exactly the same terms: the
+      // workspace edit/move binding, which is the ONE backend addition behind the
+      // examinee card save and the one-step move. It is a NEW module with no
+      // committed caller guard of its own, and no committed writer was replaced.
+      "@/lib/actions/" + "admin-exam-workspace-edit" + "-io",
     // ADDED by EX-ASG-LTD2-B2, and assembled on exactly the same terms: the
     // committed DETAILED examinee write binding's guard pinned its caller list at
     // ZERO before that slice, and at exactly this one Server Action module after
@@ -634,15 +697,22 @@ test("11. success revalidates ONLY this exams path and redirects with the flag",
   // budget is what this asserts, and it did not change. The edit's single
   // occurrence sits on its CHANGED branch only, so a no-op edit revalidates nothing
   // at all, which its own suite pins.
+  // RE-POINTED from ten to TWELVE by EX-ADMIN-WORKSPACE-UX. The per-action budget
+  // is what this asserts and it did not change: the card save revalidates once on
+  // its success path, and the move revalidates once on its CHANGED branch only, so
+  // an edge click revalidates nothing at all.
   assert.equal(
     (ACTIONS.match(/revalidatePath\(/g) ?? []).length,
-    10,
+    12,
     "the module must revalidate at most once per action and no more",
   );
   // RE-POINTED from 8 to 9 by EX-PUB-UI-MVP. The per-action budget is unchanged,
   // and the publication endpoint's single occurrence sits on its CHANGED branch
   // alone, so a NO_CHANGE publication revalidates nothing at all.
-  assert.equal((ACTIONS.match(/revalidatePath\(examsPath\);/g) ?? []).length, 10);
+  // RE-POINTED from ten to TWELVE by EX-ADMIN-WORKSPACE-UX, which appends the
+  // examinee card save and the one-step examinee move. Still an EXACT count: a
+  // thirteenth endpoint still fails here.
+  assert.equal((ACTIONS.match(/revalidatePath\(examsPath\);/g) ?? []).length, 12);
   assert.ok(DEFINITION_ACTION.includes("revalidatePath(examsPath);"), "the wrong path is revalidated");
   assert.ok(
     DEFINITION_ACTION.includes("redirect(`${examsPath}?createdDefinition=1`);"),
@@ -775,7 +845,10 @@ test("15. no edit, delete, reorder, session, source-date or publication path exi
     "reorder" + "ExamSessions",
     // Assignment management NO route may perform, in any module.
     "reorder" + "ExamAssignments",
-    "update" + "ExamAssignment",
+    // NOT banned inside the ACTION MODULE by EX-ADMIN-WORKSPACE-UX: assignment
+    // editing and moving are approved endpoints of this route, and the module is
+    // where their committed writers are legitimately called. The page is still
+    // forbidden from reaching either, which its own suite pins.
     // Session management this route does not perform at all.
     "SessionBreak",
     "Supervisor",

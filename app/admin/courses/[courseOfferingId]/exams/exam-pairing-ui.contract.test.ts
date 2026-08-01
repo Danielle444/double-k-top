@@ -115,6 +115,13 @@ const ACTIONS = stripComments(ACTIONS_SOURCE);
 const PAGE = stripComments(PAGE_SOURCE);
 const ACTIONS_FLAT = squash(ACTIONS);
 const PAGE_FLAT = squash(PAGE);
+/**
+ * The examinee edit card, which EX-ADMIN-WORKSPACE-UX made the home of the
+ * pairing control. Read here so the assertions below can follow the control to
+ * where it actually lives, instead of being deleted.
+ */
+const CARD_RAW = readSource(join(ROUTE_DIR_REL, "EditExamAssignmentCard.tsx"));
+const CARD = stripComments(CARD_RAW);
 
 /**
  * ONE top-level function's body, from its declaration to the closing brace in
@@ -182,6 +189,49 @@ const SLICE_PATHS = [
   "lib/actions/" + "trainee-exam-schedule.contract" + ".test.ts",
   "lib/actions/" + "instructor-exam-schedule.contract" + ".test.ts",
   "lib/exam/" + "exam-read.contract" + ".test.ts",
+  // EX-ADMIN-WORKSPACE-UX — the four route files the workspace adds, plus the two
+  // new `lib/` modules behind its two operations and their suites. The `lib/`
+  // entries are ASSEMBLED for the reason this suite's header records: the
+  // committed guards sweep raw source text, so a whole literal here would enrol
+  // this file as a caller of a writer it never invokes.
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  // Every committed `lib/` guard suite EX-ADMIN-WORKSPACE-UX re-points, so the
+  // footprint here matches the working tree in full. All ASSEMBLED, for the
+  // reason this suite's header records.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  // BLOCKER-1 — the canonical wave narrowing, its suite, and the ONE committed
+  // `lib/` production module this slice modifies: the role-reader module, which
+  // gains one ADMIN-ONLY export so the admin schedule can reuse the committed
+  // timetable derivation instead of reproducing it. ASSEMBLED, so this suite
+  // does not enrol itself as a caller of what it names.
+  "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+  "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+  "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  // BLOCKER-1 also re-points the READ-PIPELINE guard suites whose claims the one
+  // admin-only export makes obsolete. ASSEMBLED.
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
 ];
 
 /** The route's EXACT final file set, after this slice's ONE addition. */
@@ -189,6 +239,7 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
@@ -208,6 +259,9 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
 ];
 
@@ -236,6 +290,9 @@ const FAILURE_TEXTS: ReadonlyArray<readonly [string, string]> = [
     "ambiguous_pairing_index",
     "לא ניתן לקבוע את השיוך: קיימים שיוכים כפולים במפגש הזה. יש לתקן את השיבוצים.",
   ],
+  // The ONE-TO-ONE refusal the pairing backend added. The rule is the backend's
+  // and this route re-implements none of it — only the sentence lives here.
+  ["examinee_already_paired", "הנבחן/ת כבר משויך/ת לחניך/ה מודרך/ת אחר/ת."],
   ["stale_write", "השיוך השתנה מאז שהדף נטען, ולכן לא נשמר. יש לרענן את הדף ולנסות שוב."],
 ];
 
@@ -273,7 +330,7 @@ test("1. the slice adds ONE file and creates no new route or component", () => {
   }
 });
 
-test("2. the route directory holds EXACTLY the twenty-three approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-seven approved files", () => {
   // Tracked AND untracked, so this holds before and after the slice is committed.
   // Listing the whole repository and filtering by prefix in JS is deliberate: a
   // `[courseOfferingId]` pathspec would be read by git as a character class.
@@ -286,7 +343,7 @@ test("2. the route directory holds EXACTLY the twenty-three approved files", () 
     .filter((path) => path.startsWith(ROUTE_DIR_PREFIX))
     .sort();
   assert.deepEqual(routeFiles, FINAL_ROUTE_FILES, "the route file set changed");
-  assert.equal(routeFiles.length, 23);
+  assert.equal(routeFiles.length, 27);
 });
 
 test("3. the action module exports EXACTLY TEN actions, this slice's appended TENTH", () => {
@@ -298,7 +355,7 @@ test("3. the action module exports EXACTLY TEN actions, this slice's appended TE
   const exported = [...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g)].map(
     ([, name]) => name,
   );
-  assert.equal(exported.length, 10, "no eleventh endpoint may exist in this module");
+  assert.equal(exported.length, 12, "no thirteenth endpoint may exist in this module");
   assert.equal(exported[9], ACTION_NAME, "the pairing action must be appended LAST");
   assert.equal(exported.filter((name) => name === ACTION_NAME).length, 1);
   for (const token of ["export const", "export default", "export {", "export type"]) {
@@ -459,35 +516,50 @@ test("9. the dedicated EMPTY value becomes null, and nothing is coerced", () => 
 // ===========================================================================
 
 test("10. the offering is the BOUND leading argument, never a submitted field", () => {
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX. The standalone pairing ENDPOINT is
+  // unchanged and still builds its path from the bound id — it is deliberately
+  // left in place rather than deleted, because removing a reviewed public
+  // endpoint is a lifecycle decision rather than a UX one. What moved is the
+  // SURFACE: the control now lives on the examinee's own card, and the card's
+  // save action calls the SAME committed writer on the SAME bound-id terms.
   assert.ok(
     PAIRING_ACTION.includes(
       "const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;",
     ),
     "the path is not built from the bound id",
   );
-  // The page binds it from the VERIFIED admin context, exactly once.
+  const CARD_ACTION = bodyOf("updateExamAssignmentDetailsAction");
   assert.ok(
-    PAGE.includes(`const boundSetExamPairingAction = ${ACTION_NAME}.bind(null, context.id);`),
-    "the action is not bound to the verified offering id",
+    CARD_ACTION.includes(
+      "const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;",
+    ),
+    "the card save does not build its path from the bound id",
+  );
+  // The page binds the card save from the VERIFIED admin context, and no longer
+  // binds the standalone action at all.
+  assert.ok(
+    PAGE.includes("updateExamAssignmentDetailsAction.bind(null, context.id)"),
+    "the card save is not bound to the verified offering id",
   );
   assert.equal(
-    (PAGE.match(new RegExp(`${ACTION_NAME}\\.bind\\(`, "g")) ?? []).length,
-    1,
-    "the action is bound in more than one place",
+    PAGE.includes(ACTION_NAME),
+    false,
+    "the standalone pairing action still has a surface on the page",
   );
   assert.equal(
-    PAGE.includes(`${ACTION_NAME}.bind(null, courseOfferingId)`),
+    PAGE.includes("updateExamAssignmentDetailsAction.bind(null, courseOfferingId)"),
     false,
     "the RAW route param was bound instead of the verified id",
   );
-  // No hidden field carries a course, a plan or a session.
+  // No hidden field carries a course, a plan, a session or an allocation index.
   for (const forbidden of [
     'name="courseOfferingId"',
     'name="planId"',
     'name="sessionId"',
     'name="pairingIndex"',
   ]) {
-    assert.equal(PAGE.includes(forbidden), false, `the form submits ${forbidden}`);
+    assert.equal(PAGE.includes(forbidden), false, `the page submits ${forbidden}`);
+    assert.equal(CARD.includes(forbidden), false, `the card submits ${forbidden}`);
   }
 });
 
@@ -603,100 +675,137 @@ test("13. every redirect target is CLOSED, and echoes NO id or submitted value",
 // 14–18. The rendered control
 // ===========================================================================
 
-test("14. the control renders for INSTRUCTED_TRAINEE rows and for NO other role", () => {
-  assert.ok(
-    PAGE.includes('{assignment.role === "INSTRUCTED_TRAINEE" ? ('),
-    "the control is not gated on the row's role",
-  );
+test("14. the control renders ONCE on the EXAMINEE card, and nowhere else", () => {
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX, and this is the whole point of the
+  // change: the link is one-to-one and the EXAMINEE owns it, so the picker sits
+  // on the examinee's card instead of under the trainee's row, where it asked the
+  // same question backwards and needed its own second save button.
   assert.equal(
     (PAGE.match(/name="instructedTraineeAssignmentId"/g) ?? []).length,
-    1,
-    "there is more than one pairing form on the page",
+    0,
+    "the page still renders a pairing form of its own",
   );
   assert.equal(
-    (PAGE.match(/name="examineeAssignmentId"/g) ?? []).length,
+    (CARD.match(/name="instructedTraineeAssignmentId"/g) ?? []).length,
     1,
-    "there is more than one examinee picker on the page",
+    "the card holds more than one teaching-link picker",
   );
-  // The list itself is UNCHANGED: every stored row of every role is still
-  // rendered, so a session cannot look emptier than its own count says.
-  assert.ok(PAGE.includes("sessionAssignments.map((assignment) => {"));
+  // The instructed trainee gets NO card of its own: it travels inside the
+  // examinee it teaches, or — when nobody teaches it yet — in the explicitly
+  // labelled unlinked roster, which carries no time, wave or position.
+  assert.ok(PAGE.includes("UNLINKED_INSTRUCTED_HEADING"));
+  assert.equal(
+    PAGE.includes('assignment.role === "INSTRUCTED_TRAINEE" ? ('),
+    false,
+    "a per-trainee pairing branch survived",
+  );
+  // Every stored row of every role is still SHOWN, so a session cannot look
+  // emptier than its own count says.
+  assert.ok(PAGE.includes("unlinkedInstructed.map((assignment) => ("));
+  assert.ok(PAGE.includes("wave.examinees.map((examinee) => {"));
 });
 
-test("15. the options are THIS session's examinee bucket, built without a filter", () => {
-  // The bucket is keyed by `sessionId` and filled in the SAME single pass that
-  // fills the assignment list, so "only examinees of THIS session" is a property
-  // of the DATA STRUCTURE rather than of a comparison somebody could delete.
+test("15. the options are THIS session own bucket, built without a filter", () => {
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the DIRECTION flipped, so the picker now
+  // offers this session's INSTRUCTED TRAINEES rather than its examinees. The
+  // structural claim is unchanged and is the one that matters — the bucket is
+  // keyed by `sessionId` and filled in the SAME single pass over the reader's
+  // rows, so "only this session" is a property of the DATA STRUCTURE rather than
+  // of a comparison somebody could later delete.
+  assert.ok(
+    PAGE.includes("const instructedBySession = new Map<string, AdminExamAssignmentRow[]>();"),
+  );
   assert.ok(
     PAGE.includes("const examineesBySession = new Map<string, AdminExamAssignmentRow[]>();"),
   );
   assert.ok(PAGE.includes("for (const assignment of assignmentView.assignments) {"));
-  assert.ok(PAGE.includes('if (assignment.role !== "EXAMINEE") {'));
+  assert.ok(PAGE.includes('if (assignment.role === "EXAMINEE") {'));
   assert.ok(
-    PAGE.includes("examineesBySession.get(session.sessionId) ?? NO_ASSIGNMENTS"),
+    PAGE.includes("instructedBySession.get(session.sessionId) ?? NO_ASSIGNMENTS"),
     "the picker does not read this session's own bucket",
   );
-  assert.ok(PAGE.includes("sessionExaminees.map((examinee) => ("));
-  // The page still never sorts, filters, slices or reverses anything.
-  for (const forbidden of [".sort(", ".reverse(", ".filter(", ".slice("]) {
+  assert.ok(PAGE.includes("instructedTraineeOptions={instructedChoices}"));
+  // The page still never SORTS, SLICES or REVERSES the reader's rows. It filters
+  // in exactly two places, both of them stated: the unlinked roster, and the
+  // by-date arrangement's day partition. Neither reorders anything.
+  for (const forbidden of [".sort(", ".reverse(", ".slice("]) {
     assert.equal(PAGE.includes(forbidden), false, `the page uses ${forbidden}`);
   }
+  assert.equal(
+    (PAGE.match(/\.filter\(/g) ?? []).length,
+    2,
+    "the page filters the reader's rows somewhere unapproved",
+  );
+  assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));
+  assert.ok(PAGE.includes("(entry) => entry.dateKey === day.dateKey"));
 });
 
 test("16. the CURRENT partner is pre-selected from the READER, never from the query", () => {
+  // The link is resolved SERVER-SIDE by the committed reader and reaches the card
+  // through the page's `teaches` map — never from the query string, never from an
+  // array position and never from a pairing index, which this surface cannot see.
   assert.ok(
-    squash(PAGE).includes(
-      "defaultValue={ assignment.pairedExamineeAssignmentId ?? EXAM_PAIRING_NONE_VALUE }",
-    ),
-    "the current pairing is not pre-selected from the reader's resolved answer",
+    PAGE.includes("teachesByExaminee.set(assignment.pairedExamineeAssignmentId, assignment)"),
   );
-  // The displayed partner NAME comes from the same resolved answer, and an
-  // unresolved pairing says so plainly instead of naming an arbitrary examinee.
-  assert.ok(squash(PAGE).includes("{assignment.pairedExamineeName ?? PAIRING_UNPAIRED_TEXT}"));
-  // NOTHING derives a pairing from the query string, from an array position or
-  // from an index. `pairing` is a feedback token and nothing else.
+  assert.ok(PAGE.includes("const taught = teachesByExaminee.get(row.assignmentId);"));
+  assert.ok(
+    PAGE.includes("currentInstructedTraineeAssignmentId={"),
+    "the current link is not handed to the card",
+  );
+  assert.ok(
+    PAGE_FLAT.includes(
+      "currentInstructedTraineeAssignmentId={ examinee.instructedTraineeAssignmentId }",
+    ),
+    "the current link is not the reader's resolved answer",
+  );
+  assert.ok(
+    squash(CARD).includes(
+      "defaultValue={ currentInstructedTraineeAssignmentId ?? EDIT_CARD_NO_INSTRUCTED_TRAINEE_VALUE }",
+    ),
+    "the picker does not pre-select the current link",
+  );
+  // An unresolved link says so plainly instead of naming an arbitrary trainee.
+  assert.ok(PAGE.includes("examinee.instructedTraineeName ??"));
+  assert.ok(PAGE.includes("NO_TEACHING_LINK_TEXT"));
   for (const forbidden of [
     "pairingIndex",
     "query.pairing ===",
-    "pairing === \"PAIRED\"",
-    "sessionExaminees[0]",
+    'pairing === "PAIRED"',
+    "instructedChoices[0]",
     "assignments[0]",
     "indexOf(",
   ]) {
-    assert.equal(PAGE.includes(forbidden), false, `the page derives a pairing from ${forbidden}`);
+    assert.equal(PAGE.includes(forbidden), false, `the page derives a link from ${forbidden}`);
   }
 });
 
-test("17. the UNPAIR option exists, carries the exact sentinel, and comes FIRST", () => {
+test("17. the UNLINK option exists, carries the exact sentinel, and comes FIRST", () => {
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the option moved to the card with the
+  // control, and its sentinel is the card's own dedicated empty value.
   assert.ok(
-    PAGE_FLAT.includes(
-      "<option value={EXAM_PAIRING_NONE_VALUE}> {PAIRING_NONE_OPTION_TEXT} </option>",
+    squash(CARD).includes(
+      "<option value={EDIT_CARD_NO_INSTRUCTED_TRAINEE_VALUE}>ללא חניך מודרך</option>",
     ),
-    "the unpair option is missing or is not the dedicated empty value",
+    "the unlink option is missing or is not the dedicated empty value",
   );
-  // ...and the constant it renders is this module's own fixed Hebrew.
-  assert.ok(
-    PAGE.includes(`const PAIRING_NONE_OPTION_TEXT = "${NONE_OPTION_TEXT}";`),
-    "the unpair option's text changed",
-  );
-  assert.ok(PAGE.includes('const EXAM_PAIRING_NONE_VALUE = "";'));
-  // The page's sentinel and the action's sentinel are the SAME literal. They are
+  assert.ok(CARD.includes('const EDIT_CARD_NO_INSTRUCTED_TRAINEE_VALUE = "";'));
+  // The card's sentinel and the action's sentinel are the SAME literal. They are
   // declared separately because a `"use server"` module may export nothing but
   // its actions, so this is what keeps the two from drifting apart.
   assert.ok(ACTIONS.includes('const EXAM_PAIRING_NONE_VALUE = "";'));
-  // The unpair option precedes every examinee option.
-  const optionsStart = PAGE.indexOf("<option value={EXAM_PAIRING_NONE_VALUE}>");
-  const examineeOption = PAGE.indexOf("value={examinee.assignmentId}");
-  assert.ok(optionsStart > -1 && examineeOption > optionsStart, "the unpair option is not first");
-  // A session with no examinee gets a SENTENCE rather than a picker offering
-  // only "no partner", which would read as a control that does nothing.
-  assert.ok(PAGE.includes(NO_EXAMINEES_TEXT));
-  assert.ok(PAGE.includes("sessionExaminees.length > 0 ? ("));
+  // The unlink option precedes every trainee option.
+  const noneOption = CARD.indexOf("<option value={EDIT_CARD_NO_INSTRUCTED_TRAINEE_VALUE}>");
+  const traineeOption = CARD.indexOf("value={option.assignmentId}");
+  assert.ok(noneOption > -1 && traineeOption > noneOption, "the unlink option is not first");
+  // A session with no instructed trainee gets a SENTENCE rather than a picker
+  // offering only "nobody", which would read as a control that does nothing.
+  assert.ok(CARD.includes("instructedTraineeOptions.length > 0 ? ("));
+  assert.ok(CARD.includes("אין חניכים מודרכים במפגש הזה, ולכן אין את מי לשייך."));
 });
 
 test("18. the control sits behind the SAME lifecycle gate, and NOT behind publication", () => {
   // ONE lifecycle evaluation on the page, and this control reads its result like
-  // every other affordance. The list above it stays readable either way.
+  // every other affordance. The roster above it stays readable either way.
   assert.ok(
     PAGE_FLAT.includes(
       'const mayConfigure = evaluateCourseOperationPolicy( context.status, "SCHEDULE_DRAFT_CONFIGURATION", ).allowed;',
@@ -708,19 +817,17 @@ test("18. the control sits behind the SAME lifecycle gate, and NOT behind public
     1,
     "the page evaluates the lifecycle policy more than once",
   );
-  const control = PAGE.slice(
-    PAGE.indexOf('{assignment.role === "INSTRUCTED_TRAINEE" ? ('),
+  // The card — which now carries the pairing control — is rendered only behind
+  // that gate, and falls back to a read-only summary when it is closed.
+  assert.ok(
+    PAGE.includes("mayConfigure && !requirementsUnknown ? ("),
+    "the card is not behind the write gate",
   );
-  assert.ok(control.includes("{mayConfigure ? ("), "the control is not behind the write gate");
-  // PUBLICATION IS NOT AUTHORIZATION. The control must not consult it: the
-  // product rule is that a manager may still edit a published plan, and the
+  // PUBLICATION IS NOT AUTHORIZATION. Neither the card nor its gate consults it:
+  // the product rule is that a manager may still edit a published plan, and the
   // existing advisory is what says so.
   for (const forbidden of ["isPublished", "publishedAt", "view.publishedAt"]) {
-    assert.equal(
-      control.slice(0, control.indexOf("</li>")).includes(forbidden),
-      false,
-      `the pairing control consults ${forbidden}`,
-    );
+    assert.equal(CARD.includes(forbidden), false, `the card consults ${forbidden}`);
   }
 });
 
@@ -728,7 +835,11 @@ test("18. the control sits behind the SAME lifecycle gate, and NOT behind public
 // 19–21. The closed Hebrew mapping, and what may never become text
 // ===========================================================================
 
-test("19. the outcome table is FROZEN, closed, and owns EXACTLY the thirteen sentences", () => {
+test("19. the outcome table is FROZEN, closed, and owns EXACTLY the fourteen sentences", () => {
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX only in COUNT: the pairing backend added
+  // the one-to-one refusal, so the closed table gained its fourteenth entry. The
+  // table itself did not move — the card's teaching-link leg reports through the
+  // SAME query token, so not one sentence is duplicated anywhere.
   const start = PAGE.indexOf("const EXAM_PAIRING_MESSAGES");
   assert.ok(start > -1, "the pairing table is missing");
   assert.ok(PAGE.slice(start, start + 120).includes("Object.freeze({"), "the table is not frozen");
@@ -738,6 +849,7 @@ test("19. the outcome table is FROZEN, closed, and owns EXACTLY the thirteen sen
     ...SUCCESS_TEXTS.map(([code]) => code),
     ...FAILURE_TEXTS.map(([code]) => code),
   ]);
+  assert.equal(codes.length, 14);
   // `offering_not_found` is deliberately absent: that refusal routes to the
   // courses list and never returns to this course-scoped route.
   assert.equal(table.includes("offering_not_found"), false);
@@ -764,10 +876,22 @@ test("20. every approved Hebrew sentence is present, verbatim, with its tone", (
       `${code} does not carry the error tone`,
     );
   }
-  // The control's own fixed Hebrew is present too.
-  for (const text of [SECTION_LABEL, NONE_OPTION_TEXT, SUBMIT_TEXT, UNPAIRED_TEXT]) {
-    assert.ok(PAGE.includes(text), `the control is missing "${text}"`);
+  // The control's own fixed Hebrew moved to the card WITH the control, and the
+  // page no longer owns a second copy of any of it.
+  // SECTION_LABEL is deliberately NOT swept for: it is a SUBSTRING of two of the
+  // outcome sentences above, which legitimately stay on the page, so an includes
+  // test on it would prove nothing either way. What it labelled — the control —
+  // is covered structurally by test 14.
+  for (const text of [NONE_OPTION_TEXT, SUBMIT_TEXT, UNPAIRED_TEXT]) {
+    assert.equal(PAGE.includes(text), false, `the page still owns "${text}"`);
   }
+  assert.ok(SECTION_LABEL.length > 0);
+  // The "no partner to choose" sentence moved to the card with the control, and
+  // the page no longer owns a copy of it either.
+  assert.equal(PAGE.includes(NO_EXAMINEES_TEXT), false, "the page still owns the empty-picker text");
+  assert.ok(CARD.includes("אין חניכים מודרכים במפגש הזה, ולכן אין את מי לשייך."));
+  assert.ok(CARD.includes("החניך המודרך שהנבחן/ת מדריך/ה"), "the card has no link label");
+  assert.ok(CARD.includes("ללא חניך מודרך"), "the card has no unlink option text");
 });
 
 test("21. the parser is CLOSED in both directions and never echoes the query", () => {
@@ -805,18 +929,15 @@ test("21. the parser is CLOSED in both directions and never echoes the query", (
 });
 
 test("22. no raw id, index or personal detail becomes visible text", () => {
-  // Both ids travel ONLY as submitted values — a hidden field and an option
-  // value — and neither is ever rendered as a text node or placed in an href.
-  assert.ok(PAGE.includes('value={assignment.assignmentId}'));
-  assert.ok(PAGE.includes("value={examinee.assignmentId}"));
+  // Every id travels ONLY as a submitted value — a hidden field or an option
+  // value — or as a React key, and never as a text node or an href.
+  assert.ok(CARD.includes("value={assignmentId}"));
+  assert.ok(CARD.includes("value={option.assignmentId}"));
   assert.equal(
-    PAGE.includes("{assignment.pairedExamineeAssignmentId}"),
+    PAGE.includes("{examinee.instructedTraineeAssignmentId}<"),
     false,
     "a partner id is rendered as text",
   );
-  // Every occurrence of an examinee's id is an ATTRIBUTE value — `value={...}`
-  // or a React `key` — and never a JSX text node. A text node would be preceded
-  // by `>` or followed by `<` once whitespace is collapsed.
   for (const forbidden of [
     "> {examinee.assignmentId}",
     "{examinee.assignmentId} <",
@@ -825,10 +946,9 @@ test("22. no raw id, index or personal detail becomes visible text", () => {
   ]) {
     assert.equal(PAGE_FLAT.includes(forbidden), false, "an id is rendered as text");
   }
-  const idUses = (PAGE.match(/examinee\.assignmentId/g) ?? []).length;
-  assert.equal(idUses, 2, "an examinee id is used beyond the React key and the option value");
-  assert.ok(PAGE.includes("key={examinee.assignmentId}"));
+  // The internal allocation index never reaches either file.
   assert.equal(PAGE.includes("pairingIndex"), false, "the internal index reaches the page");
+  assert.equal(CARD.includes("pairingIndex"), false, "the internal index reaches the card");
   for (const forbidden of [
     "identityNumber",
     "phone",
@@ -841,6 +961,7 @@ test("22. no raw id, index or personal detail becomes visible text", () => {
     "examinee.studentId",
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page renders ${forbidden}`);
+    assert.equal(CARD.includes(forbidden), false, `the card renders ${forbidden}`);
   }
 });
 
@@ -866,25 +987,36 @@ test("23. the published assignment row gained the ANSWER and not the index", () 
   assert.ok(READ_CORE.includes("resolveExamPairings("), "the committed pairing rule is not used");
 });
 
-test("24. no GET can pair, and no client code came with the control", () => {
-  // The control is a POST-ing form on a Server Action. There is no pairing link,
-  // no effect, no auto-submit and no client component anywhere on this page.
-  assert.ok(PAGE_FLAT.includes("<form action={boundSetExamPairingAction}"));
+test("24. no GET can pair, and the card adds no client state of its own", () => {
+  // The control is still a POST-ing form on a Server Action. There is no pairing
+  // link, no effect, no auto-submit and no router call anywhere.
+  assert.ok(squash(CARD).includes("<form action={action}"));
+  assert.equal(CARD.includes("?pairing"), false, "a pairing is reachable by GET");
+  assert.equal(PAGE.includes("?pairing"), false, "a pairing is reachable by GET");
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the card IS a client component, because
+  // one save button that reports its own pending state needs one. That is the
+  // ONLY client capability it has — it holds no state, runs no effect, fetches
+  // nothing and calls no router.
+  assert.ok(CARD_RAW.trimStart().startsWith('"use client"'));
   for (const forbidden of [
-    '"use client"',
     "useState",
     "useEffect",
     "useTransition",
+    "useReducer",
+    "useRouter",
     "onSubmit",
     "onChange",
     "onClick",
-    "useFormStatus",
-    `href={\`/admin/courses/\${context.id}/exams?pairing`,
+    "fetch(",
   ]) {
+    assert.equal(CARD.includes(forbidden), false, `the card uses ${forbidden}`);
+  }
+  assert.ok(CARD.includes("useFormStatus"), "the pending state is not the framework's own");
+  // The PAGE itself is still a Server Component with no client code at all.
+  for (const forbidden of ["useState", "useEffect", "useFormStatus"]) {
     assert.equal(PAGE.includes(forbidden), false, `the page uses ${forbidden}`);
   }
-  // No notification, no publication validation and no per-session publication
-  // came with this slice.
+  // No notification, no publication validation and no per-session publication.
   for (const forbidden of [
     "notification",
     "sendPush",
@@ -926,6 +1058,18 @@ test("25. the slice touched EXACTLY its approved paths, and no schema or migrati
   assert.deepEqual(libProduction, [
     "lib/actions/" + "exam-assignment-read" + "-io.ts",
     "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    // EX-ADMIN-WORKSPACE-UX ADDED two files and MODIFIED no committed `lib/`
+    // production module: the pure workspace edit/move core, and its server-only
+    // binding.
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    // BLOCKER-1 — the canonical wave narrowing: a pure, DB-free module that groups
+    // the committed timetable core's own derived moments. ASSEMBLED.
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    // BLOCKER-1 — the ONE committed `lib/` production module this slice modifies:
+    // it gains one ADMIN-ONLY export so the admin schedule reuses the committed
+    // timetable derivation instead of reproducing it. ASSEMBLED.
+    "lib/actions/" + "exam-role" + "-readers" + ".ts",
   ].sort());
 
   // No instructor or trainee UI, no auth, session, middleware, capability,

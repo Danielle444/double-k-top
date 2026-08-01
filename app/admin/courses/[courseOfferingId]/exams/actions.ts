@@ -280,6 +280,10 @@ import { createDetailedExamAssignment } from "@/lib/actions/detailed-exam-assign
 import { createExamInstructedTraineeAssignment } from "@/lib/actions/exam-instructed-trainee-assignment-write-io";
 import { setExamPlanPublication } from "@/lib/actions/exam-publication-write-io";
 import { setExamInstructedTraineePairing } from "@/lib/actions/exam-pairing-write-io";
+import {
+  updateExamAssignmentDetails,
+  moveExamAssignment,
+} from "@/lib/actions/admin-exam-workspace-edit-io";
 
 /**
  * EX-PAIR-UI-MVP — the ONE submitted value that means "no partner".
@@ -1261,4 +1265,240 @@ export async function setExamPairingAction(
   //    stored index and the stale write. No diagnostics list exists for a
   //    pairing, so there is no issues token.
   redirect(`${examsPath}?pairing=${encodeURIComponent(result.code)}`);
+}
+
+/**
+ * EX-ADMIN-WORKSPACE-UX — SAVE ONE examinee's edit card: the horse, the
+ * instruction topic, the branch, and the ONE instructed trainee that examinee
+ * teaches.
+ *
+ * Returns `Promise<void>`, like its ten neighbours: every outcome is expressed
+ * as a navigation, so the action holds no client-visible state and its signature
+ * cannot grow a `prevState` parameter.
+ *
+ * ===========================================================================
+ * ONE SAVE, TWO COMMITTED WRITERS — AND WHY THAT IS NOT ONE TRANSACTION
+ * ===========================================================================
+ * A manager presses ONE button. The server then writes through TWO committed
+ * paths, because the assignment's own detail columns and the pairing allocation
+ * are owned by two different writers:
+ *
+ *   - the detail writer stores the horse, the topic and the branch, after
+ *     re-running the admin boundary, the lifecycle gate, the plan resolution,
+ *     the plan-scoped row read, the EXAMINEE role rule and the definition's own
+ *     topic/branch requirements;
+ *   - the committed PAIRING writer owns every role, same-session, reuse,
+ *     allocation, ambiguity and stale-write decision of the teaching link, and
+ *     is called EXACTLY as the standalone pairing control already calls it.
+ *
+ * They run in SEQUENCE and NOT inside one transaction, because each opens its
+ * own and each re-runs the authorization boundary for itself. Making the save
+ * atomic would mean reimplementing the pairing rules inside the detail writer —
+ * duplicating precisely the business logic that must be reused. The trade is
+ * stated rather than hidden: each leg reports its own outcome, through its own
+ * query token, so a manager is never told a link was saved when it was not.
+ *
+ * The PAIRING LEG RUNS AT MOST TWICE and only when the selection actually
+ * changed: once to CLEAR the trainee that was linked when the card was rendered,
+ * and once to LINK the newly chosen one to this examinee. Clearing first is what
+ * keeps the relationship one-to-one — leaving the old trainee pointing at this
+ * examinee's allocation would make the pairing ambiguous, and the committed
+ * reader would then resolve it to nobody.
+ *
+ * ===========================================================================
+ * WHAT THIS ACTION READS FROM THE SUBMISSION, AND WHAT IT CANNOT
+ * ===========================================================================
+ * Six fields, and no seventh: the target assignment, the horse, the topic, the
+ * branch, the previously-linked instructed trainee and the newly-chosen one.
+ *
+ * Absent — not filtered out, but never looked for — are `courseOfferingId`
+ * (bound by the route), `planId`, `sessionId`, `studentId`, `role`,
+ * `orderIndex`, `pairingIndex`, every requirement flag, a trainee or horse NAME
+ * of anyone else, a date, a time, a timestamp, a version token and an actor id.
+ * Neither committed writer's signature has a parameter through which one could
+ * arrive.
+ *
+ * Nothing is wrapped in `String(...)`, defaulted with `??` or trimmed here: the
+ * raw entries are handed to the committed input core, which refuses every
+ * non-string rather than stringifying it. `String(...)` would turn a `File` from
+ * a multipart submission into the text `"[object File]"` and store that.
+ *
+ * The PAIRING LEG is reached only when the submission actually CARRIED the
+ * picker — proved by the presence of its hidden companion field, which the card
+ * renders only alongside it. A card whose exam has no instructed trainee
+ * therefore cannot silently clear a link it never showed.
+ */
+export async function updateExamAssignmentDetailsAction(
+  courseOfferingId: string,
+  formData: FormData,
+): Promise<void> {
+  // 1. Authorize the manager BEFORE anything is read or written.
+  await requireAdmin();
+
+  // 2. The exams path of THIS offering — the only path this action revalidates
+  //    and the only one it redirects back to. The section token returns the
+  //    manager to the assignments workspace they submitted from.
+  const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
+  const backPath = `${examsPath}?tab=assignments`;
+
+  // 3. WHICH row, and its three stored detail values. Raw entries, uncoerced.
+  const submittedAssignmentId = formData.get("assignmentId");
+  const result = await updateExamAssignmentDetails(courseOfferingId, {
+    assignmentId: submittedAssignmentId,
+    horseName: formData.get("horseName"),
+    instructionTopic: formData.get("instructionTopic"),
+    discipline: formData.get("discipline"),
+  });
+
+  // 4. The DETAIL leg refused: nothing was written, so the pairing leg is never
+  //    reached and no link is touched.
+  if (!result.ok) {
+    if (result.code === "offering_not_found") {
+      redirect("/admin/courses?error=invalid");
+    }
+    const issues = result.issues.map((issue) => issue.code).join(",");
+    redirect(
+      issues.length > 0
+        ? `${backPath}&assignmentEdit=${encodeURIComponent(result.code)}&assignmentEditIssues=${encodeURIComponent(issues)}`
+        : `${backPath}&assignmentEdit=${encodeURIComponent(result.code)}`,
+    );
+  }
+
+  // 5. The PAIRING leg — EXACTLY ONE call to the committed writer, and never two.
+  //
+  //    An explicit UI-level "unpair the old one, then pair the new one" was
+  //    removed: two writes mean two transactions, and between them the examinee
+  //    is COMMITTED as teaching nobody. If the second one were then refused, the
+  //    manager would be left with a link they never asked to delete. So the
+  //    intended pairing is handed to the writer directly and it performs the
+  //    switch inside its own transaction, under its own rules:
+  //
+  //      - choosing a trainee -> pair THAT trainee to THIS examinee. The writer
+  //        overwrites the trainee's own allocation conditionally, which is the
+  //        switch; it never touches whoever the examinee was linked to except
+  //        through its own one-to-one rule;
+  //      - choosing "nobody"  -> unpair the trainee the card was rendered with.
+  //
+  //    A REFUSAL therefore writes NOTHING and the previous pairing survives
+  //    intact — including the one-to-one refusal, which is the backend's rule
+  //    and is neither re-derived nor pre-empted here.
+  //
+  //    Reached only when the card actually CARRIED the picker, proved by the
+  //    presence of its hidden companion field, so a card whose exam has no
+  //    instructed trainee can never silently clear a link it never showed.
+  let pairingRefused = false;
+  let pairingChanged = false;
+  if (formData.has("previousInstructedTraineeAssignmentId")) {
+    const submittedPrevious = formData.get("previousInstructedTraineeAssignmentId");
+    const previous = typeof submittedPrevious === "string" ? submittedPrevious : "";
+    const submittedNext = formData.get("instructedTraineeAssignmentId");
+    const next = typeof submittedNext === "string" ? submittedNext : "";
+
+    if (next !== previous) {
+      // WHICH instructed-trainee row the one call names, and WHAT it is being
+      // pointed at. Choosing somebody names the new trainee and this examinee;
+      // choosing nobody names the trainee the card was rendered with and `null`.
+      const isClearing = next === EXAM_PAIRING_NONE_VALUE;
+      const instructedTraineeAssignmentId = isClearing ? previous : next;
+      const examineeAssignmentId = isClearing
+        ? null
+        : typeof submittedAssignmentId === "string"
+          ? submittedAssignmentId
+          : "";
+
+      const outcome = await setExamInstructedTraineePairing(
+        courseOfferingId,
+        instructedTraineeAssignmentId,
+        examineeAssignmentId,
+      );
+
+      if (outcome.ok) {
+        pairingChanged = outcome.status !== "NO_CHANGE";
+      } else {
+        if (outcome.code === "offering_not_found") {
+          redirect("/admin/courses?error=invalid");
+        }
+        // The write was refused, so NOTHING was written and the pairing the card
+        // was rendered with is still in force. The refusal CODE is deliberately
+        // not carried into the URL: the card reports one fixed sentence that
+        // says the details saved and the link did not, which is the whole of
+        // what a manager can act on.
+        pairingRefused = true;
+      }
+    }
+  }
+
+  // 6. ONE honest outcome. Revalidate EXACTLY this exams path, then say which of
+  //    the three things actually happened — never a general "saved" when only
+  //    the detail leg succeeded.
+  revalidatePath(examsPath);
+  const editToken = pairingRefused
+    ? "PAIRING_FAILED"
+    : result.changed || pairingChanged
+      ? "SAVED"
+      : "NO_CHANGE";
+  redirect(`${backPath}&assignmentEdit=${editToken}`);
+}
+
+/**
+ * EX-ADMIN-WORKSPACE-UX — MOVE ONE examinee one position up or down within its
+ * own exam block, which is what changes the derived wave time it is examined at.
+ *
+ * Returns `Promise<void>`, like its eleven neighbours.
+ *
+ * TWO FIELDS AND NO THIRD: the target assignment and the direction. Absent — and
+ * never looked for — are `courseOfferingId` (bound by the route), `planId`,
+ * `sessionId`, a target POSITION, an `orderIndex`, a neighbour id, a wave index,
+ * a time and a version token. The committed writer derives the session from the
+ * target row itself and rewrites THAT session's positions in one transaction, so
+ * this endpoint cannot be talked into renumbering a session the manager did not
+ * name, and cannot move a person between sessions at all.
+ *
+ * Neither value is coerced. Both raw entries go to the writer, which normalizes
+ * the id and recognizes exactly two direction literals, refusing everything else
+ * before any query runs.
+ *
+ * A move at the EDGE of the order is a SUCCESS that wrote nothing, and it is
+ * reported as such rather than as a refusal: the manager asked for an order that
+ * is already in force.
+ */
+export async function moveExamAssignmentAction(
+  courseOfferingId: string,
+  formData: FormData,
+): Promise<void> {
+  // 1. Authorize the manager BEFORE anything is read or written.
+  await requireAdmin();
+
+  // 2. The exams path of THIS offering, and the section to return to.
+  const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
+  const backPath = `${examsPath}?tab=assignments`;
+
+  // 3. The committed writer, which re-runs the admin boundary and the lifecycle
+  //    gate, resolves the plan from the DB-verified offering, reads the target
+  //    WITHIN that plan, reads that session's own rows in the reader's order,
+  //    and renumbers them atomically.
+  const result = await moveExamAssignment(
+    courseOfferingId,
+    formData.get("assignmentId"),
+    formData.get("direction"),
+  );
+
+  // 4. Success, in its two distinguishable forms. A real move revalidates this
+  //    ONE exams path; an edge click revalidates NOTHING, because the writer
+  //    issued no statement and a cache invalidation would be a lie about it.
+  if (result.ok) {
+    if (result.moved) {
+      revalidatePath(examsPath);
+    }
+    redirect(`${backPath}&assignmentOrder=${result.moved ? "MOVED" : "AT_EDGE"}`);
+  }
+
+  // 5. The one refusal that is NOT about this page.
+  if (result.code === "offering_not_found") {
+    redirect("/admin/courses?error=invalid");
+  }
+
+  // 6. Every other refusal is fully described by its code alone. No diagnostics
+  //    list exists for a move, so there is no issues token.
+  redirect(`${backPath}&assignmentOrder=${encodeURIComponent(result.code)}`);
 }

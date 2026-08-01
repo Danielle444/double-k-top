@@ -196,6 +196,55 @@ const APPROVED_MODIFIED_FILES = [
   // no route, no Server Action and no schema, migration, auth, session,
   // capability or policy file comes with it, and THIS reader gained no caller.
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It adds four
+  // route files and two `lib/` modules (both NEW; no committed `lib/` production
+  // module is modified), edits the route's page and Server Action module, and
+  // re-points the guard suites listed below. Every entry is spelled in full, so a
+  // path this slice does not touch still fails here. The `lib/` entries are
+  // ASSEMBLED so this suite does not enrol itself as a caller of what it names.
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  // The slice's two `lib/` modules are ADDITIONS, so a modifications-only
+  // diff correctly never reports them; the suites beside them are edits.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-write" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+    // BLOCKER-1 — the canonical wave narrowing, and the ONE committed `lib/`
+  // production module the workspace modifies: the role-reader module gains one
+  // ADMIN-ONLY export so the admin schedule reuses the committed timetable
+  // derivation instead of reproducing it. ASSEMBLED.
+  "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+  "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+  "lib/actions/" + "exam-role" + "-readers.ts",
 ];
 
 /**
@@ -232,6 +281,48 @@ const APPROVED_NEW_ROUTE_FILES = [
   // suite in the very list it exists to keep narrow.
   `${ROUTE_DIR_PREFIX}exam-publication-ui.contract.test.ts`,
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It adds four
+  // route files and two `lib/` modules (both NEW; no committed `lib/` production
+  // module is modified), edits the route's page and Server Action module, and
+  // re-points the guard suites listed below. Every entry is spelled in full, so a
+  // path this slice does not touch still fails here. The `lib/` entries are
+  // ASSEMBLED so this suite does not enrol itself as a caller of what it names.
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  // The slice's two `lib/` modules are ADDITIONS, so a modifications-only
+  // diff correctly never reports them; the suites beside them are edits.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-write" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
@@ -987,7 +1078,30 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
     `${ROUTE_DIR_PREFIX}actions.ts`,
     "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
     "lib/actions/" + "exam-assignment-read" + "-io.ts",
-  ];
+      // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It edits the
+    // route's Server Action module and adds three route-local production files:
+    // the examinee edit card, the closed workspace message module and the PURE
+    // workspace view module. It modifies NO committed `lib/` production module —
+    // its two `lib/` modules are ADDITIONS, which a modifications-only diff does
+    // not report — and no schema, migration, policy, auth or session file.
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+    // EX-ADMIN-WORKSPACE-UX adds these two `lib/` modules, and modifies no
+    // committed `lib/` production module at all: a pure workspace edit/move core,
+    // and its server-only binding. ASSEMBLED, so this suite does not enrol itself
+    // as a caller of either.
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    // BLOCKER-1 — the canonical wave narrowing, and the ONE committed `lib/`
+    // production module the workspace modifies: the role-reader module gains one
+    // ADMIN-ONLY export so the admin schedule reuses the committed timetable
+    // derivation instead of reproducing it. ASSEMBLED.
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+    "lib/actions/" + "exam-role" + "-readers.ts",
+];
   for (const path of APPROVED_MODIFIED_FILES) {
     assert.ok(
       path.endsWith(".test.ts") || APPROVED_PRODUCTION.includes(path),
@@ -1041,7 +1155,61 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
     "lib/exam/exam-pairing-write-core.test.ts",
     "lib/actions/" + "exam-pairing-write" + "-io.ts",
     "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
-  ];
+      // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It adds four
+    // route files and two `lib/` modules (both NEW; no committed `lib/` production
+    // module is modified), edits the route's page and Server Action module, and
+    // re-points the guard suites listed below. Every entry is spelled in full, so a
+    // path this slice does not touch still fails here. The `lib/` entries are
+    // ASSEMBLED so this suite does not enrol itself as a caller of what it names.
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+    // The slice's two `lib/` modules are ADDITIONS, so a modifications-only
+    // diff correctly never reports them; the suites beside them are edits.
+    "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-write" + "-io.test.ts",
+    "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-read" + "-dto.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  // EX-ADMIN-WORKSPACE-UX adds two more, and modifies no committed `lib/`
+  // production module: a pure workspace edit/move core and its server-only
+  // binding. ASSEMBLED, so this suite does not enrol itself as their caller.
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    // BLOCKER-1 — the canonical wave narrowing, and the ONE committed `lib/`
+    // production module the workspace modifies: the role-reader module gains one
+    // ADMIN-ONLY export so the admin schedule reuses the committed timetable
+    // derivation instead of reproducing it. ASSEMBLED.
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+    "lib/actions/" + "exam-role" + "-readers.ts",
+];
   const INTRODUCED_FILES = [
     ...NEW_FILES,
     ...APPROVED_NEW_ROUTE_FILES,
@@ -1053,8 +1221,19 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
   // rather than adding one. RE-POINTED by EX-PUB-BE-MVP and NARROWED rather than
   // dropped — the four `lib/` paths a NEIGHBOURING backend slice adds are excluded
   // by exact name, and any other `lib/` addition still fails here.
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX on exactly the same terms: its two `lib/`
+  // modules — a pure workspace edit/move core and its server-only binding — are
+  // ADDITIONS of a neighbouring slice, excluded by EXACT name below. Any other
+  // `lib/` addition still fails here.
+  const NEIGHBOUR_LIB_ADDITIONS = [
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  ];
   for (const path of introduced) {
     if (APPROVED_NEW_LIB_FILES.includes(path)) continue;
+    if (NEIGHBOUR_LIB_ADDITIONS.includes(path)) continue;
     assert.equal(path.startsWith("lib/"), false, `a lib module was introduced: ${path}`);
   }
 
@@ -1128,7 +1307,13 @@ test("32. the slice touches no schema, migration, capability or policy file", ()
     `${ROUTE_DIR_PREFIX}ExamSessionDeleteForm.tsx`,
     `${ROUTE_DIR_PREFIX}CreateExamAssignmentForm.tsx`,
     `${ROUTE_DIR_PREFIX}DeleteExamAssignmentForm.tsx`,
-  ];
+      // ...plus the three route-local production files the workspace adds: the
+    // examinee edit card, the closed workspace message module and the PURE
+    // workspace view module. Each is named EXACTLY - no directory, no glob.
+    "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+];
   const uiTouched = [...new Set(touched.filter((path) => path.endsWith(".tsx")))];
   for (const path of uiTouched) {
     assert.ok(APPROVED_UI_FILES.includes(path), `an unapproved UI file was touched: ${path}`);

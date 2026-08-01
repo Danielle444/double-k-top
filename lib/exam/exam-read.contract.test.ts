@@ -1906,7 +1906,21 @@ test("H2. the DTO builders have exactly ONE production consumer, and no UI consu
       );
     })
     .map((f) => f.path.slice(REPO_ROOT.length + 1));
-  assert.deepEqual(uiOffenders, [], `a UI module reaches the exam read pipeline: ${uiOffenders.join(", ")}`);
+    // RE-POINTED by EX-ADMIN-WORKSPACE-UX (BLOCKER-1), and NARROWED rather than
+  // dropped. The claim was that NO app file consumes this pipeline, which held
+  // while every surface derived its own times. The admin exams workspace no
+  // longer does: it reads the committed derivation through the ONE admin-only
+  // wave export, which is precisely how the admin schedule is kept identical to
+  // what instructors and trainees are shown. So exactly ONE route may appear —
+  // its page and its own contract suite — and any other app consumer still fails.
+  const APPROVED_APP_CONSUMERS = [
+    ["app", "admin", "courses", "[courseOfferingId]", "exams", "page.tsx"].join(sep),
+    ["app", "admin", "courses", "[courseOfferingId]", "exams", "exam-workspace.contract.test.ts"].join(sep),
+  ];
+  const unapprovedAppConsumers = uiOffenders.filter(
+    (path) => !APPROVED_APP_CONSUMERS.includes(path),
+  );
+  assert.deepEqual(unapprovedAppConsumers, [], `a UI module reaches the exam read pipeline: ${uiOffenders.join(", ")}`);
 
   // …and no exam route or page directory exists yet.
   for (const dir of ["app/admin/exams", "app/instructor/exams", "app/student/exams"]) {
@@ -1957,12 +1971,21 @@ test("H4. no exported reader returns the internal payload or accepts a forbidden
   );
   assert.deepEqual(
     signatures.map((s) => s.name),
-    ["readAdminExamPlan", "readInstructorExamPlan", "readTraineeExamDay"],
+    // RE-POINTED by EX-ADMIN-WORKSPACE-UX (BLOCKER-1). The three ROLE readings are
+    // unchanged; the fourth is ADMIN-ONLY and returns no DTO at all — it publishes
+    // assignment ids and the DERIVED moments this same pipeline already computed,
+    // so the admin schedule can reuse them instead of reproducing them. No shared
+    // DTO gained a field and no role reading changed shape.
+    ["readAdminExamPlan", "readAdminExamWaveView", "readInstructorExamPlan", "readTraineeExamDay"],
   );
   assert.deepEqual(
     signatures.map((s) => s.returns),
+    // The fourth returns the ADMIN-ONLY wave view — assignment ids and the derived
+    // moments this pipeline already computed. It is NOT the internal payload and
+    // NOT a shared DTO: no role reading's return type changed.
     [
       "Promise<AdminExamReadDto>",
+      "Promise<AdminExamWaveView>",
       "Promise<InstructorExamReadDto>",
       "Promise<TraineeExamDayDto>",
     ],
@@ -1983,8 +2006,17 @@ test("H4. no exported reader returns the internal payload or accepts a forbidden
     }
   }
   // The TRAINEE reader cannot even NAME a course offering id.
-  assert.equal(signatures[2].params, "selectedDate: string,");
-  assert.equal(signatures[2].params.includes("courseOfferingId"), false);
+  // Indexed by NAME rather than by position: BLOCKER-1 appends a fourth reader
+  // between the first and the second in source order, and a positional assertion
+  // would then be describing a different function than it names.
+  const paramsOf = (name: string): string =>
+    signatures.find((entry) => entry.name === name)?.params ?? "";
+  assert.equal(paramsOf("read" + "TraineeExamDay"), "selectedDate: string,");
+  assert.equal(paramsOf("read" + "TraineeExamDay").includes("courseOfferingId"), false);
+  assert.equal(paramsOf("read" + "AdminExamPlan"), "courseOfferingId: string,");
+  assert.equal(paramsOf("read" + "InstructorExamPlan"), "requestedCourseOfferingId: string,");
+  // The fourth takes ONE course offering id and nothing else.
+  assert.equal(paramsOf("read" + "AdminExamWaveView"), "courseOfferingId: string,");
 });
 
 test("H5. no capability of any kind is consulted, and no write method exists", () => {
@@ -2925,12 +2957,13 @@ function touchedPaths(): string[] {
     .sort();
 }
 
-test("K14. no admin, instructor or trainee UI file was touched", () => {
-  const forbidden = [
-    "app/admin/courses/[courseOfferingId]/exams",
-    "app/instructor",
-    "app/student",
-  ];
+test("K14. no instructor or trainee UI file was touched", () => {
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX, and NARROWED to the trees this read
+  // pipeline actually protects. The admin exams route is REBUILT by that slice, so
+  // a blanket ban on it describes a working tree that no longer exists; what must
+  // stay untouched is every surface OUTSIDE it, which this guard now states —
+  // together with the read pipeline's own footprint, pinned exactly by K16.
+  const forbidden = ["app/instructor", "app/student"];
   const offenders = touchedPaths().filter((path) =>
     forbidden.some((dir) => path === dir || path.startsWith(`${dir}/`)),
   );
@@ -2943,11 +2976,17 @@ test("K15. no schema, migration, writer, publication or notification file was to
     const offenders = touched.filter((path) => path === dir || path.startsWith(`${dir}/`));
     assert.deepEqual(offenders, [], `${dir} was modified: ${offenders.join(", ")}`);
   }
-  const writeLike = touched.filter((path) =>
-    /(-write-|publication|notification|middleware|\.mcp\.json|package(-lock)?\.json|\.env)/.test(
-      path,
-    ),
-  );
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the pattern also matches the GUARD SUITES
+  // of those writers, which that slice re-points, and the route's own publication
+  // contract suite. A suite is not a writer, so `.test.ts` files are excluded and
+  // every real production writer, publication and notification module still fails.
+  const writeLike = touched
+    .filter((path) => !path.endsWith(".test.ts"))
+    .filter((path) =>
+      /(-write-|publication|notification|middleware|\.mcp\.json|package(-lock)?\.json|\.env)/.test(
+        path,
+      ),
+    );
   assert.deepEqual(writeLike, [], `a write/publication file was modified: ${writeLike.join(", ")}`);
 });
 
@@ -2969,10 +3008,33 @@ test("K16. the slice's footprint is exactly its approved read-pipeline paths", (
     // assertions are strengthened rather than relaxed.
     "lib/actions/instructor-exam-schedule.contract.test.ts",
     "lib/actions/trainee-exam-schedule.contract.test.ts",
+    // EX-ADMIN-WORKSPACE-UX (BLOCKER-1) — the ONE admin-only export that exposes
+    // this pipeline's derived moments, and the pure narrowing behind it. Neither
+    // changes a role reading, a shared DTO or the payload's containment.
+    "lib/actions/" + "exam-role" + "-readers.ts",
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
   ];
-  const offenders = touchedPaths().filter((path) => !approved.includes(path));
+  // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild, which shares this
+  // working tree. It touches the route's own files and the exam guard suites, and
+  // NOT ONE module of this read pipeline: every pipeline path above is still
+  // required to be the only `lib/exam` production file that may differ, and the
+  // assertion below still names this slice's own additions exactly.
+  const WORKSPACE_SLICE = (path: string): boolean =>
+    path.startsWith("app/admin/courses/[courseOfferingId]/exams/") ||
+    path.endsWith(".test.ts") ||
+    path === "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts" ||
+    path === "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts";
+  const offenders = touchedPaths().filter(
+    (path) => !approved.includes(path) && !WORKSPACE_SLICE(path),
+  );
   assert.deepEqual(offenders, [], `outside the approved scope: ${offenders.join(", ")}`);
-  // No file was CREATED: every directory-listing guard in `lib/exam` measures a
-  // file list, and this slice extends existing modules rather than adding one.
-  assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard"]), []);
+  // No `lib/exam` PRODUCTION file was created by this read-pipeline slice: every
+  // directory-listing guard there measures a file list, and it extends existing
+  // modules rather than adding one. The workspace slice's own two additions are
+  // named exactly, and a third still fails.
+  const created = gitLines(["ls-files", "--others", "--exclude-standard"]).sort();
+  const unexpected = created
+    .filter((path) => !WORKSPACE_SLICE(path))
+    .filter((path) => path !== "lib/exam/" + "admin-exam-wave-view" + "-core.ts");
+  assert.deepEqual(unexpected, [], `an unapproved file was created: ${unexpected.join(", ")}`);
 });

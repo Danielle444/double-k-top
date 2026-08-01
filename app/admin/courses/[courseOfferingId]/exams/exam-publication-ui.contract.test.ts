@@ -172,6 +172,49 @@ const SLICE_PATHS = [
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
   "lib/actions/" + "exam-session-write" + "-io.test.ts",
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  // EX-ADMIN-WORKSPACE-UX — the four route files the workspace adds, plus the two
+  // new `lib/` modules behind its two operations and their suites. The `lib/`
+  // entries are ASSEMBLED for the reason this suite's header records: the
+  // committed guards sweep raw source text, so a whole literal here would enrol
+  // this file as a caller of a writer it never invokes.
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  // Every committed `lib/` guard suite EX-ADMIN-WORKSPACE-UX re-points, so the
+  // footprint here matches the working tree in full. All ASSEMBLED, for the
+  // reason this suite's header records.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  // BLOCKER-1 — the canonical wave narrowing, its suite, and the ONE committed
+  // `lib/` production module this slice modifies: the role-reader module, which
+  // gains one ADMIN-ONLY export so the admin schedule can reuse the committed
+  // timetable derivation instead of reproducing it. ASSEMBLED, so this suite
+  // does not enrol itself as a caller of what it names.
+  "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+  "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+  "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  // BLOCKER-1 also re-points the READ-PIPELINE guard suites whose claims the one
+  // admin-only export makes obsolete. ASSEMBLED.
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
 ];
 
 /** The route's EXACT final file set, after this slice's ONE addition. */
@@ -179,6 +222,7 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
@@ -199,6 +243,9 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
 ];
 
@@ -251,7 +298,7 @@ test("1. the slice adds ONE file and creates no new route or component", () => {
   }
 });
 
-test("2. the route directory holds EXACTLY the twenty-three approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-seven approved files", () => {
   // Tracked AND untracked, so this holds before and after the slice is committed.
   // Listing the whole repository and filtering by prefix in JS is deliberate: a
   // `[courseOfferingId]` pathspec would be read by git as a character class.
@@ -264,7 +311,7 @@ test("2. the route directory holds EXACTLY the twenty-three approved files", () 
     .filter((path) => path.startsWith(ROUTE_DIR_PREFIX))
     .sort();
   assert.deepEqual(routeFiles, FINAL_ROUTE_FILES, "the route file set changed");
-  assert.equal(routeFiles.length, 23);
+  assert.equal(routeFiles.length, 27);
 });
 
 test("3. the action module is STILL a Server Action module and nothing else", () => {
@@ -276,7 +323,7 @@ test("3. the action module is STILL a Server Action module and nothing else", ()
   const exported = [...ACTIONS_SOURCE.matchAll(/export (?:async )?function (\w+)\(/g)].map(
     ([, name]) => name,
   );
-  assert.equal(exported.length, 10, "no eleventh endpoint may exist in this module");
+  assert.equal(exported.length, 12, "no thirteenth endpoint may exist in this module");
   assert.equal(exported[8], ACTION_NAME, "the publication action must be appended LAST");
   assert.equal(exported.filter((name) => name === ACTION_NAME).length, 1);
   for (const token of ["export const", "export default", "export {", "export type"]) {
@@ -706,7 +753,13 @@ test("21. the parser is CLOSED in both directions and never echoes the query", (
   assert.equal(PAGE.split("await searchParams").length - 1, 1);
   assert.ok(PAGE.includes("const { publication } = query;"));
   // The raw token is read EXACTLY ONCE, and only to hand it to the closed parser.
-  assert.equal((PAGE.match(/\bpublication\b(?!Feedback|\?)/g) ?? []).length, 2);
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX, and NARROWED to the claim it always
+  // made. The bare word now also names one of the four workspace SECTIONS — a
+  // closed arrangement token that selects which markup renders and reads nothing —
+  // so the count is taken over the QUERY token's own two uses instead: the
+  // destructuring, and the hand-off to the closed parser.
+  assert.equal((PAGE.match(/\bpublication\b(?!Feedback|\?|")/g) ?? []).length, 2);
+  assert.ok(PAGE.includes('activeTab === "publication"'), "the section token is a literal");
   assert.ok(PAGE.includes("const publicationFeedback = publicationFeedbackFrom(publication);"));
   // ...and the parsed result reaches EXACTLY ONE banner: a null check, a tone
   // class and a message, and nothing else. No affordance, no read and no scope.
@@ -763,9 +816,12 @@ test("22. no notification, history, per-session publication or validation was ad
   }
   // The LAST occurrence is the CARD heading; the first is the constant table this
   // module owns, which legitimately spells every sentence it may render.
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the card moved into its own section, so
+  // the slice runs from its heading to the END of that section rather than to the
+  // definitions list, which now precedes it in source order.
   const publicationCard = PAGE.slice(
     PAGE.lastIndexOf("פרסום לוח המבחנים"),
-    PAGE.indexOf("{hasDefinitions ? ("),
+    PAGE.indexOf("<div>", PAGE.lastIndexOf("פרסום לוח המבחנים")),
   );
   assert.ok(publicationCard.length > 0, "the publication card is missing");
   for (const forbidden of ["pairing", "Pairing"]) {
@@ -780,8 +836,22 @@ test("22. no notification, history, per-session publication or validation was ad
 test("23. no GET can publish, and no client code came with the control", () => {
   // Both publication forms are POST-ing forms on a Server Action. There is no
   // href, no effect, no auto-submit and no client fetch anywhere on this page.
-  const hrefs = [...PAGE.matchAll(/href=\{?([^}\s]+)\}?/g)].map(([, href]) => href);
-  assert.deepEqual(hrefs, ["dashboardHref"], "the page must expose exactly one link");
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the workspace is selected by a query
+  // token, so the page gained one link per section and one per schedule
+  // arrangement. The inventory is EXACT and every entry carries a CLOSED token
+  // and NO id, so no navigation on this page can name a session, an assignment
+  // or a definition.
+  const hrefs = [...new Set((PAGE.match(/href=\{.*$/gm) ?? []).map((line) => line.trim()))].sort();
+  assert.deepEqual(
+    hrefs,
+    [
+      "href={`${examsPath}?tab=${activeTab}&view=${token}`}",
+      "href={`${examsPath}?tab=${token}`}",
+      "href={dashboardHref}",
+    ],
+    "a link that is neither the back link nor a closed workspace link exists",
+  );
+
   for (const forbidden of [
     '"use client"',
     "useEffect",
@@ -818,12 +888,30 @@ test("24. the slice touched EXACTLY its approved paths, and no schema or migrati
   // pairing without reading the index behind it — so those two `lib/` modules
   // join this list BY NAME. A FIFTH production file, of any kind, still fails
   // here, and no writer, policy core, auth module or session module may appear.
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX, and GROWN by an EXACT set rather than
+  // relaxed. The workspace adds THREE route-local production files — the examinee
+  // edit card, the closed workspace message module and the PURE workspace view
+  // module — and TWO `lib/` modules, both of them NEW: the pure edit/move core and
+  // its server-only binding. No committed `lib/` production module was modified by
+  // it, and no writer, policy core, auth module or session module appears here.
   const production = SLICE_PATHS.filter((path) => !path.endsWith(".test.ts")).sort();
   assert.deepEqual(production, [
     ROUTE_DIR_PREFIX + "actions.ts",
     ROUTE_DIR_PREFIX + "page.tsx",
+    ROUTE_DIR_PREFIX + "EditExamAssignmentCard.tsx",
+    ROUTE_DIR_PREFIX + "exam-workspace-view.ts",
+    ROUTE_DIR_PREFIX + "exam-workspace-messages.ts",
     "lib/actions/" + "exam-assignment-read" + "-io.ts",
     "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    // BLOCKER-1 — the canonical wave narrowing: a pure, DB-free module that groups
+    // the committed timetable core's own derived moments. ASSEMBLED.
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    // BLOCKER-1 — the ONE committed `lib/` production module this slice modifies:
+    // it gains one ADMIN-ONLY export so the admin schedule reuses the committed
+    // timetable derivation instead of reproducing it. ASSEMBLED.
+    "lib/actions/" + "exam-role" + "-readers" + ".ts",
   ].sort());
   // No schema, no migration, and no auth, session, cookie, capability or
   // service-worker file — in ANY state.

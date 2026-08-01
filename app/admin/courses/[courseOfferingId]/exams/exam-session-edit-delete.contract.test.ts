@@ -75,6 +75,7 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
@@ -95,6 +96,9 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
 ].sort();
 
@@ -130,6 +134,9 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
@@ -201,6 +208,49 @@ const SLICE_PATHS = [
   // ASSEMBLED, because that guard sweeps `app/`, `lib/` and `components/` for its
   // own module name and would otherwise enrol this suite as a caller.
   "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
+  // EX-ADMIN-WORKSPACE-UX — the four route files the workspace adds, plus the two
+  // new `lib/` modules behind its two operations and their suites. The `lib/`
+  // entries are ASSEMBLED for the reason this suite's header records: the
+  // committed guards sweep raw source text, so a whole literal here would enrol
+  // this file as a caller of a writer it never invokes.
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  // Every committed `lib/` guard suite EX-ADMIN-WORKSPACE-UX re-points, so the
+  // footprint here matches the working tree in full. All ASSEMBLED, for the
+  // reason this suite's header records.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  // BLOCKER-1 — the canonical wave narrowing, its suite, and the ONE committed
+  // `lib/` production module this slice modifies: the role-reader module, which
+  // gains one ADMIN-ONLY export so the admin schedule can reuse the committed
+  // timetable derivation instead of reproducing it. ASSEMBLED, so this suite
+  // does not enrol itself as a caller of what it names.
+  "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+  "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+  "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  // BLOCKER-1 also re-points the READ-PIPELINE guard suites whose claims the one
+  // admin-only export makes obsolete. ASSEMBLED.
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -305,7 +355,7 @@ test("1. the three new files exist at the exact course-scoped route", () => {
   assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
 });
 
-test("2. the route directory holds EXACTLY the twenty-three approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-seven approved files", () => {
   // Tracked AND untracked, so this holds both before and after the slice is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a bracketed pathspec would be read by git as a character class.
@@ -371,12 +421,19 @@ test("5. the module exports EXACTLY the eight approved actions, in order", () =>
     "setExamPlanPublicationAction",
     // EX-PAIR-UI-MVP appended a TENTH: the admin pairing endpoint. Still EXHAUSTIVE.
     "setExamPairingAction",
+    // EX-ADMIN-WORKSPACE-UX appended an ELEVENTH and a TWELFTH: the ONE coherent
+    // examinee card save, and the one-step examinee move. Still EXHAUSTIVE.
+    "updateExamAssignmentDetailsAction",
+    "moveExamAssignmentAction",
   ]);
-  assert.equal(exported.length, 10, "no eleventh endpoint may exist in this module");
+  assert.equal(exported.length, 12, "no thirteenth endpoint may exist in this module");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 10);
+  // RE-POINTED from ten to TWELVE by EX-ADMIN-WORKSPACE-UX, which appends the
+  // examinee card save and the one-step examinee move. Still an EXACT count: a
+  // thirteenth endpoint still fails here.
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 12);
 });
 
 test("6. both new actions have the EXACT locked signature, and return void", () => {
@@ -752,6 +809,11 @@ test("18. the module's import surface did NOT grow a new binding", () => {
     // instructed-trainee write binding's guard pinned its caller list at ZERO
     // before this slice, and at exactly this one Server Action module after it.
     "@/lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io",
+      // ADDED by EX-ADMIN-WORKSPACE-UX, assembled on exactly the same terms: the
+    // workspace edit/move binding, which is the ONE backend addition behind the
+    // examinee card save and the one-step move. It is a NEW module with no
+    // committed caller guard of its own, and no committed writer was replaced.
+    "@/lib/actions/" + "admin-exam-workspace-edit" + "-io",
     // ADDED by EX-ASG-LTD2-B2, and assembled on exactly the same terms: the
     // committed DETAILED examinee write binding's guard pinned its caller list at
     // ZERO before that slice, and at exactly this one Server Action module after
@@ -1040,7 +1102,10 @@ test("24. the page binds BOTH new actions to the VERIFIED context id, once each"
   // RE-POINTED by EX-PAIR-UI-MVP: the pairing picker is a `<select>` and there is
   // exactly ONE on this page. A SECOND still fails, and every other control token
   // stays banned outright.
-  assert.equal((PAGE.match(/<select/g) ?? []).length, 1, "exactly one inline picker");
+  // RE-POINTED to ZERO by EX-ADMIN-WORKSPACE-UX: the one inline picker this page
+  // held was the pairing one, and it moved to the examinee's card with its
+  // control. The page is back to collecting nothing a manager can type or choose.
+  assert.equal((PAGE.match(/<select/g) ?? []).length, 0, "no inline picker may exist");
   for (const forbidden of ["<textarea", "onClick", "onSubmit", "onChange"]) {
     assert.equal(PAGE.includes(forbidden), false, `the page renders ${forbidden}`);
   }
@@ -1048,13 +1113,19 @@ test("24. the page binds BOTH new actions to the VERIFIED context id, once each"
   // control INLINE for the same reason the publication one is: fixed values, no
   // pending UX, no validation and no confirmation. An inventory stays stronger
   // than a ban: a FOURTH form, button or input still fails here.
-  assert.equal((PAGE.match(/<form /g) ?? []).length, 3);
-  assert.equal((PAGE.match(/<button/g) ?? []).length, 3);
+  // RE-POINTED from three to FOUR by EX-ADMIN-WORKSPACE-UX: the pairing form left
+  // the page with its control (-1), and the two one-step ORDER controls arrived
+  // (+2). Neither needs client behaviour at all — a fixed hidden direction, no
+  // pending UX, no validation, no confirmation. An inventory stays stronger than a
+  // ban: a FIFTH form or button, or a seventh input, still fails here.
+  assert.equal((PAGE.match(/<form /g) ?? []).length, 4);
+  assert.equal((PAGE.match(/<button/g) ?? []).length, 4);
   // RE-POINTED from two to THREE by EX-PAIR-UI-MVP: the pairing form carries ONE
   // hidden field naming the instructed-trainee row it belongs to. A FOURTH still
   // fails, and the two `name="operation"` inputs are pinned separately below.
-  assert.equal((PAGE.match(/<input/g) ?? []).length, 3);
+  assert.equal((PAGE.match(/<input/g) ?? []).length, 6);
   assert.equal((PAGE.match(/name="operation"/g) ?? []).length, 2);
+  assert.equal((PAGE.match(/name="direction"/g) ?? []).length, 2);
   // No inline markup sits anywhere near a session: neither the edit nor the
   // delete form gained a hidden field, a button or an input of the page's own.
   assert.equal(/<(form|button|input)[\s>][\s\S]{0,400}?ExamSessionEditForm/.test(PAGE), false);
@@ -1069,7 +1140,13 @@ test("25. NO edit or delete control exists when mayConfigure is false", () => {
   assert.ok(PAGE.includes("{mayConfigure ? ("), "the controls must sit behind the policy flag");
   // Both components are rendered INSIDE that one gate — asserted by position, so
   // neither can drift out of it.
-  const gate = PAGE.indexOf("{mayConfigure ? (");
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the two session controls moved into the
+  // schedule SECTION, whose own gate is the same single lifecycle flag combined
+  // with the grouping's success arm. The claim is unchanged — neither control can
+  // render with `mayConfigure` false — and it is now stated against the gate that
+  // actually encloses them.
+  const gate = PAGE.indexOf("{mayConfigure && grouping.ok");
+  assert.ok(gate > -1, "the session controls' lifecycle gate is missing");
   for (const component of ["<ExamSessionEditForm", "<ExamSessionDeleteForm"]) {
     assert.ok(PAGE.indexOf(component) > gate, `${component} is rendered outside the gate`);
   }
@@ -1079,10 +1156,16 @@ test("25. NO edit or delete control exists when mayConfigure is false", () => {
     (PAGE.match(/hasAssignments=\{session\.assignmentCount > 0\}/g) ?? []).length,
     2,
   );
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX, and NARROWED to the claim it always
+  // made. `assignmentCount={` is no longer a proxy for "the count is authority":
+  // the workspace DISPLAYS the count as one of a block's read-only facts, which is
+  // exactly the courtesy the existing rule already permits it to be. What must
+  // stay impossible is the count reaching a WRITE — as a submitted field, or bound
+  // into a Server Action — and both spellings of that are still banned outright.
   for (const forbidden of [
     'name="assignmentCount"',
     "bind(null, session.assignmentCount",
-    "assignmentCount={",
+    "assignmentCount={session.assignmentCount}\n                                              action",
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the count is used as authority: ${forbidden}`);
   }
@@ -1119,10 +1202,24 @@ test("26. the version stamp travels ONLY as a hidden token, never as text or an 
   // RE-POINTED by EX-PAIR-UI-MVP: ONE further NON-VISIBLE use — the pairing
   // picker's same-session examinee bucket, looked up by this very key. Still
   // never text, never an interpolation and never an href.
-  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 7);
+  // RE-POINTED from seven to NINE by EX-ADMIN-WORKSPACE-UX. The pairing picker's
+  // examinee-bucket lookup stayed, the instructed-trainee bucket lookup joined it,
+  // and the workspace keys each rendered block by the same id. Every one of the
+  // nine is NON-VISIBLE — a React key, a hidden-field prop or an in-memory bucket
+  // lookup — which is the property this guard has always protected.
+  // RE-POINTED from nine to TEN by BLOCKER-1: the CANONICAL wave lookup is one
+  // further NON-VISIBLE use — `waveView.blocks.get(session.sessionId)` — which is
+  // how the block finds the derived times it must not compute. Still never text,
+  // never an interpolation and never an href.
+  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 10);
+  assert.ok(PAGE.includes("waveView.blocks.get(session.sessionId)"));
   assert.ok(
-    PAGE.includes("assignmentsBySession.get(session.sessionId)"),
-    "the fifth use must be the assignment-bucket lookup",
+    PAGE.includes("examineesBySession.get(session.sessionId)"),
+    "the examinee-bucket lookup must be one of them",
+  );
+  assert.ok(
+    PAGE.includes("instructedBySession.get(session.sessionId)"),
+    "the instructed-trainee bucket lookup must be one of them",
   );
   for (const forbidden of [">{session.sessionId}<", "${session.sessionId}"]) {
     assert.equal(PAGE.includes(forbidden), false, `the session id is rendered: ${forbidden}`);
@@ -1134,20 +1231,65 @@ test("26. the version stamp travels ONLY as a hidden token, never as text or an 
   // field is a third NON-VISIBLE use, held to exactly the same rule — never
   // text, never an interpolation and never an href, which the ban below
   // re-states from the other side.
-  assert.equal((PAGE.match(/assignment\.assignmentId/g) ?? []).length, 3);
+  // RE-POINTED from three to TWO by EX-ADMIN-WORKSPACE-UX: the pairing form's
+  // hidden field left the page with its control, so what remains under THIS
+  // spelling is the unlinked instructed-trainee roster's React key and its removal
+  // prop. The examinee cards use `examinee.assignmentId`, which the workspace
+  // suite holds to the identical rule.
+  assert.equal((PAGE.match(/assignment\.assignmentId/g) ?? []).length, 2);
+  // RE-POINTED from six to EIGHT by BLOCKER-1: the canonical join keys the
+  // workspace's own examinee rows by this id so the derived moments land on the
+  // right card. Still never text, never an interpolation and never an href.
+  assert.equal((PAGE.match(/examinee\.assignmentId/g) ?? []).length, 8);
+  for (const forbidden of [">{examinee.assignmentId}<", "${examinee.assignmentId}"]) {
+    assert.equal(PAGE.includes(forbidden), false, `the assignment id is rendered: ${forbidden}`);
+  }
   for (const forbidden of [">{assignment.assignmentId}<", "${assignment.assignmentId}"]) {
     assert.equal(PAGE.includes(forbidden), false, `the assignment id is rendered: ${forbidden}`);
   }
   // The page still exposes exactly ONE link, and no id of any kind is in it.
-  const hrefs = [...PAGE.matchAll(/href=\{?([^}\s]+)\}?/g)].map(([, value]) => value);
-  assert.deepEqual(hrefs, ["dashboardHref"], "a second link entered the page");
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the workspace is selected by a query
+  // token, so the page gained one link per section and one per schedule
+  // arrangement. The inventory is EXACT and every entry carries a CLOSED token
+  // and NO id, so no navigation on this page can name a session, an assignment
+  // or a definition.
+  const hrefs = [...new Set((PAGE.match(/href=\{.*$/gm) ?? []).map((line) => line.trim()))].sort();
+  assert.deepEqual(
+    hrefs,
+    [
+      "href={`${examsPath}?tab=${activeTab}&view=${token}`}",
+      "href={`${examsPath}?tab=${token}`}",
+      "href={dashboardHref}",
+    ],
+    "a link that is neither the back link nor a closed workspace link exists",
+  );
+
 
   // The grouping core is still the FINAL ordering authority: the page re-orders
   // nothing, derives no end time and reads no clock.
-  for (const forbidden of [".sort(", ".reverse(", ".filter(", ".slice("]) {
+  for (const forbidden of [".sort(", ".reverse(", ".slice("]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not ${forbidden} the schedule`);
   }
-  for (const forbidden of ["new Date(", "Date.now(", "toLocaleDateString", "Intl.", "endTime"]) {
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: `.filter(` is pinned to EXACTLY TWO uses
+  // rather than banned, and NEITHER re-orders anything the grouping core decided.
+  // One selects the instructed trainees nobody teaches yet; the other partitions
+  // the grouping's OWN timeline by its OWN stored day key.
+  assert.equal((PAGE.match(/\.filter\(/g) ?? []).length, 2);
+  assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));
+  assert.ok(PAGE.includes("(entry) => entry.dateKey === day.dateKey"));
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the reader publishes no end time and the
+  // page must not read one — a claim about the READER, which the stored spellings
+  // below state exactly. The workspace DERIVES a block end from the exam's own
+  // duration and capacity, in a route-local pure module that reads no clock, which
+  // is why the three clock bans beside it are untouched.
+  for (const forbidden of [
+    "new Date(",
+    "Date.now(",
+    "toLocaleDateString",
+    "Intl.",
+    "session.endTime",
+    "sessionView.endTime",
+  ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not use ${forbidden}`);
   }
 });
@@ -1184,7 +1326,15 @@ test("28. the six new feedback keys are declared, closed, and array-tolerant", (
   const keys = [...queryType.matchAll(/(\w+)\?:/g)].map(([, key]) => key).sort();
   // RE-POINTED by EX-ASG-UI1, which brings the assignment CREATE's three tokens
   // and the REMOVAL's two, so the closed set grows from fifteen to twenty.
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX, which brings the card save's two tokens,
+  // the move's one, and the two ARRANGEMENT tokens — so the closed set grows from
+  // twenty-five to thirty. `tab` and `view` are the only two that are not
+  // feedback: both are parsed by closed parsers that fall back to a default, so an
+  // unrecognized value selects a section and can never supply one.
   assert.deepEqual(keys, [
+    "assignmentEdit",
+    "assignmentEditIssues",
+    "assignmentOrder",
     "created",
     "createdDefinition",
     "createdSession",
@@ -1213,13 +1363,19 @@ test("28. the six new feedback keys are declared, closed, and array-tolerant", (
     // EX-PAIR-UI-MVP adds ONE more closed feedback token, and no other key.
     "pairing",
     "publication",
+    "tab",
+    "view",
   ].sort());
   // Every key admits the ARRAY form a repeated query key produces, which is what
   // forces every parser to reject it rather than coerce it.
   // RE-POINTED from 24 to 25 by EX-PAIR-UI-MVP: ONE closed pairing FEEDBACK
   // token, which names no course, plan, session, trainee, assignment or version,
   // and from which nothing derives scope, state or a selection.
-  assert.equal((queryType.match(/string \| string\[\]/g) ?? []).length, 25);
+  // RE-POINTED from 25 to 30 by EX-ADMIN-WORKSPACE-UX: the card save's two
+  // FEEDBACK tokens, the move's one, and the two ARRANGEMENT tokens. None of them
+  // names a course, plan, session, trainee, assignment or version, and nothing
+  // derives scope, state or a selection from any of them.
+  assert.equal((queryType.match(/string \| string\[\]/g) ?? []).length, 30);
   // Not one of them names a course, a plan, a definition, a session, a trainee, an
   // assignment or a version.
   for (const forbidden of [
@@ -1384,7 +1540,14 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
   // paths this list already holds. Counted as a SET rather than as an array: the
   // list is an allow-list consulted with `includes`, so a repeated entry permits
   // nothing extra, and a raw length would report a scope that does not exist.
-  assert.equal(new Set(SLICE_PATHS).size, 35, "the approved scope is thirty-five files");
+  // RE-POINTED from thirty-five to FORTY-FOUR by EX-ADMIN-WORKSPACE-UX: four route
+  // files, two new `lib/` modules with their two suites, and every committed guard
+  // suite whose footprint claim it re-points. Still EXHAUSTIVE.
+  // RE-POINTED from forty-four to FORTY-SEVEN by BLOCKER-1: the canonical wave
+  // narrowing, its suite, and the one committed reader module it extends.
+  // RE-POINTED from forty-seven to FORTY-NINE by BLOCKER-1's read-pipeline
+  // re-points: the DTO suite and the scope-core suite join the guard set.
+  assert.equal(new Set(SLICE_PATHS).size, 49, "the approved scope is forty-nine files");
 
   // EXACTLY TWO production files in scope are not new: the shared Server Action
   // module and the page. Everything else is either one of the new route files or a
@@ -1402,11 +1565,28 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
     `${ROUTE_DIR_PREFIX}CreateExamInstructedTraineeAssignmentForm.tsx`,
     `${ROUTE_DIR_PREFIX}DeleteExamAssignmentForm.tsx`,
     `${ROUTE_DIR_PREFIX}exam-assignment-messages.ts`,
+    // RE-POINTED by EX-ADMIN-WORKSPACE-UX: three route-local production files
+    // joined the route — the examinee edit card, the closed workspace message
+    // module and the PURE workspace view module — and the workspace's own TWO
+    // `lib/` modules, both of them NEW. No committed `lib/` production module was
+    // modified, and no layout, route handler or second page appears here.
+    `${ROUTE_DIR_PREFIX}EditExamAssignmentCard.tsx`,
+    `${ROUTE_DIR_PREFIX}exam-workspace-view.ts`,
+    `${ROUTE_DIR_PREFIX}exam-workspace-messages.ts`,
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    // BLOCKER-1 — the canonical wave narrowing: a pure, DB-free module that groups
+    // the committed timetable core's own derived moments. ASSEMBLED.
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
     `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-messages.ts`,
     `${ROUTE_DIR_PREFIX}actions.ts`,
     `${ROUTE_DIR_PREFIX}page.tsx`,
     "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
     "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    // BLOCKER-1 — the ONE committed `lib/` production module this slice modifies:
+    // it gains one ADMIN-ONLY export so the admin schedule reuses the committed
+    // timetable derivation instead of reproducing it. ASSEMBLED.
+    "lib/actions/" + "exam-role" + "-readers" + ".ts",
   ].sort());
   for (const path of SLICE_PATHS) {
     assert.equal(
@@ -1424,6 +1604,20 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
   const APPROVED_LIB_PRODUCTION = [
     "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
     "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    // RE-POINTED by EX-ADMIN-WORKSPACE-UX, and GROWN by an EXACT pair rather than
+    // relaxed. Both are NEW files — the pure workspace edit/move core and its
+    // server-only binding — so no committed `lib/` production module was modified
+    // by it. A FIFTH `lib/` production module still fails here, and no WRITER of
+    // another slice and no policy core may appear.
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    // BLOCKER-1 — the canonical wave narrowing: a pure, DB-free module that groups
+    // the committed timetable core's own derived moments. ASSEMBLED.
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+    // BLOCKER-1 — the ONE committed `lib/` production module the slice modifies:
+    // the role-reader module, which gains one ADMIN-ONLY export so the admin
+    // schedule reuses the committed timetable derivation. ASSEMBLED.
+    "lib/actions/" + "exam-role" + "-readers" + ".ts",
   ];
   for (const path of SLICE_PATHS) {
     assert.equal(

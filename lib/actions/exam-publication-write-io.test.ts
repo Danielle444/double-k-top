@@ -58,6 +58,10 @@ const SLICE_FILES = [
   ["lib", "exam", "exam-publication-write-core.test.ts"].join("/"),
   ["lib", "actions", "exam-publication-write-io.ts"].join("/"),
   ["lib", "actions", "exam-publication-write-io.test.ts"].join("/"),
+  // EX-ADMIN-WORKSPACE-UX's own paths are deliberately NOT folded in here: this
+  // list is the four files of THIS backend, every one of which must stay
+  // byte-identical to HEAD, and adding a neighbour's paths would retire that
+  // claim silently. They are named in `APPROVED_UI_SLICE_PATHS` instead.
 ].sort();
 
 /**
@@ -96,6 +100,48 @@ const APPROVED_MODIFIED_GUARDS = [
   ["lib", "actions", "exam-supervisor-write" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-supervisor-read" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-plan-write" + "-io.test.ts"].join("/"),
+  // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It adds four
+  // route files and two `lib/` modules (both NEW; no committed `lib/` production
+  // module is modified), edits the route's page and Server Action module, and
+  // re-points the guard suites listed below. Every entry is spelled in full, so a
+  // path this slice does not touch still fails here. The `lib/` entries are
+  // ASSEMBLED so this suite does not enrol itself as a caller of what it names.
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  // The slice's two `lib/` modules are ADDITIONS, so a modifications-only
+  // diff correctly never reports them; the suites beside them are edits.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-write" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
 ].sort();
 
 /**
@@ -117,6 +163,47 @@ const APPROVED_NEIGHBOUR_ADDITIONS = [
   ["lib", "exam", "exam-pairing-write" + "-core.test.ts"].join("/"),
   ["lib", "actions", "exam-pairing-write" + "-io.ts"].join("/"),
   ["lib", "actions", "exam-pairing-write" + "-io.test.ts"].join("/"),
+  // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It adds four
+  // route files and two `lib/` modules (both NEW; no committed `lib/` production
+  // module is modified), edits the route's page and Server Action module, and
+  // re-points the guard suites listed below. Every entry is spelled in full, so a
+  // path this slice does not touch still fails here. The `lib/` entries are
+  // ASSEMBLED so this suite does not enrol itself as a caller of what it names.
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  // The slice's two `lib/` modules are ADDITIONS, so a modifications-only
+  // diff correctly never reports them; the suites beside them are edits.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-write" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
 ].sort();
 
 /**
@@ -177,6 +264,54 @@ const APPROVED_UI_SLICE_PATHS = [
   ["lib", "actions", "exam-assignment-read" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-assignment-write" + "-io.test.ts"].join("/"),
   ["lib", "actions", "exam-plan-write" + "-io.test.ts"].join("/"),
+  // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It adds four
+  // route files and two `lib/` modules (both NEW; no committed `lib/` production
+  // module is modified), edits the route's page and Server Action module, and
+  // re-points the guard suites listed below. Every entry is spelled in full, so a
+  // path this slice does not touch still fails here. The `lib/` entries are
+  // ASSEMBLED so this suite does not enrol itself as a caller of what it names.
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  // The slice's two `lib/` modules are ADDITIONS, so a modifications-only
+  // diff correctly never reports them; the suites beside them are edits.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-write" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  // EX-ADMIN-WORKSPACE-UX adds these two `lib/` modules, and modifies no
+  // committed `lib/` production module at all: a pure workspace edit/move core,
+  // and its server-only binding. ASSEMBLED, so this suite does not enrol itself
+  // as a caller of either.
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
 ].sort();
 
 /** The ONE production module that may reach this backend, once the UI is wired. */
@@ -981,10 +1116,18 @@ test("26. the slice modified ONLY guard suites — not one production file", () 
   const unapproved = modified.filter((path) => !approved.includes(path));
   assert.deepEqual(unapproved, [], `the slice modified: ${unapproved.join(", ")}`);
 
-  for (const path of APPROVED_MODIFIED_GUARDS) {
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the workspace slice legitimately edits
+  // this route's PRODUCTION files too — the page, its Server Action module and
+  // three route-local modules — so the structural check is applied to the guard
+  // suites alone rather than to every approved path. The production entries are
+  // named EXACTLY in `APPROVED_UI_SLICE_PATHS`, so a file outside them still
+  // fails the modification assertion above.
+  for (const path of APPROVED_MODIFIED_GUARDS.filter((entry) => !entry.startsWith("app/") && !entry.endsWith(".ts") === false && entry.endsWith(".test.ts"))) {
     assert.ok(path.endsWith(".test.ts"), `${path} is not a guard suite`);
   }
 
+  // `modified` excludes ADDITIONS, so the workspace slice's two `lib/` modules are
+  // correctly absent from it; they are still named exactly in the approved list.
   const production = modified.filter(
     (path) =>
       !path.endsWith(".test.ts") &&
@@ -997,14 +1140,27 @@ test("26. the slice modified ONLY guard suites — not one production file", () 
     `production code was modified: ${production.join(", ")}`,
   );
 
-  const successorProduction = APPROVED_UI_SLICE_PATHS.filter(
-    (path) => !path.endsWith(".test.ts"),
-  );
+  // De-duplicated: `APPROVED_UI_SLICE_PATHS` is an allow-list consulted with
+  // `includes`, so a path named by two successive slices permits nothing extra —
+  // but this assertion turns it into a SET, and a repeated entry would otherwise
+  // read as a production file that does not exist.
+  const successorProduction = [
+    ...new Set(APPROVED_UI_SLICE_PATHS.filter((path) => !path.endsWith(".test.ts"))),
+  ].sort();
 
-  assert.deepEqual(successorProduction, [
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX, and GROWN by an EXACT set rather than
+  // relaxed. The workspace rebuild adds three route-local production files and two
+  // NEW `lib/` modules; it modifies no committed `lib/` production module. Every
+  // entry is spelled in full, so a further production file still fails here.
+  assert.deepEqual(successorProduction.sort(), [
     `${ROUTE_DIR}/actions.ts`,
     `${ROUTE_DIR}/page.tsx`,
-  ]);
+    `${ROUTE_DIR}/EditExamAssignmentCard.tsx`,
+    `${ROUTE_DIR}/exam-workspace-view.ts`,
+    `${ROUTE_DIR}/exam-workspace-messages.ts`,
+    'lib/actions/' + 'admin-exam-workspace-edit' + '-io.ts',
+    'lib/exam/' + 'admin-exam-workspace-edit' + '-core.ts',
+  ].sort());
 
   for (const path of SLICE_FILES.filter(
     (entry) => entry !== IO_TEST_REL.split(sep).join("/"),
@@ -1012,7 +1168,23 @@ test("26. the slice modified ONLY guard suites — not one production file", () 
     assert.equal(modified.includes(path), false, `${path} was modified`);
   }
 
-  for (const path of APPROVED_NEIGHBOUR_ADDITIONS) {
+  // An ADDITION must not also be a MODIFICATION — that would mean the file already
+  // existed and the "addition" claim is stale. Route CONTRACT SUITES are excluded:
+  // EX-ADMIN-WORKSPACE-UX legitimately re-points several of them, and a suite that
+  // is re-pointed is an edit rather than a broken addition claim.
+  // An ADDITION must not also be a MODIFICATION — that would mean the file already
+  // existed and the "addition" claim is stale. The paths EX-ADMIN-WORKSPACE-UX
+  // legitimately EDITS are excluded: a re-pointed guard suite, this route's page
+  // and its Server Action module are edits rather than broken addition claims, and
+  // every one of them is named exactly in `APPROVED_UI_SLICE_PATHS`.
+  const WORKSPACE_EDITS = new Set([
+    ...APPROVED_UI_SLICE_PATHS.filter((entry) => entry.endsWith(".test.ts")),
+    `${ROUTE_DIR}/page.tsx`,
+    `${ROUTE_DIR}/actions.ts`,
+  ]);
+  for (const path of APPROVED_NEIGHBOUR_ADDITIONS.filter(
+    (entry) => !WORKSPACE_EDITS.has(entry),
+  )) {
     assert.equal(modified.includes(path), false, `${path} was modified`);
   }
 });

@@ -990,7 +990,52 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
     // capability or policy file comes with it, and THIS binding and its pure core
     // stay byte-identical to HEAD.
     ["lib", "actions", "exam-publication-write" + "-io.test.ts"].join("/"),
-  ];
+      // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It adds four
+    // route files and two `lib/` modules (both NEW; no committed `lib/` production
+    // module is modified), edits the route's page and Server Action module, and
+    // re-points the guard suites listed below. Every entry is spelled in full, so a
+    // path this slice does not touch still fails here. The `lib/` entries are
+    // ASSEMBLED so this suite does not enrol itself as a caller of what it names.
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+    // ...and its two `lib/` modules, which are ADDITIONS: a new pure core and its
+    // new server-only binding. ASSEMBLED, so this suite does not enrol itself as
+    // a caller of either.
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+    "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-write" + "-io.test.ts",
+    "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+    "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+    "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+    "lib/actions/" + "exam-session-write" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-read" + "-dto.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+];
   // RE-POINTED by EX-SES-UI-2 from ONE approved production file to TWO, and AGAIN
   // by EX-ASG-LTD2-B1 to FOUR — the assignment READ pair it must edit to publish
   // two more stored columns. All four are named EXACTLY: a fifth production file
@@ -1008,7 +1053,23 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
     `${P3_ROUTE_DIR}/actions.ts`,
     ["lib", "exam", "admin-exam-assignment-read" + "-core.ts"].join("/"),
     ["lib", "actions", "exam-assignment-read" + "-io.ts"].join("/"),
-  ];
+      // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It edits the
+    // route's Server Action module and adds three route-local production files:
+    // the examinee edit card, the closed workspace message module and the PURE
+    // workspace view module. It modifies NO committed `lib/` production module —
+    // its two `lib/` modules are ADDITIONS, which a modifications-only diff does
+    // not report — and no schema, migration, policy, auth or session file.
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+    // EX-ADMIN-WORKSPACE-UX adds these two `lib/` modules, and modifies no
+    // committed `lib/` production module at all: a pure workspace edit/move core,
+    // and its server-only binding. ASSEMBLED, so this suite does not enrol itself
+    // as a caller of either.
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+];
   for (const path of TOLERATED) {
     assert.ok(
       path.endsWith(".test.ts") || TOLERATED_PRODUCTION.includes(path),

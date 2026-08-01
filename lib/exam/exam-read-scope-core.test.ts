@@ -990,7 +990,12 @@ test("34–36. no reader accepts options, a plan id or an actor id", () => {
   ].map(([, name, params]) => ({ name, params: params.replace(/\s+/g, " ").trim() }));
   assert.deepEqual(
     signatures.map((s) => s.name),
-    ["readAdminExamPlan", "readInstructorExamPlan", "readTraineeExamDay"],
+    // RE-POINTED by EX-ADMIN-WORKSPACE-UX (BLOCKER-1). The three ROLE readings are
+    // unchanged; the fourth is ADMIN-ONLY and returns no DTO at all — it publishes
+    // assignment ids and the DERIVED moments this same pipeline already computed,
+    // so the admin schedule can reuse them instead of reproducing them. No shared
+    // DTO gained a field and no role reading changed shape.
+    ["readAdminExamPlan", "readAdminExamWaveView", "readInstructorExamPlan", "readTraineeExamDay"],
   );
   for (const { name, params } of signatures) {
     for (const forbidden of [
@@ -1006,9 +1011,17 @@ test("34–36. no reader accepts options, a plan id or an actor id", () => {
       assert.equal(params.includes(forbidden), false, `${name} accepts ${forbidden}`);
     }
   }
-  assert.equal(signatures[0].params, "courseOfferingId: string,");
-  assert.equal(signatures[1].params, "requestedCourseOfferingId: string,");
-  assert.equal(signatures[2].params, "selectedDate: string,");
+  // Indexed by NAME rather than by position: BLOCKER-1 appends a fourth reader
+  // between the first and the second in source order, and a positional assertion
+  // would then be describing a different function than it names.
+  const paramsOf = (name: string): string =>
+    signatures.find((entry) => entry.name === name)?.params ?? "";
+  assert.equal(paramsOf("read" + "AdminExamPlan"), "courseOfferingId: string,");
+  assert.equal(paramsOf("read" + "InstructorExamPlan"), "requestedCourseOfferingId: string,");
+  assert.equal(paramsOf("read" + "TraineeExamDay"), "selectedDate: string,");
+  // The fourth takes ONE course offering id and nothing else — no options, no
+  // plan id, no actor id, which the loop above already re-checks by name.
+  assert.equal(paramsOf("read" + "AdminExamWaveView"), "courseOfferingId: string,");
 });
 
 test("37. no returned DTO contains a Map, Set, Date or class instance", async () => {
@@ -1533,7 +1546,21 @@ test("45–46 + N10. no app/, route, page or UI file consumes this slice", () =>
       }
     }
   }
-  assert.deepEqual(offenders, [], `EX-S5A-4B adds no app caller; found: ${offenders.join(", ")}`);
+    // RE-POINTED by EX-ADMIN-WORKSPACE-UX (BLOCKER-1), and NARROWED rather than
+  // dropped. The claim was that NO app file consumes this pipeline, which held
+  // while every surface derived its own times. The admin exams workspace no
+  // longer does: it reads the committed derivation through the ONE admin-only
+  // wave export, which is precisely how the admin schedule is kept identical to
+  // what instructors and trainees are shown. So exactly ONE route may appear —
+  // its page and its own contract suite — and any other app consumer still fails.
+  const APPROVED_APP_CONSUMERS = [
+    ["app", "admin", "courses", "[courseOfferingId]", "exams", "page.tsx"].join(sep),
+    ["app", "admin", "courses", "[courseOfferingId]", "exams", "exam-workspace.contract.test.ts"].join(sep),
+  ];
+  const unapprovedAppConsumers = offenders.filter(
+    (path) => !APPROVED_APP_CONSUMERS.includes(path),
+  );
+  assert.deepEqual(unapprovedAppConsumers, [], `EX-S5A-4B adds no app caller; found: ${offenders.join(", ")}`);
   // No exam route or page directory was created either.
   for (const dir of ["app/admin/exams", "app/instructor/exams", "app/student/exams"]) {
     assert.equal(existsSync(join(REPO_ROOT, dir)), false, `${dir} was created`);

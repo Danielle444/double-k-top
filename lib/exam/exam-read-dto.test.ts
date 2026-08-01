@@ -1597,7 +1597,17 @@ test("the DTO builders have exactly ONE production consumer: the EX-S5A-4B scope
     .filter((f) => f.path.startsWith(join(REPO_ROOT, "app")))
     .filter((f) => DTO_TOKENS.test(stripComments(f.source)))
     .map((f) => f.path.slice(REPO_ROOT.length + 1));
-  assert.deepEqual(appConsumers, [], `an app consumer was added: ${appConsumers.join(", ")}`);
+    // RE-POINTED by EX-ADMIN-WORKSPACE-UX (BLOCKER-1): the admin exams workspace
+  // reads the committed derivation rather than reproducing it, so its page and
+  // its own suite are approved app consumers. Any other still fails.
+  const APPROVED_APP_CONSUMERS = [
+    ["app", "admin", "courses", "[courseOfferingId]", "exams", "page.tsx"].join(sep),
+    ["app", "admin", "courses", "[courseOfferingId]", "exams", "exam-workspace.contract.test.ts"].join(sep),
+  ];
+  const unapprovedAppConsumers = appConsumers.filter(
+    (path) => !APPROVED_APP_CONSUMERS.includes(path),
+  );
+  assert.deepEqual(unapprovedAppConsumers, [], `an app consumer was added: ${appConsumers.join(", ")}`);
 
   // The ONLY production caller of the loader is the EX-S5A-4B binding.
   const loaderCallers = files
