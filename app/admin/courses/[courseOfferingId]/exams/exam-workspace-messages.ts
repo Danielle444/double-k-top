@@ -199,6 +199,109 @@ export function examAssignmentEditIssueTexts(
   return texts;
 }
 
+// ===========================================================================
+// 4. Selecting which Teaching-Practice dates the plan runs as exam days
+// ===========================================================================
+
+/**
+ * The TWO SUCCESS tokens of a source-date replacement.
+ *
+ * `NO_CHANGE` is reported separately from a real replacement and is deliberately
+ * NEUTRAL: the backend issued no statement at all, and a green "saved" banner
+ * over a database that was never touched is the one thing a manager must not be
+ * shown here — this selection is exactly what decides whether beginner exams
+ * appear at all.
+ */
+export const EXAM_SOURCE_DATES_REPLACED_TOKEN = "REPLACED";
+export const EXAM_SOURCE_DATES_NO_CHANGE_TOKEN = "NO_CHANGE";
+
+export const EXAM_SOURCE_DATES_REPLACED_TEXT =
+  "רשימת תאריכי מבחני המתחילים עודכנה. מבחני המתחילים מוצגים לפי התאריכים שנבחרו.";
+export const EXAM_SOURCE_DATES_NO_CHANGE_TEXT =
+  "לא בוצע שינוי — התאריכים שנשלחו זהים לתאריכים השמורים.";
+
+/**
+ * The CLOSED refusal table of a source-date replacement.
+ *
+ * Each sentence states the RULE that was applied and names NO date, NO lesson,
+ * NO child and NO id: the manager can see the dates they submitted, and a token
+ * echoed into a banner would be a way to put arbitrary text on the page.
+ */
+const EXAM_SOURCE_DATES_ERROR_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  operation_not_allowed: "לא ניתן לשנות את תאריכי מבחני המתחילים במצב הנוכחי של הקורס.",
+  plan_not_found:
+    "לא קיימת תוכנית מבחנים לקורס זה, ולכן אין למה לשייך תאריכים. יש לרענן את הדף.",
+  invalid_input: "לא ניתן היה לשמור את התאריכים. יש לתקן את הבחירה ולנסות שוב.",
+});
+
+/** The ONE sentence an unrecognized refusal code renders. */
+const EXAM_SOURCE_DATES_FALLBACK_TEXT =
+  "עדכון תאריכי מבחני המתחילים לא הושלם. יש לרענן את הדף ולנסות שוב.";
+
+/**
+ * The CLOSED per-rule diagnostics a source-date replacement can produce.
+ *
+ * The codes are the committed backend's own. Each sentence states the RULE and
+ * never the offending value, so a submitted token can never reach the screen.
+ */
+const EXAM_SOURCE_DATES_ISSUE_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  "EX-SRC-INPUT-NOT-A-LIST": "בקשת עדכון התאריכים אינה תקינה. יש לרענן את הדף",
+  "EX-SRC-DATE-INVALID": "אחד התאריכים שנבחרו אינו תאריך תקין",
+  "EX-SRC-LEVEL-NOT-SUPPORTED": "ברמת הקורס הזו אין מבחני מתחילים, ולכן לא ניתן לבחור תאריכים",
+  "EX-SRC-DATE-OUT-OF-COURSE-RANGE": "אחד התאריכים שנבחרו נמצא מחוץ לתקופת הקורס",
+  "EX-SRC-DATE-HAS-NO-PRACTICE":
+    "באחד התאריכים שנבחרו אין תרגול מעשי. יש לבחור תאריך שבו מתקיים תרגול מעשי",
+});
+
+/** ONE banner for one raw source-date token, on exactly the card save's terms. */
+export function examSourceDatesFeedback(
+  raw: string | string[] | undefined,
+): ExamWorkspaceFeedback | null {
+  const token = readToken(raw);
+  if (token === null) return null;
+  if (token === EXAM_SOURCE_DATES_REPLACED_TOKEN) {
+    return { tone: "success", message: EXAM_SOURCE_DATES_REPLACED_TEXT };
+  }
+  if (token === EXAM_SOURCE_DATES_NO_CHANGE_TOKEN) {
+    return { tone: "neutral", message: EXAM_SOURCE_DATES_NO_CHANGE_TEXT };
+  }
+  return {
+    tone: "error",
+    message: Object.hasOwn(EXAM_SOURCE_DATES_ERROR_MESSAGES, token)
+      ? EXAM_SOURCE_DATES_ERROR_MESSAGES[token]
+      : EXAM_SOURCE_DATES_FALLBACK_TEXT,
+  };
+}
+
+/**
+ * The per-rule sentences for one raw comma-separated issue token.
+ *
+ * RECOGNIZED CODES ONLY — an unknown token is DROPPED rather than rendered,
+ * exactly as the card-save diagnostics are. Duplicates collapse and the SERVER's
+ * order is preserved.
+ */
+export function examSourceDatesIssueTexts(
+  raw: string | string[] | undefined,
+): readonly string[] {
+  const token = readToken(raw);
+  if (token === null) return [];
+  const seen = new Set<string>();
+  const texts: string[] = [];
+  for (const part of token.split(",")) {
+    const code = part.trim();
+    if (
+      code.length === 0 ||
+      seen.has(code) ||
+      !Object.hasOwn(EXAM_SOURCE_DATES_ISSUE_MESSAGES, code)
+    ) {
+      continue;
+    }
+    seen.add(code);
+    texts.push(EXAM_SOURCE_DATES_ISSUE_MESSAGES[code]);
+  }
+  return texts;
+}
+
 /** ONE banner for one raw move token, on exactly the terms above. */
 export function examAssignmentOrderFeedback(
   raw: string | string[] | undefined,

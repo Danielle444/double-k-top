@@ -1012,10 +1012,19 @@ test("24. only the approved wiring paths are modified: no schema, migration, aut
     // modified lib/ production module still fails here. None is a writer, a policy
     // core, an auth module or a session module.
     [
-      "lib/exam/" + "exam-plan-loader" + "-core.ts",
-      "lib/exam/" + "exam-read-dto" + ".ts",
-      "lib/exam/" + "exam-read-scope" + "-core.ts",
-      "lib/exam/" + "exam-trainee-view" + "-core.ts",
+      // RE-POINTED to the EMPTY set by EX-ADMIN-UX-FIXES / EX-ADMIN-SRCDATE, and
+      // it is the STRICTEST form of this claim rather than a relaxation.
+      //
+      // The four modules this list used to name — the plan loader, the read DTO,
+      // the read scope core and the trainee view core — were edited by a slice
+      // that shared this working tree and is MERGED into `main` now. Measured
+      // against HEAD they are no longer modifications, so the names described a
+      // moment rather than a rule.
+      //
+      // THIS branch modifies NO `lib/` production module at all. It ADDS two —
+      // the pure source-date decision core and its server-only binding, which a
+      // modifications-only diff does not report — and does everything else under
+      // `app/`. A modification of ANY `lib/` production module fails here again.
     ].sort(),
     `an unapproved lib production module was edited: ${libProduction.join(", ")}`,
   );

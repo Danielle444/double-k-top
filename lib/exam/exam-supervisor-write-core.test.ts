@@ -939,6 +939,13 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
    * supervisor module, adds no caller and modifies no production file.
    */
   const APPROVED_NEIGHBOUR_ADDITIONS = [
+    // EX-ADMIN-SRCDATE — the two new `lib/` production modules this branch adds
+    // and their two suites: the pure source-date decision core and its
+    // server-only binding. Neither is a supervisor module.
+    "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+    "lib/exam/" + "admin-exam-source-date" + "-core.test.ts",
+    "lib/actions/" + "admin-exam-source-date" + "-io.ts",
+    "lib/actions/" + "admin-exam-source-date" + "-io.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
@@ -1069,10 +1076,20 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
     // modified lib/ production module still fails here. None is a supervisor
     // module, which the assertion above proves independently.
     [
-      "lib/exam/" + "exam-plan-loader" + "-core.ts",
-      "lib/exam/" + "exam-read-dto" + ".ts",
-      "lib/exam/" + "exam-read-scope" + "-core.ts",
-      "lib/exam/" + "exam-trainee-view" + "-core.ts",
+      // RE-POINTED to the EMPTY set by EX-ADMIN-UX-FIXES / EX-ADMIN-SRCDATE, and
+      // it is the STRICTEST form of this claim rather than a relaxation.
+      //
+      // The four read-pipeline modules this list used to name were edited by a
+      // slice that shared this working tree and is MERGED into `main` now.
+      // Measured against HEAD they are no longer modifications, so the names
+      // described a moment rather than a rule.
+      //
+      // THIS branch modifies NO `lib/` production module at all. It ADDS two —
+      // the pure source-date decision core and its server-only binding, which a
+      // modifications-only diff does not report — and does everything else under
+      // `app/`. Neither is a supervisor module, which the assertion above proves
+      // independently, and a modification of ANY `lib/` production module fails
+      // here again.
     ].sort(),
     `an unapproved lib production module was edited: ${libProduction.join(", ")}`,
   );
