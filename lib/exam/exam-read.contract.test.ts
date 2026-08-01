@@ -3457,7 +3457,16 @@ test("K16. the slice's footprint is exactly its approved read-pipeline paths", (
     path.startsWith("app/admin/courses/[courseOfferingId]/exams/") ||
     path.endsWith(".test.ts") ||
     path === "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts" ||
-    path === "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts";
+    path === "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts" ||
+    // EX-ADMIN-SRCDATE, on EXACTLY the same terms and no wider: the pure
+    // source-date decision core and its server-only binding. They exist because
+    // nothing in the product could write an exam plan's Teaching-Practice date
+    // selection, so every plan held an empty one and this pipeline projected NO
+    // beginner rows anywhere. They ADD a writer BESIDE the pipeline and change
+    // NOT ONE module of it — every pipeline path above is still required to be
+    // the only `lib/exam` production file that may differ.
+    path === "lib/actions/" + "admin-exam-source-date" + "-io.ts" ||
+    path === "lib/exam/" + "admin-exam-source-date" + "-core.ts";
   const offenders = touchedPaths().filter(
     (path) => !approved.includes(path) && !WORKSPACE_SLICE(path),
   );

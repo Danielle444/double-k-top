@@ -60,6 +60,13 @@ const APPROVED_CALLER = "app/admin/courses/[courseOfferingId]/exams/actions.ts";
  * beyond the one production caller they exist to pin.
  */
 const SLICE_PATHS = [
+  // EX-ADMIN-SRCDATE — the TWO new `lib/` modules that let a manager select which
+  // Teaching-Practice days the plan runs as exam days, plus their suites.
+  // ASSEMBLED from pieces, for the reason this file's header records: those guards
+  // sweep raw source for their own module names and pin exact consumer lists, so a
+  // path written whole here would enrol this suite in one of them.
+  "lib/exam/" + "admin-exam-source-date" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.test.ts",
   // ===========================================================================
   // RE-POINTED by EX-PUB-UI-MVP, which wires the committed exam-plan publication
   // backend to this route. It re-points the export list, the binding count and
@@ -237,6 +244,13 @@ const SLICE_PATHS = [
   "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
   "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
   "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  // EX-ADMIN-SRCDATE ADDED two `lib/` production modules and MODIFIED no
+  // committed one: the pure source-date decision core, and its server-only
+  // binding. They are the ONE way a plan can gain a Teaching-Practice date, and
+  // without them every plan held an empty selection and beginner exams could
+  // not appear on any screen. ASSEMBLED, for the reason this header records.
+  "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.ts",
   // BLOCKER-1 also re-points the READ-PIPELINE guard suites whose claims the one
   // admin-only export makes obsolete. ASSEMBLED.
   "lib/exam/" + "exam-read" + "-dto.test.ts",
@@ -417,6 +431,10 @@ test("2. the action module is a Server Action module exporting EXACTLY the nine 
     // helper, parser, constant or type may join them, and no THIRTEENTH endpoint
     // may appear. They sit here because this list is compared SORTED.
     "moveExamAssignmentAction",
+    // EX-ADMIN-SRCDATE appended a THIRTEENTH: the ONE endpoint that replaces the
+    // plan's Teaching-Practice date selection. Still EXHAUSTIVE, and still not a
+    // generic endpoint — it performs one operation and reads one field name.
+    "replaceExamSourceDatesAction",
     "setExamPairingAction",
     "setExamPlanPublicationAction",
     "updateExamAssignmentDetailsAction",
@@ -437,7 +455,10 @@ test("2. the action module is a Server Action module exporting EXACTLY the nine 
   // RE-POINTED from ten to TWELVE by EX-ADMIN-WORKSPACE-UX, which appends the
   // examinee card save and the one-step examinee move. Still an EXACT count: a
   // thirteenth endpoint still fails here.
-  assert.equal((ACTION.match(/export async function /g) ?? []).length, 12);
+  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
+  // replacement, which is the only way a plan can gain a Teaching-Practice day
+  // and therefore the only way a beginner exam can appear anywhere at all.
+  assert.equal((ACTION.match(/export async function /g) ?? []).length, 13);
 });
 
 test("3. the action has the EXACT locked signature, and returns void", () => {
@@ -586,8 +607,14 @@ test("8. success revalidates ONLY this course's exams path, exactly once", () =>
   // RE-POINTED from ten to TWELVE by EX-ADMIN-WORKSPACE-UX, which appends the
   // examinee card save and the one-step examinee move. Still an EXACT count: a
   // thirteenth endpoint still fails here.
-  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 12);
-  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 12);
+  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
+  // replacement, which is the only way a plan can gain a Teaching-Practice day
+  // and therefore the only way a beginner exam can appear anywhere at all.
+  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 13);
+  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
+  // replacement, which is the only way a plan can gain a Teaching-Practice day
+  // and therefore the only way a beginner exam can appear anywhere at all.
+  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 13);
   // The two successes are distinguished, and both land on the exams path.
   assert.ok(
     PLAN_ACTION.includes(
@@ -715,7 +742,7 @@ test("13. searchParams carries ONLY closed feedback tokens", () => {
   // version stamp — which the id ban below re-states from the other side.
   assert.ok(
     PAGE_FLAT.includes(
-      "searchParams: Promise<{ tab?: string | string[]; view?: string | string[]; created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; updatedSession?: string | string[]; unchangedSession?: string | string[]; sessionEditError?: string | string[]; sessionEditIssues?: string | string[]; deletedSession?: string | string[]; sessionDeleteError?: string | string[]; createdAssignment?: string | string[]; assignmentError?: string | string[]; assignmentIssues?: string | string[]; deletedAssignment?: string | string[]; assignmentDeleteError?: string | string[]; createdInstructedTrainee?: string | string[]; instructedTraineeError?: string | string[]; instructedTraineeIssues?: string | string[]; publication?: string | string[]; pairing?: string | string[]; assignmentEdit?: string | string[]; assignmentEditIssues?: string | string[]; assignmentOrder?: string | string[]; }>;",
+      "searchParams: Promise<{ tab?: string | string[]; view?: string | string[]; created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; updatedSession?: string | string[]; unchangedSession?: string | string[]; sessionEditError?: string | string[]; sessionEditIssues?: string | string[]; deletedSession?: string | string[]; sessionDeleteError?: string | string[]; createdAssignment?: string | string[]; assignmentError?: string | string[]; assignmentIssues?: string | string[]; deletedAssignment?: string | string[]; assignmentDeleteError?: string | string[]; createdInstructedTrainee?: string | string[]; instructedTraineeError?: string | string[]; instructedTraineeIssues?: string | string[]; publication?: string | string[]; pairing?: string | string[]; assignmentEdit?: string | string[]; assignmentEditIssues?: string | string[]; assignmentOrder?: string | string[]; group?: string | string[]; add?: string | string[]; sourceDates?: string | string[]; sourceDateIssues?: string | string[]; }>;",
     ),
     "the searchParams type must be the closed thirty-key shape",
   );
@@ -777,14 +804,25 @@ test("15. NO query value can influence which course is read or written", () => {
   // inside the parser — never near the context, the reader or a href.
   const parserStart = PAGE.indexOf("function feedbackFrom(");
   const parserEnd = PAGE.indexOf("const FEEDBACK_CLASS");
-  const ARRANGEMENT_READS = ["explicit: query.tab,", "parseExamScheduleView(query.view)"];
+  // RE-POINTED by EX-ADMIN-UX-FIXES, and NARROWED rather than relaxed. Two more
+  // ARRANGEMENT reads exist — which sub-tab is open, and whether the create forms
+  // are disclosed — and each goes through a closed route-local parser with a safe
+  // default, exactly as the two original ones do. Neither reaches a reader, a
+  // context, an action binding or an href, and neither can carry an id: one is an
+  // ORDINAL clamped to the list on screen, and the other is the literal `1`.
+  const ARRANGEMENT_READS = [
+    "explicit: query.tab,",
+    "parseExamScheduleView(query.view)",
+    "parseAddAssignmentDisclosure(query.add)",
+    "parseWorkspaceGroupIndex(query.group,",
+  ];
   for (const match of PAGE.matchAll(/query\./g)) {
     const at = match.index ?? -1;
     const inParser = at > parserStart && at < parserEnd;
     const isArrangement = ARRANGEMENT_READS.some((read) => PAGE.startsWith(read, at - read.indexOf("query.")));
     assert.ok(
       inParser || isArrangement,
-      "query is referenced outside the closed parser and the two arrangement reads",
+      "query is referenced outside the closed parser and the four arrangement reads",
     );
   }
   for (const read of ARRANGEMENT_READS) {
@@ -865,8 +903,14 @@ test("17. no publication, source-date, session, capability or notification work"
       "publishExamPlan",
       "unpublishExamPlan",
       "deleteExamPlan",
-      "sourceDate",
-      "SourceDate",
+      // RE-POINTED by EX-ADMIN-SRCDATE, and NARROWED to the TABLE rather than
+      // relaxed. Selecting which Teaching-Practice days a plan runs as exam days is
+      // now an approved endpoint of this route: nothing in the product could write
+      // that selection before, so every plan held an empty one and beginner exams
+      // could not appear on any screen. What must still be absent from every file
+      // here is the Prisma model itself, so the route names its own endpoint and its
+      // own display copy and reaches no table.
+      "examTeachingPracticeSourceDate",
       // The Prisma model ACCESSORS themselves: no file here may touch a table.
       // Spelled with the trailing dot, which is what makes it an accessor — the
       // page legitimately imports route-local message helpers whose names begin
@@ -986,6 +1030,12 @@ test("17. no publication, source-date, session, capability or notification work"
     // module after it, so a suite that spelled the module whole would enrol
     // itself in that list.
     "@/lib/actions/" + "exam-pairing-write" + "-io",
+    // ADDED by EX-ADMIN-SRCDATE, and assembled on exactly the same terms: the
+    // source-date binding is a NEW module whose own guard pins its caller list at
+    // exactly this one Server Action module. It is the ONE way a plan can gain a
+    // Teaching-Practice date at all, which is why beginner exams were invisible
+    // everywhere before it existed.
+    "@/lib/actions/" + "admin-exam-source-date" + "-io",
     "next/cache",
     "next/navigation",
   ].sort());

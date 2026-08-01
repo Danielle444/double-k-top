@@ -103,6 +103,13 @@ const FINAL_ROUTE_FILES = [
  * The `lib/` entries are ASSEMBLED for the reason in the header.
  */
 const SLICE_PATHS = [
+  // EX-ADMIN-SRCDATE — the TWO new `lib/` modules that let a manager select which
+  // Teaching-Practice days the plan runs as exam days, plus their suites.
+  // ASSEMBLED from pieces, for the reason this file's header records: those guards
+  // sweep raw source for their own module names and pin exact consumer lists, so a
+  // path written whole here would enrol this suite in one of them.
+  "lib/exam/" + "admin-exam-source-date" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.test.ts",
   // ===========================================================================
   // RE-POINTED by EX-PUB-UI-MVP, which wires the committed exam-plan publication
   // backend to this route. It re-points the export list, the binding count and
@@ -225,6 +232,13 @@ const SLICE_PATHS = [
   "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
   "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
   "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  // EX-ADMIN-SRCDATE ADDED two `lib/` production modules and MODIFIED no
+  // committed one: the pure source-date decision core, and its server-only
+  // binding. They are the ONE way a plan can gain a Teaching-Practice date, and
+  // without them every plan held an empty selection and beginner exams could
+  // not appear on any screen. ASSEMBLED, for the reason this header records.
+  "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.ts",
   // BLOCKER-1 also re-points the READ-PIPELINE guard suites whose claims the one
   // admin-only export makes obsolete. ASSEMBLED.
   "lib/exam/" + "exam-read" + "-dto.test.ts",
@@ -447,8 +461,15 @@ test("5. the module exports EXACTLY nine actions, IT2's appended EIGHTH", () => 
     // examinee card save, and the one-step examinee move. Still EXHAUSTIVE.
     "updateExamAssignmentDetailsAction",
     "moveExamAssignmentAction",
+    // EX-ADMIN-SRCDATE appended a THIRTEENTH: the ONE endpoint that replaces the
+    // plan's Teaching-Practice date selection. Still EXHAUSTIVE, and still not a
+    // generic endpoint — it performs one operation and reads one field name.
+    "replaceExamSourceDatesAction",
   ]);
-  assert.equal(exported.length, 12, "no thirteenth endpoint may exist in this module");
+  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
+  // replacement, which is the only way a plan can gain a Teaching-Practice day
+  // and therefore the only way a beginner exam can appear anywhere at all.
+  assert.equal(exported.length, 13, "no fourteenth endpoint may exist in this module");
   assert.equal(exported[7], ACTION_NAME, "the new action must be appended after the seven");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
@@ -456,7 +477,10 @@ test("5. the module exports EXACTLY nine actions, IT2's appended EIGHTH", () => 
   // RE-POINTED from ten to TWELVE by EX-ADMIN-WORKSPACE-UX, which appends the
   // examinee card save and the one-step examinee move. Still an EXACT count: a
   // thirteenth endpoint still fails here.
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 12);
+  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
+  // replacement, which is the only way a plan can gain a Teaching-Practice day
+  // and therefore the only way a beginner exam can appear anywhere at all.
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 13);
 });
 
 test("6. the action has the EXACT locked signature, and returns void", () => {
@@ -510,7 +534,10 @@ test("9. the module's import surface gained EXACTLY the one committed writer", (
   // the one-step move. The three positive assertions above still pin the
   // specifiers THIS suite is responsible for, and the core/Prisma/capability/
   // notification bans below are untouched.
-  assert.equal(specifiers.length, 12, "the action module's import surface is not twelve");
+  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
+  // replacement, which is the only way a plan can gain a Teaching-Practice day
+  // and therefore the only way a beginner exam can appear anywhere at all.
+  assert.equal(specifiers.length, 13, "the action module's import surface is not thirteen");
   assert.ok(specifiers.includes(WRITER_SPECIFIER), "the committed writer is not imported");
   assert.ok(
     specifiers.includes("@/lib/actions/" + "detailed-exam-assignment-write" + "-io"),
@@ -974,7 +1001,14 @@ test("25. the form sits behind the SAME single lifecycle evaluation, via &&", ()
     1,
     "the read gate must be asserted exactly once",
   );
-  assert.ok(PAGE.includes("{mayConfigure && showInstructedTraineeForm ? ("));
+  // RE-POINTED by EX-ADMIN-UX-FIXES, and NARROWED rather than relaxed. The create
+  // forms are now CLOSED BY DEFAULT and opened by one control at the TOP of the
+  // assignments workspace, so the DISCLOSURE token joins the lifecycle gate as an
+  // EXTRA condition — never as a replacement for it. With `mayConfigure` false no
+  // `add=1` can bring either form back, and each committed writer re-evaluates the
+  // same gate for itself regardless.
+  assert.ok(PAGE.includes("{addAssignmentOpen && mayConfigure ? ("));
+  assert.ok(PAGE.includes("{showInstructedTraineeForm ? ("));
   assert.ok(PAGE.includes("<CreateExamInstructedTraineeAssignmentForm"));
   // Its four props, exactly — the VERIFIED offering id, this session's id, and the
   // ONE page-wide eligible roster.
@@ -1081,9 +1115,14 @@ test("26. the list, its roles, the count rule and the ONE delete path are untouc
   // RE-POINTED from two to THREE by the approved beginner projection: the third
   // filter selects the committed admin reading's own BEGINNER rows by its own
   // `source` discriminator. It re-orders nothing and reads nothing new.
-  assert.equal((PAGE.match(/\.filter\(/g) ?? []).length, 3);
+  // RE-POINTED from three to TWO by EX-ADMIN-UX-FIXES, and it is a NARROWING
+  // rather than a relaxation: the by-date day partition moved OUT of the page
+  // and into the PURE route-local view module, whose own suite exercises it
+  // directly. The two filters left are the unlinked instructed roster and the
+  // committed admin reading's own BEGINNER discriminator.
+  assert.equal((PAGE.match(/\.filter\(/g) ?? []).length, 2);
   assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));
-  assert.ok(PAGE.includes("(entry) => entry.dateKey === day.dateKey"));
+  assert.ok(PAGE.includes('(row) => row.source === "BEGINNER"'));
   // And no id or personal detail became text.
   assert.equal(PAGE.includes("assignment.orderIndex"), false, "the order position is rendered");
   assert.equal(PAGE.includes("assignment.studentId"), false, "a Student.id reaches the page");
@@ -1126,9 +1165,13 @@ test("27. searchParams carries EXACTLY the closed twenty-five keys", () => {
   // and are untouched, and the id ban below still refuses every scope-shaped key.
     // RE-POINTED from 25 to 30 by EX-ADMIN-WORKSPACE-UX: the card save's two
     // FEEDBACK tokens, the move's one, and the two ARRANGEMENT tokens.
+    // RE-POINTED from 30 to 34 by EX-ADMIN-UX-FIXES (the sub-tab ORDINAL and the
+    // create-form disclosure — both ARRANGEMENT) and by EX-ADMIN-SRCDATE (the
+    // source-date outcome and its per-rule codes — both closed FEEDBACK). None
+    // names a course, plan, session, trainee, assignment, version or date.
     (queryType.match(/\?: string \| string\[\];/g) ?? []).length,
-    30,
-    "the searchParams type must be the closed thirty-key shape",
+    34,
+    "the searchParams type must be the closed thirty-four-key shape",
   );
   // No id, no scope and no submitted value may become a query key...
   for (const forbidden of [
@@ -1190,11 +1233,17 @@ test("29. the page binds EXACTLY eight actions, all to the verified context id",
   // RE-POINTED from ten to ELEVEN by EX-ADMIN-WORKSPACE-UX: it binds TWO more
   // reviewed actions and REMOVES one — the standalone pairing action, whose
   // control was absorbed into the examinee's card.
-  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 11);
+  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
+  // replacement, which is the only way a plan can gain a Teaching-Practice day
+  // and therefore the only way a beginner exam can appear anywhere at all.
+  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 12);
   // RE-POINTED from ten to ELEVEN by EX-ADMIN-WORKSPACE-UX: it binds TWO more
   // reviewed actions and REMOVES one — the standalone pairing action, whose
   // control was absorbed into the examinee's card.
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 11);
+  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
+  // replacement, which is the only way a plan can gain a Teaching-Practice day
+  // and therefore the only way a beginner exam can appear anywhere at all.
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 12);
   // RE-POINTED from 10 to 11 by EX-PAIR-UI-MVP: ONE more inline form, bound to
   // the SAME verified context id, which the two `.bind` counts above pin.
   // RE-POINTED from eleven to FOURTEEN by EX-ADMIN-WORKSPACE-UX: the pairing form
@@ -1202,7 +1251,10 @@ test("29. the page binds EXACTLY eight actions, all to the verified context id",
   // arrived (+1); and the role-blind removal control is rendered from two places
   // now (+1). Every one is still bound to the SAME verified context id, which the
   // two `.bind` counts above pin.
-  assert.equal((PAGE.match(/action=/g) ?? []).length, 14);
+  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
+  // replacement, which is the only way a plan can gain a Teaching-Practice day
+  // and therefore the only way a beginner exam can appear anywhere at all.
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 15);
   // The new binding is HOISTED, not created inside the session loop.
   assert.ok(
     squash(PAGE).includes(
@@ -1227,7 +1279,10 @@ test("29. the page binds EXACTLY eight actions, all to the verified context id",
   // directly: all twelve actions arrive through the one `./actions`.
   // RE-POINTED from 24 to 26 by BLOCKER-1: the canonical timetable read and its
   // view type. The page still reaches NO write binding directly.
-  assert.equal(specifiers.length, 26, "the page's import surface is not twenty-six");
+  // RE-POINTED from 26 to 27 by EX-ADMIN-SRCDATE: the ONE admin-facing predicate
+  // that says whether this course level has beginner exams at all. The page still
+  // reaches NO write binding directly.
+  assert.equal(specifiers.length, 27, "the page's import surface is not twenty-seven");
   assert.ok(specifiers.includes("./CreateExamInstructedTraineeAssignmentForm"));
   assert.ok(specifiers.includes("./exam-instructed-trainee-assignment-messages"));
   for (const specifier of specifiers) {
@@ -1410,8 +1465,14 @@ test("35. this slice adds NO publication, notification, pairing, wave or supervi
       "sessionView.wave",
       "supervisor",
       "Supervisor",
-      "sourceDate",
-      "SourceDate",
+      // RE-POINTED by EX-ADMIN-SRCDATE, and NARROWED to the TABLE rather than
+      // relaxed. Selecting which Teaching-Practice days a plan runs as exam days is
+      // now an approved endpoint of this route: nothing in the product could write
+      // that selection before, so every plan held an empty one and beginner exams
+      // could not appear on any screen. What must still be absent from every file
+      // here is the Prisma model itself, so the route names its own endpoint and its
+      // own display copy and reaches no table.
+      "examTeachingPracticeSourceDate",
       "TeachingPractice",
       "capabilit",
       "Capabilit",
@@ -1535,7 +1596,15 @@ test("37. the slice touched EXACTLY its approved paths, and no schema or migrati
     // timetable derivation instead of reproducing it; the three existing readers
     // and every shared DTO are untouched. ASSEMBLED, so this suite does not enrol
     // itself as a caller.
-    "lib/actions/" + "exam-role" + "-readers" + ".ts",
+    // RE-POINTED to the EMPTY set by EX-ADMIN-UX-FIXES / EX-ADMIN-SRCDATE, which
+    // is the STRICTEST form of this claim rather than a relaxation. The admin-only
+    // reader export belonged to the workspace slice that shared this working tree
+    // and is MERGED into `main` now, so measured against the branch base it is not
+    // an edit this branch makes. THIS branch modifies NO committed `lib/`
+    // production module at all: it only ADDS two new ones — the pure source-date
+    // decision core and its server-only binding — which the workspace suite pins
+    // by name. Any modification of a committed `lib/` production module still
+    // fails here.
   ];
   // RE-POINTED to the BRANCH BASE rather than to HEAD. The slice is committed
   // locally now, so `git diff HEAD` reports nothing and this guard would pass

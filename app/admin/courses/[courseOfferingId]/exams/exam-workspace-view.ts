@@ -341,6 +341,8 @@ export interface WorkspaceSchedulableSession {
   readonly sessionId: string;
   readonly definitionId: string;
   readonly definitionName: string;
+  /** VERBATIM `HH:MM`, the stored block start. Compared, never computed. */
+  readonly startTime: string;
 }
 
 /** One day, exactly as the committed grouping core produced it. */
@@ -435,5 +437,354 @@ export function groupTimelineByDefinition<TSession extends WorkspaceSchedulableS
         entries: Object.freeze([...group.entries]),
       }),
     ),
+  );
+}
+
+// ===========================================================================
+// 6. THE ONE ORDERING RULE OF EVERY WORKSPACE VIEW
+// ===========================================================================
+
+/**
+ * Plain code-point comparison. Deliberately NOT `localeCompare` and not
+ * `Intl.Collator`: a locale-aware order can differ between a developer machine,
+ * CI and the server, and a schedule that renders in two different orders is a
+ * bug report nobody can reproduce.
+ *
+ * Both keys it is ever given are ZERO-PADDED — `YYYY-MM-DD` and `HH:MM` — so
+ * code-point order IS chronological order for them, and no `Date`, no clock and
+ * no arithmetic of any kind is involved in putting a schedule in sequence.
+ */
+function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * THE ORDERING RULE, stated ONCE for the whole workspace:
+ *
+ *      DATE ascending, then START TIME ascending, then the order the rows
+ *      already arrived in.
+ *
+ * Every view is arranged by this one comparator — the general overview, the
+ * by-type view, the by-date view, the beginner rows and the blocks inside a
+ * selected group — so no two surfaces of one plan can present a day in two
+ * different sequences.
+ *
+ * THE THIRD KEY IS THE ARRIVAL INDEX, and that is what makes this SAFE to layer
+ * over the committed grouping. That grouping is still the authority on what a tie
+ * means: it hands rows over in `orderIndex` order, and this sort is STABLE by
+ * construction — the index is compared last and is unique — so two blocks sharing
+ * a date and a clock time keep exactly the manager's own stored sequence. Nothing
+ * here re-derives that sequence, and nothing sorts by a DISPLAY NAME: a name is
+ * not a time, and ordering a day by it would reshuffle the schedule whenever an
+ * exam was renamed.
+ */
+function compareOrderKeys(
+  a: { readonly dateKey: string; readonly startTime: string; readonly index: number },
+  b: { readonly dateKey: string; readonly startTime: string; readonly index: number },
+): number {
+  return cmp(a.dateKey, b.dateKey) || cmp(a.startTime, b.startTime) || a.index - b.index;
+}
+
+/**
+ * Put a timeline into the one workspace order.
+ *
+ * Never mutates the input array: a fresh array is sorted and returned frozen, so
+ * a frozen input is fine and an unfrozen one comes back untouched.
+ */
+export function orderWorkspaceTimeline<TSession extends WorkspaceSchedulableSession>(
+  timeline: readonly WorkspaceTimelineEntry<TSession>[],
+): readonly WorkspaceTimelineEntry<TSession>[] {
+  const list = Array.isArray(timeline) ? timeline : [];
+  return Object.freeze(
+    list
+      .map((entry, index) => ({
+        entry,
+        dateKey: entry.dateKey,
+        startTime: entry.session.startTime,
+        index,
+      }))
+      .sort(compareOrderKeys)
+      .map((keyed) => keyed.entry),
+  );
+}
+
+/** One stored day of the workspace, rebuilt from the ORDERED timeline. */
+export interface WorkspaceTimelineDay<TSession extends WorkspaceSchedulableSession> {
+  readonly dateKey: string;
+  readonly dayLabel: string;
+  readonly dateLabel: string;
+  readonly entries: readonly WorkspaceTimelineEntry<TSession>[];
+}
+
+/**
+ * The BY-DATE axis, taken from the ORDERED timeline rather than from a second
+ * grouping.
+ *
+ * One source means the by-date view can never disagree with the general one
+ * about which blocks exist or about their sequence — a day is exactly the run of
+ * timeline entries carrying its key, in the order the timeline already put them.
+ * Day order is first appearance, which the ordering rule above has already made
+ * ascending by date.
+ */
+export function groupTimelineByDate<TSession extends WorkspaceSchedulableSession>(
+  timeline: readonly WorkspaceTimelineEntry<TSession>[],
+): readonly WorkspaceTimelineDay<TSession>[] {
+  const days: {
+    dateKey: string;
+    dayLabel: string;
+    dateLabel: string;
+    entries: WorkspaceTimelineEntry<TSession>[];
+  }[] = [];
+  const byKey = new Map<string, number>();
+
+  for (const entry of timeline) {
+    const existing = byKey.get(entry.dateKey);
+    if (existing === undefined) {
+      byKey.set(entry.dateKey, days.length);
+      days.push({
+        dateKey: entry.dateKey,
+        dayLabel: entry.dayLabel,
+        dateLabel: entry.dateLabel,
+        entries: [entry],
+      });
+      continue;
+    }
+    days[existing].entries.push(entry);
+  }
+
+  return Object.freeze(
+    days.map((day) =>
+      Object.freeze({
+        dateKey: day.dateKey,
+        dayLabel: day.dayLabel,
+        dateLabel: day.dateLabel,
+        entries: Object.freeze([...day.entries]),
+      }),
+    ),
+  );
+}
+
+// ===========================================================================
+// 7. THE SUB-TAB SELECTION, AND THE ADD-ASSIGNMENT DISCLOSURE
+// ===========================================================================
+
+/**
+ * WHICH group of a by-type or by-date view is open, as a POSITION and never as
+ * an id.
+ *
+ * An ORDINAL is deliberate. The obvious alternative — putting the
+ * `ExamDefinition.id` in the sub-tab link — would put a database id in an href
+ * on a page whose whole containment claim is that no href carries one. A
+ * position names the same group without naming anything internal, and it is
+ * meaningless outside the list it indexes.
+ *
+ * CLOSED AND TOTAL in both directions. A non-string (which is what a REPEATED
+ * query key produces), an empty string, a non-integer, a negative, a value past
+ * the end of the list and every unrecognized token all fall back to the FIRST
+ * group — which, under the ordering rule above, is the earliest date or the first
+ * available exam type. A hand-typed value can therefore select a group and can
+ * never supply one, reach a reader or influence a scope.
+ *
+ * A count of zero yields `0`, so a caller with nothing to show still has a total
+ * function to call rather than a special case to remember.
+ */
+export function parseWorkspaceGroupIndex(
+  raw: string | string[] | undefined,
+  count: number,
+): number {
+  if (!Number.isSafeInteger(count) || count <= 0) return 0;
+  if (typeof raw !== "string" || raw.length === 0) return 0;
+  // `Number` rather than `parseInt`: `parseInt("2abc")` is 2, which would let a
+  // malformed token select a group. `Number("2abc")` is `NaN`, which cannot.
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0 || value >= count) return 0;
+  return value;
+}
+
+/**
+ * The ONE query token that means "the manager asked to add somebody".
+ *
+ * The add-assignment form is CLOSED BY DEFAULT and is opened only by an explicit
+ * click, because a form permanently sitting at the bottom of a long page is one
+ * a manager has to scroll past on every visit and can submit by accident.
+ *
+ * Honoured on the EXACT string `"1"` and on nothing else, on exactly the terms
+ * every other closed token on this route uses: a repeated query key arrives as an
+ * ARRAY, and the `typeof` test is what stops `["1"]` coercing its way to a match.
+ * It is a DISCLOSURE and never a permission — the create forms sit behind the
+ * same lifecycle gate they always did, and this token cannot open one that gate
+ * has closed.
+ */
+export function parseAddAssignmentDisclosure(raw: string | string[] | undefined): boolean {
+  return typeof raw === "string" && raw === "1";
+}
+
+// ===========================================================================
+// 8. THE GENERAL OVERVIEW — ONE CHRONOLOGY, STORED BLOCKS AND BEGINNER ALIKE
+// ===========================================================================
+
+/**
+ * ONE row of the general overview.
+ *
+ * The general view answers ONE question — what does this day look like — so it
+ * carries the STRUCTURE of a block and never its people. There is deliberately no
+ * examinee, no instructed trainee, no horse, no topic, no branch, no pairing and
+ * no assignment id anywhere in either arm: a manager reading the overview is
+ * reading a timetable, and the roster belongs to the by-type and by-date views
+ * where it can actually be edited.
+ *
+ * The two arms are DISCRIMINATED rather than merged into one optional-heavy
+ * shape, because a beginner row is a live Teaching-Practice projection and a
+ * stored block is not — and a surface that could not tell them apart would sooner
+ * or later offer an edit control on the one that has none.
+ */
+export type WorkspaceOverviewEntry<TSession extends WorkspaceSchedulableSession> =
+  | {
+      readonly kind: "SESSION";
+      readonly dateKey: string;
+      readonly dayLabel: string;
+      readonly dateLabel: string;
+      readonly startTime: string;
+      readonly session: TSession;
+    }
+  | {
+      readonly kind: "BEGINNER";
+      readonly dateKey: string;
+      readonly dayLabel: string;
+      readonly dateLabel: string;
+      readonly startTime: string;
+      readonly beginner: WorkspaceBeginnerRow;
+    };
+
+/** The two day headings a date key is rendered under. */
+export interface WorkspaceDayLabels {
+  readonly dayLabel: string;
+  readonly dateLabel: string;
+}
+
+/**
+ * The day headings of every day the stored schedule occupies, keyed by date.
+ *
+ * Built from the timeline the committed grouping produced, so the labels are that
+ * core's own — this module derives none. A beginner date the stored schedule does
+ * not also occupy therefore has no label available, and the overview falls back
+ * to the raw date key rather than computing a heading of its own: a second
+ * calendar in this file would be a second thing to keep in step with the product's
+ * Hebrew dates.
+ */
+export function collectDayLabels<TSession extends WorkspaceSchedulableSession>(
+  timeline: readonly WorkspaceTimelineEntry<TSession>[],
+): ReadonlyMap<string, WorkspaceDayLabels> {
+  const labels = new Map<string, WorkspaceDayLabels>();
+  for (const entry of timeline) {
+    if (labels.has(entry.dateKey)) continue;
+    labels.set(entry.dateKey, { dayLabel: entry.dayLabel, dateLabel: entry.dateLabel });
+  }
+  return labels;
+}
+
+/**
+ * ONE chronological overview of everything that happens, stored blocks and
+ * BEGINNER Teaching-Practice exams together.
+ *
+ * The beginner rows arrive from the SAME already-loaded admin reading the rest of
+ * this page is built from — there is NO second query, no second reader and no
+ * duplicated data. Their times are that reading's own, exactly like every other
+ * clock on this page, and nothing here derives, adjusts or reformats one.
+ *
+ * Both kinds are ordered by the ONE workspace rule: date, then start time, then
+ * arrival. A beginner lesson at 09:00 therefore reads before a stored block at
+ * 10:00 on the same day, which is the entire point of merging them — a manager
+ * running the day needs one list, not two they have to interleave in their head.
+ *
+ * Rows carrying an unusable date or start time are DROPPED rather than placed
+ * arbitrarily: a row with no position in a chronology cannot be shown in one
+ * honestly, and the by-date and by-type views still list what the plan holds.
+ */
+export function buildScheduleOverview<TSession extends WorkspaceSchedulableSession>(
+  timeline: readonly WorkspaceTimelineEntry<TSession>[],
+  beginnerRows: readonly WorkspaceBeginnerRow[],
+  labels: ReadonlyMap<string, WorkspaceDayLabels>,
+): readonly WorkspaceOverviewEntry<TSession>[] {
+  const keyed: {
+    entry: WorkspaceOverviewEntry<TSession>;
+    dateKey: string;
+    startTime: string;
+    index: number;
+  }[] = [];
+
+  const sessions = Array.isArray(timeline) ? timeline : [];
+  for (const entry of sessions) {
+    keyed.push({
+      entry: {
+        kind: "SESSION",
+        dateKey: entry.dateKey,
+        dayLabel: entry.dayLabel,
+        dateLabel: entry.dateLabel,
+        startTime: entry.session.startTime,
+        session: entry.session,
+      },
+      dateKey: entry.dateKey,
+      startTime: entry.session.startTime,
+      index: keyed.length,
+    });
+  }
+
+  const beginners = Array.isArray(beginnerRows) ? beginnerRows : [];
+  for (const row of beginners) {
+    if (typeof row.date !== "string" || row.date.length === 0) continue;
+    if (typeof row.startTime !== "string" || row.startTime.length === 0) continue;
+    const dayLabels = labels.get(row.date);
+    keyed.push({
+      entry: {
+        kind: "BEGINNER",
+        dateKey: row.date,
+        dayLabel: dayLabels === undefined ? "" : dayLabels.dayLabel,
+        dateLabel: dayLabels === undefined ? row.date : dayLabels.dateLabel,
+        startTime: row.startTime,
+        beginner: row,
+      },
+      dateKey: row.date,
+      startTime: row.startTime,
+      index: keyed.length,
+    });
+  }
+
+  return Object.freeze(
+    keyed.sort(compareOrderKeys).map((entry) => Object.freeze(entry.entry)),
+  );
+}
+
+/**
+ * The beginner rows of ONE stored day, in the workspace order.
+ *
+ * Used by the by-date view, which shows the FULL read-only detail of a beginner
+ * lesson beside the stored blocks of the same day. It is a FILTER of the rows
+ * already loaded and never a second read.
+ */
+export function beginnerRowsOnDate(
+  beginnerRows: readonly WorkspaceBeginnerRow[],
+  dateKey: string,
+): readonly WorkspaceBeginnerRow[] {
+  const list = Array.isArray(beginnerRows) ? beginnerRows : [];
+  const matching = list
+    .filter((row) => row.date === dateKey)
+    .map((row, index) => ({ row, dateKey: row.date, startTime: row.startTime, index }))
+    .sort(compareOrderKeys)
+    .map((keyed) => keyed.row);
+  return matching.length === 0 ? NO_BEGINNER_ROWS : Object.freeze(matching);
+}
+
+/** Every beginner row, in the ONE workspace order. Never a second read. */
+export function orderBeginnerRows(
+  beginnerRows: readonly WorkspaceBeginnerRow[],
+): readonly WorkspaceBeginnerRow[] {
+  const list = Array.isArray(beginnerRows) ? beginnerRows : [];
+  if (list.length === 0) return NO_BEGINNER_ROWS;
+  return Object.freeze(
+    list
+      .map((row, index) => ({ row, dateKey: row.date, startTime: row.startTime, index }))
+      .sort(compareOrderKeys)
+      .map((keyed) => keyed.row),
   );
 }

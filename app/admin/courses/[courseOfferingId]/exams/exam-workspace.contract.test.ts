@@ -42,12 +42,21 @@ import {
   collectUntimedExaminees,
   buildGeneralTimeline,
   groupTimelineByDefinition,
+  orderWorkspaceTimeline,
+  groupTimelineByDate,
+  parseWorkspaceGroupIndex,
+  parseAddAssignmentDisclosure,
+  collectDayLabels,
+  buildScheduleOverview,
+  type WorkspaceBeginnerRow,
   type WorkspaceExaminee,
 } from "./exam-workspace-view";
 import {
   examAssignmentEditFeedback,
   examAssignmentEditIssueTexts,
   examAssignmentOrderFeedback,
+  examSourceDatesFeedback,
+  examSourceDatesIssueTexts,
 } from "./exam-workspace-messages";
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..", "..", "..", "..");
@@ -259,15 +268,15 @@ test("7. the general timeline is a FLATTEN of the committed grouping — no sort
       dayLabel: "שבת",
       dateLabel: "01.08",
       sessions: [
-        { sessionId: "s1", definitionId: "d1", definitionName: "A" },
-        { sessionId: "s2", definitionId: "d2", definitionName: "B" },
+        { sessionId: "s1", definitionId: "d1", definitionName: "A", startTime: "09:00" },
+        { sessionId: "s2", definitionId: "d2", definitionName: "B", startTime: "10:00" },
       ],
     },
     {
       dateKey: "2026-07-01",
       dayLabel: "רביעי",
       dateLabel: "01.07",
-      sessions: [{ sessionId: "s3", definitionId: "d1", definitionName: "A" }],
+      sessions: [{ sessionId: "s3", definitionId: "d1", definitionName: "A", startTime: "08:00" }],
     },
   ];
   const timeline = buildGeneralTimeline(days);
@@ -288,9 +297,9 @@ test("8. the by-type view buckets by definition ID, in first-appearance order", 
       dayLabel: "d",
       dateLabel: "l",
       sessions: [
-        { sessionId: "s1", definitionId: "d1", definitionName: "A" },
-        { sessionId: "s2", definitionId: "d2", definitionName: "A" },
-        { sessionId: "s3", definitionId: "d1", definitionName: "A" },
+        { sessionId: "s1", definitionId: "d1", definitionName: "A", startTime: "09:00" },
+        { sessionId: "s2", definitionId: "d2", definitionName: "A", startTime: "09:30" },
+        { sessionId: "s3", definitionId: "d1", definitionName: "A", startTime: "10:00" },
       ],
     },
   ]);
@@ -309,13 +318,25 @@ test("9. the page offers all three views and renders them from ONE timeline", ()
   assert.ok(PAGE.includes("groupTimelineByDefinition(timeline)"));
   assert.ok(PAGE.includes('scheduleView === "type"'));
   assert.ok(PAGE.includes('scheduleView === "date"'));
-  // Both schedule-bearing sections render from the SAME sections list, so they
-  // cannot disagree about what exists or about sequence.
+  // RE-POINTED by EX-ADMIN-UX-FIXES. The two grouped views now show ONE group at
+  // a time, so the shared structure is the SUB-TAB list rather than a list of
+  // every section — but the claim is unchanged and is asserted more strongly:
+  // both sections derive from the SAME ONE ordered timeline, and neither builds a
+  // second arrangement of its own.
+  assert.ok(PAGE.includes("const scheduleSubTabs: readonly ScheduleSubTab[] ="));
+  assert.ok(PAGE.includes("groupTimelineByDate(timeline)"));
   assert.equal(
-    (PAGE.match(/scheduleSections\.map\(/g) ?? []).length,
-    2,
-    "the two sections do not share one arrangement",
+    (PAGE.match(/buildGeneralTimeline\(/g) ?? []).length,
+    1,
+    "the timeline is built more than once",
   );
+  assert.equal(
+    (PAGE.match(/orderWorkspaceTimeline\(/g) ?? []).length,
+    1,
+    "the timeline is ordered more than once",
+  );
+  // The assignments section renders the SELECTED entries of that one timeline.
+  assert.ok(PAGE.includes("selectedEntries.map((entry) => {"));
 });
 
 test("10. every view states the facts a manager needs to run the day", () => {
@@ -337,10 +358,13 @@ test("10. every view states the facts a manager needs to run the day", () => {
   assert.equal(PAGE_RAW.includes('BLOCK_KIND_LABEL = "סוג מבחן"'), true);
   assert.equal(PAGE_RAW.includes('BLOCK_PARALLEL_LABEL = "נבחנים במקביל"'), true);
   // The facts are rendered by ONE shared component, so no view can omit one.
+  // RE-POINTED by EX-ADMIN-UX-FIXES: the general view is now its own renderer and
+  // uses the SAME component, which is a third call site of one component rather
+  // than a second copy of the facts.
   assert.equal(
     (PAGE.match(/<BlockFacts/g) ?? []).length,
-    2,
-    "the block facts are not rendered by one shared component in both sections",
+    3,
+    "the block facts are not rendered by one shared component in every view",
   );
 });
 
@@ -461,15 +485,15 @@ test("15. examinees the timetable could not place are still SHOWN, with no inven
 test("16. the page prints the canonical wave moment ONCE per wave, above a responsive pair", () => {
   // Two places print a wave heading — the read-only arrangement and the editable
   // one — and each prints the CANONICAL string, on the WAVE and not in a card.
+  //
+  // RE-POINTED by EX-ADMIN-UX-FIXES: the heading lost its Hebrew noun and is now
+  // a bare time range, so the count is taken on the RANGE itself rather than on
+  // the retired label. The claim — printed once per wave, never inside a card —
+  // is unchanged and is now asserted directly on what reaches the screen.
   assert.equal(
-    (PAGE.match(/\{WAVE_LABEL\}/g) ?? []).length,
+    (squash(PAGE).match(/\{wave\.startTime\} \{WAVE_TIME_SEPARATOR\}/g) ?? []).length,
     2,
     "the wave moment is printed somewhere other than the two wave headings",
-  );
-  assert.equal(
-    (PAGE.match(/· \{wave\.startTime\}/g) ?? []).length,
-    2,
-    "the wave start is printed somewhere else, or assembled",
   );
   // The other two uses are React keys — never text, and never interpolated.
   assert.equal((PAGE.match(/key=\{wave\.startTime\}/g) ?? []).length, 2);
@@ -503,7 +527,10 @@ test("18. there is EXACTLY ONE save button and ONE form in the card", () => {
   assert.equal((CARD.match(/<form/g) ?? []).length, 1, "the card holds a second form");
   assert.equal((CARD.match(/type="submit"/g) ?? []).length, 1, "the card holds a second save");
   assert.ok(CARD.includes("SAVE_TEXT"));
-  assert.equal(CARD_RAW.includes('SAVE_TEXT = "שמירת הכרטיס"'), true);
+  // RE-POINTED by EX-ADMIN-UX-FIXES: the compacted card shortened its button
+  // label. It is still exactly ONE button saving exactly ONE card, which the two
+  // counts above prove structurally.
+  assert.equal(CARD_RAW.includes('SAVE_TEXT = "שמירה"'), true);
 });
 
 test("19. the STANDALONE pairing form is gone from the page entirely", () => {
@@ -1009,19 +1036,19 @@ test("37. the shared instructor/trainee READ pipeline was not modified", () => {
   assert.deepEqual(branchModified("lib/exam/exam-read-dto.ts"), []);
   assert.deepEqual(branchModified("lib/exam/exam-read-scope-core.ts"), []);
   // ...and the only `lib/` files this branch ADDS are its own modules and their
-  // suites. The FOURTH pair is the atomic replacement's pure decision core: it
-  // composes the committed pairing decision instead of restating it, which is
-  // why nothing under the shared pipeline had to move to make the replacement
-  // safe.
+  // suites.
+  //
+  // RE-POINTED by EX-ADMIN-UX-FIXES / EX-ADMIN-SRCDATE. The workspace slice this
+  // suite was written for is MERGED into `main`, so its own four pairs are no
+  // longer "added by this branch" and the list measured against the merge base is
+  // this branch's own two pairs: the pure source-date decision core, and the
+  // server-only binding that applies it. Both are NEW modules — no committed
+  // `lib/` production module is modified, which the assertion above still proves.
   assert.deepEqual(branchAdded("lib"), [
-    "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
-    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
-    "lib/exam/" + "admin-exam-examinee-pairing" + "-core.test.ts",
-    "lib/exam/" + "admin-exam-examinee-pairing" + "-core.ts",
-    "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
-    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
-    "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
-    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    "lib/actions/" + "admin-exam-source-date" + "-io.test.ts",
+    "lib/actions/" + "admin-exam-source-date" + "-io.ts",
+    "lib/exam/" + "admin-exam-source-date" + "-core.test.ts",
+    "lib/exam/" + "admin-exam-source-date" + "-core.ts",
   ].sort());
 });
 
@@ -1098,12 +1125,34 @@ test("39. no internal id becomes visible text, and no href carries one", () => {
   }
   // The only hrefs are the course back link, the four section links and the
   // three view links — none of which carries an id.
+  // RE-POINTED by EX-ADMIN-UX-FIXES, and NARROWED rather than relaxed. Two link
+  // families were added — the sub-tab and the add-assignment disclosure — and
+  // NEITHER carries an id: the sub-tab carries an ORDINAL into the list on
+  // screen, and the disclosure carries the closed literal `1`. The assertion is
+  // still an EXACT list, so a future href has to be justified here.
   const hrefs = (PAGE.match(/href=\{.*$/gm) ?? []).map((line) => line.trim());
   assert.deepEqual(hrefs.sort(), [
+    "href={`${examsPath}?${viewQuery}&group=${index}`}",
     "href={`${examsPath}?tab=${activeTab}&view=${token}`}",
     "href={`${examsPath}?tab=${token}`}",
     "href={dashboardHref}",
-  ]);
+    "href={",
+  ].sort());
+  // The one multi-line href is the disclosure, and both of its arms are ordinal
+  // and token only — no session, assignment, definition or trainee id.
+  assert.ok(PAGE.includes("`${examsPath}?${groupQuery}&add=1`"));
+  assert.ok(PAGE.includes("`${examsPath}?${groupQuery}`"));
+  for (const forbidden of ["sessionId", "assignmentId", "definitionId", "studentId", "context.id"]) {
+    assert.equal(
+      PAGE.includes(`&group=\${${forbidden}}`),
+      false,
+      "a sub-tab link carries an id",
+    );
+    assert.equal(PAGE.includes(`?${forbidden}=`), false, "a link carries an id");
+  }
+  // The sub-tab ordinal is derived from the RENDERED position and never from a
+  // stored value that could be mistaken for a stable identifier.
+  assert.ok(PAGE.includes("scheduleSubTabs.map((subTab, index) => ("));
 });
 
 // ===========================================================================
@@ -1131,7 +1180,10 @@ test("40. there is no table, and no fixed-width layout, anywhere on the route", 
 });
 
 test("41. the card's own fields stack on a phone and widen only with room", () => {
-  assert.ok(CARD.includes("grid-cols-1 gap-3 sm:grid-cols-2"));
+  // RE-POINTED by EX-ADMIN-UX-FIXES: the compacted card reaches a THIRD column on
+  // a large screen, still behind a breakpoint prefix and still stacking on a
+  // phone, which guard 40 re-checks structurally.
+  assert.ok(CARD.includes("grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3"));
   assert.ok(CARD.includes("w-full"), "a card field does not fill its column");
 });
 
@@ -1169,6 +1221,13 @@ const SLICE_PATHS = [
   "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
   "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
   "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  // EX-ADMIN-SRCDATE ADDED two `lib/` production modules and MODIFIED no
+  // committed one: the pure source-date decision core, and its server-only
+  // binding. They are the ONE way a plan can gain a Teaching-Practice date, and
+  // without them every plan held an empty selection and beginner exams could not
+  // appear on any screen. ASSEMBLED, for the reason this file's header records.
+  "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.ts",
   "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
   "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
   // The committed guard suites this slice re-points. Every entry ends in
@@ -1191,25 +1250,15 @@ const SLICE_PATHS = [
   // Every committed `lib/` guard suite EX-ADMIN-WORKSPACE-UX re-points, so the
   // footprint here matches the working tree in full. All ASSEMBLED, for the
   // reason this suite's header records.
-  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
-  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
-  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
-  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
-  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
-  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
-  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
-  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
-  "lib/actions/" + "exam-session-write" + "-io.test.ts",
-  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
-  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
-  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
   "lib/exam/" + "exam-read" + ".contract.test.ts",
-  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   // BLOCKER-1 also re-points the READ-PIPELINE guard suites whose claims the one
   // admin-only export makes obsolete. ASSEMBLED.
   "lib/exam/" + "exam-read" + "-dto.test.ts",
   "lib/exam/" + "exam-read-scope" + "-core.test.ts",
-  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  // EX-ADMIN-SRCDATE — the TWO new `lib/` modules and their suites. ASSEMBLED,
+  // for the reason this suite's header records.
+  "lib/exam/" + "admin-exam-source-date" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-source-date" + "-io.test.ts",
 ];
 
 /** The route's EXACT final file set, after this slice's FOUR additions. */
@@ -1259,15 +1308,20 @@ test("42. the route directory holds EXACTLY the twenty-seven approved files", ()
   assert.equal(routeFiles.length, 27);
 });
 
-test("43. the action module exports EXACTLY TWELVE actions, this slice's appended last", () => {
+test("43. the action module exports EXACTLY THIRTEEN actions, this slice's appended last", () => {
   const firstStatement = ACTIONS_RAW.split("\n").find((line) => line.trim().length > 0);
   assert.equal(firstStatement?.trim(), '"use server";');
   const exported = [...ACTIONS_RAW.matchAll(/export (?:async )?function (\w+)\(/g)].map(
     ([, name]) => name,
   );
-  assert.equal(exported.length, 12, "no thirteenth endpoint may exist in this module");
+  // RE-POINTED by EX-ADMIN-SRCDATE, and by exactly ONE endpoint. Nothing in the
+  // product could write the plan's Teaching-Practice date selection, so every
+  // plan held an empty one and beginner exams could not appear on any screen.
+  // The twelve existing endpoints are unchanged, in the same order.
+  assert.equal(exported.length, 13, "no fourteenth endpoint may exist in this module");
   assert.equal(exported[10], "updateExamAssignmentDetailsAction");
   assert.equal(exported[11], "moveExamAssignmentAction");
+  assert.equal(exported[12], "replaceExamSourceDatesAction");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS_RAW.includes(token), false, `the module has an ${token} export`);
   }
@@ -1291,6 +1345,16 @@ test("44. the slice touched EXACTLY its approved paths, and no schema or migrati
     "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
     "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
     "lib/actions/" + "exam-role" + "-readers" + ".ts",
+    // EX-ADMIN-SRCDATE ADDED two `lib/` production modules and MODIFIED no
+    // committed one: the pure source-date decision core, and its server-only
+    // binding. They are the ONE way a plan can gain a Teaching-Practice date, and
+    // without them every plan held an empty selection and beginner exams could not
+    // appear on any screen. ASSEMBLED, for the reason this file's header records.
+    "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+    "lib/actions/" + "admin-exam-source-date" + "-io.ts",
+    // EX-ADMIN-SRCDATE's own two production modules.
+    "lib/exam/" + "admin-exam-source-date" + "-core.ts",
+    "lib/actions/" + "admin-exam-source-date" + "-io.ts",
   ];
   const libEntries = SLICE_PATHS.filter(
     (path) => path.startsWith("lib/") && !ownLib.includes(path),
@@ -1329,7 +1393,504 @@ test("45. the two new lib modules are the ONLY backend this slice added", () => 
   assert.equal(PAGE.includes("admin-exam-workspace-edit" + "-io"), false);
 });
 
-test("46. this suite opens no database and reads no environment", () => {
+// ===========================================================================
+// 12. EX-ADMIN-UX-FIXES — the corrections from the first manual E2E review
+// ===========================================================================
+
+/** One schedulable session fixture. */
+function session(sessionId: string, definitionId: string, startTime: string) {
+  return { sessionId, definitionId, definitionName: `def-${definitionId}`, startTime };
+}
+
+/** One beginner row fixture, narrowed to the fields the arrangements read. */
+function beginner(sessionId: string, date: string, startTime: string) {
+  return {
+    sessionId,
+    date,
+    startTime,
+    displayEndTime: null,
+    beginnerFormat: "BEGINNER_INSTRUCTION",
+    groupName: null,
+    location: "arena",
+    responsibleInstructorName: null,
+    participantNames: [] as readonly string[],
+    participantCount: 0,
+    children: [],
+    notes: null,
+    isPublished: true,
+  } as WorkspaceBeginnerRow;
+}
+
+test("47. the ONE ordering rule is date, then start time, then arrival — never a name", () => {
+  const timeline = buildGeneralTimeline([
+    {
+      dateKey: "2026-08-02",
+      dayLabel: "d2",
+      dateLabel: "l2",
+      sessions: [session("late", "d1", "14:00"), session("early", "d1", "08:00")],
+    },
+    {
+      dateKey: "2026-08-01",
+      dayLabel: "d1",
+      dateLabel: "l1",
+      sessions: [session("first", "d2", "10:00")],
+    },
+  ]);
+  const ordered = orderWorkspaceTimeline(timeline);
+  assert.deepEqual(ordered.map((entry) => entry.session.sessionId), [
+    "first",
+    "early",
+    "late",
+  ]);
+  // The sort is STABLE, so two blocks sharing a date AND a clock time keep the
+  // committed grouping's own sequence rather than being re-ordered by name.
+  const tied = orderWorkspaceTimeline(
+    buildGeneralTimeline([
+      {
+        dateKey: "2026-08-01",
+        dayLabel: "d",
+        dateLabel: "l",
+        sessions: [session("zzz", "d1", "09:00"), session("aaa", "d2", "09:00")],
+      },
+    ]),
+  );
+  assert.deepEqual(tied.map((entry) => entry.session.sessionId), ["zzz", "aaa"]);
+  // The input is never mutated.
+  assert.deepEqual(timeline.map((entry) => entry.session.sessionId), [
+    "late",
+    "early",
+    "first",
+  ]);
+});
+
+test("48. the by-date axis comes from the ORDERED timeline, days ascending", () => {
+  const ordered = orderWorkspaceTimeline(
+    buildGeneralTimeline([
+      {
+        dateKey: "2026-08-05",
+        dayLabel: "d5",
+        dateLabel: "l5",
+        sessions: [session("b", "d1", "09:00")],
+      },
+      {
+        dateKey: "2026-08-03",
+        dayLabel: "d3",
+        dateLabel: "l3",
+        sessions: [session("a", "d1", "11:00")],
+      },
+    ]),
+  );
+  const days = groupTimelineByDate(ordered);
+  assert.deepEqual(days.map((day) => day.dateKey), ["2026-08-03", "2026-08-05"]);
+  assert.deepEqual(days[0].entries.map((entry) => entry.session.sessionId), ["a"]);
+  // Nothing is dropped and no day is empty.
+  assert.equal(days.reduce((total, day) => total + day.entries.length, 0), 2);
+});
+
+test("49. the general overview MERGES beginner times into ONE chronology", () => {
+  const ordered = orderWorkspaceTimeline(
+    buildGeneralTimeline([
+      {
+        dateKey: "2026-08-02",
+        dayLabel: "יום ראשון",
+        dateLabel: "2 באוגוסט 2026",
+        sessions: [session("stored", "d1", "10:00")],
+      },
+    ]),
+  );
+  const overview = buildScheduleOverview(
+    ordered,
+    [beginner("tp-1", "2026-08-02", "09:00"), beginner("tp-2", "2026-08-02", "12:00")],
+    collectDayLabels(ordered),
+  );
+  // Interleaved BY TIME rather than appended after the stored blocks.
+  assert.deepEqual(
+    overview.map((entry) => [entry.kind, entry.startTime]),
+    [
+      ["BEGINNER", "09:00"],
+      ["SESSION", "10:00"],
+      ["BEGINNER", "12:00"],
+    ],
+  );
+  // A beginner row on a day the stored schedule also occupies borrows that day's
+  // committed labels — this module derives no calendar of its own.
+  const first = overview[0];
+  assert.equal(first.dayLabel, "יום ראשון");
+  assert.equal(first.dateLabel, "2 באוגוסט 2026");
+});
+
+test("50. an overview entry carries NO participant, horse, topic or assignment", () => {
+  const ordered = orderWorkspaceTimeline(
+    buildGeneralTimeline([
+      {
+        dateKey: "2026-08-02",
+        dayLabel: "d",
+        dateLabel: "l",
+        sessions: [session("s", "d1", "10:00")],
+      },
+    ]),
+  );
+  const overview = buildScheduleOverview(
+    ordered,
+    [beginner("tp-1", "2026-08-02", "09:00")],
+    collectDayLabels(ordered),
+  );
+  for (const entry of overview) {
+    for (const field of [
+      "examinees",
+      "waves",
+      "assignments",
+      "traineeName",
+      "horseName",
+      "instructionTopic",
+      "discipline",
+      "instructedTraineeName",
+      "children",
+      "participantNames",
+    ]) {
+      assert.equal(Object.hasOwn(entry, field), false, `an overview row carries ${field}`);
+    }
+  }
+});
+
+test("51. a beginner row with an unusable date or time is DROPPED, never mis-placed", () => {
+  const overview = buildScheduleOverview(
+    [],
+    [
+      { ...beginner("bad-date", "", "09:00") },
+      { ...beginner("bad-time", "2026-08-02", "") },
+      beginner("good", "2026-08-02", "09:00"),
+    ],
+    new Map(),
+  );
+  assert.deepEqual(
+    overview.map((entry) => (entry.kind === "BEGINNER" ? entry.beginner.sessionId : "")),
+    ["good"],
+  );
+  // With no stored day to borrow labels from, the raw date key stands in and no
+  // calendar is computed here.
+  assert.equal(overview[0].dateLabel, "2026-08-02");
+  assert.equal(overview[0].dayLabel, "");
+});
+
+test("52. the GENERAL VIEW renders structure only — no card, no name, no create form", () => {
+  const start = PAGE.indexOf("function renderGeneralSchedule()");
+  assert.notEqual(start, -1, "the general view has no renderer of its own");
+  const end = PAGE.indexOf("function renderGroupedSchedule()");
+  assert.ok(end > start, "the general renderer is not delimited");
+  const general = PAGE.slice(start, end);
+
+  // The facts a manager runs a day from ARE there.
+  assert.ok(general.includes("<BlockFacts"));
+  assert.ok(general.includes("BLOCK_ARENA_LABEL"));
+  assert.ok(general.includes("scheduleOverview.map("));
+
+  // ...and nothing that belongs to the roster or to editing is.
+  for (const forbidden of [
+    "traineeName",
+    "horseText",
+    "EditExamAssignmentCard",
+    "CreateExamAssignmentForm",
+    "CreateExamInstructedTraineeAssignmentForm",
+    "DeleteExamAssignmentForm",
+    "ReadOnlyWave",
+    "TEACHES_LABEL",
+    "INSTRUCTION_TOPIC_LABEL",
+    "DISCIPLINE_LABEL",
+    "instructedTrainee",
+    "pairing",
+    "participantNames",
+    "children",
+    "<form",
+  ]) {
+    assert.equal(general.includes(forbidden), false, `the general view renders ${forbidden}`);
+  }
+});
+
+test("53. the general view CARRIES beginner times, and says where the editing is", () => {
+  const start = PAGE.indexOf("function renderGeneralSchedule()");
+  const general = PAGE.slice(start, PAGE.indexOf("function renderGroupedSchedule()"));
+  assert.ok(general.includes('entry.kind === "SESSION"'));
+  assert.ok(general.includes("entry.beginner.beginnerFormat"));
+  assert.ok(general.includes("entry.beginner.displayEndTime"));
+  assert.ok(general.includes("entry.beginner.location"));
+  assert.ok(general.includes("GENERAL_VIEW_READ_ONLY_TEXT"));
+  // The beginner rows come from the ONE already-loaded admin reading. No second
+  // reader is named anywhere on the page.
+  assert.equal(
+    (PAGE.match(/readAdminExamPlan\(/g) ?? []).length,
+    1,
+    "the admin reading is asked more than once",
+  );
+});
+
+test("54. the two grouped views are SUB-TABS with a safe default, one group at a time", () => {
+  // The ordinal parser is closed, total and clamped.
+  for (const raw of [undefined, "", "x", "-1", "1.5", "9", "constructor", ["1"], "1e1"]) {
+    assert.equal(
+      parseWorkspaceGroupIndex(raw as string | string[] | undefined, 3),
+      0,
+      `${String(raw)} escaped the safe default`,
+    );
+  }
+  assert.equal(parseWorkspaceGroupIndex("2", 3), 2);
+  assert.equal(parseWorkspaceGroupIndex("0", 3), 0);
+  // A list with nothing in it still has a total answer.
+  assert.equal(parseWorkspaceGroupIndex("2", 0), 0);
+
+  // The page renders exactly ONE group, chosen by that ordinal.
+  assert.ok(PAGE.includes("parseWorkspaceGroupIndex(query.group, scheduleSubTabs.length)"));
+  assert.ok(PAGE.includes("const activeSubTab: ScheduleSubTab | undefined = scheduleSubTabs["));
+  assert.ok(PAGE.includes("activeSubTab === undefined ? [] : activeSubTab.entries"));
+  // A single group is not given a control to switch between.
+  assert.ok(PAGE.includes("if (scheduleSubTabs.length < 2) return null;"));
+});
+
+test("55. the sub-tabs cover the exam TYPES in one view and the DATES in the other", () => {
+  assert.ok(PAGE.includes("definitionGroups.map((group) => ({"));
+  assert.ok(PAGE.includes("timelineDays.map((day) => ({"));
+  // The general view has none — it is one continuous chronology by definition.
+  assert.ok(PAGE.includes('scheduleView === "general" ? timeline'));
+  // Switching arrangement DROPS the ordinal, so position 3 of the types cannot
+  // land on position 3 of the dates.
+  assert.ok(PAGE.includes("href={`${examsPath}?tab=${activeTab}&view=${token}`}"));
+});
+
+test("56. the ADD-ASSIGNMENT form is closed by default and opened from the TOP", () => {
+  // The disclosure parser is closed to the exact literal.
+  assert.equal(parseAddAssignmentDisclosure("1"), true);
+  for (const raw of [undefined, "", "0", "true", "01", " 1", ["1"], "yes"]) {
+    assert.equal(
+      parseAddAssignmentDisclosure(raw as string | string[] | undefined),
+      false,
+      `${String(raw)} opened the form`,
+    );
+  }
+  // The create forms render ONLY behind it, and the disclosure never replaces the
+  // lifecycle gate.
+  assert.ok(PAGE.includes("{addAssignmentOpen && mayConfigure ? ("));
+  assert.equal(
+    PAGE.includes("{mayConfigure ? (\n                                requirementsUnknown"),
+    false,
+    "the create form is still rendered unconditionally",
+  );
+  // The control sits ABOVE the list of blocks, not after it.
+  const control = PAGE.indexOf("ADD_ASSIGNMENT_OPEN_TEXT");
+  const list = PAGE.indexOf("selectedEntries.map((entry) => {");
+  assert.ok(control !== -1 && list !== -1 && control < list, "the control is not at the top");
+  assert.ok(PAGE_RAW.includes('ADD_ASSIGNMENT_OPEN_TEXT = "הוספת שיבוץ"'));
+  // Opening a form is a NAVIGATION and never a write.
+  assert.ok(PAGE.includes("&add=1`"));
+});
+
+test("57. the word for a wave is GONE from every visible string", () => {
+  // The display-copy correction: the heading is a time range and no noun.
+  assert.ok(PAGE.includes("{wave.startTime} {WAVE_TIME_SEPARATOR} {timeText(wave.endTime)}"));
+  assert.equal(PAGE_RAW.includes("WAVE_LABEL"), false, "the wave noun still exists");
+  // ...and it is not spelled inline anywhere in any route production file either.
+  const files = readdirSync(join(REPO_ROOT, ROUTE_DIR_REL)).filter(
+    (name) => /\.tsx?$/.test(name) && !name.endsWith(".test.ts"),
+  );
+  for (const name of files) {
+    const source = stripComments(readFileSync(join(REPO_ROOT, ROUTE_DIR_REL, name), "utf8"));
+    assert.equal(
+      new RegExp('"\\u05d2\\u05dc"|>\\s*\\u05d2\\u05dc\\s*<|\\u05d2\\u05dc\\s*·').test(source),
+      false,
+      `${name} still renders the wave noun`,
+    );
+  }
+  // The internal model KEEPS its technical name — this was copy, not behaviour.
+  assert.ok(VIEW.includes("ExamWave"));
+  assert.ok(PAGE.includes("attachExamineesToWaves("));
+});
+
+test("58. the instructed-trainee field follows the DEFINITION, not an existing pairing", () => {
+  // The gate is the definition's own requirement flag...
+  assert.ok(PAGE.includes("requirements !== undefined && requirements.requiresInstructedTrainee"));
+  assert.ok(PAGE.includes("const definitionWantsInstructedTrainee = showInstructedTraineeForm;"));
+  // ...and the old "any instructed row in this session" inference is GONE.
+  assert.equal(
+    PAGE.includes("showInstructedTraineeForm || instructedRows.length > 0"),
+    false,
+    "the field is still inferred from a session's rows",
+  );
+  // The ONE exception is per PERSON and can never produce an EMPTY field: it is
+  // reached only when that examinee already carries a stored link.
+  const flat = squash(PAGE);
+  assert.ok(
+    flat.includes(
+      "definitionWantsInstructedTrainee || examinee.instructedTraineeAssignmentId !== null",
+    ),
+    "the card's field is not gated per person",
+  );
+  assert.ok(flat.includes("showTeachingLink || examinee.instructedTraineeName !== null"));
+  // The read-only summary is gated on the same rule rather than printed always.
+  assert.ok(
+    flat.includes("definitionWantsInstructedTrainee || examinee.instructedTraineeName !== null"),
+    "the read-only summary still prints the field unconditionally",
+  );
+  // The wave summary takes the same gate as a PROP rather than assuming it.
+  assert.ok(flat.includes("showTeachingLink={ requirements !== undefined && requirements.requiresInstructedTrainee }"));
+});
+
+test("59. the examinee card is COMPACT, keeps one save and keeps the move controls", () => {
+  // One save button, and it is still exactly one.
+  assert.equal((CARD.match(/<SaveCardButton/g) ?? []).length, 1);
+  assert.equal((CARD.match(/type="submit"/g) ?? []).length, 1);
+  // Compact: single-line fields in one responsive grid, no repeated headings.
+  assert.ok(CARD.includes("LABEL_CLASS"));
+  assert.ok(CARD.includes("grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3"));
+  assert.equal(CARD.includes("gap-3 sm:grid-cols-2"), false, "the tall layout survives");
+  // Nothing required was hidden to achieve it.
+  for (const field of ["horseName", "instructionTopic", "discipline", "instructedTraineeAssignmentId"]) {
+    assert.ok(CARD.includes(`name="${field}"`), `${field} was dropped from the card`);
+  }
+  // The ordering controls are unchanged and still live on the page beside it.
+  assert.ok(PAGE.includes("MOVE_UP_LABEL"));
+  assert.ok(PAGE.includes("MOVE_DOWN_LABEL"));
+  assert.ok(PAGE.includes("POSITION_LABEL"));
+  assert.ok(PAGE.includes('value="UP"'));
+  assert.ok(PAGE.includes('value="DOWN"'));
+});
+
+test("60. beginner rows stay READ-ONLY and are placed by arrangement", () => {
+  // Full detail in the two grouped views, times only in the general one.
+  assert.ok(PAGE.includes("const beginnerRowsInView: readonly WorkspaceBeginnerRow[] ="));
+  assert.ok(PAGE.includes("beginnerRowsOnDate("));
+  assert.ok(PAGE.includes("beginnerRowsInView.map((row) => ("));
+  // The detail a manager needs to run the day is all still there.
+  for (const label of [
+    "BEGINNER_GROUP_LABEL",
+    "BEGINNER_RESPONSIBLE_LABEL",
+    "BEGINNER_PARTICIPANTS_LABEL",
+    "BEGINNER_AGE_LABEL",
+    "BEGINNER_PARENT_LABEL",
+    "BEGINNER_PARENT_PHONE_LABEL",
+    "BEGINNER_ABSENT_TEXT",
+    "BEGINNER_DRAFT_TEXT",
+  ]) {
+    assert.ok(PAGE.includes(label), `${label} was dropped`);
+  }
+  // NO edit control of any kind is rendered for a beginner row, and the rule is
+  // stated on screen.
+  const start = PAGE.indexOf("aria-label={BEGINNER_REGION_HEADING}");
+  const region = PAGE.slice(start, PAGE.indexOf("</section>", start));
+  for (const forbidden of ["<form", "<button", "<input", "<select", "action={"]) {
+    assert.equal(region.includes(forbidden), false, `a beginner row offers ${forbidden}`);
+  }
+  // The rule is stated in WORDS, and the sentence is the read-only one's own. The
+  // region's old "these will be shown here read-only" placeholder is GONE,
+  // replaced by the three distinguishable states guard 61 pins — one sentence
+  // could not tell a level with no beginner exams apart from a plan that has
+  // selected no days. The rule sentence is rendered TWICE: beside the rows, and
+  // beside the source-date control that decides which rows exist at all.
+  assert.ok(PAGE.includes("BEGINNER_READ_ONLY_TEXT"));
+  assert.equal((PAGE.match(/BEGINNER_READ_ONLY_TEXT/g) ?? []).length, 3);
+  assert.ok(PAGE_RAW.includes("כל שינוי נעשה במסך התרגול המעשי"));
+});
+
+test("61. the THREE beginner empty states are distinguishable", () => {
+  assert.ok(PAGE.includes("!beginnerSupported ?"));
+  assert.ok(PAGE.includes("!hasSourceDates ?"));
+  assert.ok(PAGE.includes("orderedBeginnerRows.length === 0 ?"));
+  for (const text of [
+    "BEGINNER_LEVEL_UNSUPPORTED_TEXT",
+    "BEGINNER_NO_SOURCE_DATES_TEXT",
+    "BEGINNER_NO_MATCHING_LESSONS_TEXT",
+  ]) {
+    assert.ok(PAGE.includes(text), `${text} is missing`);
+  }
+  // The three sentences are DIFFERENT sentences.
+  const found = [
+    /BEGINNER_LEVEL_UNSUPPORTED_TEXT =\s*\n?\s*"([^"]+)"/,
+    /BEGINNER_NO_SOURCE_DATES_TEXT =\s*\n?\s*"([^"]+)"/,
+    /BEGINNER_NO_MATCHING_LESSONS_TEXT =\s*\n?\s*"([^"]+)"/,
+  ].map((pattern) => (PAGE_RAW.match(pattern) ?? [])[1] ?? "");
+  assert.equal(found.includes(""), false, "an empty state has no sentence");
+  assert.equal(new Set(found).size, 3, "two empty states say the same thing");
+  // The level question is DELEGATED, never restated on the page.
+  assert.ok(PAGE.includes("examBeginnerDatesSupportedForLevel(context.level)"));
+  assert.equal(/context\.level\s*===\s*1/.test(PAGE), false, "the level rule is restated");
+});
+
+test("62. the source-date control is the ONE way a plan gains beginner dates", () => {
+  // It lives in the schedule section, behind the lifecycle gate and the level.
+  assert.ok(PAGE.includes("{beginnerSupported ? ("));
+  assert.ok(PAGE.includes("action={boundReplaceExamSourceDatesAction}"));
+  assert.ok(PAGE.includes("replaceExamSourceDatesAction.bind(null, context.id)"));
+  // The submission is the COMPLETE set: every selected day shares ONE field name
+  // with the add field, so unchecking a day removes it.
+  assert.equal((PAGE.match(/name="date"/g) ?? []).length, 2);
+  assert.ok(PAGE.includes('type="checkbox"'));
+  assert.ok(PAGE.includes('type="date"'));
+  assert.ok(PAGE.includes("defaultChecked"));
+  assert.ok(PAGE.includes("selectedSourceDates.map((selected) => ("));
+  // The offering id travels in the SERVER-side binding and is never a field.
+  assert.equal(PAGE.includes('name="courseOfferingId"'), false);
+  assert.equal(PAGE.includes('name="planId"'), false);
+  // No Teaching-Practice identifier is expressible from this surface at all.
+  for (const forbidden of ['name="lessonId"', 'name="practiceId"', 'name="childId"']) {
+    assert.equal(PAGE.includes(forbidden), false, `the control submits ${forbidden}`);
+  }
+});
+
+test("63. the source-date action is bound to the committed writer and echoes nothing", () => {
+  assert.ok(ACTIONS.includes('formData.getAll("date")'));
+  assert.ok(ACTIONS.includes("replaceExamSourceDates(courseOfferingId, formData.getAll"));
+  // The raw entries are NOT coerced — the backend validates every token.
+  assert.equal(ACTIONS.includes('String(formData.getAll("date"))'), false);
+  // Success revalidates only on a real write; a no-op revalidates nothing.
+  assert.ok(ACTIONS.includes('if (result.outcome !== "NO_CHANGE")'));
+  // The refusal carries CODES only, and the page selects a fixed sentence per
+  // code — so no submitted date can be echoed onto the screen.
+  assert.ok(ACTIONS.includes("result.issues.map((issue) => issue.code).join"));
+  assert.ok(PAGE.includes("examSourceDatesFeedback(sourceDates)"));
+  assert.ok(PAGE.includes("examSourceDatesIssueTexts(sourceDateIssues)"));
+  const unknown = examSourceDatesIssueTexts("NOT-A-CODE,EX-SRC-DATE-INVALID");
+  assert.equal(unknown.length, 1, "an unknown diagnostic code reached the screen");
+  assert.equal(examSourceDatesFeedback(["REPLACED"] as unknown as string), null);
+  assert.equal(examSourceDatesFeedback("REPLACED")?.tone, "success");
+  assert.equal(examSourceDatesFeedback("NO_CHANGE")?.tone, "neutral");
+  assert.equal(examSourceDatesFeedback("whatever-code")?.tone, "error");
+});
+
+test("64. the publication section is untouched by this slice", () => {
+  assert.ok(PAGE.includes('activeTab === "publication"'));
+  assert.ok(PAGE.includes("PUBLISH_BUTTON_TEXT"));
+  assert.ok(PAGE.includes("UNPUBLISH_BUTTON_TEXT"));
+  assert.ok(PAGE.includes("PUBLISHED_WARNING_TEXT"));
+  assert.ok(PAGE.includes('value="PUBLISH"'));
+  assert.ok(PAGE.includes('value="UNPUBLISH"'));
+  assert.ok(PAGE.includes("boundSetExamPlanPublicationAction"));
+  // The two forms are still chosen by the STORED state and never by the query.
+  assert.ok(PAGE.includes("const isPublished = view.publishedAt !== null;"));
+  // The disclosure and the sub-tab ordinal reach nothing in this section.
+  const start = PAGE.indexOf('activeTab === "publication"');
+  const publication = PAGE.slice(start);
+  for (const forbidden of ["addAssignmentOpen", "activeSubTab", "sourceDates"]) {
+    assert.equal(publication.includes(forbidden), false, `publication reads ${forbidden}`);
+  }
+});
+
+test("65. no instructor or trainee file is touched, and no new PII is reachable", () => {
+  for (const dir of ["app/instructor", "app/student", "components"]) {
+    assert.deepEqual(branchModified(dir), [], `${dir} was modified`);
+    assert.deepEqual(branchAdded(dir), [], `${dir} gained a file`);
+  }
+  // The source-date surface adds NO personal field anywhere: it can express a
+  // date and nothing else. The Server Action module is the boundary that matters
+  // — the view module's beginner ROW TYPE legitimately names the parent contact
+  // the committed operational reader already publishes, which guard 38 pins.
+  for (const token of ["identityNumber", "phone", "Phone", "parent", "Parent", "child", "Child"]) {
+    assert.equal(ACTIONS.includes(token), false, `${token} became reachable`);
+  }
+  // And no beginner field reached a WRITE surface.
+  for (const token of ["beginnerFormat", "participantNames", "childNotes", "equipmentNotes"]) {
+    assert.equal(ACTIONS.includes(token), false, `${token} reaches a write surface`);
+  }
+});
+
+test("66. this suite opens no database and reads no environment", () => {
   const own = stripComments(routeFile("exam-workspace.contract.test.ts"));
   for (const token of ["@/lib/" + "prisma", "Prisma" + "Client", "DATABASE" + "_URL"]) {
     assert.equal(own.includes(token), false, `the suite references ${token}`);

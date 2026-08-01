@@ -72,10 +72,22 @@ export interface InstructedTraineeChoice {
 /** The submitted value that means "this examinee teaches nobody". */
 export const EDIT_CARD_NO_INSTRUCTED_TRAINEE_VALUE = "";
 
+/**
+ * The card is COMPACT by construction.
+ *
+ * It used to be a stack of full-height labelled blocks, which made one examinee
+ * as tall as a form page and an exam block a very long scroll. Every field is now
+ * a single line — a small label above a `py-1` control — laid out in a responsive
+ * grid that stacks on a phone and widens to two and then three columns as there
+ * is room. Nothing is hidden and no value is truncated: the same fields, the same
+ * validation and the same one save button, in roughly a third of the height.
+ */
 const FIELD_CLASS =
-  "w-full rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-card-foreground disabled:cursor-not-allowed disabled:opacity-50";
+  "w-full rounded-lg border border-border bg-background px-2 py-1 text-sm text-card-foreground disabled:cursor-not-allowed disabled:opacity-50";
 
-const SAVE_TEXT = "שמירת הכרטיס";
+const LABEL_CLASS = "text-xs font-medium text-muted-foreground";
+
+const SAVE_TEXT = "שמירה";
 const SAVING_TEXT = "שומר...";
 
 /** The ONE submit button of the card. Disabled only while its own save is in flight. */
@@ -86,7 +98,7 @@ function SaveCardButton() {
       type="submit"
       disabled={pending}
       aria-disabled={pending}
-      className="rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+      className="rounded-lg bg-secondary px-3 py-1 text-xs font-medium text-secondary-foreground hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
     >
       {pending ? SAVING_TEXT : SAVE_TEXT}
     </button>
@@ -128,7 +140,7 @@ export function EditExamAssignmentCard({
   const showDiscipline = requiresDiscipline || discipline !== null;
 
   return (
-    <form action={action} className="mt-3 flex flex-col gap-3 border-t border-border pt-3">
+    <form action={action} className="mt-2 flex flex-col gap-2 border-t border-border pt-2">
       {/*
         WHICH row this card edits. Hidden rather than chosen: the manager already
         picked the person by opening their card, and the committed writer looks
@@ -149,11 +161,20 @@ export function EditExamAssignmentCard({
         readOnly
       />
 
+      {/*
+        The person's name is the card's own heading and is printed ONCE. The
+        surrounding block already states the time, so the card repeats neither.
+      */}
       <p className="text-sm font-semibold text-card-foreground">{traineeName}</p>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-card-foreground">סוס</span>
+      {/*
+        ONE responsive grid for every field. It stacks on a phone, pairs at `sm`
+        and reaches three columns only where there is genuinely room, so an
+        examinee reads as ONE ROW of a block rather than as a page of its own.
+      */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <label className="flex flex-col gap-0.5">
+          <span className={LABEL_CLASS}>סוס</span>
           {/*
             REQUIRED, and required server-side too: the committed input core
             refuses a blank or whitespace-only horse for an examinee regardless
@@ -170,8 +191,8 @@ export function EditExamAssignmentCard({
         </label>
 
         {showTopic ? (
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-card-foreground">נושא הדרכה</span>
+          <label className="flex flex-col gap-0.5">
+            <span className={LABEL_CLASS}>נושא הדרכה</span>
             <input
               type="text"
               name="instructionTopic"
@@ -183,8 +204,8 @@ export function EditExamAssignmentCard({
         ) : null}
 
         {showDiscipline ? (
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-card-foreground">ענף</span>
+          <label className="flex flex-col gap-0.5">
+            <span className={LABEL_CLASS}>ענף</span>
             <input
               type="text"
               name="discipline"
@@ -209,8 +230,8 @@ export function EditExamAssignmentCard({
           whose only option is "nobody" looks like one that does nothing.
         */}
         {showInstructedTrainee ? (
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-card-foreground">החניך המודרך שהנבחן/ת מדריך/ה</span>
+          <label className="flex flex-col gap-0.5">
+            <span className={LABEL_CLASS}>מדריך/ה את</span>
             {instructedTraineeOptions.length > 0 ? (
               <select
                 name="instructedTraineeAssignmentId"
@@ -233,10 +254,15 @@ export function EditExamAssignmentCard({
             )}
           </label>
         ) : null}
-      </div>
 
-      <div>
-        <SaveCardButton />
+        {/*
+          THE ONE SAVE BUTTON, inside the same grid so it takes a cell rather than
+          a row of its own. It is still exactly one button saving exactly one
+          card — only its height changed.
+        */}
+        <div className="flex items-end">
+          <SaveCardButton />
+        </div>
       </div>
     </form>
   );
