@@ -86,10 +86,11 @@ const STUDENT_MORE_ITEMS: { id: MainTabId; label: string }[] = [
   { id: "materials", label: "חומרי קורס" },
   { id: "teachingPractice", label: "התנסויות מתחילים" },
   // EX-TRAINEE-VIEW-MVP - the trainee "מבחנים" screen. A "עוד" menu entry, not a
-  // sixth bottom tab and not a home shortcut. It is deliberately absent from
-  // LEVEL2_ONLY_VISIBLE_NAV_IDS and from LOADING_SAFE_NAV_IDS above, so a
-  // Level-2-only trainee never sees it and nobody sees it before the course
-  // options resolve - the existing fail-closed allow-list needed no change.
+  // sixth bottom tab. It is ALSO a home shortcut - see STUDENT_QUICK_ACTIONS
+  // below, which reuses this exact id/label pair and goes through the SAME
+  // filterTraineeNavEntries call, so a Level-2-only trainee sees it in both
+  // places (it is on LEVEL2_ONLY_VISIBLE_NAV_IDS) and nobody sees it before the
+  // course options resolve, exactly like every other entry here.
   { id: "exams", label: "מבחנים" },
   { id: "notifications", label: "עדכונים" },
   { id: "weeklyFeedback", label: "משוב שבועי" },
@@ -146,6 +147,10 @@ const STUDENT_QUICK_ACTIONS: { id: MainTabId; label: string }[] = [
   { id: "profile", label: "פרופיל" },
   { id: "contacts", label: "אנשי קשר" },
   { id: "materials", label: "חומרי קורס" },
+  // Home shortcut to the existing trainee exams screen (same id/label as the
+  // "עוד" menu entry above) - filtered by the SAME filterTraineeNavEntries call
+  // visibleQuickActions already uses, so its visibility rules are unchanged.
+  { id: "exams", label: "מבחנים" },
 ];
 
 interface StoredSession {

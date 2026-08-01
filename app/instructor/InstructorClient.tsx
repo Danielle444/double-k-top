@@ -102,12 +102,13 @@ const INSTRUCTOR_MORE_ITEMS: { id: MainTabId; label: string }[] = [
   { id: "materials", label: "חומרי קורס" },
   { id: "notifications", label: "עדכונים" },
   { id: "teachingPractice", label: "התנסויות מתחילים" },
-  // EX-INST-VIEW-MVP - the ONE instructor navigation entry for the exam
-  // schedule. It is added here and nowhere else: not to INSTRUCTOR_MAIN_TABS,
-  // not to either shortcut list below, so "מבחנים" appears exactly once in the
-  // instructor shell. Every existing entry keeps its position. The screen it
-  // opens is read-only, and the reader behind it re-derives the instructor from
-  // the signed session regardless of how this list was built.
+  // EX-INST-VIEW-MVP - the instructor "עוד" menu entry for the exam schedule.
+  // It is ALSO a home shortcut - see INSTRUCTOR_ACTIVITY_SHORTCUTS below, which
+  // reuses this exact id/label pair, so "מבחנים" appears in exactly two places:
+  // this menu and the home quick-nav grid. Every existing entry keeps its
+  // position. The screen it opens is read-only, and the reader behind it
+  // re-derives the instructor from the signed session regardless of how this
+  // list was built.
   { id: "exams", label: "מבחנים" },
   { id: "help", label: "עזרה" },
 ];
@@ -132,6 +133,12 @@ const INSTRUCTOR_ACTIVITY_SHORTCUTS: { id: MainTabId; label: string }[] = [
   // actions) - so unlike "messages" above, this shortcut is never filtered
   // out here.
   { id: "teachingPractice", label: "התנסויות מתחילים" },
+  // Home shortcut to the existing instructor exams screen (same id/label as
+  // the "עוד" menu entry, see INSTRUCTOR_MORE_ITEMS above). Read-only, and the
+  // reader behind it re-derives the instructor and re-authorizes every read
+  // from the signed session regardless of how this list was built - this
+  // shortcut is never filtered out.
+  { id: "exams", label: "מבחנים" },
 ];
 
 const INSTRUCTOR_INFO_SHORTCUTS: { id: MainTabId; label: string }[] = [

@@ -105,6 +105,17 @@ import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates
  * stands.
  *
  * ===========================================================================
+ * THE GENERAL/ALL VIEW IS A TIMETABLE, NOT A ROSTER (EX-INST-GENERAL-OVERVIEW-ONLY)
+ * ===========================================================================
+ * `לו״ז כללי` (navMode === "all") mirrors the admin general view: date, time,
+ * exam type/name and arena/location only. No examinee, no instructed trainee, no
+ * supervisor, no assignment, no horse, no topic and no self/role marker is
+ * rendered while it is open — that detail is exclusive to the by-type and
+ * by-date views, which are otherwise byte-for-byte unchanged. This is a VIEW-
+ * LAYER filter of rows already loaded and already authorized; no reader, DTO or
+ * query is touched, and switching to a grouped view issues no request.
+ *
+ * ===========================================================================
  * LIVE BEGINNER ROWS ARE A SECOND KIND OF ROW (EX-BEGINNER-EXAM-UI)
  * ===========================================================================
  * A beginner row is a LIVE projection of a Teaching-Practice lesson: no stored
@@ -235,6 +246,14 @@ function BeginnerPlaceholderCard({
 }
 
 const GENERAL_VIEW_LABEL = "לו״ז כללי";
+/**
+ * EX-INST-GENERAL-OVERVIEW-ONLY — the general/all view is a TIMETABLE, exactly
+ * like the admin general view. It never carries an examinee, an instructed
+ * trainee, a supervisor, a horse, a topic or a self/role marker; those live
+ * only in the by-type and by-date views below.
+ */
+const GENERAL_VIEW_READ_ONLY_TEXT =
+  "לו״ז כללי הוא תצוגת מבנה בלבד. לפרטי משתתפים יש לעבור ללפי תאריך או ללפי סוג מבחן.";
 
 export function InstructorExamsSection() {
   const [selectedOfferingId, setSelectedOfferingId] = useState<string | null>(null);
@@ -354,6 +373,14 @@ export function InstructorExamsSection() {
             onSelectDate={setNavDate}
           />
 
+          {/* EX-INST-GENERAL-OVERVIEW-ONLY — shown only in the general/all
+              view, which the block below renders as structure only. */}
+          {navMode === "all" && (
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {GENERAL_VIEW_READ_ONLY_TEXT}
+            </p>
+          )}
+
           {/* A NARROWED view with nothing in it says exactly that, and never
               borrows the "this course has no exam plan" sentence above. */}
           {groups.length === 0 && (
@@ -400,55 +427,64 @@ export function InstructorExamsSection() {
                       <p className="mt-1 text-sm text-muted-foreground">מקום: {place}</p>
                     )}
 
-                    <div className="mt-2 flex flex-col gap-1">
-                      {/* The participant SUMMARY, and only where it is the only
-                          place those names appear. A block with operational
-                          rows names everyone below, in their waves and with
-                          their horses, so printing the same names again here
-                          would be pure repetition — and a LIVE BEGINNER row has
-                          no examinee and no instructed trainee at all, so
-                          printing its people under those two labels would be
-                          two exam roles this screen invented. */}
-                      {!isBeginnerExamRow(row) && row.assignments.length === 0 && (
-                        <>
+                    {/* EX-INST-GENERAL-OVERVIEW-ONLY — every participant-level
+                        block below (names, assignments, horses, topics, self/
+                        role markers) is shown ONLY in the by-type and by-date
+                        views. The general/all view (navMode === "all") stops
+                        at the block facts above: date, time, type and place. */}
+                    {navMode !== "all" && (
+                      <>
+                        <div className="mt-2 flex flex-col gap-1">
+                          {/* The participant SUMMARY, and only where it is the only
+                              place those names appear. A block with operational
+                              rows names everyone below, in their waves and with
+                              their horses, so printing the same names again here
+                              would be pure repetition — and a LIVE BEGINNER row has
+                              no examinee and no instructed trainee at all, so
+                              printing its people under those two labels would be
+                              two exam roles this screen invented. */}
+                          {!isBeginnerExamRow(row) && row.assignments.length === 0 && (
+                            <>
+                              <PeopleLine
+                                label="נבחנים"
+                                names={row.examineeNames}
+                                count={row.examineeCount}
+                              />
+                              <PeopleLine
+                                label="חניכים מדריכים"
+                                names={row.instructedTraineeNames}
+                                count={row.instructedTraineeCount}
+                              />
+                            </>
+                          )}
+                          {/* Supervisors are never in the operational rows, so their
+                              line is never a duplicate and always stands. */}
                           <PeopleLine
-                            label="נבחנים"
-                            names={row.examineeNames}
-                            count={row.examineeCount}
+                            label="משגיחים"
+                            names={row.supervisorNames}
+                            count={row.supervisorCount}
                           />
-                          <PeopleLine
-                            label="חניכים מדריכים"
-                            names={row.instructedTraineeNames}
-                            count={row.instructedTraineeCount}
-                          />
-                        </>
-                      )}
-                      {/* Supervisors are never in the operational rows, so their
-                          line is never a duplicate and always stands. */}
-                      <PeopleLine
-                        label="משגיחים"
-                        names={row.supervisorNames}
-                        count={row.supervisorCount}
-                      />
-                    </div>
+                        </div>
 
-                    {/* ROUTED BY THE CONTRACT'S OWN `source`.
+                        {/* ROUTED BY THE CONTRACT'S OWN `source`.
 
-                        A LIVE BEGINNER ROW gets the dedicated compact beginner
-                        presentation — its source, its format, its group, its
-                        responsible instructor, its participants and the full
-                        operational child detail — and is NEVER handed to the
-                        advanced wave/examinee renderer, which has no stored
-                        assignment to draw and would print nothing.
+                            A LIVE BEGINNER ROW gets the dedicated compact beginner
+                            presentation — its source, its format, its group, its
+                            responsible instructor, its participants and the full
+                            operational child detail — and is NEVER handed to the
+                            advanced wave/examinee renderer, which has no stored
+                            assignment to draw and would print nothing.
 
-                        A STORED BLOCK keeps its COMPLETE operational schedule,
-                        verbatim and in the contract's own order. An empty list
-                        renders nothing, so a stored block with no assignment
-                        stays exactly as it was. */}
-                    {isBeginnerExamRow(row) ? (
-                      <ExamBeginnerRows detail={row.beginner} showOperationalDetail />
-                    ) : (
-                      <ExamAssignmentRows assignments={row.assignments} />
+                            A STORED BLOCK keeps its COMPLETE operational schedule,
+                            verbatim and in the contract's own order. An empty list
+                            renders nothing, so a stored block with no assignment
+                            stays exactly as it was. */}
+                        {isBeginnerExamRow(row) ? (
+                          <ExamBeginnerRows detail={row.beginner} showOperationalDetail />
+                        ) : (
+                          <ExamAssignmentRows assignments={row.assignments} />
+                        )}
+                      </>
                     )}
 
                     {statusLabel !== null && (
