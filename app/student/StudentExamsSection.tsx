@@ -193,6 +193,16 @@ const NO_SELF_TEXT = "אין לך שיבוץ למבחן.";
 const NO_MATCHING_ROWS_TEXT = "אין מבחנים בתצוגה שנבחרה.";
 
 /**
+ * EX-C2-0-SUSPEND-UI — TEMPORARY static placeholder dates.
+ *
+ * The live BEGINNER Teaching-Practice projection is suspended from THIS screen
+ * only, for these two fixed dates. Nothing upstream (reader/adapter/DTO) is
+ * touched, and nothing here is a permanent product rule.
+ */
+const BEGINNER_PLACEHOLDER_DATE_A = "2026-08-02";
+const BEGINNER_PLACEHOLDER_DATE_B = "2026-08-03";
+
+/**
  * THE TWO TRAINEE VIEWS, and the only two. There is deliberately no general
  * schedule label and no by-exam-type label anywhere in this file — not in code
  * and not in a comment — so neither can be rendered and neither can be revived
@@ -248,6 +258,31 @@ function PeopleLine({
       <span className="font-semibold">{label}: </span>
       {names.length > 0 ? names.join(", ") : `${count}`}
     </p>
+  );
+}
+
+/**
+ * EX-C2-0-SUSPEND-UI — a TEMPORARY static informational card.
+ *
+ * Pure static text: no fetched data, no row, no assignment, no child, no
+ * parent, no phone and no id of any kind. Three fixed lines, in the same
+ * outer card style already used by every other row on this screen.
+ */
+function BeginnerPlaceholderCard({
+  title,
+  dateLabel,
+  timeLabel,
+}: {
+  title: string;
+  dateLabel: string;
+  timeLabel: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
+      <p className="text-base font-bold text-card-foreground">{title}</p>
+      <p className="text-xs text-muted-foreground">{dateLabel}</p>
+      <p className="text-sm font-semibold text-muted-foreground">{timeLabel}</p>
+    </div>
   );
 }
 
@@ -307,7 +342,7 @@ export function StudentExamsSection() {
   const filteredRows = filterExamRows(allRows, {
     definitionName: null,
     date: activeDate,
-  });
+  }).filter((entry) => !isBeginnerExamRow(entry));
   const groups = groupRowsByDate(sortExamRowsByStartTime(filteredRows));
   const scheduleIsEmpty = view !== null && view.allRows.length === 0;
   // Each view answers for itself: the personal view by its own rows, the date
@@ -407,6 +442,10 @@ export function StudentExamsSection() {
         !failed &&
         mode === "self" &&
         myRows.map((row) => {
+          // EX-C2-0-SUSPEND-UI — TEMPORARY: the live beginner projection is
+          // suspended from this screen; the dead branch further down that would
+          // have rendered it is left untouched.
+          if (isBeginnerExamRow(row)) return null;
           const place = row.arena ?? row.location;
           // A live beginner lesson has no exam ROLE. The contract still carries
           // `selfRole` for it, and printing that label here would tell a trainee
@@ -481,6 +520,24 @@ export function StudentExamsSection() {
             </div>
           );
         })}
+
+      {/* EX-C2-0-SUSPEND-UI — TEMPORARY static informational cards, shown
+          unconditionally in "לו״ז שלי" alongside (never instead of) the
+          trainee's own real rows above. Pure static text, no fetched data. */}
+      {!loading && !failed && mode === "self" && (
+        <>
+          <BeginnerPlaceholderCard
+            title="הדרכות מתחילים — קבוצה א"
+            dateLabel="יום ראשון, 2.8.2026"
+            timeLabel="16:00–19:30"
+          />
+          <BeginnerPlaceholderCard
+            title="הדרכות מתחילים — קבוצה ב"
+            dateLabel="יום שני, 3.8.2026"
+            timeLabel="16:00–19:30"
+          />
+        </>
+      )}
 
       {!loading &&
         !failed &&
@@ -580,6 +637,24 @@ export function StudentExamsSection() {
             })}
           </div>
         ))}
+
+      {/* EX-C2-0-SUSPEND-UI — TEMPORARY static informational cards for "לפי
+          תאריך", shown only when the selected date is one of the two fixed
+          suspended dates. Pure static text, no fetched data. */}
+      {!loading && !failed && mode === "date" && activeDate === BEGINNER_PLACEHOLDER_DATE_A && (
+        <BeginnerPlaceholderCard
+          title="הדרכות מתחילים — קבוצה א"
+          dateLabel="יום ראשון, 2.8.2026"
+          timeLabel="16:00–19:30"
+        />
+      )}
+      {!loading && !failed && mode === "date" && activeDate === BEGINNER_PLACEHOLDER_DATE_B && (
+        <BeginnerPlaceholderCard
+          title="הדרכות מתחילים — קבוצה ב"
+          dateLabel="יום שני, 3.8.2026"
+          timeLabel="16:00–19:30"
+        />
+      )}
     </div>
   );
 }

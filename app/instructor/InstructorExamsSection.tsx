@@ -137,6 +137,16 @@ const NO_COURSE_TEXT = "יש לבחור קורס כדי לראות את לוח �
  */
 const NO_MATCHING_ROWS_TEXT = "אין מבחנים בתצוגה שנבחרה.";
 
+/**
+ * EX-C2-0-SUSPEND-UI — TEMPORARY static placeholder dates.
+ *
+ * The live BEGINNER Teaching-Practice projection is suspended from THIS screen
+ * only, for these two fixed dates. Nothing upstream (reader/adapter/DTO) is
+ * touched, and nothing here is a permanent product rule.
+ */
+const BEGINNER_PLACEHOLDER_DATE_A = "2026-08-02";
+const BEGINNER_PLACEHOLDER_DATE_B = "2026-08-03";
+
 type ExamRow = InstructorExamScheduleView["rows"][number];
 
 /** The Hebrew label for a block's timetable state. Absent state shows nothing. */
@@ -196,6 +206,31 @@ function PeopleLine({
       <span className="font-semibold">{label}: </span>
       {names.length > 0 ? names.join(", ") : `${count}`}
     </p>
+  );
+}
+
+/**
+ * EX-C2-0-SUSPEND-UI — a TEMPORARY static informational card.
+ *
+ * Pure static text: no fetched data, no row, no assignment, no child, no
+ * parent, no phone and no id of any kind. Three fixed lines, in the same
+ * outer card style already used by every other row on this screen.
+ */
+function BeginnerPlaceholderCard({
+  title,
+  dateLabel,
+  timeLabel,
+}: {
+  title: string;
+  dateLabel: string;
+  timeLabel: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
+      <p className="text-base font-bold text-card-foreground">{title}</p>
+      <p className="text-xs text-muted-foreground">{dateLabel}</p>
+      <p className="text-sm font-semibold text-muted-foreground">{timeLabel}</p>
+    </div>
   );
 }
 
@@ -260,7 +295,7 @@ export function InstructorExamsSection() {
   const visibleRows = filterExamRows(allRows, {
     definitionName: navMode === "type" ? navDefinitionName : null,
     date: navMode === "date" ? navDate : null,
-  });
+  }).filter((entry) => !isBeginnerExamRow(entry));
   const groups = groupRowsByDate(visibleRows);
   // "Is there a schedule at all" is answered by the LOADED rows, never by the
   // filtered ones: a narrowed view that happens to be empty must not read as a
@@ -430,6 +465,25 @@ export function InstructorExamsSection() {
               })}
             </div>
           ))}
+
+          {/* EX-C2-0-SUSPEND-UI — TEMPORARY static informational cards, shown
+              only in the "by date" view, only for the matching selected date.
+              Never in the general or by-type view. Pure static text, no
+              fetched data. */}
+          {navMode === "date" && navDate === BEGINNER_PLACEHOLDER_DATE_A && (
+            <BeginnerPlaceholderCard
+              title="הדרכות מתחילים — קבוצה א"
+              dateLabel="יום ראשון, 2.8.2026"
+              timeLabel="16:00–19:30"
+            />
+          )}
+          {navMode === "date" && navDate === BEGINNER_PLACEHOLDER_DATE_B && (
+            <BeginnerPlaceholderCard
+              title="הדרכות מתחילים — קבוצה ב"
+              dateLabel="יום שני, 3.8.2026"
+              timeLabel="16:00–19:30"
+            />
+          )}
         </>
       )}
     </div>

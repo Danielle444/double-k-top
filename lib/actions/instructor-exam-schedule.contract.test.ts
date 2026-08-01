@@ -1220,6 +1220,13 @@ function approvedSlicePaths(): string[] {
     "lib/exam/" + "exam-read-scope" + "-core.test.ts",
     READERS_REL,
     "lib/actions/" + "trainee-exam-schedule" + ".ts",
+    // EX-C2-0-SUSPEND-UI, on the same terms: an EXACT path list, never a
+    // directory and never a glob. This slice's two new test files, proving the
+    // temporary beginner-row suspension and its two static placeholders on
+    // both the trainee and instructor screens. It adds no route, no action,
+    // no reader and no `lib/exam` file.
+    "lib/components/StudentExamsSectionBeginnerPlaceholder.test.tsx",
+    "lib/components/InstructorExamsSectionBeginnerPlaceholder.test.tsx",
     ];
 }
 
