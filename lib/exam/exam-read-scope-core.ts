@@ -113,7 +113,10 @@ import type {
   ExamPlanLoadOptions,
   ExamPlanPayload,
 } from "./exam-plan-loader-core";
-import type { ProjectionSession } from "./exam-schedule-projection-core";
+import {
+  listExamDates as listProjectionDates,
+  type ProjectionSession,
+} from "./exam-schedule-projection-core";
 import type { BeginnerDetail } from "./exam-live-beginner-adapter-core";
 import { isBeginnerSourceCourseLevel } from "./exam-beginner-course-scope-core";
 import type { ConflictSession } from "./exam-conflict-core";
@@ -859,4 +862,144 @@ export async function readTraineeExamDayWithDeps(
     },
     payload.storedAssignmentDetails,
   );
+}
+
+/**
+ * The TRAINEE reading of their WHOLE published exam schedule — every date, in
+ * ONE load.
+ *
+ * ===========================================================================
+ * IT IS THE DAY READER WITH THE DATE ARGUMENT REMOVED. NOTHING ELSE.
+ * ===========================================================================
+ * Every authorization step above is repeated here VERBATIM and in the SAME
+ * ORDER — the signed-session identity first, the NON-SELECTABLE course resolver
+ * second, the loader third under the very same `traineeExamPlanLoadOptions`,
+ * which carry BOTH publication gates and the Level-1 beginner containment. Not
+ * one of those decisions is re-implemented, relaxed or re-ordered: this function
+ * calls the same dependencies with the same arguments as the day reader, and the
+ * only thing it does not do is narrow to one date.
+ *
+ * The signature accepts NOTHING AT ALL. There is no `courseOfferingId`, no
+ * `studentId`, no `planId`, no date, no range and no publication option — a
+ * caller cannot name another trainee, another course, another plan, another
+ * window or a different publication rule, because none of them is representable.
+ *
+ * ===========================================================================
+ * ONE LOAD, THEN GROUPING — NEVER ONE READ PER DATE
+ * ===========================================================================
+ * `deps.loadPlan` is called EXACTLY ONCE, and `deps.fetchStudentDisplayNames`
+ * EXACTLY ONCE over the union of every visible row. What repeats per date is the
+ * committed PURE projection over that single already-loaded payload, which
+ * performs no IO whatsoever — so the number of dates a plan holds cannot change
+ * the number of queries this reader issues.
+ *
+ * REUSING THE COMMITTED DAY PROJECTION IS THE POINT. `projectTraineeExamDay`
+ * owns `isSelf`, the personal role, the exact personal times, the within-date
+ * order, the live-beginner state check and the exclusion of unresolved and
+ * contradictory rows. Running it once per date reuses ALL of that verbatim
+ * rather than growing a second, multi-date copy of rules that must have exactly
+ * one home — and it is why no timetable and no pairing arithmetic appears here.
+ *
+ * ORDER: dates ASCENDING (the committed `listExamDates` sorts the plan's own
+ * date tokens as plain strings, which is chronological for `YYYY-MM-DD`), then
+ * each date's rows in the projection's own locked order. So the result reads by
+ * date and then by time, with live beginner rows and stored blocks interleaved
+ * by the one rule the projection already applies to both.
+ *
+ * An unpublished plan, a missing plan, an unenrolled or ambiguous trainee, an
+ * anonymous session and a plan with no visible row all return the SAME empty
+ * DTO — byte-identical to the day reader's, carrying no plan id and no
+ * publication state.
+ */
+export async function readTraineeExamScheduleWithDeps(
+  deps: TraineeExamReadDeps,
+): Promise<TraineeExamDayDto> {
+  let studentId: string | null;
+  let verifiedId: string | null;
+  // The RESOLVED offering's level, captured beside its id — same as the day
+  // reader. `undefined` fails the beginner gate closed, so a trainee whose
+  // course cannot state a level reads no beginner row rather than another
+  // course's.
+  let verifiedLevel: unknown;
+  try {
+    // 1. The AUTHENTICATED trainee — the only trustworthy identity here.
+    studentId = idOrNull(await deps.requireTraineeId());
+    // 2. Their ONE authorized course. No argument exists to influence it.
+    const offering = await deps.resolveTraineeCourseOffering();
+    verifiedId = idOrNull(offering?.id);
+    verifiedLevel = offering?.level;
+  } catch (error) {
+    if (deps.isCourseContextDenial(error)) {
+      return emptyTraineeExamDayDto();
+    }
+    throw error;
+  }
+
+  if (studentId === null || verifiedId === null) {
+    return emptyTraineeExamDayDto();
+  }
+
+  // 3. Only now: the plan, under the LOCKED trainee options — the SAME producer
+  //    the day reader calls, with the same two arguments. An unpublished plan
+  //    produces the empty payload without a single content query.
+  const payload = await deps.loadPlan({
+    courseOfferingId: verifiedId,
+    options: traineeExamPlanLoadOptions(studentId, verifiedLevel),
+  });
+
+  // 4. The plan's OWN dates, ascending. Derived from the sessions the loader
+  //    already returned, so a date the publication gates hid is not among them
+  //    and cannot be asked for. The plan's declared Teaching-Practice source
+  //    dates are deliberately NOT unioned in: a source date with no visible row
+  //    would advertise a day this trainee may not see anything on.
+  const dates = listProjectionDates(payload.sessions);
+
+  // 5. The committed day projection, once per date, over the ONE loaded payload.
+  //    Pure and IO-free: this loop issues no query.
+  const projections = dates.map((date) =>
+    projectTraineeExamDay(payload.sessions, payload.storedDetails, date, studentId),
+  );
+
+  // 6. ONE batched student-name lookup, over the VISIBLE rows of every date —
+  //    so no id of a hidden, unpublished or excluded row is ever asked about,
+  //    and the query count does not grow with the number of dates.
+  const visibleSessions = projections.flatMap((projection) =>
+    projection.allRows.map((row) => row.session),
+  );
+  const studentIds = collectExamStudentDisplayIds(visibleSessions, payload.beginnerDetails);
+  const studentNames =
+    studentIds.length === 0 ? emptyNameMap() : await deps.fetchStudentDisplayNames(studentIds);
+
+  // 7. The narrow arena sibling — one scalar per stored session, nothing else.
+  const arenas = buildTraineeExamArenaLookup(payload.conflictSessions);
+
+  // 8. The committed narrowing, per date, with EXACTLY the arguments the day
+  //    reader passes. `instructorNames` is EMPTY on purpose, for the same reason
+  //    it is there: the responsible instructor's display name falls back to the
+  //    value the live adapter already carries, so this reader issues no
+  //    instructor query either.
+  const names = {
+    studentNames: usableNameMap(studentNames),
+    instructorNames: emptyNameMap(),
+  };
+  const allRows = projections.flatMap(
+    (projection) =>
+      buildTraineeExamDayDto(
+        projection,
+        payload.beginnerDetails,
+        arenas,
+        names,
+        payload.storedAssignmentDetails,
+      ).allRows,
+  );
+
+  const frozenAllRows = Object.freeze(allRows);
+  // THE invariant, unchanged and re-stated at this level: the personal view is a
+  // FILTER of the full view, sharing row object identity. It is never a second
+  // mapping, and `isSelf` is never re-derived here — it is the boolean the
+  // committed projection computed from the signed session's own student id.
+  return Object.freeze({
+    allRows: frozenAllRows,
+    myRows: Object.freeze(frozenAllRows.filter((row) => row.isSelf)),
+  });
 }
