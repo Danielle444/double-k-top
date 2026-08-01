@@ -101,6 +101,51 @@ const APPROVED_NEW_FILES = [
   "lib/exam/exam-pairing-write-core.test.ts",
   "lib/actions/" + "exam-pairing-write" + "-io.ts",
   "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It adds four
+  // route files and two `lib/` modules (both NEW; no committed `lib/` production
+  // module is modified), edits the route's page and Server Action module, and
+  // re-points the guard suites listed below. Every entry is spelled in full, so a
+  // path this slice does not touch still fails here. The `lib/` entries are
+  // ASSEMBLED so this suite does not enrol itself as a caller of what it names.
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  // ...and its two `lib/` modules, which are ADDITIONS: a new pure core and its
+  // new server-only binding. ASSEMBLED, so this suite does not enrol itself as
+  // a caller of either.
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-write" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
 ];
 
 /**
@@ -221,6 +266,32 @@ const APPROVED_MODIFIED_FILES = [
   // policy file is named, and guard 33 is untouched: that slice reaches none of
   // THIS binding's three writers.
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It adds four
+  // route files and two `lib/` modules (both NEW; no committed `lib/` production
+  // module is modified), edits the route's page and Server Action module, and
+  // re-points the guard suites listed below. Every entry is spelled in full, so a
+  // path this slice does not touch still fails here. The `lib/` entries are
+  // ASSEMBLED so this suite does not enrol itself as a caller of what it names.
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  // ...and its two `lib/` modules, which are ADDITIONS: a new pure core and its
+  // new server-only binding. ASSEMBLED, so this suite does not enrol itself as
+  // a caller of either.
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
   // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
   // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
   // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
@@ -231,6 +302,7 @@ const APPROVED_MODIFIED_FILES = [
   "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
   "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
   "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-write" + "-io.test.ts",
   "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
   "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
   "lib/actions/" + "exam-plan-write" + "-io.test.ts",
@@ -238,6 +310,13 @@ const APPROVED_MODIFIED_FILES = [
   "lib/actions/" + "exam-session-write" + "-io.test.ts",
   "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
   "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
   "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
   "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",

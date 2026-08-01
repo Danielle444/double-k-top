@@ -1155,6 +1155,24 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     // edited, and no schema, migration, auth, session, capability or policy file
     // appears.
     ["lib", "actions", "detailed-exam-assignment-write" + "-io.test.ts"].join("/"),
+      // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It adds four
+    // route files and two `lib/` modules (both NEW; no committed `lib/` production
+    // module is modified), edits the route's page and Server Action module, and
+    // re-points the guard suites listed below. Every entry is spelled in full, so a
+    // path this slice does not touch still fails here. The `lib/` entries are
+    // ASSEMBLED so this suite does not enrol itself as a caller of what it names.
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+    // ...and its two `lib/` modules, which are ADDITIONS and therefore live in the
+    // tolerated PRODUCTION list below rather than in this suites list.
     // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
     // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
     // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
@@ -1165,6 +1183,7 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
     "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
     "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-write" + "-io.test.ts",
     "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
     "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
     "lib/actions/" + "exam-plan-write" + "-io.test.ts",
@@ -1172,6 +1191,13 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     "lib/actions/" + "exam-session-write" + "-io.test.ts",
     "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
     "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-read" + "-dto.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
     "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
     "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
     "lib/exam/" + "create-exam-plan" + "-core.test.ts",
@@ -1198,6 +1224,8 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
   const P3_ACTIONS_TRACKED_PATH = `${ROUTE_DIR}/actions.ts`;
   const ASSIGNMENT_READ_CORE_PATH = ["lib", "exam", "admin-exam-assignment-read" + "-core.ts"].join("/");
   const ASSIGNMENT_READ_IO_PATH = ["lib", "actions", "exam-assignment-read" + "-io.ts"].join("/");
+  const WORKSPACE_EDIT_CORE_PATH = "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts";
+  const WORKSPACE_EDIT_IO_PATH = "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts";
   const TOLERATED_PRODUCTION = [
     // RE-POINTED by EX-ASG-LTD2-B2: the examinee create FORM and the route-local
     // assignment MESSAGE TABLE are production files of that same one route, and the
@@ -1209,6 +1237,21 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     P3_ACTIONS_TRACKED_PATH,
     ASSIGNMENT_READ_CORE_PATH,
     ASSIGNMENT_READ_IO_PATH,
+      // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It edits the
+    // route's Server Action module and adds three route-local production files:
+    // the examinee edit card, the closed workspace message module and the PURE
+    // workspace view module. It modifies NO committed `lib/` production module —
+    // its two `lib/` modules are ADDITIONS, which a modifications-only diff does
+    // not report — and no schema, migration, policy, auth or session file.
+    "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+    // EX-ADMIN-WORKSPACE-UX adds these two `lib/` modules, and modifies no
+    // committed `lib/` production module at all: a pure workspace edit/move core,
+    // and its server-only binding. ASSEMBLED, so this suite does not enrol itself
+    // as a caller of either.
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
     // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
     // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
     // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
@@ -1241,18 +1284,23 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
   // shared Server Action module and the assignment READ pair — not this core, not
   // its binding, and not a second route. Each one is named individually, so the
   // list cannot grow by accident.
-  assert.deepEqual(TOLERATED_PRODUCTION, [
-    // RE-POINTED by EX-ASG-LTD2-B2, in step with the list above: two more
-    // production files of that SAME one route — the examinee create form and the
-    // route-local assignment message table. Both are still under the ONE approved
-    // route directory, which the loop below re-checks path by path.
-    ["app", "admin", "courses", "[courseOfferingId]", "exams", "CreateExamAssignmentForm.tsx"].join("/"),
-    ["app", "admin", "courses", "[courseOfferingId]", "exams", "exam-assignment-messages.ts"].join("/"),
+  // The tolerated production files are EXACTLY this route's own, plus the two
+  // committed `lib/` modules an earlier slice edits and the two a neighbouring
+  // slice ADDS. Each is named individually, so the list cannot grow by accident,
+  // and the loop below re-checks every entry path by path.
+  assert.deepEqual([...TOLERATED_PRODUCTION].sort(), [
+    `${ROUTE_DIR}/CreateExamAssignmentForm.tsx`,
+    `${ROUTE_DIR}/EditExamAssignmentCard.tsx`,
+    `${ROUTE_DIR}/exam-assignment-messages.ts`,
+    `${ROUTE_DIR}/exam-workspace-messages.ts`,
+    `${ROUTE_DIR}/exam-workspace-view.ts`,
     P3_PAGE_TRACKED_PATH,
     P3_ACTIONS_TRACKED_PATH,
     ASSIGNMENT_READ_CORE_PATH,
     ASSIGNMENT_READ_IO_PATH,
-    // EX-BEGINNER-EXAM-READ, in step with TOLERATED_PRODUCTION above: the Level-1
+    WORKSPACE_EDIT_CORE_PATH,
+    WORKSPACE_EDIT_IO_PATH,
+    // EX-BEGINNER-EXAM-READ, in step with the suites list above: the Level-1
     // beginner containment gate plus the trainee-only assignment `isSelf` marker.
     // All five are lib/ read-pipeline modules, approved BY NAME in the predicate
     // below, and none of them is this core or its binding.
@@ -1261,11 +1309,13 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     "lib/exam/" + "exam-read-dto" + ".ts",
     "lib/exam/" + "exam-read-scope" + "-core.ts",
     "lib/exam/" + "exam-trainee-view" + "-core.ts",
-  ]);
+  ].sort());
   for (const path of TOLERATED_PRODUCTION) {
     const isApprovedLibModule =
       path === ASSIGNMENT_READ_CORE_PATH ||
       path === ASSIGNMENT_READ_IO_PATH ||
+      path === WORKSPACE_EDIT_CORE_PATH ||
+      path === WORKSPACE_EDIT_IO_PATH ||
       // EX-BEGINNER-EXAM-READ - each named EXACTLY, so no other lib/ module
       // qualifies and a prefix can never widen this predicate by accident.
       path === "lib/exam/" + "exam-beginner-course-scope" + "-core.ts" ||

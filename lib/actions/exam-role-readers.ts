@@ -102,6 +102,7 @@ import {
 } from "@/lib/course/actor-course-offering-core";
 import { loadExamPlan } from "@/lib/exam/exam-plan-loader-core";
 import {
+  adminExamPlanLoadOptions,
   readAdminExamPlanWithDeps,
   readInstructorExamPlanWithDeps,
   readTraineeExamDayWithDeps,
@@ -115,6 +116,10 @@ import {
   fetchInstructorDisplayNamesByIds,
   fetchStudentDisplayNamesByIds,
 } from "./exam-read-io";
+import {
+  readAdminExamWaveViewWithDeps,
+  type AdminExamWaveView,
+} from "@/lib/exam/admin-exam-wave-view-core";
 
 /**
  * The ONE real loader binding: the committed pure load order, wired to the
@@ -203,6 +208,44 @@ export async function readAdminExamPlan(
     loadPlan,
     fetchStudentDisplayNames: fetchStudentDisplayNamesByIds,
     fetchInstructorDisplayNames: fetchInstructorDisplayNamesByIds,
+  });
+}
+
+/**
+ * EX-ADMIN-WORKSPACE-UX (BLOCKER-1) — the ADMIN-ONLY WAVE VIEW of one course
+ * offering: which assignment is examined at which DERIVED moment, and who shares
+ * that moment.
+ *
+ * IT DERIVES NOTHING. It runs the SAME `loadPlan` binding, under the SAME
+ * `adminExamPlanLoadOptions`, that `readAdminExamPlan` above runs — so every
+ * clock value it publishes is the committed block timetable core's own output,
+ * reached through the committed adapter, and is identical to the time the
+ * instructor DTO and the trainee day show for the same block. The pure narrowing
+ * it hands the payload to only GROUPS those values; it computes none.
+ *
+ * WHY IT IS A SECOND FUNCTION rather than a wider `AdminExamReadDto`: that DTO
+ * is SHARED with the instructor reading, and widening it to carry a write target
+ * would change the instructor's contract for a need only the admin write surface
+ * has. This function is admin-only, and the shared DTO is untouched.
+ *
+ * The payload still never escapes this module: it is produced here, in the ONE
+ * place allowed to produce it, and handed straight to a pure narrowing that
+ * returns assignment ids and derived times and nothing else — no `studentId`, no
+ * `pairingIndex`, no name, no horse, no topic and no discipline.
+ */
+export async function readAdminExamWaveView(
+  courseOfferingId: string,
+): Promise<AdminExamWaveView> {
+  return readAdminExamWaveViewWithDeps(courseOfferingId, {
+    requireAdminCourseOffering,
+    loadPlan: (verifiedCourseOfferingId, verifiedCourseLevel) =>
+      loadPlan({
+        courseOfferingId: verifiedCourseOfferingId,
+        // The SAME committed options producer `readAdminExamPlan` above uses,
+        // derived from the SAME DB-verified level — so the beginner containment
+        // gate and every other load decision are identical for both readings.
+        options: adminExamPlanLoadOptions(verifiedCourseLevel),
+      }),
   });
 }
 

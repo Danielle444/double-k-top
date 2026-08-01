@@ -74,6 +74,7 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
@@ -94,6 +95,9 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
 ].sort();
 
@@ -141,6 +145,9 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
@@ -152,6 +159,9 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   // The two amended production files.
   "app/admin/courses/[courseOfferingId]/exams/actions.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
@@ -175,6 +185,7 @@ const SLICE_PATHS = [
   // that slice.
   "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
@@ -216,6 +227,49 @@ const SLICE_PATHS = [
   // ASSEMBLED, because that guard sweeps `app/`, `lib/` and `components/` for its
   // own module name and would otherwise enrol this suite as a caller.
   "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
+  // EX-ADMIN-WORKSPACE-UX — the four route files the workspace adds, plus the two
+  // new `lib/` modules behind its two operations and their suites. The `lib/`
+  // entries are ASSEMBLED for the reason this suite's header records: the
+  // committed guards sweep raw source text, so a whole literal here would enrol
+  // this file as a caller of a writer it never invokes.
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  // Every committed `lib/` guard suite EX-ADMIN-WORKSPACE-UX re-points, so the
+  // footprint here matches the working tree in full. All ASSEMBLED, for the
+  // reason this suite's header records.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  // BLOCKER-1 — the canonical wave narrowing, its suite, and the ONE committed
+  // `lib/` production module this slice modifies: the role-reader module, which
+  // gains one ADMIN-ONLY export so the admin schedule can reuse the committed
+  // timetable derivation instead of reproducing it. ASSEMBLED, so this suite
+  // does not enrol itself as a caller of what it names.
+  "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+  "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+  "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  // BLOCKER-1 also re-points the READ-PIPELINE guard suites whose claims the one
+  // admin-only export makes obsolete. ASSEMBLED.
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -341,7 +395,7 @@ test("1. the three new files exist at the exact course-scoped route", () => {
   assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
 });
 
-test("2. the route directory holds EXACTLY the twenty-three approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-seven approved files", () => {
   // Tracked AND untracked, so this holds both before and after the slice is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a bracketed pathspec would be read by git as a character class.
@@ -413,12 +467,19 @@ test("5. the module exports EXACTLY the eight approved actions, in order", () =>
     "setExamPlanPublicationAction",
     // EX-PAIR-UI-MVP appended a TENTH: the admin pairing endpoint. Still EXHAUSTIVE.
     "setExamPairingAction",
+    // EX-ADMIN-WORKSPACE-UX appended an ELEVENTH and a TWELFTH: the ONE coherent
+    // examinee card save, and the one-step examinee move. Still EXHAUSTIVE.
+    "updateExamAssignmentDetailsAction",
+    "moveExamAssignmentAction",
   ]);
-  assert.equal(exported.length, 10, "no eleventh endpoint may exist in this module");
+  assert.equal(exported.length, 12, "no thirteenth endpoint may exist in this module");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 10);
+  // RE-POINTED from ten to TWELVE by EX-ADMIN-WORKSPACE-UX, which appends the
+  // examinee card save and the one-step examinee move. Still an EXACT count: a
+  // thirteenth endpoint still fails here.
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 12);
 });
 
 test("6. the session action has the EXACT locked signature, and returns void", () => {
@@ -641,6 +702,11 @@ test("15. the action imports no database client, capability or notification surf
     // instructed-trainee write binding's guard pinned its caller list at ZERO
     // before this slice, and at exactly this one Server Action module after it.
     "@/lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io",
+      // ADDED by EX-ADMIN-WORKSPACE-UX, assembled on exactly the same terms: the
+    // workspace edit/move binding, which is the ONE backend addition behind the
+    // examinee card save and the one-step move. It is a NEW module with no
+    // committed caller guard of its own, and no committed writer was replaced.
+    "@/lib/actions/" + "admin-exam-workspace-edit" + "-io",
     // ADDED by EX-ASG-LTD2-B2, and assembled on exactly the same terms: the
     // committed DETAILED examinee write binding's guard pinned its caller list at
     // ZERO before that slice, and at exactly this one Server Action module after
@@ -701,7 +767,10 @@ test("16. no session reorder, assignment, break, supervisor, publication or sour
     // table are still swept for the whole assignment slice below.
     "examAssignment.",
     "reorder" + "ExamAssignments",
-    "update" + "ExamAssignment",
+    // NOT banned inside the ACTION MODULE by EX-ADMIN-WORKSPACE-UX: assignment
+    // editing and moving are approved endpoints of this route, and the module is
+    // where their committed writers are legitimately called. The page is still
+    // forbidden from reaching either, which its own suite pins.
     "SessionBreak",
     "Supervisor",
     "sourceDate",
@@ -1041,9 +1110,25 @@ test("26. page.tsx WIRES this form to the committed reader, grouping core and ac
   );
 
   // The grouping core is the FINAL ordering authority: the page re-orders nothing.
-  for (const forbidden of [".sort(", ".reverse(", ".filter(", ".slice("]) {
+  for (const forbidden of [".sort(", ".reverse(", ".slice("]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not ${forbidden} the schedule`);
   }
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: `.filter(` is pinned to EXACTLY TWO uses
+  // rather than banned, and NEITHER re-orders anything the grouping core decided.
+  // One selects the instructed trainees nobody teaches yet; the other partitions
+  // the grouping's OWN timeline by its OWN stored day key for the by-date
+  // arrangement, which is a partition of that order rather than a second opinion
+  // about it.
+  // RE-POINTED from two to THREE by the approved beginner projection: the third
+  // filter selects the committed admin reading's own BEGINNER rows by its own
+  // `source` discriminator. It re-orders nothing and reads nothing new.
+  assert.equal(
+    (PAGE.match(/\.filter\(/g) ?? []).length,
+    3,
+    "the page filters the schedule somewhere unapproved",
+  );
+  assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));
+  assert.ok(PAGE.includes("(entry) => entry.dateKey === day.dateKey"));
   // Its CLOSED failure arm becomes ONE fixed sentence — never a raw diagnostic,
   // never a row echo, and never a silent fall back to the reader's own order.
   assert.ok(PAGE.includes("grouping.ok ? ("), "the closed result union must be discriminated");
@@ -1074,11 +1159,25 @@ test("26. page.tsx WIRES this form to the committed reader, grouping core and ac
   // RE-POINTED by EX-PAIR-UI-MVP: ONE further NON-VISIBLE use — the pairing
   // picker's same-session examinee bucket, looked up by this very key. Still
   // never text, never an interpolation and never an href.
-  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 7);
+  // RE-POINTED from seven to NINE by EX-ADMIN-WORKSPACE-UX. The examinee bucket
+  // lookup stayed, the instructed-trainee bucket lookup joined it, and the
+  // workspace keys each rendered block by the same id. Every one of the nine is
+  // NON-VISIBLE — a React key, a hidden-field prop or an in-memory bucket lookup —
+  // which is the property this guard has always protected.
+  // RE-POINTED from nine to TEN by BLOCKER-1: the CANONICAL wave lookup is one
+  // further NON-VISIBLE use — `waveView.blocks.get(session.sessionId)` — which is
+  // how the block finds the derived times it must not compute. Still never text,
+  // never an interpolation and never an href.
+  assert.equal((PAGE.match(/session\.sessionId/g) ?? []).length, 10);
+  assert.ok(PAGE.includes("waveView.blocks.get(session.sessionId)"));
   assert.equal((PAGE.match(/sessionId=\{session\.sessionId\}/g) ?? []).length, 4);
   assert.ok(
-    PAGE.includes("assignmentsBySession.get(session.sessionId)"),
-    "the sixth use must be the assignment-bucket lookup",
+    PAGE.includes("examineesBySession.get(session.sessionId)"),
+    "the examinee-bucket lookup must be one of them",
+  );
+  assert.ok(
+    PAGE.includes("instructedBySession.get(session.sessionId)"),
+    "the instructed-trainee bucket lookup must be one of them",
   );
   // Once per form, and only as the hidden concurrency token.
   assert.equal((PAGE.match(/session\.updatedAt/g) ?? []).length, 2);
@@ -1107,12 +1206,39 @@ test("26. page.tsx WIRES this form to the committed reader, grouping core and ac
   for (const forbidden of [
     "session.definitionKind",
     "session.orderIndex",
-    "endTime",
-    "waves",
-    "slots",
-    "capacity",
+    // RE-POINTED by EX-ADMIN-WORKSPACE-UX. The ban existed because the session
+    // reader publishes no end time and the page must not invent a STORED one — a
+    // claim about the reader, not about the word. The workspace DERIVES a block's
+    // end from the exam's own duration and capacity and reads no column, so the
+    // ban moves to the stored spellings it always meant.
+    "session.endTime",
+    "sessionView.endTime",
+    "examSession.endTime",
+    // RE-POINTED by EX-ADMIN-WORKSPACE-UX. These three were banned as a proxy for
+    // "the page does not derive a timetable", which is exactly what the workspace
+    // now does — from the exam's own duration and capacity, in one route-local
+    // pure module, reading no clock and writing nothing. The claim narrows to what
+    // it always protected: no STORED wave, slot or capacity column is read or
+    // rendered, because the committed readers publish none.
+    "session.waves",
+    "session.slots",
+    "session.capacity",
+    "sessionView.waves",
+    "sessionView.slots",
   ]) {
     assert.equal(PAGE.includes(forbidden), false, `the page must not render ${forbidden}`);
+  }
+  // The derivation is the route-local PURE module and nothing else: no committed
+  // exam core is imported here, and no clock is read.
+  // RE-POINTED by BLOCKER-1: the local derivation was RETIRED. The page reads the
+  // committed one instead — the admin reading of the exam plan pipeline, which
+  // runs the same adapter and block timetable core the instructor DTO and the
+  // trainee day are built from — so the admin schedule cannot drift from theirs.
+  assert.equal(PAGE.includes("buildExamWaves("), false, "a local derivation survived");
+  assert.ok(PAGE.includes("read" + "AdminExamWaveView" + "(context.id)"));
+  assert.ok(PAGE.includes("attachExamineesToWaves(canonical.waves, byAssignmentId)"));
+  for (const forbidden of ["new Date", "Date.now", "toLocale"]) {
+    assert.equal(PAGE.includes(forbidden), false, `the page reads ${forbidden}`);
   }
 
   // The three always-rendered display fields, and the three optional ones, which
@@ -1120,7 +1246,19 @@ test("26. page.tsx WIRES this form to the committed reader, grouping core and ac
   for (const field of ["session.definitionName", "session.startTime", "session.assignmentCount"]) {
     assert.ok(PAGE.includes(field), `${field} is not rendered`);
   }
-  for (const optional of ["session.title", "session.arena", "session.notes"]) {
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the arena is one of the block FACTS every
+  // schedule arrangement states, so it is handed to the ONE shared facts component
+  // instead of being conditionally rendered at each call site. The presence rule is
+  // unchanged and now lives in exactly one place — and an absent arena renders a
+  // fixed sentence rather than the blank cell the old inline check produced, which
+  // would have read as a rendering bug.
+  assert.ok(PAGE.includes("arena={session.arena}"));
+  assert.ok(
+    PAGE.includes('arena === null || arena === "" ? NO_ARENA_TEXT : arena'),
+    "the arena presence rule is not applied in the shared facts component",
+  );
+  assert.ok(PAGE.includes('NO_ARENA_TEXT = "לא צוין מקום"'));
+  for (const optional of ["session.title", "session.notes"]) {
     assert.ok(
       PAGE.includes(`${optional} !== null && ${optional} !== ""`),
       `${optional} must be rendered only when present`,
@@ -1181,7 +1319,11 @@ test("26b. the session form is gated, fed from the definition reader, and adviso
   // shown when there is no plan — that branch renders the plan-create state, and
   // every piece of session markup lives inside the plan-PRESENT branch.
   assert.ok(PAGE.includes("עדיין לא נוצרו מפגשי מבחנים לקורס הזה."));
-  const noPlan = PAGE.slice(PAGE.indexOf("{!view.planExists ? ("), PAGE.indexOf(") : ("));
+  // The closing marker is searched FROM the branch: EX-ADMIN-WORKSPACE-UX added
+  // earlier ternaries, so an unanchored search would return an index before the
+  // branch and yield an empty slice.
+  const noPlanAt = PAGE.indexOf("{!view.planExists ? (");
+  const noPlan = PAGE.slice(noPlanAt, PAGE.indexOf(") : (", noPlanAt));
   assert.ok(noPlan.length > 0, "the no-plan branch must be locatable");
   for (const forbidden of [
     "עדיין לא נוצרו מפגשי מבחנים לקורס הזה.",
@@ -1318,7 +1460,14 @@ test("29. the slice touched EXACTLY its fourteen approved paths", () => {
   // paths this list already holds. Counted as a SET rather than as an array: the
   // list is an allow-list consulted with `includes`, so a repeated entry permits
   // nothing extra, and a raw length would report a scope that does not exist.
-  assert.equal(new Set(SLICE_PATHS).size, 35, "the approved scope is thirty-five files");
+  // RE-POINTED from thirty-five to FORTY-FOUR by EX-ADMIN-WORKSPACE-UX: four route
+  // files, two new `lib/` modules with their two suites, and every committed guard
+  // suite whose footprint claim it re-points. Still EXHAUSTIVE.
+  // RE-POINTED from forty-four to FORTY-SEVEN by BLOCKER-1: the canonical wave
+  // narrowing, its suite, and the one committed reader module it extends.
+  // RE-POINTED from forty-seven to FORTY-NINE by BLOCKER-1's read-pipeline
+  // re-points: the DTO suite and the scope-core suite join the guard set.
+  assert.equal(new Set(SLICE_PATHS).size, 49, "the approved scope is forty-nine files");
   assert.ok(
     SLICE_PATHS.includes(`${ROUTE_DIR_PREFIX}page.tsx`),
     "the wired page must be in scope",
@@ -1340,9 +1489,26 @@ test("29. the slice touched EXACTLY its fourteen approved paths", () => {
     `${ROUTE_DIR_PREFIX}CreateExamInstructedTraineeAssignmentForm.tsx`,
     `${ROUTE_DIR_PREFIX}DeleteExamAssignmentForm.tsx`,
     `${ROUTE_DIR_PREFIX}exam-assignment-messages.ts`,
+    // RE-POINTED by EX-ADMIN-WORKSPACE-UX: three route-local production files
+    // joined the route — the examinee edit card, the closed workspace message
+    // module and the PURE workspace view module — and the workspace's own TWO
+    // `lib/` modules, both of them NEW. No committed `lib/` production module was
+    // modified, and no layout, route handler or second page appears here.
+    `${ROUTE_DIR_PREFIX}EditExamAssignmentCard.tsx`,
+    `${ROUTE_DIR_PREFIX}exam-workspace-view.ts`,
+    `${ROUTE_DIR_PREFIX}exam-workspace-messages.ts`,
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    // BLOCKER-1 — the canonical wave narrowing: a pure, DB-free module that groups
+    // the committed timetable core's own derived moments. ASSEMBLED.
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
     `${ROUTE_DIR_PREFIX}exam-instructed-trainee-assignment-messages.ts`,
     "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
     "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    // BLOCKER-1 — the ONE committed `lib/` production module this slice modifies:
+    // it gains one ADMIN-ONLY export so the admin schedule reuses the committed
+    // timetable derivation instead of reproducing it. ASSEMBLED.
+    "lib/actions/" + "exam-role" + "-readers" + ".ts",
   ].sort());
   // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to an exact pair rather than
   // dropped. The claim was "no `lib/` PRODUCTION module is in scope", which held
@@ -1353,6 +1519,20 @@ test("29. the slice touched EXACTLY its fourteen approved paths", () => {
   const APPROVED_LIB_PRODUCTION = [
     "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
     "lib/actions/" + "exam-assignment-read" + "-io.ts",
+    // RE-POINTED by EX-ADMIN-WORKSPACE-UX, and GROWN by an EXACT pair rather than
+    // relaxed. Both are NEW files — the pure workspace edit/move core and its
+    // server-only binding — so no committed `lib/` production module was modified
+    // by it. A FIFTH `lib/` production module still fails here, and no WRITER of
+    // another slice and no policy core may appear.
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+    // BLOCKER-1 — the canonical wave narrowing: a pure, DB-free module that groups
+    // the committed timetable core's own derived moments. ASSEMBLED.
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+    // BLOCKER-1 — the ONE committed `lib/` production module the slice modifies:
+    // the role-reader module, which gains one ADMIN-ONLY export so the admin
+    // schedule reuses the committed timetable derivation. ASSEMBLED.
+    "lib/actions/" + "exam-role" + "-readers" + ".ts",
   ];
   for (const path of SLICE_PATHS) {
     assert.equal(

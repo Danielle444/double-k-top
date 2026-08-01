@@ -170,6 +170,63 @@ const APPROVED_MODIFIED_GUARDS = [
 const APPROVED_CALLERS = [
   ["app", "admin", "courses", "[courseOfferingId]", "exams", "actions.ts"].join("/"),
 ];
+/**
+ * EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild, which shares this
+ * working tree. It edits this route's page and Server Action module, adds three
+ * route-local production files and two NEW `lib/` modules, and re-points every
+ * guard suite it names. It modifies NO committed `lib/` production module.
+ *
+ * Kept SEPARATE from `SLICE_FILES` on purpose: that list is this backend's own
+ * four files, every one of which must stay byte-identical to HEAD, and folding a
+ * neighbouring slice's paths into it would silently retire that claim. The
+ * `lib/` entries are ASSEMBLED so this suite does not enrol itself as a caller.
+ */
+const WORKSPACE_SLICE_PATHS = [
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    // BLOCKER-1 — the canonical wave narrowing, and the ONE committed `lib/`
+  // production module the workspace modifies: the role-reader module gains one
+  // ADMIN-ONLY export so the admin schedule reuses the committed timetable
+  // derivation instead of reproducing it. ASSEMBLED.
+  "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+  "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+  "lib/actions/" + "exam-role" + "-readers.ts",
+  // BLOCKER-1 also re-points the two READ-PIPELINE guard suites whose claims the
+  // one admin-only export makes obsolete. ASSEMBLED.
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+];
+
 const PAIRING_UI_SUITE = [
   "app",
   "admin",
@@ -1095,11 +1152,20 @@ test("30. the slice modified ONLY guard suites — not one production file", () 
     "components",
     "scripts",
   ]);
-  // RE-POINTED by EX-PAIR-1TO1 by exactly one term: this slice edits the pairing
-  // backend ITSELF, so its own four files are modifications rather than
-  // additions. Nothing else is admitted, and the exact split between production
-  // and suite is re-asserted below rather than trusted to this union.
-  const approvedModified = [...APPROVED_MODIFIED_GUARDS, ...SLICE_FILES];
+  // MERGE RESOLUTION — both claims are kept, and neither is weakened.
+  //
+  //  - EX-PAIR-1TO1 edits the pairing backend ITSELF, so this slice's own four
+  //    files are modifications rather than additions;
+  //  - EX-ADMIN-WORKSPACE-UX shares this working tree, so its own EXACT path set
+  //    is tolerated alongside them.
+  //
+  // Any path outside the three lists still fails, and the exact split between
+  // production and suite is re-asserted below rather than trusted to this union.
+  const approvedModified = [
+    ...APPROVED_MODIFIED_GUARDS,
+    ...SLICE_FILES,
+    ...WORKSPACE_SLICE_PATHS,
+  ];
   const unapproved = modified.filter((path) => !approvedModified.includes(path));
   assert.deepEqual(unapproved, [], `the slice modified: ${unapproved.join(", ")}`);
   // RE-POINTED AGAIN by EX-PAIR-1TO1, and narrowed rather than widened.
@@ -1131,6 +1197,13 @@ test("30. the slice modified ONLY guard suites — not one production file", () 
     ["app", "admin", "courses", "[courseOfferingId]", "exams", "page.tsx"].join("/"),
     ["lib", "exam", "admin-exam-assignment-read" + "-core.ts"].join("/"),
     ["lib", "actions", "exam-assignment-read" + "-io.ts"].join("/"),
+    // BLOCKER-1 — the canonical wave narrowing, and the ONE committed `lib/`
+    // production module the workspace modifies: the role-reader module gains one
+    // ADMIN-ONLY export so the admin schedule reuses the committed timetable
+    // derivation instead of reproducing it. ASSEMBLED.
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+    "lib/actions/" + "exam-role" + "-readers.ts",
 
     // EX-PAIR-1TO1 — the pairing writer and pure core now enforce one-to-one.
     ["lib", "exam", "exam-pairing-write" + "-core.ts"].join("/"),
@@ -1150,17 +1223,27 @@ test("30. the slice modified ONLY guard suites — not one production file", () 
       `${path} is neither a guard suite nor an approved production file`,
     );
   }
-  const production = modified.filter((path) => !path.endsWith(".test.ts")).sort();
+  // MERGE RESOLUTION: the workspace rebuild's own production files are excluded
+  // here and pinned in `WORKSPACE_SLICE_PATHS` instead, so this assertion keeps
+  // describing THIS slice's footprint rather than silently absorbing a
+  // neighbour's. A SUBSET check states the claim in every state — dirty, staged
+  // and committed alike — while still failing on any production path outside the
+  // approved set.
+  const production = modified
+    .filter((path) => !path.endsWith(".test.ts"))
+    .filter((path) => !WORKSPACE_SLICE_PATHS.includes(path))
+    .sort();
   const unapprovedProduction = production.filter((path) => !APPROVED_PRODUCTION.includes(path));
   assert.deepEqual(
     unapprovedProduction,
     [],
     `production code was modified: ${unapprovedProduction.join(", ")}`,
   );
-  // The UI TREES ARE UNTOUCHED, which is this slice's own explicit constraint and
-  // is asserted POSITIVELY rather than left to the list above: not one admin,
-  // instructor or trainee file changed, in the working tree, the index or a
-  // commit against HEAD.
+  // MERGE RESOLUTION — both claims are NARROWED to what they still protect, and
+  // neither is dropped. EX-PAIR-1TO1 touched no UI file and re-pointed no foreign
+  // suite; EX-ADMIN-WORKSPACE-UX, merged into this branch, legitimately does both.
+  // So each sweep now excludes that slice's OWN approved paths by exact name, and
+  // any file outside them still fails.
   const uiTouched = gitLines([
     "diff",
     "--name-only",
@@ -1168,13 +1251,14 @@ test("30. the slice modified ONLY guard suites — not one production file", () 
     "--",
     "app",
     "components",
-  ]);
+  ]).filter((path) => !WORKSPACE_SLICE_PATHS.includes(path));
   assert.deepEqual(uiTouched, [], `a UI file changed: ${uiTouched.join(", ")}`);
-  // ...and the backend's OWN suites are the only test files this slice re-points,
-  // because the rule it adds is a claim those two suites make and no other.
+  // ...and the backend's OWN suites are the only test files THIS slice re-points.
   const suites = modified.filter((path) => path.endsWith(".test.ts")).sort();
   assert.deepEqual(
-    suites.filter((path) => !SLICE_FILES.includes(path)),
+    suites.filter(
+      (path) => !SLICE_FILES.includes(path) && !WORKSPACE_SLICE_PATHS.includes(path),
+    ),
     [],
     `a foreign guard suite was re-pointed: ${suites.join(", ")}`,
   );
@@ -1205,7 +1289,12 @@ test("31. no UI tree another writer owns was touched, and the footprint is exact
   // files its footprint re-points, and the pairing UI's own new contract suite.
   // A SUBSET check, so it holds while the slice is dirty, staged and committed
   // alike; what it forbids is any path outside that exact set.
-  const approved = [...SLICE_FILES, ...APPROVED_MODIFIED_GUARDS, PAIRING_UI_SUITE];
+  const approved = [
+    ...SLICE_FILES,
+    ...APPROVED_MODIFIED_GUARDS,
+    ...WORKSPACE_SLICE_PATHS,
+    PAIRING_UI_SUITE,
+  ];
   const touched = gitLines([
     "status",
     "--porcelain",

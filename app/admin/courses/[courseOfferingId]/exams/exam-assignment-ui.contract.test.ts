@@ -76,6 +76,7 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
@@ -96,6 +97,9 @@ const FINAL_ROUTE_FILES = [
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/page.tsx",
 ].sort();
 
@@ -131,6 +135,9 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
@@ -186,6 +193,49 @@ const SLICE_PATHS = [
   // and `components/` for its own module name, so spelling it whole here would
   // enrol THIS suite in the very allow-list it re-points.
   "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
+  // EX-ADMIN-WORKSPACE-UX — the four route files the workspace adds, plus the two
+  // new `lib/` modules behind its two operations and their suites. The `lib/`
+  // entries are ASSEMBLED for the reason this suite's header records: the
+  // committed guards sweep raw source text, so a whole literal here would enrol
+  // this file as a caller of a writer it never invokes.
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  // Every committed `lib/` guard suite EX-ADMIN-WORKSPACE-UX re-points, so the
+  // footprint here matches the working tree in full. All ASSEMBLED, for the
+  // reason this suite's header records.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  // BLOCKER-1 — the canonical wave narrowing, its suite, and the ONE committed
+  // `lib/` production module this slice modifies: the role-reader module, which
+  // gains one ADMIN-ONLY export so the admin schedule can reuse the committed
+  // timetable derivation instead of reproducing it. ASSEMBLED, so this suite
+  // does not enrol itself as a caller of what it names.
+  "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+  "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+  "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  // BLOCKER-1 also re-points the READ-PIPELINE guard suites whose claims the one
+  // admin-only export makes obsolete. ASSEMBLED.
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -230,6 +280,29 @@ function gitLines(args: readonly string[]): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
+}
+
+/**
+ * The commit this branch was last merged UP TO, so a footprint guard keeps
+ * measuring the slice after it is committed.
+ *
+ * `git diff HEAD` answers "what is still uncommitted", which silently empties
+ * — and so silently passes — the moment the slice is committed locally. The
+ * merge base against `main` answers "what does this branch change", which is
+ * the question these guards were always asking.
+ */
+function branchBase(): string {
+  const result = spawnSync("git", ["merge-base", "main", "HEAD"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, "git merge-base main HEAD failed");
+  return (result.stdout ?? "").trim();
+}
+
+/** Every path under `dir` this BRANCH modifies, committed or not. */
+function branchModified(dir: string): string[] {
+  return gitLines(["diff", "--name-only", "--diff-filter=MDRT", branchBase(), "--", dir]).sort();
 }
 
 /**
@@ -361,7 +434,7 @@ test("1. the four new files exist at the exact course-scoped route", () => {
   assert.ok(existsSync(join(REPO_ROOT, PAGE_REL)), "the page is missing");
 });
 
-test("2. the route directory holds EXACTLY the twenty-three approved files", () => {
+test("2. the route directory holds EXACTLY the twenty-seven approved files", () => {
   // Tracked AND untracked, so this holds both before and after the slice is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a bracketed pathspec would be read by git as a character class.
@@ -431,12 +504,19 @@ test("5. the module exports EXACTLY the eight approved actions, in order", () =>
     "setExamPlanPublicationAction",
     // EX-PAIR-UI-MVP appended a TENTH: the admin pairing endpoint. Still EXHAUSTIVE.
     "setExamPairingAction",
+    // EX-ADMIN-WORKSPACE-UX appended an ELEVENTH and a TWELFTH: the ONE coherent
+    // examinee card save, and the one-step examinee move. Still EXHAUSTIVE.
+    "updateExamAssignmentDetailsAction",
+    "moveExamAssignmentAction",
   ]);
-  assert.equal(exported.length, 10, "no eleventh endpoint may exist in this module");
+  assert.equal(exported.length, 12, "no thirteenth endpoint may exist in this module");
   for (const token of ["export const", "export default", "export {", "export type"]) {
     assert.equal(ACTIONS.includes(token), false, `the module also declares ${token}`);
   }
-  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 10);
+  // RE-POINTED from ten to TWELVE by EX-ADMIN-WORKSPACE-UX, which appends the
+  // examinee card save and the one-step examinee move. Still an EXACT count: a
+  // thirteenth endpoint still fails here.
+  assert.equal((ACTIONS.match(/export async function /g) ?? []).length, 12);
 });
 
 test("6. both new actions have the EXACT locked signature, and return void", () => {
@@ -781,9 +861,6 @@ test("19. the trainee picker is a NATIVE select showing ONLY the display name", 
   for (const forbidden of [
     "identityNumber",
     "phone",
-    "parent",
-    "guardian",
-    "groupName",
     "subgroup",
     "enrollment",
   ]) {
@@ -905,21 +982,52 @@ test("24. the page reads each committed reader EXACTLY once — never per sessio
 });
 
 test("25. the page groups assignments with a Map and a for...of, and never re-sorts", () => {
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the ONE pass now fills THREE buckets
+  // instead of two — examinees, instructed trainees, and the map from an examinee
+  // to the ONE trainee it teaches. All three still APPEND in arrival order, which
+  // is what preserves the committed reader's own total order.
   assert.ok(
-    PAGE.includes("const assignmentsBySession = new Map<string, AdminExamAssignmentRow[]>();"),
+    PAGE.includes("const examineesBySession = new Map<string, AdminExamAssignmentRow[]>();"),
   );
+  assert.ok(
+    PAGE.includes("const instructedBySession = new Map<string, AdminExamAssignmentRow[]>();"),
+  );
+  assert.ok(PAGE.includes("const teachesByExaminee = new Map<string, AdminExamAssignmentRow>();"));
   assert.ok(PAGE.includes("for (const assignment of assignmentView.assignments) {"));
-  // The committed reader already imposed the total order — session, then position,
-  // then assignment id — and a for...of that APPENDS preserves it.
-  for (const forbidden of [".sort(", ".reverse(", ".filter(", ".slice("]) {
+  assert.equal(
+    (PAGE.match(/for \(const assignment of assignmentView\.assignments\)/g) ?? []).length,
+    1,
+    "the rows are walked more than once",
+  );
+  for (const forbidden of [".sort(", ".reverse(", ".slice("]) {
     assert.equal(PAGE.includes(forbidden), false, `the page uses ${forbidden}`);
   }
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: `.filter(` is pinned to EXACTLY TWO uses
+  // rather than banned, and NEITHER re-orders anything the reader decided. One
+  // selects the instructed trainees nobody teaches yet; the other partitions the
+  // day grouping's OWN timeline by its OWN stored day key.
+  // RE-POINTED from two to THREE by the approved beginner projection: the third
+  // filter selects the committed admin reading's own BEGINNER rows by its own
+  // `source` discriminator. It re-orders nothing and reads nothing new.
+  assert.equal((PAGE.match(/\.filter\(/g) ?? []).length, 3);
+  assert.ok(PAGE.includes("(row) => row.pairedExamineeAssignmentId === null"));
+  assert.ok(PAGE.includes("(entry) => entry.dateKey === day.dateKey"));
+
 });
 
 test("26. every assignment renders under its OWN session, with every role kept", () => {
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the ONE bucket became TWO, both keyed by
+  // the SAME session id, because the workspace renders the two roles in different
+  // PLACES — an examinee gets a card in its wave, and an instructed trainee travels
+  // inside the examinee it teaches or, when nobody teaches it yet, in its own
+  // explicitly labelled roster. Neither is ever dropped.
   assert.ok(
-    PAGE.includes("assignmentsBySession.get(session.sessionId) ?? NO_ASSIGNMENTS"),
-    "the rows must be looked up by the session they belong to",
+    PAGE.includes("examineesBySession.get(session.sessionId) ?? NO_ASSIGNMENTS"),
+    "the examinee rows must be looked up by the session they belong to",
+  );
+  assert.ok(
+    PAGE.includes("instructedBySession.get(session.sessionId) ?? NO_ASSIGNMENTS"),
+    "the instructed rows must be looked up by the session they belong to",
   );
   // An INSTRUCTED_TRAINEE row this surface cannot create is still SHOWN: hiding it
   // would make a session look emptier than it is and disagree with its own count.
@@ -939,34 +1047,53 @@ test("26. every assignment renders under its OWN session, with every role kept",
   //   - the predicate decides what a row SAYS. It is never the row's condition:
   //     the `<li>` and its name, horse, role label and removal control are outside
   //     it entirely.
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX, and NARROWED again to the rule itself.
+  // The comparison is now the BUCKETING predicate rather than a row-level display
+  // test: it decides which of the two buckets a row joins, and both buckets are
+  // rendered in full. It still may not gate whether a row appears at all.
   assert.equal(
     (PAGE.match(/=== "EXAMINEE"/g) ?? []).length,
     1,
-    "exactly one role comparison may exist, and it is the row-level display test",
+    "exactly one role comparison may exist, and it is the bucketing predicate",
   );
   assert.ok(
-    PAGE.includes('const isExaminee = assignment.role === "EXAMINEE";'),
-    "the one role comparison must be the row-level display predicate",
+    PAGE.includes('if (assignment.role === "EXAMINEE") {'),
+    "the one role comparison must be the bucketing predicate",
   );
+  // Both buckets are rendered, and the role LABEL still exists for each of them.
+  assert.ok(PAGE.includes("wave.examinees.map((examinee) => {"));
+  assert.ok(PAGE.includes("unlinkedInstructed.map((assignment) => ("));
   // RE-POINTED by EX-PAIR-UI-MVP, and NARROWED to an EXACT COUNT rather than
   // dropped. The ban was correct while no affordance belonged to the second
   // role. The pairing control belongs to it and to no other, so the page has to
   // ask the question exactly once — to decide what ONE row RENDERS, never
   // whether a row, its role label or its removal control appears at all, which
   // the untouched list assertions above still prove.
+  // RE-POINTED to ZERO by EX-ADMIN-WORKSPACE-UX. The one branch on the second role
+  // was the standalone pairing control, which moved onto the examinee's card — so
+  // the page no longer asks the question at all: an instructed trainee reaches the
+  // screen through the bucket it was appended to, never through a role test.
   assert.equal(
     (PAGE.match(/=== "INSTRUCTED_TRAINEE"/g) ?? []).length,
-    1,
-    "the page must branch on the second role exactly once",
+    0,
+    "the page must not branch on the second role at all",
+  );
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the ONE list became TWO, and BOTH are
+  // mapped in full — the examinees through their waves, the unlinked instructed
+  // trainees through their own roster. No row of either role is filtered out of
+  // its own list.
+  assert.ok(
+    PAGE.includes("{wave.examinees.map((examinee) => {"),
+    "every bucketed examinee must still be mapped",
   );
   assert.ok(
-    PAGE.includes("{sessionAssignments.map((assignment) => {"),
-    "every bucketed row must still be mapped",
+    PAGE.includes("{unlinkedInstructed.map((assignment) => ("),
+    "every unlinked instructed trainee must still be mapped",
   );
   assert.equal(
-    /isExaminee\s*(\?|&&)\s*\(?\s*<li/.test(squash(PAGE)),
+    /role\s*(\?|&&)\s*\(?\s*<li/.test(squash(PAGE)),
     false,
-    "the role predicate must not decide whether a row is rendered",
+    "a role predicate must not decide whether a row is rendered",
   );
   // The empty state is a fixed sentence, not a blank block.
   assert.ok(PAGE.includes("עדיין אין חניכים משובצים ליחידת המבחן הזו."));
@@ -991,8 +1118,19 @@ test("27. the horse placeholder is safe, and NO id or personal detail is rendere
   );
   assert.equal(PAGE.includes("assignment.orderIndex"), false, "the order position is rendered");
   assert.equal(PAGE.includes("assignment.studentId"), false, "a Student.id reaches the page");
-  for (const forbidden of ["identityNumber", "parentPhone", "guardian", "subgroup", "enrollment"]) {
+  // RE-POINTED by the approved READ-ONLY BEGINNER PROJECTION. A beginner exam is a
+  // children's lesson, and the merged admin reading already decided an operational
+  // role may see the child, the horse and the parent to call — that is what the
+  // manager running the day needs. The beginner parent field therefore leaves this
+  // ban. Everything the ban existed for is unchanged: no identity number, no
+  // guardian record, no subgroup and no enrolment is reachable, and the assertion
+  // below pins that the ONLY phone on the page is the beginner parent one, so no
+  // TRAINEE contact detail can arrive behind this narrowing.
+  for (const forbidden of ["identityNumber", "guardian", "subgroup", "enrollment"]) {
     assert.equal(PAGE.includes(forbidden), false, `the page renders ${forbidden}`);
+  }
+  for (const phone of PAGE.match(/\w*[Pp]hone\w*/g) ?? []) {
+    assert.ok(/^(?:child\.)?parentPhone$/.test(phone), `a non-beginner phone is rendered: ${phone}`);
   }
 });
 
@@ -1035,11 +1173,23 @@ test("28. the create form is hidden ONLY when the requirements are unknown", () 
   // requiresInstructedTrainee is still deliberately NOT consulted by that gate: the
   // instructed trainee is a SECOND row written by a separate operation, and it never
   // blocks the examinee.
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX, and NARROWED to the exact variable the
+  // rule has always been about. `requiresInstructedTrainee` still may not enter
+  // the EXAMINEE CREATE gate — asserted against that gate's own name below — but
+  // it legitimately decides whether the examinee's card offers a TEACHING-LINK
+  // picker, which is a different question about a different control.
   assert.equal(
-    /requirementsUnknown[\s\S]{0,200}requiresInstructedTrainee/.test(flat),
+    /const requirementsUnknown[\s\S]{0,120}requiresInstructedTrainee/.test(flat),
     false,
     "requiresInstructedTrainee must not gate the examinee create form",
   );
+  assert.ok(
+    flat.includes(
+      "const showInstructedTraineeForm = requirements !== undefined && requirements.requiresInstructedTrainee;",
+    ),
+    "the instructed-trainee flag must have its own separate gate",
+  );
+
   // The two flags reach the form as PROPS — read from the same already-loaded
   // definition requirements, on the branch where they are provably known.
   assert.ok(
@@ -1051,7 +1201,15 @@ test("28. the create form is hidden ONLY when the requirements are unknown", () 
   // The requirements come from the DEFINITION reader already loaded — no second
   // query, and no widening of the session reader, which reports neither flag.
   assert.ok(PAGE.includes("for (const definition of view.definitions) {"));
-  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 4, "a fifth reader entered the page");
+  // RE-POINTED from four to FIVE by BLOCKER-1. The fifth is the CANONICAL
+  // timetable read: the admin reading of the committed exam plan pipeline, which
+  // is what lets this page show the derived times instead of reproducing them.
+  // It is the same `loadPlan`, adapter and timetable core the instructor DTO and
+  // the trainee day are built from, so no second derivation exists anywhere.
+  // RE-POINTED from five to SIX by the approved beginner projection: the SIXTH is
+  // the committed ADMIN READING, which is the one source of beginner rows. It is
+  // the same pipeline the wave view already uses — no second query.
+  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 6, "a seventh reader entered the page");
 });
 
 test("28b. the two conditional inputs render IFF their flag, and are REQUIRED", () => {
@@ -1354,7 +1512,10 @@ test("36. this slice adds NO publication, notification, instructor or trainee su
     "unpublishExamPlan",
     "deleteExamPlan",
     "reorderExamAssignments",
-    "updateExamAssignment",
+    // NOT banned in this shared list by EX-ADMIN-WORKSPACE-UX: assignment editing
+    // and moving are approved endpoints of this route, and the ACTION MODULE is
+    // where their committed writers are legitimately called. The PAGE is still
+    // forbidden from reaching either, which is asserted separately below.
     "INSTRUCTED_TRAINEE\"," + " role",
     "pairingIndex",
     "supervisor",
@@ -1362,7 +1523,6 @@ test("36. this slice adds NO publication, notification, instructor or trainee su
     "sourceDate",
     "SourceDate",
     "TeachingPractice",
-    "beginnerChild",
   ];
   for (const [label, source] of [
     ["actions", ACTIONS],
@@ -1389,11 +1549,15 @@ test("36. this slice adds NO publication, notification, instructor or trainee su
   // else. No second read, no coercion, no default, no interpolation into a URL and
   // no other syntactic use may exist — so the action still cannot assemble a write
   // of its own from either value, which is the whole of what the blanket ban bought.
+  // RE-POINTED from two to FOUR by EX-ADMIN-WORKSPACE-UX. The card SAVE reads and
+  // forwards the SAME two fields on exactly the same terms the create endpoint
+  // does — one key, one raw read, per endpoint — so the exact shape below is what
+  // still holds, and a FIFTH mention of either field still fails here.
   for (const field of ["instructionTopic", "discipline"]) {
     assert.equal(
       (ACTIONS.match(new RegExp(field, "g")) ?? []).length,
-      2,
-      `the action module may name ${field} exactly twice: the key and its raw read`,
+      4,
+      `the action module may name ${field} exactly twice per endpoint`,
     );
     assert.ok(
       ACTIONS.includes(`${field}: formData.get("${field}"),`),
@@ -1421,17 +1585,31 @@ test("36. this slice adds NO publication, notification, instructor or trainee su
     false,
     "a submitted detail value reaches the query string",
   );
-  const topicUses = PAGE.match(/instructionTopic/g) ?? [];
-  assert.equal(topicUses.length, 1, "the page may read the stored value exactly once");
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX, and NARROWED to what it always
+  // protected. The page now ALSO hands the stored value to the examinee's edit
+  // card as a prop, which is the only way an already-assigned examinee can be
+  // corrected at all. The rule that survives is the sharp one: the page still
+  // never READS the value from a submission, never builds a field name from it and
+  // never interpolates it into a URL — so it still cannot assemble a write of its
+  // own, which is the whole of what the old count bought.
   assert.ok(
-    squash(PAGE).includes("storedDetailText( assignment.instructionTopic"),
+    squash(PAGE).includes("storedDetailText( examinee.instructionTopic"),
     "the value must go through the page's own display helper",
   );
+  assert.ok(
+    PAGE.includes("instructionTopic={examinee.instructionTopic}"),
+    "the stored value must reach the edit card as a prop",
+  );
+  // The ONE `instructionTopic:` on the page is the KEY of the in-memory mapping
+  // that reshapes a reader row for the wave builder. It is not a write, it is not
+  // a form field, and it names no submission — which the three bans below and the
+  // ban list above state from the other side.
+  assert.equal((PAGE.match(/instructionTopic:/g) ?? []).length, 1);
+  assert.ok(PAGE.includes("instructionTopic: row.instructionTopic,"));
   for (const forbidden of [
     'name="instructionTopic"',
     'get("instructionTopic")',
-    "instructionTopic=",
-    "instructionTopic:",
+    "${examinee.instructionTopic",
   ]) {
     assert.equal(
       PAGE.includes(forbidden),
@@ -1439,6 +1617,10 @@ test("36. this slice adds NO publication, notification, instructor or trainee su
       `the page turns the detail value into ${forbidden}`,
     );
   }
+  // The FIELD NAME the card submits belongs to the card, and to nothing else.
+  const CARD = readSource(join(ROUTE_DIR_REL, "EditExamAssignmentCard.tsx"));
+  assert.equal((CARD.match(/name="instructionTopic"/g) ?? []).length, 1);
+  assert.equal((CARD.match(/name="discipline"/g) ?? []).length, 1);
   // No instructor, trainee or supervisor route gained an assignment surface.
   for (const dir of [
     join("app", "instructor"),
@@ -1484,13 +1666,24 @@ test("37. the slice touched EXACTLY its approved paths, and no schema or migrati
   // core and its own binding — and nothing else under `lib/`. A THIRD `lib/`
   // production module, of ANY kind, still fails here: no writer, no policy core,
   // no auth module and no session module may appear.
-  const APPROVED_LIB_PRODUCTION = [
-    "lib/actions/" + "exam-assignment-read" + "-io.ts",
-    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
-  ].sort();
-  const libTouched = gitLines(["diff", "--name-only", "HEAD", "--", "lib"])
-    .filter((path) => !path.endsWith(".test.ts"))
-    .sort();
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX to the EMPTY set. The admin read pair was
+  // edited by the PAIRING slice that shared this working tree; the workspace slice
+  // modifies NO committed `lib/` production module at all — it only ADDS two new
+  // ones, which the workspace's own suite pins by name. Any modification of a
+  // committed `lib/` production module still fails here.
+  const APPROVED_LIB_PRODUCTION: readonly string[] = [
+    // BLOCKER-1 — the ONE committed `lib/` production module this slice modifies.
+    // It gains one ADMIN-ONLY export so the admin schedule can reuse the committed
+    // timetable derivation instead of reproducing it; the three existing readers
+    // and every shared DTO are untouched. ASSEMBLED, so this suite does not enrol
+    // itself as a caller.
+    "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  ];
+  // RE-POINTED to the BRANCH BASE rather than to HEAD. The slice is committed
+  // locally now, so `git diff HEAD` reports nothing and this guard would pass
+  // vacuously; measured against the branch base it still answers exactly what it
+  // was written to answer — which committed `lib/` bindings this branch edits.
+  const libTouched = branchModified("lib").filter((path) => !path.endsWith(".test.ts"));
   assert.deepEqual(
     libTouched,
     APPROVED_LIB_PRODUCTION,
@@ -1512,14 +1705,25 @@ test("43. the ONE create endpoint calls the DETAILED writer and nothing else", (
   // create did not gain a sibling, which the assertions below still pin BY NAME;
   // the three totals move together, so a tenth export with no form — or a tenth
   // form with no export — still fails here.
-  assert.equal((ACTIONS.match(/^export async function /gm) ?? []).length, 10);
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 10);
+  // RE-POINTED from ten to TWELVE by EX-ADMIN-WORKSPACE-UX, which appends the
+  // examinee card save and the one-step examinee move. Still an EXACT count: a
+  // thirteenth endpoint still fails here.
+  assert.equal((ACTIONS.match(/^export async function /gm) ?? []).length, 12);
+  // RE-POINTED from ten to ELEVEN by EX-ADMIN-WORKSPACE-UX: it binds TWO more
+  // reviewed actions and REMOVES one — the standalone pairing action, whose
+  // control was absorbed into the examinee's card.
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 11);
   // `action=` counts TWO for the publication card, because its two mutually
   // exclusive forms are written out separately so each can carry a LITERAL hidden
   // operation value rather than a computed one.
   // RE-POINTED from 10 to 11 by EX-PAIR-UI-MVP: ONE more inline form, bound to
   // the SAME verified context id, which the `.bind` count above pins.
-  assert.equal((PAGE.match(/action=/g) ?? []).length, 11);
+  // RE-POINTED from eleven to FOURTEEN by EX-ADMIN-WORKSPACE-UX: the pairing form
+  // left the page (-1); the two one-step move forms arrived (+2); the examinee edit
+  // card arrived (+1); and the role-blind REMOVAL control is now rendered from TWO
+  // places (+1), because an instructed trainee no longer has a card of its own to
+  // carry it.
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 14);
 
   // The create action reaches the DETAILED writer EXACTLY ONCE...
   assert.equal(
@@ -1626,7 +1830,11 @@ test("45. this slice adds no route, no query key, no schema and no capability", 
   // RE-POINTED from 24 to 25 by EX-PAIR-UI-MVP: ONE closed pairing FEEDBACK
   // token, which names no course, plan, session, trainee, assignment or version,
   // and from which nothing derives scope, state or a selection.
-  assert.equal((queryType.match(/\?: string \| string\[\];/g) ?? []).length, 25);
+  // RE-POINTED from 25 to 30 by EX-ADMIN-WORKSPACE-UX: the card save's two
+  // FEEDBACK tokens, the move's one, and the two ARRANGEMENT tokens. None names a
+  // course, plan, session, trainee, assignment or version, and nothing derives
+  // scope or state from any of them.
+  assert.equal((queryType.match(/\?: string \| string\[\];/g) ?? []).length, 30);
   for (const forbidden of ["instructionTopic?", "discipline?", "detailedAssignment"]) {
     assert.equal(queryType.includes(forbidden), false, `searchParams gained ${forbidden}`);
   }
@@ -1729,27 +1937,39 @@ test("40. the detail values are shown for the EXAMINEE row only", () => {
   const flat = squash(PAGE);
   // Both value lines hang off the SAME single role predicate, and each also
   // requires something to have been stored.
-  assert.ok(flat.includes("{isExaminee && topicText !== null ? ("));
-  assert.ok(flat.includes("{isExaminee && disciplineText !== null ? ("));
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX. The two values are now shown inside the
+  // EXAMINEE's own card, so the role is a property of WHERE they render rather
+  // than a conjunct beside them — which is a stronger form of the same rule: an
+  // instructed trainee has no card to carry them at all.
+  assert.ok(flat.includes("{INSTRUCTION_TOPIC_LABEL}: {topicText}"));
+  assert.ok(flat.includes("{DISCIPLINE_LABEL}: {disciplineText}"));
+  assert.ok(flat.includes("{topicText !== null ? ("));
+  assert.ok(flat.includes("{disciplineText !== null ? ("));
   // The INSTRUCTED_TRAINEE row keeps everything it had — name, horse, role label
   // and the ONE removal control — and gains neither value line: those are outside
   // the predicate entirely.
   assert.ok(flat.includes("{roleText(assignment.role)}"));
-  assert.ok(flat.includes("סוס: {horseText(assignment.horseName)}"));
+  assert.ok(flat.includes("{roleText(\"EXAMINEE\")}"));
+  assert.ok(flat.includes("סוס: {horseText(examinee.horseName)}"));
+  // RE-POINTED from one to TWO by EX-ADMIN-WORKSPACE-UX: the role-blind removal
+  // control is rendered from two places now — once on an examinee card, and once
+  // in the unlinked instructed-trainee roster — because a trainee no longer has a
+  // card of its own to carry it. It is the SAME control, bound to the SAME hoisted
+  // action, and it still reaches a row of EITHER role.
   assert.equal(
     (PAGE.match(/<DeleteExamAssignmentForm/g) ?? []).length,
-    1,
-    "a second delete control entered the page",
+    2,
+    "the role-blind removal control was lost or duplicated",
   );
   // A null value is NOT rendered as an ordinary value row: there is no placeholder
   // constant for either detail, and neither label may be emitted unconditionally.
   assert.equal(
-    /\{INSTRUCTION_TOPIC_LABEL\}: \{(assignment\.instructionTopic|NO_)/.test(flat),
+    /\{INSTRUCTION_TOPIC_LABEL\}: \{(examinee\.instructionTopic|NO_)/.test(flat),
     false,
     "an absent topic is rendered as a value row",
   );
   assert.equal(
-    /\{DISCIPLINE_LABEL\}: \{(assignment\.discipline|NO_)/.test(flat),
+    /\{DISCIPLINE_LABEL\}: \{(examinee\.discipline|NO_)/.test(flat),
     false,
     "an absent branch is rendered as a value row",
   );
@@ -1768,25 +1988,41 @@ test("41. a MISSING required value is a fixed diagnostic that FAILS CLOSED", () 
   // warning — the page never invents what an exam demanded.
   assert.ok(
     flat.includes(
-      "const missingTopic = isExaminee && requirements !== undefined && requirements.requiresLessonTopic && topicText === null;",
+      // RE-POINTED by EX-ADMIN-WORKSPACE-UX: the role conjunct is GONE because the
+      // diagnostic is now rendered only inside an EXAMINEE's card — the role is a
+      // property of WHERE the test runs rather than a term inside it. The
+      // fail-closed conjunct that actually matters is untouched.
+      "const missingTopic = requirements !== undefined && requirements.requiresLessonTopic && topicText === null;",
     ),
     "the topic diagnostic is not the closed fail-closed test",
   );
   assert.ok(
     flat.includes(
-      "const missingDiscipline = isExaminee && requirements !== undefined && requirements.requiresDiscipline && disciplineText === null;",
+      "const missingDiscipline = requirements !== undefined && requirements.requiresDiscipline && disciplineText === null;",
     ),
     "the branch diagnostic is not the closed fail-closed test",
   );
   // The requirements come from the definition reader the page already loaded — no
   // second reader and no second query came with the diagnostics.
   assert.ok(PAGE.includes("for (const definition of view.definitions) {"));
-  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 4, "a fifth reader entered the page");
+  // RE-POINTED from four to FIVE by BLOCKER-1. The fifth is the CANONICAL
+  // timetable read: the admin reading of the committed exam plan pipeline, which
+  // is what lets this page show the derived times instead of reproducing them.
+  // It is the same `loadPlan`, adapter and timetable core the instructor DTO and
+  // the trainee day are built from, so no second derivation exists anywhere.
+  // RE-POINTED from five to SIX by the approved beginner projection: the SIXTH is
+  // the committed ADMIN READING, which is the one source of beginner rows. It is
+  // the same pipeline the wave view already uses — no second query.
+  assert.equal((PAGE.match(/\bread[A-Z]\w*\(/g) ?? []).length, 6, "a seventh reader entered the page");
 
   // Rendering is NOT blocked by either diagnostic: both are siblings of the value
   // spans inside the same row, never a wrapper around the row or an early return.
-  assert.ok(flat.includes("{missingTopic ? ( <span"));
-  assert.ok(flat.includes("{missingDiscipline ? ( <span"));
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX: each diagnostic is now a paragraph in the
+  // examinee's card rather than an inline span in a flat row. The claim is
+  // unchanged and is the one that matters — neither wraps the row, and neither can
+  // stop it rendering.
+  assert.ok(flat.includes("{missingTopic ? ( <p"));
+  assert.ok(flat.includes("{missingDiscipline ? ( <p"));
   assert.equal(/missingTopic\s*(\?|&&)\s*\(?\s*<li/.test(flat), false, "a diagnostic hides the row");
 });
 
@@ -1817,21 +2053,34 @@ test("42. the diagnostics add NO write, no route, no query key and no client sta
   // control INLINE for the same reason the publication one is: fixed values, no
   // pending UX, no validation and no confirmation. An inventory stays stronger
   // than a ban: a FOURTH form, button or input still fails here.
-  assert.equal((PAGE.match(/<form /g) ?? []).length, 3);
-  assert.equal((PAGE.match(/<button/g) ?? []).length, 3);
+  // RE-POINTED from three to FOUR by EX-ADMIN-WORKSPACE-UX: the pairing form left
+  // the page with its control (-1) and the two one-step ORDER controls arrived
+  // (+2). What matters HERE is unchanged — the diagnostic rows gained none of
+  // them, and every count belongs to the publication card or to an order control.
+  assert.equal((PAGE.match(/<form /g) ?? []).length, 4);
+  assert.equal((PAGE.match(/<button/g) ?? []).length, 4);
   // RE-POINTED from two to THREE by EX-PAIR-UI-MVP: the pairing form carries ONE
   // hidden field naming the instructed-trainee row it belongs to. A FOURTH still
   // fails, and the two `name="operation"` inputs are pinned separately below.
-  assert.equal((PAGE.match(/<input/g) ?? []).length, 3);
-  // RE-POINTED by EX-PAIR-UI-MVP: the pairing picker is a `<select>` and there is
-  // exactly ONE on this page. A SECOND still fails, and every other control token
-  // stays banned outright.
-  assert.equal((PAGE.match(/<select/g) ?? []).length, 1, "exactly one inline picker");
+  // RE-POINTED from three to SIX: two hidden publication operations, and two per
+  // move form — the assignment it acts on and a fixed direction literal.
+  assert.equal((PAGE.match(/<input/g) ?? []).length, 6);
+  assert.equal((PAGE.match(/name="direction"/g) ?? []).length, 2);
+  // RE-POINTED to ZERO: the one inline picker this page held was the pairing one,
+  // and it moved to the examinee's card with its control.
+  assert.equal((PAGE.match(/<select/g) ?? []).length, 0, "no inline picker may exist");
   assert.equal((PAGE.match(/name="operation"/g) ?? []).length, 2);
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 10);
+  // RE-POINTED from ten to ELEVEN by EX-ADMIN-WORKSPACE-UX: it binds TWO more
+  // reviewed actions and REMOVES one — the standalone pairing action, whose
+  // control was absorbed into the examinee's card.
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 11);
   // RE-POINTED from 10 to 11 by EX-PAIR-UI-MVP: ONE more inline form, bound to
   // the SAME verified context id, which the `.bind` count above pins.
-  assert.equal((PAGE.match(/action=/g) ?? []).length, 11);
+  // RE-POINTED from eleven to FOURTEEN by EX-ADMIN-WORKSPACE-UX: the pairing form
+  // left the page (-1); the two move forms arrived (+2); the examinee edit card
+  // arrived (+1); and the role-blind removal control is rendered from two places
+  // now (+1).
+  assert.equal((PAGE.match(/action=/g) ?? []).length, 14);
 
   // No new query key, and the query is still resolved once.
   const squashed = squash(PAGE);
@@ -1844,7 +2093,11 @@ test("42. the diagnostics add NO write, no route, no query key and no client sta
   // RE-POINTED from 24 to 25 by EX-PAIR-UI-MVP: ONE closed pairing FEEDBACK
   // token, which names no course, plan, session, trainee, assignment or version,
   // and from which nothing derives scope, state or a selection.
-  assert.equal((queryType.match(/\?: string \| string\[\];/g) ?? []).length, 25);
+  // RE-POINTED from 25 to 30 by EX-ADMIN-WORKSPACE-UX: the card save's two
+  // FEEDBACK tokens, the move's one, and the two ARRANGEMENT tokens. None names a
+  // course, plan, session, trainee, assignment or version, and nothing derives
+  // scope or state from any of them.
+  assert.equal((queryType.match(/\?: string \| string\[\];/g) ?? []).length, 30);
   for (const forbidden of ["instructionTopic?", "discipline?", "missingTopic?", "assignmentId?"]) {
     assert.equal(queryType.includes(forbidden), false, `searchParams gained ${forbidden}`);
   }
@@ -1865,7 +2118,7 @@ test("42. the diagnostics add NO write, no route, no query key and no client sta
   // ASSIGNMENT slice added none, and the exhaustive ordered export list at guard 5
   // is what pins which ten exist.
     (ACTIONS.match(/^export async function /gm) ?? []).length,
-    10,
+    12,
     "the action module gained an export",
   );
 });

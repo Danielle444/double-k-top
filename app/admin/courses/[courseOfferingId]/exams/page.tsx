@@ -1,29 +1,95 @@
 /**
  * EXAM EX-S5B-5B + EXAM PLAN P3 + EXAM EX-S5B-5C + EXAM EX-SES-UI-1 + EXAM
  * EX-SES-UI-2 + EXAM EX-ASG-UI1 + EXAM EX-ASG-IT2 + EXAM EX-ASG-LTD2-B1 + EXAM
- * EX-PUB-UI-MVP + EXAM EX-PAIR-UI-MVP — the admin Exams surface of ONE course
- * offering: a read of its ExamDefinition configuration, of its scheduled exam
- * sessions AND of the people assigned to them, plus the TEN explicit mutation
- * affordances that belong to it.
+ * EX-PUB-UI-MVP + EXAM EX-PAIR-UI-MVP + EXAM EX-ADMIN-WORKSPACE-UX — the admin
+ * Exams WORKSPACE of ONE course offering.
  *
  * Server Component. The page holds NO state and runs NO client code of its own.
- * Eight of the ten forms are separate client components; the NINTH — the
- * publication form EX-PUB-UI-MVP adds — and the TENTH — the pairing form
- * EX-PAIR-UI-MVP adds — are rendered INLINE, because neither needs client
- * behaviour at all: each has fixed values, no pending UX, no validation and no
- * confirmation, so a `"use client"` component would add a bundle entry and a
- * second file for nothing. Both are still ordinary POST-ing forms on Server
- * Actions, submitted the same way every other mutation here is.
  *
  * ===========================================================================
- * WHAT THIS ROUTE MAY MUTATE — AND WHAT IT STILL MAY NOT
+ * WHAT EX-ADMIN-WORKSPACE-UX CHANGED, AND WHAT IT DELIBERATELY DID NOT
  * ===========================================================================
- * EXACTLY TEN mutations exist here. The first two are MUTUALLY EXCLUSIVE by the
- * state of the plan; the third additionally requires something to schedule; the
- * next two are PER SESSION and require a session to already exist; the next three
- * are PER ASSIGNMENT and require a session to be there to assign anyone to; the
- * ninth is PER PLAN and is itself mutually exclusive by publication state; the
- * tenth is PER INSTRUCTED-TRAINEE ASSIGNMENT and requires such a row to exist:
+ * This route used to be ONE very long page that mixed exam type definitions,
+ * scheduled blocks, assignments and publication into a single scroll. Everything
+ * it could do it did all at once, and editing anything meant finding it.
+ *
+ * It is now FOUR SECTIONS, selected by a `tab` search param and rendered by this
+ * same one Server Component: `סוגי מבחנים`, `מופעים וזמנים`, `שיבוצים` and
+ * `פרסום`. There is no second route, no layout file, no client state, no
+ * `useState`, no accordion and no effect — a section is a query token, so the
+ * back button, a refresh and a bookmark all behave exactly as they did.
+ *
+ * The READS are unchanged: the same five committed readers, in the same order,
+ * on the same VERIFIED offering id, whichever section is open. A section decides
+ * what is RENDERED and never what is fetched, so no arrangement of tabs can
+ * widen what this page can see.
+ *
+ * ===========================================================================
+ * THE THREE SCHEDULE VIEWS ARE ARRANGEMENTS, NEVER COPIES
+ * ===========================================================================
+ * `לו״ז כללי`, `לפי סוג מבחן` and `לפי תאריך` are three arrangements of the ONE
+ * list the committed session reader returned, produced by the route-local pure
+ * view module and never persisted. The committed day grouping remains the FINAL
+ * ordering authority — the view module preserves arrival order and sorts
+ * nothing — so no two views can disagree about what exists or about sequence.
+ *
+ * Each of them states the same facts about a block, because a manager reading
+ * any one of them has to be able to run the day from it: the date, the block's
+ * start and its DERIVED end, the personal wave times, how many examinees run in
+ * parallel, the place, and the exam type.
+ *
+ * ===========================================================================
+ * THE WAVE OWNS THE TIME — THE EXAMINEE NEVER DOES
+ * ===========================================================================
+ * Personal times are DERIVED, never stored — and this route DERIVES NONE OF
+ * THEM. Every clock value on this page comes from `readAdminExamWaveView`, the
+ * admin reading of the committed exam plan pipeline: the same `loadPlan`, the
+ * same adapter and the same block timetable core the instructor DTO and the
+ * trainee day are built from. The admin schedule therefore shows, by
+ * construction, exactly the times everybody else is shown.
+ *
+ * There is NO exam duration, NO parallel capacity, NO wave index and NO `HH:MM`
+ * arithmetic anywhere in this file. The page joins the canonical wave's
+ * assignment ids to the rows it already read, and prints the strings it was
+ * given.
+ *
+ * Two examinees examined together are therefore rendered INSIDE ONE WAVE — two
+ * columns where there is room, stacked on a phone — with the time printed ONCE
+ * on the wave and never repeated inside a card. That is the whole reason the
+ * wave is a rendering unit at all.
+ *
+ * The Hebrew exam-kind labels, the role labels and every sentence on this page
+ * are spelled out LOCALLY rather than imported from the shared domain tables,
+ * for the containment reason this header has always recorded: the committed
+ * guards forbid a file under `app/` from naming an exam core module, by import
+ * OR in prose. The wave arithmetic is local for the same reason, and the
+ * trade-off is stated rather than hidden.
+ *
+ * ===========================================================================
+ * THE EXAMINEE'S CARD IS THE UNIT OF EDITING
+ * ===========================================================================
+ * An examinee is now ONE card carrying the person, the horse, the instruction
+ * topic, the branch and the ONE instructed trainee they TEACH — saved by ONE
+ * button.
+ *
+ * The instructed trainee gets NO schedule card of its own. The relationship is
+ * one-to-one and the examinee owns it, so the standalone pairing form that used
+ * to sit under the trainee's row is gone: it was the same link, asked backwards,
+ * with a second save button. An instructed trainee that is not linked to anybody
+ * yet is still LISTED — under its own explicitly-labelled "not linked" heading,
+ * with its removal control — because a row that vanished would make a session
+ * look emptier than it is and would disagree with the count beside it.
+ *
+ * ORDERING is two buttons and a visible position number per card. There is no
+ * drag-and-drop: none existed, a pointer-only affordance would be unusable on
+ * the phones this admin area is actually used on, and the committed writer
+ * expresses a move as one step in one direction.
+ *
+ * ===========================================================================
+ * WHAT THIS ROUTE MAY MUTATE
+ * ===========================================================================
+ * TWELVE mutations exist here — the ten this route already had, plus the two
+ * EX-ADMIN-WORKSPACE-UX adds:
  *
  *   - no plan yet     -> create ONE empty, unpublished ExamPlan;
  *   - plan present    -> append ONE ExamDefinition to it;
@@ -38,88 +104,37 @@
  *   - published plan  -> UNPUBLISH it;
  *   - per instructed
  *     trainee         -> PAIR it with ONE examinee of ITS OWN session, or clear
- *                        that one pairing.
+ *                        that one pairing — now submitted from the EXAMINEE's
+ *                        card, through the SAME committed writer;
+ *   - per examinee    -> SAVE that card's horse, topic, branch and teaching link;
+ *   - per examinee    -> MOVE it one position up or down inside its own block.
  *
- * Editing, removing and reordering definitions, reordering sessions, DELETING the
- * plan, EDITING or REORDERING an assignment, publishing an INDIVIDUAL session,
- * waves, personal times, breaks, supervisors and source dates are NOT reachable —
- * not disabled, not hidden behind a flag, but absent, with no import that could
- * reach them. Neither is a publication NOTIFICATION or a publication HISTORY: the
- * ninth action flips one column and does nothing else, and the tenth writes one
- * nullable column on one row through the committed pairing backend, which owns
- * every allocation, reuse, ambiguity and staleness decision.
+ * Editing or removing a definition, reordering definitions, reordering sessions,
+ * DELETING the plan, moving a person BETWEEN sessions, publishing an INDIVIDUAL
+ * session, breaks, supervisors and source dates are still NOT reachable — not
+ * disabled, not hidden behind a flag, but absent, with no import that could reach
+ * them. Neither is a publication NOTIFICATION or a publication HISTORY.
  *
- * All ten mutations are ALWAYS an explicit click on a POST-ing form. The page
- * performs no write, so a plain GET of this route — a refresh, a back button, a
- * prefetch, a bookmark — can never bring a plan, a definition, a session or an
- * assignment into existence, can never remove one, and can never publish or
- * unpublish anything either. No session id and no assignment id appears in any
- * href on this page, and neither does a publication operation. There is no effect,
- * no auto-submit and no redirect that writes.
+ * All twelve are ALWAYS an explicit click on a POST-ing form. The page performs
+ * no write, so a plain GET of this route — a refresh, a back button, a prefetch,
+ * a bookmark, a tab link — can never bring anything into existence, remove
+ * anything, publish anything or move anybody. Every tab and view link is a plain
+ * `<Link>` carrying ONE closed token and no id whatsoever.
  *
  * ===========================================================================
- * WHAT THE ASSIGNMENT SURFACE MAY AND MAY NOT SAY
+ * BEGINNER EXAMS ARE A LABELLED HOLE, AND NOTHING ELSE, IN THIS BRANCH
  * ===========================================================================
- * The examinee create form collects three values ALWAYS — the session (hidden,
- * fixed by the row it was rendered under), the trainee and the horse — plus, when
- * and only when this session's exam demands them, a lesson topic and a branch. The
- * instructed-trainee create form collects EXACTLY two — the session and the
- * trainee, and no horse, because that role carries none. The ROLE is not among
- * either form's fields: each committed create core fixes its own single role
- * literal and neither payload type can express another, so the form a manager
- * submits decides the role and no submission can.
+ * A separate branch is adding a READ-ONLY beginner-exam projection sourced from
+ * Teaching Practice. This page therefore renders ONE isolated, explicitly named
+ * region for it inside the assignments section, holding a fixed sentence and no
+ * data.
  *
- * The LIST is HISTORY and shows every stored row, of every role, exactly as
- * before. Hiding one would make a session look emptier than it is and would
- * disagree with the count beside it.
- *
- * The two create forms are gated INDEPENDENTLY. EX-ASG-LTD2-B2 NARROWS the
- * examinee gate to the fail-closed case alone: a definition that demands a lesson
- * topic or a branch now GETS the form, which collects both and hands them to the
- * committed writer that stores them, so the only remaining reason to withhold it
- * is that the requirements cannot be resolved at all. `requiresInstructedTrainee`
- * never enters that gate. The INSTRUCTED-TRAINEE form asks exactly one question in
- * return — does this session's exam ask for such a person? — and consults neither
- * topic nor branch, because refusing this role over the examinee's missing topic
- * would block precisely the blocks it exists to complete. Both gates still FAIL
- * CLOSED when the requirements are unknown.
- *
- * Nothing here renders an identity number, a phone, a parent or guardian contact,
- * a group, a subgroup or any enrolment detail. The committed readers do not select
- * one, so this page could not render one even by mistake.
- *
- * ===========================================================================
- * THE ASSIGNMENT COUNT DECIDES WHAT IS SHOWN, NEVER WHAT IS ALLOWED
- * ===========================================================================
- * Each session's assignment count is read here and used for exactly two display
- * decisions: the delete control renders an explanatory sentence instead of a form
- * when the count is non-zero, and the edit form shows an advisory that the
- * DEFINITION cannot be changed while it is. Both are courtesies.
- *
- * The COUNT from the session reader stays the authority for those two decisions,
- * and the assignment ROWS are used only to render the list. The two come from
- * separate reads, so a create or a removal landing between them can briefly make
- * the count and the visible rows disagree. UI1 invents NO reconciliation for that:
- * the next revalidation resolves it, and a page that quietly "corrected" one read
- * with the other would be inventing a state neither read reported.
- *
- * The count came from a read that has already finished, and an examinee can be
- * assigned a moment later — so it is never sent to a Server Action, never reaches
- * a writer, and never appears in any FormData. The committed writers re-count
- * assignments themselves and carry an atomic `assignments: { none: {} }` condition
- * on the statements that need it, which is what actually decides the outcome.
- *
- * An ARCHIVED offering stays fully READABLE and gains NEITHER affordance. That is
- * decided by the course-lifecycle policy rather than by a hand-written status
- * test — see the gates below — and each server binding independently refuses
- * regardless of what is on screen.
- *
- * A PUBLISHED plan does not lose the definition-create form: whether a published
- * plan may still be configured is the committed lifecycle policy's decision, not
- * this page's, so publication only adds an advisory notice. EX-PUB-UI-MVP keeps
- * that rule EXACTLY as it was and adds a third advisory of the same kind on the
- * publication card itself: publishing tells the manager that trainees can now see
- * what they change, and blocks no edit whatsoever.
+ * NOTHING here touches Teaching Practice, a coach, a child or a parent contact:
+ * no such module is imported, no reader can express one, and the region below is
+ * markup with a constant inside it. When that branch lands, its rows go into
+ * that one region — and nothing else on this page has to move. It stays
+ * READ-ONLY here: beginner exams are edited on the existing Teaching Practice
+ * screen and nowhere else.
  *
  * ===========================================================================
  * THE ORDER
@@ -135,43 +150,35 @@
  *   3. `readExamDefinitionsForAdmin(context.id)` — with the VERIFIED context id,
  *      never the raw route param.
  *   4. `readAdminExamSessions(context.id)` — the same, for the stored sessions.
- *   5. `readEligibleExamTraineesForAdmin(context.id)` — the same, for the trainees
- *      who may be assigned RIGHT NOW. Asked ONCE for the page: the eligible roster
- *      is a property of the OFFERING, so a per-session read would repeat one query.
+ *   5. `readEligibleExamTraineesForAdmin(context.id)` — the same, for the
+ *      trainees who may be assigned RIGHT NOW. Asked ONCE for the page.
  *   6. `readAdminExamAssignments(context.id)` — the same, for every stored
- *      assignment of the plan. Asked ONCE and bucketed in memory below — never
- *      once per session, which would be an N+1 over the session list.
+ *      assignment of the plan. Asked ONCE and bucketed in memory below.
  *   7. `groupAdminExamSessionsByDay(...)` — a PURE grouping of what step 4
- *      returned. It reaches no database, no clock and no locale, and it is the
- *      FINAL ordering authority for what is rendered, so the page never sorts.
- *   8. The in-memory assignment bucketing — a `Map` filled by a `for...of` that
- *      APPENDS in arrival order, which preserves the committed reader's own total
- *      order. The page therefore never sorts, filters, slices or reverses.
+ *      returned, and the FINAL ordering authority for everything rendered.
+ *   8. The in-memory bucketing — plain `for...of` loops that APPEND in arrival
+ *      order, which preserves the committed reader's own total order. The page
+ *      never sorts, filters, slices or reverses.
  *   9. `evaluateCourseOperationPolicy(context.status, ...)` — the write gate,
  *      asked ONCE as a QUESTION rather than as an assertion, purely to decide
  *      which forms to render. It is pure, total and default-deny, so an unknown
  *      status hides every form instead of exposing any.
  *
- * All four readers independently re-run the admin/offering boundary and the read
- * gate, and each Server Action's committed writer independently re-runs the admin
- * boundary, the offering lookup AND the write gate. Step 9 is therefore a DISPLAY
- * decision only: hiding a form prevents a pointless round trip and is never what
- * makes the write safe.
- *
- * The reads are SEQUENTIAL rather than a `Promise.all`, matching the route flow
- * that was already here: each is wrapped in its own `try` so a typed
- * "that offering does not exist" fails closed as `notFound()` while every other
- * failure keeps its identity and propagates. A combined await would have to
- * re-derive which reader threw before it could preserve that distinction.
+ * All readers independently re-run the admin/offering boundary and the read
+ * gate, and each Server Action's committed writer independently re-runs the
+ * admin boundary, the offering lookup AND the write gate. Step 9 is therefore a
+ * DISPLAY decision only.
  *
  * ===========================================================================
- * `searchParams` IS FEEDBACK ONLY — IT IS NOT SCOPE
+ * `searchParams` IS FEEDBACK AND ARRANGEMENT — IT IS NEVER SCOPE
  * ===========================================================================
  * The route's `[courseOfferingId]` remains the ONLY thing that decides which
  * course is read or written. No cookie, no current-offering resolver and no form
- * field can influence it. `searchParams` carries CLOSED feedback tokens and
- * nothing else, resolved ONCE, only after authorization and the read:
+ * field can influence it. `searchParams` carries CLOSED tokens and nothing else,
+ * resolved ONCE, only after authorization and the reads:
  *
+ *   - `tab=<section>`        — which of the four sections is open;
+ *   - `view=<arrangement>`   — which of the three schedule arrangements is shown;
  *   - `created=1`            — the plan was created by the previous click;
  *   - `existing=1`           — a plan was already there and nothing was touched;
  *   - `error=<code>`         — one of two known plan refusal codes;
@@ -196,35 +203,17 @@
  *   - `instructedTraineeError=<code>`  — a known instructed-trainee refusal code;
  *   - `instructedTraineeIssues=<codes>`— known instructed-trainee issue codes;
  *   - `publication=<token>`  — the publication outcome, success or refusal alike;
- *   - `pairing=<token>`      — the pairing outcome, success or refusal alike.
+ *   - `pairing=<token>`      — the pairing outcome, success or refusal alike;
+ *   - `assignmentEdit=<token>`      — the card-save outcome;
+ *   - `assignmentEditIssues=<codes>`— known card-save field diagnostics;
+ *   - `assignmentOrder=<token>`     — the move outcome.
  *
- * The pairing family is ONE key for the same reason the publication family is,
- * and its banner is deliberately PAGE-LEVEL rather than per row: a per-row
- * diagnostic would need an assignment id in the URL, and this page puts none
- * there. It is FEEDBACK and never STATE — which examinee each picker pre-selects
- * comes from the committed reader's resolved answer, so a hand-typed
- * `?pairing=PAIRED` changes what one banner says and nothing else.
+ * `tab` and `view` are ARRANGEMENT and never STATE: both are parsed by closed
+ * route-local parsers that fall back to a default, so a hand-typed value can
+ * select a section and can never supply one, reach a reader, open an affordance
+ * or influence a scope. Neither ever carries an id.
  *
- * The publication family is ONE key rather than a success/error pair, because a
- * publication has exactly one outcome per submission and only one publication
- * control can be on screen at a time — so there is no second form whose diagnostic
- * could be rendered above it. Its parser is closed like every other one, and the
- * TONE it renders with is carried in the table beside the sentence rather than
- * derived from the token's shape.
- *
- * It is FEEDBACK and never an OPTION. Nothing derives the publication STATE from
- * it: the card's two mutually-exclusive forms are chosen from the committed
- * reader's `publishedAt`, so a hand-typed `?publication=PUBLISHED` changes what
- * one banner says and nothing else — no read, no affordance and no write.
- *
- * The instructed-trainee family is DISTINCT from the examinee one rather than
- * shared: both create forms can be on screen under the SAME session at once, and
- * a shared token would render one form's diagnostic above the other with no way
- * for the page to tell which submission failed. There is deliberately NO
- * instructed-trainee DELETE token: removal is the existing, role-blind assignment
- * removal, and it keeps reporting through the existing tokens.
- *
- * Every parser here is CLOSED in both directions. `created`, `existing`,
+ * Every other parser here is CLOSED in both directions. `created`, `existing`,
  * `createdDefinition`, `createdSession`, `updatedSession`, `unchangedSession`,
  * `deletedSession`, `createdAssignment` and `deletedAssignment` are honoured only
  * on the exact string `"1"`; `error` only on a key the message table actually
@@ -234,106 +223,49 @@
  * committed code sets. Every other query value, and every unknown code, is
  * silently IGNORED.
  *
- * The two ASSIGNMENT headline parsers are closed but NOT silent: an unrecognized
- * refusal code renders their module's explicit fallback sentence rather than
- * nothing, because a refusal that renders as a blank page would read to the
- * manager as a successful save. The per-field issue parser still DROPS unknown
- * tokens, which is what keeps arbitrary text off the page.
- *
- * No session id, plan id, definition id, student id, assignment id, horse name or
- * version stamp is ever a query key or a query value. The outcome tokens say WHAT
- * happened and never to WHICH row: a per-row diagnostic would need an id in the
- * URL, and this page does not put one there.
+ * The two ASSIGNMENT headline parsers, and the two EX-ADMIN-WORKSPACE-UX ones,
+ * are closed but NOT silent: an unrecognized refusal code renders an explicit
+ * fallback sentence rather than nothing, because a refusal that renders as a
+ * blank page would read to the manager as a successful save. The per-field issue
+ * parsers still DROP unknown tokens, which is what keeps arbitrary text off the
+ * page.
  *
  * A REPEATED query key arrives as an ARRAY, which is why every key is typed
- * `string | string[]` and every check is a `typeof === "string"` comparison: an
- * array must simply not be a recognized token, and a loose comparison would let
- * `["1"]` coerce its way to a match.
+ * `string | string[]` and every check is a `typeof === "string"` comparison.
  *
  * Nothing read from the query is ever interpolated into the page. Every rendered
- * string is a constant chosen by a parser, so a submitted value cannot be
- * reflected back — the query can only pick a message, never supply one.
- *
- * Structurally, no query value can influence scope: `courseOfferingId` comes from
- * `params`, everything downstream uses the VERIFIED `context.id`, and the parsed
- * feedback reaches nothing but JSX. There is no plan id and no definition id
- * anywhere on this page — the create actions produce them and never reveal them.
+ * string is a constant chosen by a parser.
  *
  * ===========================================================================
- * WHAT IS SHOWN, AND WHAT IS DELIBERATELY NOT
+ * IDS, AND WHERE THEY MAY APPEAR
  * ===========================================================================
- * Each definition renders the manager's own configuration plus how many sessions
- * use it. No database id, no plan id and no `updatedAt` is rendered: the id
- * appears only as a React `key`, which is never text on the page, and the version
- * stamp belongs to a future conditional-edit slice, not to a reader.
+ * No database id is ever TEXT on this page and none appears in an href — the tab
+ * and view links carry a closed token and nothing else.
  *
- * Each SESSION renders its start time, the exam it is scheduled against, and any
- * title, arena or note the manager wrote — nothing more. Deliberately absent: an
- * END time (this surface derives no duration), the exam kind, the sequence number,
- * waves, slots, capacity and every assignment detail. The assignment COUNT is
- * shown as explanatory text only; the writers, not this page, remain the authority
- * on what that count permits. Every date the plan holds is listed, earliest first,
- * including past ones: this is a configuration surface, not a "what is next" view,
- * so it reads no clock and filters against none.
+ * A session id is a React `key` and a hidden form field. A definition id selects
+ * the current option of the session edit picker and keys the requirement lookup.
+ * An assignment id is a React `key`, a hidden field of the removal, edit and move
+ * forms, and an `<option>` VALUE of the teaching-link picker. A `Student.id` is a
+ * React `key` and an `<option>` VALUE in the two create forms. `updatedAt` is
+ * carried only as a hidden epoch-millisecond concurrency token.
  *
- * The session id, the definition id and the version stamp are read but are NEVER
- * TEXT. The session id is a React `key` and a hidden form field; the definition id
- * selects the current option of the edit picker and keys the requirement lookup;
- * and `updatedAt` is carried only as a hidden epoch-millisecond concurrency token.
- * None of the three is rendered as visible content, and none appears in an href —
- * which is exactly the narrowing EX-SES-UI-2 makes to the previous "no id and no
- * version stamp exists here at all" rule, and the reason those guards were
- * re-pointed rather than dropped.
+ * The POSITION NUMBER a card now displays is its place in the RENDERED
+ * arrangement — `index + 1` — and never the stored `orderIndex`, which stays
+ * server-internal: a visible stored index would invite someone to treat it as a
+ * stable number, and duplicated positions are explicitly tolerated by the
+ * committed create binding.
  *
- * EX-ASG-UI1 adds two ids under the SAME rule and no third. The assignment id is a
- * React `key` and the removal form's one hidden field; the trainee's `Student.id`
- * is a React `key` and a `<select>` option VALUE in the create form. Neither is
- * ever rendered as text and neither appears in an href. The assignment reader does
- * not even SELECT a `Student.id`, so the only one on this page comes from the
- * eligible-trainee picker, which exists precisely to be submitted back.
+ * Nothing here renders an identity number, a phone, a parent or guardian
+ * contact, a group, a subgroup or any enrolment detail. The committed readers do
+ * not select one, so this page could not render one even by mistake.
  *
- * EX-PAIR-UI-MVP adds NO new kind of id and widens the rule for none. It reuses
- * the ASSIGNMENT id twice more — as the pairing form's one hidden field, and as
- * the `<option>` VALUE of each examinee the picker offers — both of which are
- * submitted values rather than text, and neither of which appears in an href.
- * What it deliberately does NOT bring onto this page is the `pairingIndex`: the
- * committed reader resolves the pairing server-side and publishes the PARTNER
- * (an assignment id and a display name) instead, so the internal allocation
- * label has no field on this page to arrive in.
- *
- * Each assignment row renders the trainee's display name, the horse — or the ONE
- * fixed placeholder when it is absent, which historical rows may be — and the role
- * label. The order position is read but never shown: it decides sequence, and a
- * visible index would invite someone to treat it as a stable number.
- *
- * EX-ASG-LTD2-B1 adds TWO more values to that row and no third: the lesson subject
- * and the branch the detailed create writer stores on an EXAMINEE. They are shown
- * for that role ONLY — an instructed trainee's row carries neither, so a value
- * found on one is malformed history rather than something to repeat under a label —
- * and a row of either role is still RENDERED in full. Each value appears only when
- * something is actually stored, is carried through to the screen exactly as it was
- * typed, and is an ordinary React text node: no raw HTML path exists on this page.
- *
- * A HISTORICAL row that is MISSING a value its own exam demanded gets a fixed
- * read-only sentence saying so, decided against the definition requirements this
- * page already loaded — no second reader, no second query, no widening of any
- * existing one. It FAILS CLOSED on an unresolvable definition: a row whose
- * requirements are unknown gets no such sentence, because "we cannot tell what was
- * required" and "a required value is absent" are different statements. The
- * diagnostic is a statement and never an affordance: it opens no editor, adds no
- * control and puts nothing in the query string.
- *
- * Nothing on this page touches Teaching Practice, a trainee, a coach, a child or
- * a parent contact — the reader cannot express any of them, and no such module is
- * imported.
- *
- * The Hebrew exam-kind labels are spelled out LOCALLY rather than imported from
- * the shared label module: that module is still inside the committed EX-C1
- * containment boundary, which forbids a page from naming it. The trade-off is
- * recorded deliberately — a kind added to the enum will render as the explicit
- * unknown text below instead of failing the build here — and both this map and
- * the create form's own option list should collapse back onto the shared table
- * when that boundary is lifted.
+ * ===========================================================================
+ * MOBILE
+ * ===========================================================================
+ * There is no fixed-width table anywhere on this page, in any section or view.
+ * Every arrangement is a stack of cards and responsive grids that collapse to one
+ * column, because this admin area is used on phones and tablets and a wide table
+ * would be unreadable on them.
  */
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -362,6 +294,8 @@ import {
   type EligibleExamTraineeListView,
 } from "@/lib/actions/exam-assignment-read-io";
 import { groupAdminExamSessionsByDay } from "@/lib/exam/admin-exam-session-grouping-core";
+import { readAdminExamPlan, readAdminExamWaveView } from "@/lib/actions/exam-role-readers";
+import type { AdminExamWaveView } from "@/lib/exam/admin-exam-wave-view-core";
 import {
   createExamPlanAction,
   createExamDefinitionAction,
@@ -372,7 +306,8 @@ import {
   deleteExamAssignmentAction,
   createExamInstructedTraineeAssignmentAction,
   setExamPlanPublicationAction,
-  setExamPairingAction,
+  updateExamAssignmentDetailsAction,
+  moveExamAssignmentAction,
 } from "./actions";
 import { ExamPlanCreateForm } from "./ExamPlanCreateForm";
 import { ExamDefinitionCreateForm } from "./ExamDefinitionCreateForm";
@@ -382,6 +317,7 @@ import { ExamSessionDeleteForm } from "./ExamSessionDeleteForm";
 import { CreateExamAssignmentForm } from "./CreateExamAssignmentForm";
 import { DeleteExamAssignmentForm } from "./DeleteExamAssignmentForm";
 import { CreateExamInstructedTraineeAssignmentForm } from "./CreateExamInstructedTraineeAssignmentForm";
+import { EditExamAssignmentCard } from "./EditExamAssignmentCard";
 import {
   examDefinitionCreateErrorText,
   examDefinitionCreateIssueTexts,
@@ -404,6 +340,27 @@ import {
   isExamInstructedTraineeSuccessToken,
   EXAM_INSTRUCTED_TRAINEE_CREATED_TEXT,
 } from "./exam-instructed-trainee-assignment-messages";
+import {
+  examAssignmentEditFeedback,
+  examAssignmentEditIssueTexts,
+  examAssignmentOrderFeedback,
+} from "./exam-workspace-messages";
+import {
+  EXAM_WORKSPACE_TABS,
+  EXAM_WORKSPACE_TAB_LABELS,
+  EXAM_SCHEDULE_VIEWS,
+  EXAM_SCHEDULE_VIEW_LABELS,
+  resolveExamWorkspaceTab,
+  parseExamScheduleView,
+  attachExamineesToWaves,
+  collectUntimedExaminees,
+  buildGeneralTimeline,
+  groupTimelineByDefinition,
+  type ExamScheduleView,
+  type ExamWave,
+  type WorkspaceBeginnerRow,
+  type WorkspaceExaminee,
+} from "./exam-workspace-view";
 
 export const dynamic = "force-dynamic";
 
@@ -625,10 +582,9 @@ function requirementText(required: boolean): string {
  *
  * `INSTRUCTED_TRAINEE` was listed here before this surface could create such a
  * row, because the committed assignment reader is HISTORY and reports every
- * stored row. IT2 changes nothing about that: the label and the list are the same
- * ones, and a row of either role must be shown rather than silently dropped — a
- * hidden row would make a session look emptier than it is and would disagree with
- * the count beside it.
+ * stored row. The workspace changes WHERE such a row appears — inside the
+ * examinee's card when it is linked, under the "not linked" heading when it is
+ * not — and never WHETHER it appears.
  */
 const EXAM_ROLE_TEXT: Readonly<Record<string, string>> = Object.freeze({
   EXAMINEE: "נבחן/ת",
@@ -644,16 +600,22 @@ function roleText(role: string): string {
 }
 
 /**
- * The safe display placeholder for an assignment with no stored horse.
+ * The safe display placeholder for a value with nothing stored in it.
  *
- * New EXAMINEE rows always carry one — the committed input core refuses a blank —
- * but historical rows may not, and a blank cell would read as a rendering bug
- * rather than as absent data.
+ * New EXAMINEE rows always carry a horse — the committed input core refuses a
+ * blank — but historical rows may not, and a blank cell would read as a rendering
+ * bug rather than as absent data. The same placeholder stands in for a derived
+ * time the block's configuration cannot produce.
  */
 const NO_HORSE_TEXT = "—";
 
 function horseText(horseName: string | null): string {
   return horseName === null || horseName.trim().length === 0 ? NO_HORSE_TEXT : horseName;
+}
+
+/** A derived clock time, or the one fixed placeholder when it cannot be derived. */
+function timeText(value: string | null): string {
+  return value === null ? NO_HORSE_TEXT : value;
 }
 
 /**
@@ -687,13 +649,26 @@ function storedDetailText(value: string | null): string | null {
  *
  * They are sentences this module owns, never anything derived from a stored value,
  * and they carry no id, no name and no instruction to act: they say that something
- * is absent, and the correction lives on a write surface this page does not have.
+ * is absent, and the correction now lives on the card beside them.
  */
 const MISSING_INSTRUCTION_TOPIC_TEXT = "חסר נושא הדרכה בשיבוץ ההיסטורי הזה.";
 const MISSING_DISCIPLINE_TEXT = "חסר ענף בשיבוץ ההיסטורי הזה.";
 
 /** The frozen list a session with no assignment renders from. */
 const NO_ASSIGNMENTS: readonly AdminExamAssignmentRow[] = Object.freeze([]);
+
+/** The frozen list a block with no canonical wave renders from. */
+const NO_RENDERED_WAVES: readonly ExamWave[] = Object.freeze([]);
+
+/**
+ * What a manager is told about examinees the committed timetable produced no
+ * moment for — an unresolved block, or a row it could not place.
+ *
+ * They are still LISTED. A session that hid them would look emptier than it is,
+ * and knowing WHO is in a block whose timetable failed is exactly what makes it
+ * fixable. No time is invented for them.
+ */
+const UNTIMED_HEADING = "לא ניתן לחשב שעות אישיות למופע הזה — מוצגים הנבחנים בלבד.";
 
 // ===========================================================================
 // EX-PUB-UI-MVP — the publication surface
@@ -782,12 +757,12 @@ const PUBLISHED_WARNING_TEXT =
 const NO_PLAN_PUBLICATION_TEXT = "יש ליצור תוכנית מבחנים לפני הפרסום.";
 
 // ===========================================================================
-// EX-PAIR-UI-MVP — the pairing surface
+// EX-PAIR-UI-MVP — the pairing outcome vocabulary
 // ===========================================================================
 
 /**
- * The CLOSED pairing outcome table: every token the pairing action can put in
- * the query, mapped to a TONE and to ONE fixed Hebrew sentence this module owns.
+ * The CLOSED pairing outcome table: every token a pairing write can put in the
+ * query, mapped to a TONE and to ONE fixed Hebrew sentence this module owns.
  *
  * ONE table rather than a success table and an error table, for exactly the
  * reason the publication table above gives: a pairing has ONE outcome per
@@ -795,16 +770,17 @@ const NO_PLAN_PUBLICATION_TEXT = "יש ליצור תוכנית מבחנים לפ
  * diagnostic would need an assignment id in the query string, and this page puts
  * none there.
  *
+ * EX-ADMIN-WORKSPACE-UX moved the CONTROL onto the examinee's card and left this
+ * table exactly where it was, because the same committed writer produces the same
+ * outcomes: the card save reports its teaching-link leg through this very token,
+ * so not one of these sentences is restated anywhere else.
+ *
  * `offering_not_found` is deliberately absent, for the same reason it is absent
  * from every other table here: that refusal never returns to this course-scoped
  * route, because an id that did not resolve cannot be used to build a URL for it.
  *
  * Every sentence is this module's own, states the RULE that was applied, and
- * names NO trainee, NO examinee, NO session and NO id — the manager can see the
- * row they submitted from, and an id in a banner would be noise at best.
- *
- * The Hebrew is spelled out LOCALLY rather than imported from the committed
- * domain tables, for the containment reason recorded in the header.
+ * names NO trainee, NO examinee, NO session and NO id.
  */
 const EXAM_PAIRING_MESSAGES: Readonly<Record<string, PlanFeedback>> = Object.freeze({
   PAIRED: { tone: "success", message: "השיוך לנבחן/ת נשמר." },
@@ -846,6 +822,31 @@ const EXAM_PAIRING_MESSAGES: Readonly<Record<string, PlanFeedback>> = Object.fre
     tone: "error",
     message: "לא ניתן לקבוע את השיוך: קיימים שיוכים כפולים במפגש הזה. יש לתקן את השיבוצים.",
   },
+  /*
+    THE ONE-TO-ONE REFUSAL — and it is the BACKEND'S rule, not this page's.
+
+    Nothing here re-implements it. The teaching-link picker still offers every
+    instructed trainee of this session, the card still submits ONE selection, and
+    the committed pairing writer alone decides whether that selection is allowed.
+    Re-deriving the rule in the UI would give a manager a second, drifting
+    opinion about what is legal, and would go wrong the moment the backend's
+    definition of the conflict changed.
+
+    The sentence names NOTHING: not the conflicting trainee, not the examinee,
+    not an assignment id, not a pairing index and not any submitted value. It is
+    a constant this module owns, selected by a closed parser, so no value from
+    the query or from a submission can be echoed through it. The manager can see
+    the card they submitted from, and the correction is the same whoever the
+    other party is.
+
+    It reaches the screen through exactly the path every other pairing outcome
+    does: the card's save reports its teaching-link leg on the shared `pairing`
+    token, and the banner above the workspace renders this sentence.
+  */
+  examinee_already_paired: {
+    tone: "error",
+    message: "הנבחן/ת כבר משויך/ת לחניך/ה מודרך/ת אחר/ת.",
+  },
   stale_write: {
     tone: "error",
     message: "השיוך השתנה מאז שהדף נטען, ולכן לא נשמר. יש לרענן את הדף ולנסות שוב.",
@@ -856,11 +857,7 @@ const EXAM_PAIRING_MESSAGES: Readonly<Record<string, PlanFeedback>> = Object.fre
  * ONE pairing banner for one raw token, chosen from the frozen table above.
  *
  * Closed in BOTH directions and total over every input, exactly like the
- * publication parser beside it: a non-string (which is what a repeated query key
- * produces), an empty string and any token the table does not OWN all yield
- * `null`, which renders nothing. `Object.hasOwn` rather than a plain lookup, so
- * an inherited property name such as `constructor` cannot select a message.
- * Nothing from the query reaches the returned object.
+ * publication parser beside it.
  */
 function pairingFeedbackFrom(raw: string | string[] | undefined): PlanFeedback | null {
   if (typeof raw !== "string" || raw.length === 0) {
@@ -870,40 +867,137 @@ function pairingFeedbackFrom(raw: string | string[] | undefined): PlanFeedback |
 }
 
 /**
- * The submitted value that means "no partner".
+ * THE STANDALONE PAIRING FORM IS GONE, AND WHY ITS ACTION IS NOT.
  *
- * It MUST equal the sentinel the Server Action compares against. The two are
- * spelled separately rather than shared through a module, because this route's
- * action file is a `"use server"` module and may export nothing but its actions —
- * an exported constant there would be an additional public network id. The
- * contract suite asserts both literals, so they cannot drift apart silently.
+ * EX-PAIR-UI-MVP rendered a picker and a second save button under every
+ * INSTRUCTED_TRAINEE row, asking the same one-to-one link backwards. The
+ * workspace absorbs that control into the examinee's card, which owns the
+ * relationship — so this page no longer renders a pairing form, no longer holds
+ * the pairing form's own Hebrew, and no longer binds the standalone pairing
+ * action.
+ *
+ * That committed Server Action is deliberately LEFT IN PLACE rather than
+ * deleted: it is an already-reviewed endpoint that re-runs the admin boundary,
+ * the offering lookup and the lifecycle gate for itself, and removing a public
+ * endpoint is a lifecycle decision of its own rather than a UX one. What is gone
+ * is the surface, which is what the workspace was asked to change.
+ *
+ * The OUTCOME vocabulary above stays exactly where it was, because the card's
+ * teaching-link leg calls the SAME committed writer and reports through the SAME
+ * query token — so not one of those sentences is duplicated anywhere.
  */
-const EXAM_PAIRING_NONE_VALUE = "";
 
-/** The pairing control's own fixed Hebrew, owned entirely by this module. */
-const PAIRING_SECTION_LABEL = "שיוך לנבחן/ת";
-const PAIRING_NONE_OPTION_TEXT = "ללא שיוך";
-const PAIRING_SUBMIT_TEXT = "שמירת שיוך";
-const PAIRING_UNPAIRED_TEXT = "אין שיוך לנבחן/ת.";
-const PAIRING_NO_EXAMINEES_TEXT = "אין נבחנים במפגש הזה, ולכן אין למי לשייך.";
+// ===========================================================================
+// EX-ADMIN-WORKSPACE-UX — the workspace's own vocabulary
+// ===========================================================================
+
+/** The fixed labels of a block's derived timetable facts. */
+const BLOCK_DATE_LABEL = "תאריך";
+const BLOCK_START_LABEL = "תחילת המופע";
+const BLOCK_END_LABEL = "סיום המופע";
+const BLOCK_ARENA_LABEL = "מקום";
+const BLOCK_KIND_LABEL = "סוג מבחן";
+const BLOCK_PARALLEL_LABEL = "נבחנים במקביל";
+const BLOCK_ASSIGNED_LABEL = "נבחנים משובצים";
+const WAVE_LABEL = "גל";
+const WAVE_TIME_SEPARATOR = "–";
+const POSITION_LABEL = "מיקום";
+const MOVE_UP_LABEL = "העלאה בסדר";
+const MOVE_DOWN_LABEL = "הורדה בסדר";
+const MOVE_UP_GLYPH = "▲";
+const MOVE_DOWN_GLYPH = "▼";
+const TEACHES_LABEL = "מדריך/ה את";
+const NO_TEACHING_LINK_TEXT = "טרם שויך חניך מודרך.";
+const UNLINKED_INSTRUCTED_HEADING = "חניכים מודרכים שטרם שויכו לנבחן/ת";
+const NO_ARENA_TEXT = "לא צוין מקום";
+const EMPTY_BLOCK_TEXT = "עדיין אין נבחנים משובצים למופע הזה.";
+const NO_SESSIONS_TEXT = "עדיין לא נוצרו מפגשי מבחנים לקורס הזה.";
+const GROUPING_FAILED_TEXT =
+  "לא ניתן להציג כרגע את מפגשי המבחנים. יש לבדוק את נתוני המפגשים.";
 
 /**
- * The DEFINITION requirements that decide which assignment affordances a session
- * may show. Carried per definition id, from the definition reader the page
- * already loaded — no second query, and no widening of the session reader, which
- * does not report any of them.
+ * The BEGINNER-EXAM region's own fixed sentence.
+ *
+ * This branch adds NO beginner data and NO Teaching-Practice read. The region
+ * below exists so the read-only projection a separate branch is building has ONE
+ * named place to land in, and so that landing does not restructure the page
+ * again. Beginner exams stay editable only on the existing Teaching Practice
+ * screen.
+ */
+const BEGINNER_REGION_HEADING = "מבחני מתחילים";
+const BEGINNER_REGION_TEXT =
+  "מבחני המתחילים נגזרים מהתרגול המעשי ויוצגו כאן לקריאה בלבד. עריכה נעשית במסך התרגול המעשי.";
+
+
+/**
+ * The rule the region states WHATEVER it holds: these rows are a PROJECTION of
+ * Teaching Practice and are corrected there, never here. It is rendered beside
+ * the rows as well as instead of them, so the read-only rule does not disappear
+ * the moment the region stops being empty.
+ */
+/** The labels one beginner row and one beginner child are described by. */
+const BEGINNER_GROUP_LABEL = "\u05e7\u05d1\u05d5\u05e6\u05d4";
+const BEGINNER_RESPONSIBLE_LABEL = "\u05de\u05d3\u05e8\u05d9\u05da/\u05d4 \u05d0\u05d7\u05e8\u05d0\u05d9/\u05ea";
+const BEGINNER_PARTICIPANTS_LABEL = "\u05de\u05e9\u05ea\u05ea\u05e4\u05d9\u05dd";
+const BEGINNER_AGE_LABEL = "\u05d2\u05d9\u05dc";
+const BEGINNER_PARENT_LABEL = "\u05d4\u05d5\u05e8\u05d4";
+const BEGINNER_PARENT_PHONE_LABEL = "\u05d8\u05dc\u05e4\u05d5\u05df \u05d4\u05d5\u05e8\u05d4";
+const BEGINNER_ABSENT_TEXT = "\u05e0\u05e2\u05d3\u05e8/\u05ea";
+const BEGINNER_DRAFT_TEXT = "\u05d4\u05e9\u05d9\u05e2\u05d5\u05e8 \u05d8\u05e8\u05dd \u05e4\u05d5\u05e8\u05e1\u05dd";
+
+/**
+ * ONE optional text value, or the caller's own placeholder.
+ *
+ * A blank once trimmed is "nothing stored", because a label followed by an empty
+ * run of spaces reads as a rendering bug rather than as data.
+ */
+function presentTextOr(value: string | null, placeholder: string): string {
+  return value === null || value.trim().length === 0 ? placeholder : value;
+}
+
+const BEGINNER_READ_ONLY_TEXT =
+  "מבחני מתחילים הם תצוגה בלבד. כל שינוי נעשה במסך התרגול המעשי.";
+
+/**
+ * The DEFINITION facts that decide what a session may show and offer.
+ *
+ * Carried per definition id, from the definition reader the page already loaded —
+ * no second query, and no widening of the session reader, which reports none of
+ * them.
  *
  * The first two decide whether an EXAMINEE can be assigned through this surface
- * at all. The third is IT2's addition and is read only by the instructed-trainee
- * affordance: the two gates are separate on purpose, because a definition that
- * demands a lesson topic still legitimately wants its instructed trainee, and
- * folding them together would hide exactly the control that completes such a
- * block.
+ * at all. The third is read only by the instructed-trainee affordance: the two
+ * gates are separate on purpose, because a definition that demands a lesson topic
+ * still legitimately wants its instructed trainee. The last three are what the
+ * wave derivation and the block facts need.
  */
+/**
+ * The narrow shape every arrangement needs of ONE scheduled block.
+ *
+ * Structural rather than imported, and deliberately so: the committed session
+ * reader's row and the committed day grouping's row are two different types with
+ * the same facts in them, and both arrangements below have to render from either.
+ * Naming exactly the eight fields the workspace uses is what lets one component
+ * serve both without either reader widening.
+ */
+interface WorkspaceBlockFacts {
+  readonly sessionId: string;
+  readonly definitionId: string;
+  readonly definitionName: string;
+  readonly startTime: string;
+  readonly arena: string | null;
+  readonly title: string | null;
+  readonly notes: string | null;
+  readonly assignmentCount: number;
+}
+
 interface AssignmentDefinitionRequirements {
   readonly requiresLessonTopic: boolean;
   readonly requiresDiscipline: boolean;
   readonly requiresInstructedTrainee: boolean;
+  readonly durationMinutes: number;
+  readonly parallelCapacity: number;
+  readonly kind: string;
 }
 
 /**
@@ -920,12 +1014,97 @@ function DefinitionFact({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * The facts every schedule view states about ONE block, so a manager can run the
+ * day from whichever arrangement they happen to be reading.
+ *
+ * A responsive grid and never a table: it collapses to two columns on a phone.
+ */
+function BlockFacts({
+  dateLabel,
+  dayLabel,
+  startTime,
+  endTime,
+  arena,
+  kind,
+  parallelCapacity,
+  assignmentCount,
+}: {
+  dateLabel: string;
+  dayLabel: string;
+  startTime: string;
+  endTime: string | null;
+  arena: string | null;
+  kind: string;
+  parallelCapacity: number;
+  assignmentCount: number;
+}) {
+  return (
+    <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
+      <DefinitionFact label={BLOCK_DATE_LABEL} value={`${dayLabel} ${dateLabel}`} />
+      <DefinitionFact label={BLOCK_START_LABEL} value={startTime} />
+      <DefinitionFact label={BLOCK_END_LABEL} value={timeText(endTime)} />
+      <DefinitionFact label={BLOCK_KIND_LABEL} value={kind} />
+      <DefinitionFact
+        label={BLOCK_ARENA_LABEL}
+        value={arena === null || arena === "" ? NO_ARENA_TEXT : arena}
+      />
+      <DefinitionFact label={BLOCK_PARALLEL_LABEL} value={String(parallelCapacity)} />
+      <DefinitionFact label={BLOCK_ASSIGNED_LABEL} value={String(assignmentCount)} />
+    </dl>
+  );
+}
+
+/**
+ * ONE wave, READ-ONLY: the time printed ONCE, and the people examined at it.
+ *
+ * Two columns where there is room and a single stack on a phone, which is exactly
+ * why the time lives on the wave header and never inside a person's entry: a
+ * parallel pair would otherwise print the same clock time twice.
+ *
+ * The instructed trainee a person teaches is named INSIDE that person's entry and
+ * never as an entry of its own — it is examined alongside them and holds no slot.
+ */
+function ReadOnlyWave({ wave }: { wave: ExamWave }) {
+  return (
+    <li className="rounded-lg border border-border bg-muted px-3 py-2">
+      <p className="text-xs font-semibold text-card-foreground">
+        {WAVE_LABEL} · {wave.startTime} {WAVE_TIME_SEPARATOR} {timeText(wave.endTime)}
+      </p>
+      <ul className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {wave.examinees.map((examinee) => (
+          <li key={examinee.assignmentId} className="rounded-lg bg-card px-3 py-2">
+            <p className="text-sm text-card-foreground">{examinee.traineeName}</p>
+            <p className="text-xs text-muted-foreground">סוס: {horseText(examinee.horseName)}</p>
+            {storedDetailText(examinee.instructionTopic) !== null ? (
+              <p className="text-xs text-muted-foreground">
+                {INSTRUCTION_TOPIC_LABEL}: {storedDetailText(examinee.instructionTopic)}
+              </p>
+            ) : null}
+            {storedDetailText(examinee.discipline) !== null ? (
+              <p className="text-xs text-muted-foreground">
+                {DISCIPLINE_LABEL}: {storedDetailText(examinee.discipline)}
+              </p>
+            ) : null}
+            <p className="text-xs text-muted-foreground">
+              {TEACHES_LABEL}:{" "}
+              {examinee.instructedTraineeName ?? NO_TEACHING_LINK_TEXT}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </li>
+  );
+}
+
 export default async function CourseExamsPage({
   params,
   searchParams,
 }: {
   params: Promise<{ courseOfferingId: string }>;
   searchParams: Promise<{
+    tab?: string | string[];
+    view?: string | string[];
     created?: string | string[];
     existing?: string | string[];
     error?: string | string[];
@@ -951,6 +1130,9 @@ export default async function CourseExamsPage({
     instructedTraineeIssues?: string | string[];
     publication?: string | string[];
     pairing?: string | string[];
+    assignmentEdit?: string | string[];
+    assignmentEditIssues?: string | string[];
+    assignmentOrder?: string | string[];
   }>;
 }) {
   const { courseOfferingId } = await params;
@@ -985,8 +1167,7 @@ export default async function CourseExamsPage({
   // 4. The stored SESSIONS of the SAME verified offering, through the committed
   //    admin session reader. It re-runs the admin/offering boundary and the read
   //    gate on its own, and like the definition read it is given the VALIDATED
-  //    context id and never the raw route param. A typed not-found fails closed
-  //    the same way; every other failure keeps its identity and propagates.
+  //    context id and never the raw route param.
   let sessionView: AdminExamSessionsView;
   try {
     sessionView = await readAdminExamSessions(context.id);
@@ -998,11 +1179,8 @@ export default async function CourseExamsPage({
   }
 
   // 5. The ASSIGNABLE trainees of the SAME verified offering, through the
-  //    committed admin picker reader. Like both reads above it re-runs the
-  //    admin/offering boundary and the READ gate on its own and is given the
-  //    VALIDATED context id, never the raw route param. It is asked ONCE for the
-  //    whole page rather than once per session: the eligible roster is a property
-  //    of the OFFERING, so a per-session read would be the same query repeated.
+  //    committed admin picker reader. Asked ONCE for the whole page rather than
+  //    once per session: the eligible roster is a property of the OFFERING.
   let eligibleView: EligibleExamTraineeListView;
   try {
     eligibleView = await readEligibleExamTraineesForAdmin(context.id);
@@ -1027,6 +1205,42 @@ export default async function CourseExamsPage({
     throw error;
   }
 
+  // 6b. The CANONICAL derived timetable of the SAME verified offering, through
+  //     the admin reading of the committed exam plan pipeline. This is the ONLY
+  //     source of a clock value on this page: it runs the same `loadPlan`, the
+  //     same adapter and the same block timetable core the instructor DTO and
+  //     the trainee day are built from, so the admin schedule shows exactly the
+  //     times everybody else is shown. It publishes assignment ids and derived
+  //     moments and nothing else — no student id, no pairing index, no name.
+  let waveView: AdminExamWaveView;
+  try {
+    waveView = await readAdminExamWaveView(context.id);
+  } catch (error) {
+    if (error instanceof CourseOfferingNotFoundError) {
+      notFound();
+    }
+    throw error;
+  }
+
+  // 6c. The CANONICAL ADMIN READING of the same verified offering. It is the one
+  //     source of BEGINNER rows: the merged pipeline gates beginner
+  //     Teaching-Practice reads to Level 1 in the loader, so a Level-2 offering
+  //     receives none and this page adds no second level test of its own. No
+  //     second query, no Teaching-Practice import and no writer is reached.
+  // Typed FROM THE READER rather than from the narrowing module: the committed
+  // contract allows exactly one production module to name the read DTO, so that
+  // narrowing stays in one place. Naming the reader's own return type asks for
+  // precisely the rows this page is allowed to receive, and reaches nothing else.
+  let planView: Awaited<ReturnType<typeof readAdminExamPlan>>;
+  try {
+    planView = await readAdminExamPlan(context.id);
+  } catch (error) {
+    if (error instanceof CourseOfferingNotFoundError) {
+      notFound();
+    }
+    throw error;
+  }
+
   // 7. The day grouping. The committed core is the FINAL presentation-order
   //    authority — orderIndex, then start time, then definition name, then session
   //    id — so the page neither sorts nor re-orders what it renders. The core is
@@ -1034,59 +1248,66 @@ export default async function CourseExamsPage({
   //    markup below turns into ONE fixed sentence rather than a raw diagnostic.
   const grouping = groupAdminExamSessionsByDay(sessionView.sessions);
 
-  // 8. The assignment rows, bucketed by the session they belong to. A plain
-  //    grouping and nothing else: the committed reader already imposed the total
-  //    order — session, then position, then assignment id — and a `for...of` that
-  //    appends in arrival order PRESERVES it, which is why the page neither sorts,
-  //    filters, slices nor reverses anything here.
+  // 8. The assignment rows, bucketed by the session they belong to, and by role.
+  //    A plain grouping and nothing else: the committed reader already imposed the
+  //    total order — session, then position, then assignment id — and a `for...of`
+  //    that appends in arrival order PRESERVES it, which is why the page neither
+  //    sorts, filters, slices nor reverses anything here.
   //
-  //    No row is dropped. An `INSTRUCTED_TRAINEE` row that this surface cannot
-  //    create is bucketed exactly like an examinee, because hiding it would make
-  //    a session disagree with its own count.
+  //    THREE buckets are filled in the SAME single pass. The EXAMINEE bucket is
+  //    what the waves are dealt from and what the position numbers count within;
+  //    the INSTRUCTED bucket is what the teaching-link picker offers, so "only
+  //    trainees of THIS session" is a property of the DATA STRUCTURE rather than
+  //    of a comparison somebody could later delete; and the `teaches` map answers,
+  //    for one examinee, WHICH trainee it teaches — read from the committed
+  //    reader's own resolved pairing and from nothing else.
   //
-  //    EX-PAIR-UI-MVP adds a SECOND bucket in the SAME single pass, holding the
-  //    EXAMINEE rows alone. It is what the pairing picker offers, and building it
-  //    HERE — keyed by `sessionId`, from rows the reader already ordered — is
-  //    what makes "only examinees of THIS session" a property of the DATA
-  //    STRUCTURE rather than of a comparison somebody could later delete. The
-  //    page still never sorts, filters, slices or reverses: this is one more
-  //    `for...of` that APPENDS in arrival order, exactly like the first bucket.
-  const assignmentsBySession = new Map<string, AdminExamAssignmentRow[]>();
+  //    No row is dropped. An instructed trainee that no examinee teaches is still
+  //    listed under its own heading, because hiding it would make a session
+  //    disagree with its own count.
   const examineesBySession = new Map<string, AdminExamAssignmentRow[]>();
+  const instructedBySession = new Map<string, AdminExamAssignmentRow[]>();
+  const teachesByExaminee = new Map<string, AdminExamAssignmentRow>();
   for (const assignment of assignmentView.assignments) {
-    const bucket = assignmentsBySession.get(assignment.sessionId);
-    if (bucket === undefined) {
-      assignmentsBySession.set(assignment.sessionId, [assignment]);
+    if (assignment.role === "EXAMINEE") {
+      const examinees = examineesBySession.get(assignment.sessionId);
+      if (examinees === undefined) {
+        examineesBySession.set(assignment.sessionId, [assignment]);
+      } else {
+        examinees.push(assignment);
+      }
+      continue;
+    }
+    const instructed = instructedBySession.get(assignment.sessionId);
+    if (instructed === undefined) {
+      instructedBySession.set(assignment.sessionId, [assignment]);
     } else {
-      bucket.push(assignment);
+      instructed.push(assignment);
     }
-    if (assignment.role !== "EXAMINEE") {
-      continue;
+    if (assignment.pairedExamineeAssignmentId !== null) {
+      teachesByExaminee.set(assignment.pairedExamineeAssignmentId, assignment);
     }
-    const examinees = examineesBySession.get(assignment.sessionId);
-    if (examinees === undefined) {
-      examineesBySession.set(assignment.sessionId, [assignment]);
-      continue;
-    }
-    examinees.push(assignment);
   }
 
-  // The definition requirements that gate the two create affordances, keyed by
-  // definition id and taken from the DEFINITION reader already loaded above — no
-  // second query, and no widening of the session reader, which reports none of
-  // them. The third flag is copied straight through, exactly like the first two.
+  // The definition facts that gate the affordances and feed the wave derivation,
+  // keyed by definition id and taken from the DEFINITION reader already loaded
+  // above — no second query, and no widening of the session reader.
   const requirementsByDefinition = new Map<string, AssignmentDefinitionRequirements>();
   for (const definition of view.definitions) {
     requirementsByDefinition.set(definition.id, {
       requiresLessonTopic: definition.requiresLessonTopic,
       requiresDiscipline: definition.requiresDiscipline,
       requiresInstructedTrainee: definition.requiresInstructedTrainee,
+      durationMinutes: definition.durationMinutes,
+      parallelCapacity: definition.parallelCapacity,
+      kind: definition.kind,
     });
   }
 
   // 9. The CLOSED feedback query, resolved ONCE and only AFTER authorization and
-  //    all four reads. It selects constant messages and influences nothing else —
-  //    not any read above, not the back link, not any create affordance.
+  //    all four reads. It selects constant messages and the open section, and
+  //    influences nothing else — not any read above, not the back link, not any
+  //    create affordance and not any scope.
   const query = await searchParams;
   const feedback = feedbackFrom(query);
   const { createdDefinition, createError, createIssues } = query;
@@ -1097,9 +1318,7 @@ export default async function CourseExamsPage({
   // The session outcome tokens, taken by DESTRUCTURING from that same one resolved
   // query and parsed by the committed route-local table. `createdSession` is
   // honoured only on the exact string "1": a repeated key arrives as an ARRAY, and
-  // the `typeof` test is what stops `["1"]` coercing its way to a match. The other
-  // two parsers recognize only codes their frozen tables own, so an unknown code
-  // and an array alike select nothing. No value from here is ever interpolated.
+  // the `typeof` test is what stops `["1"]` coercing its way to a match.
   const { createdSession, sessionError, sessionIssues } = query;
   const sessionErrorText = examSessionCreateErrorText(sessionError);
   const sessionIssueTexts = examSessionCreateIssueTexts(sessionIssues);
@@ -1107,9 +1326,7 @@ export default async function CourseExamsPage({
     typeof createdSession === "string" && createdSession === "1";
 
   // The session EDIT and REMOVAL outcome tokens, destructured from that SAME one
-  // resolved query and parsed by the closed route-local tables above. Six more
-  // tokens, no more query resolutions, and no value from any of them is ever
-  // interpolated: each one can only SELECT a constant sentence, never supply one.
+  // resolved query and parsed by the closed route-local tables above.
   const {
     updatedSession,
     unchangedSession,
@@ -1137,8 +1354,7 @@ export default async function CourseExamsPage({
   // The ASSIGNMENT outcome tokens, destructured from that SAME one resolved query
   // and parsed by the route-local message module — which is closed in both
   // directions and owns every sentence, so a query value can only SELECT text and
-  // never supply it. Five more tokens, no more query resolutions, and none of
-  // them is ever interpolated into the page.
+  // never supply it.
   const {
     createdAssignment,
     assignmentError,
@@ -1153,11 +1369,7 @@ export default async function CourseExamsPage({
   const assignmentDeleteErrorText = examAssignmentDeleteErrorText(assignmentDeleteError);
 
   // The INSTRUCTED-TRAINEE outcome tokens, destructured from that SAME one
-  // resolved query and parsed by their own closed route-local message module —
-  // which owns every sentence, so a query value can only SELECT text and never
-  // supply it. Three more tokens, no more query resolutions, and none of them is
-  // ever interpolated into the page. They are a separate family from the examinee
-  // ones on purpose: both forms can be on screen under the same session at once.
+  // resolved query and parsed by their own closed route-local message module.
   const {
     createdInstructedTrainee,
     instructedTraineeError,
@@ -1172,39 +1384,108 @@ export default async function CourseExamsPage({
     examInstructedTraineeIssueTexts(instructedTraineeIssues);
 
   // The PUBLICATION outcome token, destructured from that SAME one resolved query
-  // and parsed by the closed route-local table above. ONE more token, no more
-  // query resolutions, and it is never interpolated into the page: it can only
-  // SELECT a constant sentence and a constant tone, never supply either. It
-  // influences NO read above, no affordance and no scope — the publication STATE
-  // the controls below are derived from comes from the database, never from here.
+  // and parsed by the closed route-local table above. It influences NO read, no
+  // affordance and no scope — the publication STATE the controls below are derived
+  // from comes from the database, never from here.
   const { publication } = query;
   const publicationFeedback = publicationFeedbackFrom(publication);
 
-  // The PAIRING outcome token, destructured from that SAME one resolved query
-  // and parsed by the closed route-local table above. ONE more token, no more
-  // query resolutions, and it is never interpolated into the page: it can only
-  // SELECT a constant sentence and a constant tone, never supply either.
-  //
-  // It is FEEDBACK and never STATE. Nothing derives a pairing from it: which
-  // examinee each control pre-selects comes from the committed reader's own
-  // resolved answer, so a hand-typed `?pairing=PAIRED` changes what one banner
-  // says and nothing else — no read, no selection, no affordance and no write.
+  // The PAIRING outcome token. It is FEEDBACK and never STATE: which trainee each
+  // card pre-selects comes from the committed reader's own resolved answer, so a
+  // hand-typed `?pairing=PAIRED` changes what one banner says and nothing else.
   const { pairing } = query;
   const pairingFeedback = pairingFeedbackFrom(pairing);
 
+  // EX-ADMIN-WORKSPACE-UX's own two outcome families, parsed by the closed
+  // route-local workspace message module. Neither is ever interpolated: each can
+  // only SELECT a constant sentence and a constant tone, never supply either.
+  const { assignmentEdit, assignmentEditIssues, assignmentOrder } = query;
+  const assignmentEditFeedback = examAssignmentEditFeedback(assignmentEdit);
+  const assignmentEditIssueTexts = examAssignmentEditIssueTexts(assignmentEditIssues);
+  const assignmentOrderFeedback = examAssignmentOrderFeedback(assignmentOrder);
+
+  /**
+   * THE BEGINNER ROWS — a projection of Teaching Practice, read-only here.
+   *
+   * Taken from the committed admin reading's own rows, narrowed to the fields
+   * this screen renders. `row.source === "BEGINNER"` is the DTO's own
+   * discriminator and the only test applied: WHICH beginner rows exist is the
+   * merged loader's Level-1 containment decision, and re-checking the level here
+   * would be a second opinion about a rule this route does not own.
+   */
+  const beginnerRows: readonly WorkspaceBeginnerRow[] = planView.rows
+    .filter((row) => row.source === "BEGINNER" && row.beginner !== null)
+    .map((row) => {
+      const detail = row.beginner as NonNullable<typeof row.beginner>;
+      return {
+        sessionId: row.sessionId,
+        date: row.date,
+        startTime: row.startTime,
+        displayEndTime: row.displayEndTime,
+        beginnerFormat: detail.beginnerFormat,
+        groupName: detail.groupName,
+        location: detail.location,
+        responsibleInstructorName: detail.responsibleInstructorName,
+        participantNames: detail.participantNames,
+        participantCount: detail.participantCount,
+        children: detail.children.map((child) => ({
+          fullName: child.fullName,
+          age: child.age,
+          gender: child.gender,
+          childNotes: child.childNotes,
+          parentName: child.parentName,
+          parentPhone: child.parentPhone,
+          horseName: child.horseName,
+          equipmentNotes: child.equipmentNotes,
+          isAbsent: child.isAbsent,
+        })),
+        notes: detail.notes,
+        isPublished: detail.isPublished,
+      };
+    });
+
   const dashboardHref = `/admin/courses/${encodeURIComponent(context.id)}`;
+  const examsPath = `${dashboardHref}/exams`;
   const isPublished = view.publishedAt !== null;
   const hasDefinitions = view.definitions.length > 0;
+
+  // WHICH SECTION IS OPEN. An explicit `tab` the manager clicked wins; otherwise
+  // the family of feedback that came back decides, so a manager who published
+  // lands on the publication section and one who saved a card lands back among
+  // the assignments — WITHOUT any of the ten committed redirects changing.
+  const activeTab = resolveExamWorkspaceTab({
+    explicit: query.tab,
+    hasDefinitionFeedback: showCreatedNotice || createErrorText !== null,
+    hasScheduleFeedback:
+      showSessionCreatedNotice ||
+      showSessionUpdatedNotice ||
+      showSessionUnchangedNotice ||
+      showSessionDeletedNotice ||
+      sessionErrorText !== null ||
+      sessionEditErrorText !== null ||
+      sessionDeleteErrorText !== null,
+    hasAssignmentFeedback:
+      showAssignmentCreatedNotice ||
+      showAssignmentDeletedNotice ||
+      showInstructedTraineeCreatedNotice ||
+      assignmentErrorText !== null ||
+      assignmentDeleteErrorText !== null ||
+      instructedTraineeErrorTextValue !== null ||
+      assignmentEditFeedback !== null ||
+      assignmentOrderFeedback !== null ||
+      pairingFeedback !== null,
+    hasPublicationFeedback: publicationFeedback !== null,
+  });
+
+  // WHICH ARRANGEMENT the two schedule-bearing sections show. A closed parser
+  // with a default, exactly like the section token.
+  const scheduleView: ExamScheduleView = parseExamScheduleView(query.view);
 
   // 10. ONE lifecycle evaluation, every display decision derived from it. The gate
   //    is the non-throwing policy question on the VERIFIED status, so an ARCHIVED
   //    offering keeps a readable, affordance-free page instead of an error. Each
   //    server binding re-evaluates the same gate and refuses on its own, so this
   //    can never be the enforcement.
-  //
-  //    The two affordances are mutually exclusive by CONSTRUCTION and not merely
-  //    by position: a plan either exists or it does not, and publication is not
-  //    consulted by either flag.
   const mayConfigure = evaluateCourseOperationPolicy(
     context.status,
     "SCHEDULE_DRAFT_CONFIGURATION",
@@ -1214,55 +1495,266 @@ export default async function CourseExamsPage({
 
   // The THIRD affordance, over the SAME single evaluation. A session must name a
   // stored exam, so this one carries an extra structural precondition the other
-  // two do not: with no definition configured there is nothing a session could be
-  // scheduled against, and the empty-definitions state below says so instead.
+  // two do not.
   const showSessionCreateForm =
     sessionView.planExists && view.definitions.length > 0 && mayConfigure;
 
   // The picker's options come from the DEFINITION reader already loaded above —
-  // no second query — narrowed to exactly the three fields the form accepts. The
-  // parameter is not named `definition`: the id here legitimately becomes a form
-  // value, and the committed guard that pins `definition.id` to its single use as
-  // a React key is what keeps it from ever being rendered as text.
+  // no second query — narrowed to exactly the three fields the form accepts.
   const sessionDefinitionOptions = view.definitions.map((option) => ({
     id: option.id,
     name: option.name,
     kind: option.kind,
   }));
 
-  // The two ASSIGNMENT actions, bound ONCE to the VERIFIED context id and reused
-  // by every per-session control below. Hoisted rather than bound inline, for the
-  // same reason every other mutation's binding expression appears exactly once in
-  // this file: one binding site is one place to check that the id came from
-  // `context`, and never from the raw route param.
+  // Every ASSIGNMENT-writing action, bound ONCE to the VERIFIED context id and
+  // reused by every per-session and per-card control below. Hoisted rather than
+  // bound inline, for the reason every other binding expression appears exactly
+  // once in this file: one binding site is one place to check that the id came
+  // from `context`, and never from the raw route param. The offering id therefore
+  // travels inside the encrypted Server Action payload and is never a form field.
   const boundCreateAssignmentAction = createExamAssignmentAction.bind(null, context.id);
   const boundDeleteAssignmentAction = deleteExamAssignmentAction.bind(null, context.id);
-
-  // The INSTRUCTED-TRAINEE create action, bound ONCE to the VERIFIED context id
-  // on exactly the same terms, and reused by every per-session control below.
-  // Hoisted rather than bound inside the session loop, for the reason every other
-  // binding expression appears exactly once in this file: one binding site is one
-  // place to check that the id came from `context`, and never from the raw route
-  // param.
   const boundCreateInstructedTraineeAssignmentAction =
     createExamInstructedTraineeAssignmentAction.bind(null, context.id);
-
-  // The PUBLICATION action, bound ONCE to the VERIFIED context id on exactly the
-  // same terms as every other binding expression in this file: one binding site
-  // is one place to check that the id came from `context`, and never from the raw
-  // route param. The offering id therefore travels inside the encrypted Server
-  // Action payload and is never a form field.
   const boundSetExamPlanPublicationAction =
     setExamPlanPublicationAction.bind(null, context.id);
+  const boundUpdateExamAssignmentDetailsAction =
+    updateExamAssignmentDetailsAction.bind(null, context.id);
+  const boundMoveExamAssignmentAction = moveExamAssignmentAction.bind(null, context.id);
 
-  // The PAIRING action, bound ONCE to the VERIFIED context id on exactly the
-  // same terms, and reused by every per-assignment control below. Hoisted rather
-  // than bound inside the session loop, for the reason every other binding
-  // expression appears exactly once in this file: one binding site is one place
-  // to check that the id came from `context`, and never from the raw route
-  // param. The offering id therefore travels inside the encrypted Server Action
-  // payload and is never a form field.
-  const boundSetExamPairingAction = setExamPairingAction.bind(null, context.id);
+  /**
+   * The three arrangements of the stored schedule, built ONCE from the committed
+   * day grouping and shared by both schedule-bearing sections. A failed grouping
+   * yields an empty timeline and the fixed sentence below says so.
+   */
+  const scheduleDays = grouping.ok ? grouping.days : [];
+  const timeline = buildGeneralTimeline(scheduleDays);
+  const definitionGroups = groupTimelineByDefinition(timeline);
+
+  /**
+   * Everything ONE block needs, assembled once and reused by every arrangement
+   * and by the assignments section.
+   *
+   * IT DERIVES NO TIME. The waves, their moments and the block end all come from
+   * the CANONICAL view read above; this function only looks that block up by its
+   * session id and JOINS the workspace's own examinee rows to the assignment ids
+   * the canonical waves named.
+   *
+   * A session the canonical view has no entry for — an unresolved block, or one
+   * the plan loader did not report — yields no waves and lists every examinee as
+   * untimed, so the roster is still complete and the surface says plainly that
+   * the times are unavailable. It never invents one.
+   *
+   * The teaching link is read from the `teaches` map — the committed reader's own
+   * resolved pairing — so an ambiguous, unmatched or absent one resolves to
+   * `null` and the surface says plainly that there is none.
+   */
+  function describeBlock(session: WorkspaceBlockFacts) {
+    const requirements = requirementsByDefinition.get(session.definitionId);
+    const examineeRows = examineesBySession.get(session.sessionId) ?? NO_ASSIGNMENTS;
+    const instructedRows = instructedBySession.get(session.sessionId) ?? NO_ASSIGNMENTS;
+    const byAssignmentId = new Map<string, WorkspaceExaminee>();
+    for (const row of examineeRows) {
+      const taught = teachesByExaminee.get(row.assignmentId);
+      byAssignmentId.set(row.assignmentId, {
+        assignmentId: row.assignmentId,
+        traineeName: row.traineeName,
+        horseName: row.horseName,
+        instructionTopic: row.instructionTopic,
+        discipline: row.discipline,
+        instructedTraineeAssignmentId: taught === undefined ? null : taught.assignmentId,
+        instructedTraineeName: taught === undefined ? null : taught.traineeName,
+      });
+    }
+    const canonical = waveView.blocks.get(session.sessionId);
+    const waves =
+      canonical === undefined
+        ? NO_RENDERED_WAVES
+        : attachExamineesToWaves(canonical.waves, byAssignmentId);
+    const untimed = collectUntimedExaminees(
+      canonical === undefined
+        ? examineeRows.map((row) => row.assignmentId)
+        : canonical.untimedExamineeAssignmentIds,
+      byAssignmentId,
+    );
+    return {
+      requirements,
+      examineeRows,
+      instructedRows,
+      waves,
+      untimed,
+      blockEndTime: canonical === undefined ? null : canonical.derivedBlockEndTime,
+    };
+  }
+
+  /** ONE block, rendered READ-ONLY, as all three schedule arrangements show it. */
+  function renderScheduleBlock({
+    session,
+    dayLabel,
+    dateLabel,
+  }: {
+    session: WorkspaceBlockFacts;
+    dayLabel: string;
+    dateLabel: string;
+  }) {
+    const { requirements, waves, untimed, blockEndTime } = describeBlock(session);
+    return (
+      <div className="rounded-lg border border-border bg-card px-4 py-3">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="text-sm font-semibold text-card-foreground">
+            {session.startTime}
+          </span>
+          <span className="text-sm text-card-foreground">{session.definitionName}</span>
+        </div>
+        {session.title !== null && session.title !== "" ? (
+          <p className="mt-1 text-sm text-card-foreground">{session.title}</p>
+        ) : null}
+        <BlockFacts
+          dayLabel={dayLabel}
+          dateLabel={dateLabel}
+          startTime={session.startTime}
+          endTime={blockEndTime}
+          arena={session.arena}
+          kind={requirements === undefined ? kindText("") : kindText(requirements.kind)}
+          parallelCapacity={requirements === undefined ? 0 : requirements.parallelCapacity}
+          assignmentCount={session.assignmentCount}
+        />
+        {session.notes !== null && session.notes !== "" ? (
+          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{session.notes}</p>
+        ) : null}
+        {waves.length > 0 ? (
+          <ul className="mt-3 flex flex-col gap-2">
+            {waves.map((wave) => (
+              <ReadOnlyWave key={wave.startTime} wave={wave} />
+            ))}
+          </ul>
+        ) : null}
+        {untimed.length > 0 ? (
+          <div className="mt-3">
+            <p className="text-xs font-semibold text-warning">{UNTIMED_HEADING}</p>
+            <ul className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {untimed.map((examinee) => (
+                <li key={examinee.assignmentId} className="rounded-lg bg-card px-3 py-2">
+                  <p className="text-sm text-card-foreground">{examinee.traineeName}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {waves.length === 0 && untimed.length === 0 ? (
+          <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{EMPTY_BLOCK_TEXT}</p>
+        ) : null}
+      </div>
+    );
+  }
+
+  /**
+   * The SAME three arrangements, expressed as SECTIONS so both schedule-bearing
+   * tabs can render them identically: `general` is one unheaded section holding
+   * the whole timeline, `type` is one section per exam definition, and `date` is
+   * one section per stored day.
+   *
+   * Built from the SAME timeline and the SAME day grouping, so the two tabs can
+   * never disagree about what exists or about sequence.
+   */
+  interface ScheduleSection {
+    readonly key: string;
+    readonly heading: string | null;
+    readonly subheading: string | null;
+    readonly entries: typeof timeline;
+  }
+
+  const scheduleSections: readonly ScheduleSection[] =
+    scheduleView === "type"
+      ? definitionGroups.map((group) => ({
+          key: group.definitionId,
+          heading: group.definitionName,
+          subheading: null,
+          entries: group.entries,
+        }))
+      : scheduleView === "date"
+        ? scheduleDays.map((day) => ({
+            key: day.dateKey,
+            heading: day.dayLabel,
+            subheading: day.dateLabel,
+            entries: timeline.filter((entry) => entry.dateKey === day.dateKey),
+          }))
+        : [
+            {
+              key: "general",
+              heading: null,
+              subheading: null,
+              entries: timeline,
+            },
+          ];
+
+  /** The view switcher. Plain links carrying ONE closed token and never an id. */
+  function renderScheduleViewNav() {
+    return (
+      <nav aria-label="תצוגת הלו״ז" className="flex flex-wrap gap-2">
+        {EXAM_SCHEDULE_VIEWS.map((token) => (
+          <Link
+            key={token}
+            href={`${examsPath}?tab=${activeTab}&view=${token}`}
+            aria-current={scheduleView === token ? "true" : undefined}
+            className={
+              scheduleView === token
+                ? "rounded-lg bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground"
+                : "rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground"
+            }
+          >
+            {EXAM_SCHEDULE_VIEW_LABELS[token]}
+          </Link>
+        ))}
+      </nav>
+    );
+  }
+
+  /**
+   * The three arrangements, from the SAME timeline.
+   *
+   * `general` is the flat continuous list, `type` buckets it by exam definition
+   * and `date` by stored day. None of them re-reads anything and none of them
+   * sorts: each is the committed order, arranged.
+   */
+  function renderScheduleViews() {
+    if (!grouping.ok) {
+      return <p className="mt-2 text-sm leading-relaxed text-danger">{GROUPING_FAILED_TEXT}</p>;
+    }
+    if (timeline.length === 0) {
+      return <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{NO_SESSIONS_TEXT}</p>;
+    }
+    return (
+      <ul className="mt-4 flex flex-col gap-5">
+        {scheduleSections.map((section) => (
+          <li key={section.key}>
+            {section.heading !== null ? (
+              <div className="flex flex-wrap items-baseline gap-2 border-b border-border pb-2">
+                <span className="text-sm font-semibold text-card-foreground">
+                  {section.heading}
+                </span>
+                {section.subheading !== null ? (
+                  <span className="text-xs text-muted-foreground">{section.subheading}</span>
+                ) : null}
+              </div>
+            ) : null}
+            <ul className="mt-3 flex flex-col gap-2">
+              {section.entries.map((entry) => (
+                <li key={entry.session.sessionId}>
+                  {renderScheduleBlock({
+                    session: entry.session,
+                    dayLabel: entry.dayLabel,
+                    dateLabel: entry.dateLabel,
+                  })}
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -1271,8 +1763,8 @@ export default async function CourseExamsPage({
       <div className="rounded-xl border border-border bg-card p-5">
         <h2 className="text-base font-semibold text-card-foreground">מבחנים</h2>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          הגדרות המבחנים של הקורס. מוצגות ההגדרות עצמן בלבד — ללא מועדי מבחן, ללא
-          שיבוץ נבחנים וללא נתוני חניכים או מדריכים.
+          סביבת העבודה של מבחני הקורס: סוגי המבחנים, המופעים והזמנים, שיבוץ
+          הנבחנים והפרסום לחניכים — כל אחד בלשונית משלו.
         </p>
       </div>
 
@@ -1417,6 +1909,25 @@ export default async function CourseExamsPage({
         </div>
       ) : null}
 
+      {assignmentEditFeedback !== null ? (
+        <div className={FEEDBACK_CLASS[assignmentEditFeedback.tone]}>
+          <p>{assignmentEditFeedback.message}</p>
+          {assignmentEditIssueTexts.length > 0 ? (
+            <ul className="mt-2 list-inside list-disc text-sm">
+              {assignmentEditIssueTexts.map((text) => (
+                <li key={text}>{text}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
+      {assignmentOrderFeedback !== null ? (
+        <div className={FEEDBACK_CLASS[assignmentOrderFeedback.tone]}>
+          {assignmentOrderFeedback.message}
+        </div>
+      ) : null}
+
       {!view.planExists ? (
         <div className="rounded-xl border border-dashed border-border bg-muted p-5">
           <h3 className="text-sm font-semibold text-card-foreground">
@@ -1451,243 +1962,160 @@ export default async function CourseExamsPage({
         </div>
       ) : (
         <>
-          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-5 py-4">
-            <span className="text-sm text-muted-foreground">מצב תוכנית המבחנים:</span>
-            <span
-              className={
-                isPublished
-                  ? "rounded-lg bg-success-muted px-3 py-1 text-sm font-medium text-success"
-                  : "rounded-lg bg-muted px-3 py-1 text-sm font-medium text-muted-foreground"
-              }
-            >
-              {isPublished ? "פורסמה" : "טיוטה"}
-            </span>
-          </div>
-
           {/*
-            EX-PUB-UI-MVP — THE PUBLICATION CARD.
+            THE WORKSPACE NAVIGATION.
 
-            The one surface from which a manager makes the exam plan visible to
-            trainees, or takes it back out of sight. It renders the state in the
-            two exact words this slice owns, and — behind the SAME single
-            lifecycle evaluation every other affordance on this page uses — ONE
-            form carrying ONE fixed hidden `operation` value.
-
-            The two forms are MUTUALLY EXCLUSIVE by the stored state: a draft plan
-            gets the publish form and no unpublish control, and a published plan
-            gets the unpublish form and no publish control. Neither is a toggle
-            whose meaning depends on what the client believes, and neither reads
-            the query string: `isPublished` comes from the committed reader's
-            `publishedAt` and from nothing else.
-
-            NO CLIENT COMPONENT. These are plain POST-ing forms on a Server
-            Action, so a GET of this route — a refresh, a back button, a prefetch,
-            a bookmark — can never change publication. There is no effect, no
-            auto-submit and no publication link anywhere on this page.
-
-            The warning is INFORMATIONAL. It disables nothing: the definition and
-            session forms above stay exactly as available after publication as
-            before, which is the committed lifecycle policy's decision and not
-            this page's.
+            Four plain links, each carrying ONE closed section token and nothing
+            else — no session id, no assignment id, no definition id and no
+            publication operation. A GET of any of them re-renders this same
+            Server Component and can never write.
           */}
-          <div className="rounded-xl border border-border bg-card p-5">
-            <h3 className="text-sm font-semibold text-card-foreground">
-              פרסום לוח המבחנים
-            </h3>
-            <p className="mt-2 text-sm text-muted-foreground">
-              מצב נוכחי:{" "}
-              <span className="font-medium text-card-foreground">
-                {isPublished ? PUBLICATION_PUBLISHED_TEXT : PUBLICATION_DRAFT_TEXT}
-              </span>
-            </p>
+          <nav
+            aria-label="סביבת העבודה של המבחנים"
+            className="flex flex-wrap gap-2 rounded-xl border border-border bg-card p-3"
+          >
+            {EXAM_WORKSPACE_TABS.map((token) => (
+              <Link
+                key={token}
+                href={`${examsPath}?tab=${token}`}
+                aria-current={activeTab === token ? "page" : undefined}
+                className={
+                  activeTab === token
+                    ? "rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+                    : "rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted-foreground"
+                }
+              >
+                {EXAM_WORKSPACE_TAB_LABELS[token]}
+              </Link>
+            ))}
+          </nav>
 
-            {isPublished ? (
-              <p className="mt-3 rounded-lg bg-warning-muted px-4 py-3 text-sm leading-relaxed text-warning">
-                {PUBLISHED_WARNING_TEXT}
-              </p>
-            ) : null}
-
-            {mayConfigure ? (
-              isPublished ? (
-                <form action={boundSetExamPlanPublicationAction} className="mt-4">
-                  <input type="hidden" name="operation" value="UNPUBLISH" readOnly />
-                  <button
-                    type="submit"
-                    className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-card-foreground"
-                  >
-                    {UNPUBLISH_BUTTON_TEXT}
-                  </button>
-                </form>
+          {/* =================================================================
+              SECTION 1 — סוגי מבחנים
+              ================================================================= */}
+          {activeTab === "definitions" ? (
+            <>
+              {hasDefinitions ? (
+                <ul className="flex flex-col gap-3">
+                  {view.definitions.map((definition) => (
+                    <li
+                      key={definition.id}
+                      className="rounded-xl border border-border bg-card p-4"
+                    >
+                      <h3 className="text-sm font-semibold text-card-foreground">
+                        {definition.name}
+                      </h3>
+                      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
+                        <DefinitionFact label="סוג מבחן" value={kindText(definition.kind)} />
+                        <DefinitionFact
+                          label="משך"
+                          value={`${definition.durationMinutes} דקות`}
+                        />
+                        <DefinitionFact
+                          label="נבחנים במקביל"
+                          value={String(definition.parallelCapacity)}
+                        />
+                        <DefinitionFact
+                          label="חניך מודרך נדרש"
+                          value={requirementText(definition.requiresInstructedTrainee)}
+                        />
+                        <DefinitionFact
+                          label="נושא שיעור נדרש"
+                          value={requirementText(definition.requiresLessonTopic)}
+                        />
+                        <DefinitionFact
+                          label="דיסציפלינה נדרשת"
+                          value={requirementText(definition.requiresDiscipline)}
+                        />
+                        <DefinitionFact
+                          label="מפגשים משובצים"
+                          value={String(definition.sessionCount)}
+                        />
+                      </dl>
+                    </li>
+                  ))}
+                </ul>
               ) : (
-                <form action={boundSetExamPlanPublicationAction} className="mt-4">
-                  <input type="hidden" name="operation" value="PUBLISH" readOnly />
-                  <button
-                    type="submit"
-                    className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
-                  >
-                    {PUBLISH_BUTTON_TEXT}
-                  </button>
-                </form>
-              )
-            ) : null}
-          </div>
-
-          {hasDefinitions ? (
-            <ul className="flex flex-col gap-3">
-              {view.definitions.map((definition) => (
-                <li
-                  key={definition.id}
-                  className="rounded-xl border border-border bg-card p-4"
-                >
+                <div className="rounded-xl border border-dashed border-border bg-muted p-5">
                   <h3 className="text-sm font-semibold text-card-foreground">
-                    {definition.name}
+                    לא הוגדרו מבחנים בתוכנית זו
                   </h3>
-                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
-                    <DefinitionFact label="סוג מבחן" value={kindText(definition.kind)} />
-                    <DefinitionFact
-                      label="משך"
-                      value={`${definition.durationMinutes} דקות`}
-                    />
-                    <DefinitionFact
-                      label="נבחנים במקביל"
-                      value={String(definition.parallelCapacity)}
-                    />
-                    <DefinitionFact
-                      label="חניך מודרך נדרש"
-                      value={requirementText(definition.requiresInstructedTrainee)}
-                    />
-                    <DefinitionFact
-                      label="נושא שיעור נדרש"
-                      value={requirementText(definition.requiresLessonTopic)}
-                    />
-                    <DefinitionFact
-                      label="דיסציפלינה נדרשת"
-                      value={requirementText(definition.requiresDiscipline)}
-                    />
-                    <DefinitionFact
-                      label="מפגשים משובצים"
-                      value={String(definition.sessionCount)}
-                    />
-                  </dl>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="rounded-xl border border-dashed border-border bg-muted p-5">
-              <h3 className="text-sm font-semibold text-card-foreground">
-                לא הוגדרו מבחנים בתוכנית זו
-              </h3>
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                קיימת תוכנית מבחנים לקורס, אך עדיין לא הוגדר בה אף מבחן.
-              </p>
-            </div>
-          )}
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    קיימת תוכנית מבחנים לקורס, אך עדיין לא הוגדר בה אף מבחן.
+                  </p>
+                </div>
+              )}
 
-          {showCreateForm ? (
-            <div className="rounded-xl border border-border bg-card p-5">
-              <h3 className="text-sm font-semibold text-card-foreground">
-                הוספת הגדרת מבחן
-              </h3>
-              {isPublished ? (
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                  שימו לב: תוכנית המבחנים כבר פורסמה. ניתן להוסיף הגדרת מבחן, והיא
-                  תיכלל בתוכנית שפורסמה.
-                </p>
+              {showCreateForm ? (
+                <div className="rounded-xl border border-border bg-card p-5">
+                  <h3 className="text-sm font-semibold text-card-foreground">
+                    הוספת הגדרת מבחן
+                  </h3>
+                  {isPublished ? (
+                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                      שימו לב: תוכנית המבחנים כבר פורסמה. ניתן להוסיף הגדרת מבחן, והיא
+                      תיכלל בתוכנית שפורסמה.
+                    </p>
+                  ) : null}
+                  <div className="mt-3">
+                    <ExamDefinitionCreateForm
+                      action={createExamDefinitionAction.bind(null, context.id)}
+                    />
+                  </div>
+                </div>
               ) : null}
-              <div className="mt-3">
-                <ExamDefinitionCreateForm
-                  action={createExamDefinitionAction.bind(null, context.id)}
-                />
-              </div>
-            </div>
+            </>
           ) : null}
 
-          <div className="rounded-xl border border-border bg-card p-5">
-            <h3 className="text-sm font-semibold text-card-foreground">מפגשי המבחנים</h3>
-            {grouping.ok ? (
-              grouping.days.length > 0 ? (
-                <ul className="mt-4 flex flex-col gap-5">
-                  {grouping.days.map((day) => (
-                    <li key={day.dateKey}>
+          {/* =================================================================
+              SECTION 2 — מופעים וזמנים
+
+              The stored blocks, in whichever of the three arrangements is
+              selected, plus the two PER-SESSION affordances and the create form.
+              The arrangements are read-only: a manager edits a block through the
+              session edit form below and its people in the assignments section.
+              ================================================================= */}
+          {activeTab === "schedule" ? (
+            <>
+              <div className="rounded-xl border border-border bg-card p-5">
+                <h3 className="text-sm font-semibold text-card-foreground">
+                  {EXAM_WORKSPACE_TAB_LABELS.schedule}
+                </h3>
+                <div className="mt-3">
+                  {renderScheduleViewNav()}
+                </div>
+                {renderScheduleViews()}
+              </div>
+
+              {/*
+                The two PER-SESSION affordances, behind the SAME single lifecycle
+                evaluation the create forms use. With `mayConfigure` false — an
+                ARCHIVED offering, or any status the default-deny policy does not
+                recognize — neither control is rendered at all. Each server binding
+                re-evaluates the same gate and refuses on its own, so this is a
+                display decision and never the enforcement.
+
+                `day.dateKey` is the session's own stored day: the grouping core
+                keyed the day by it, so the edit form's date default is the stored
+                value and not a derived one. No clock is read.
+              */}
+              {mayConfigure && grouping.ok
+                ? scheduleDays.map((day) => (
+                    <div
+                      key={day.dateKey}
+                      className="rounded-xl border border-border bg-card p-5"
+                    >
                       <div className="flex flex-wrap items-baseline gap-2 border-b border-border pb-2">
                         <span className="text-sm font-semibold text-card-foreground">
                           {day.dayLabel}
                         </span>
                         <span className="text-xs text-muted-foreground">{day.dateLabel}</span>
                       </div>
-                      <ul className="mt-3 flex flex-col gap-2">
-                        {day.sessions.map((session) => {
-                          // This session's own assignment rows, in the committed
-                          // reader's order — the grouping above only bucketed them.
-                          // A session nobody is assigned to renders from the ONE
-                          // frozen empty list rather than a fresh array.
-                          const sessionAssignments =
-                            assignmentsBySession.get(session.sessionId) ?? NO_ASSIGNMENTS;
-
-                          // EX-PAIR-UI-MVP — the EXAMINEE rows of THIS session
-                          // and of no other, looked up by the SAME key the list
-                          // above uses. The pairing picker offers exactly these,
-                          // so an examinee of another session is not filtered
-                          // out here: it was never in this bucket.
-                          const sessionExaminees =
-                            examineesBySession.get(session.sessionId) ?? NO_ASSIGNMENTS;
-
-                          // The definition's two extra requirements, from the
-                          // definition reader. `undefined` means the session names
-                          // a definition the definition reader did not report,
-                          // which this page treats as "requirements unknown" and
-                          // therefore FAILS CLOSED below: an unknown definition
-                          // must not open a write surface.
-                          const requirements = requirementsByDefinition.get(
-                            session.definitionId,
-                          );
-
-                          // IT2's own affordance, derived FIRST and kept entirely
-                          // separate from the examinee gate below. It asks ONE
-                          // question and no other: does this session's exam
-                          // actually ask for an instructed trainee?
-                          //
-                          // FAIL-CLOSED on unknown requirements, exactly like the
-                          // examinee gate: a session naming a definition the
-                          // definition reader did not report opens no write
-                          // surface. The lesson topic, the discipline, the
-                          // assignment count, the existing rows, the horse and
-                          // every wave or personal-time notion are deliberately
-                          // NOT consulted — they describe the examinee's row, and
-                          // an instructed trainee carries none of them.
-                          //
-                          // Declared ABOVE the examinee gate on purpose: the
-                          // committed guard proves this flag never enters that
-                          // gate by reading the source window that FOLLOWS it.
-                          const showInstructedTraineeForm =
-                            requirements !== undefined &&
-                            requirements.requiresInstructedTrainee;
-
-                          // RE-POINTED by EX-ASG-LTD2-B2, and NARROWED to the one
-                          // thing it always really protected. The gate used to
-                          // ALSO refuse a definition demanding a lesson topic or a
-                          // discipline, because the create form collected neither
-                          // and the writer behind it refused the whole create
-                          // rather than storing a half-filled row. The form now
-                          // collects both and the endpoint now calls the writer
-                          // that stores them, so those two demands are ordinary
-                          // fields rather than a dead end.
-                          //
-                          // What remains is the FAIL-CLOSED case and nothing else:
-                          // `undefined` means the session names a definition the
-                          // definition reader did not report, so this page cannot
-                          // tell what its exam demands — and a write surface must
-                          // never be opened on a requirement nobody can state. The
-                          // instructed-trainee requirement is still deliberately
-                          // NOT consulted: that is a SECOND row, written by the
-                          // separate operation above, and it never blocks the
-                          // examinee.
-                          const requirementsUnknown = requirements === undefined;
-
-                          return (
+                      <ul className="mt-3 flex flex-col gap-4">
+                        {day.sessions.map((session) => (
                           <li
                             key={session.sessionId}
-                            className="rounded-lg border border-border bg-muted px-4 py-3"
+                            className="flex flex-col gap-3 rounded-lg border border-border bg-muted px-4 py-3"
                           >
                             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                               <span className="text-sm font-semibold text-card-foreground">
@@ -1700,114 +2128,425 @@ export default async function CourseExamsPage({
                                 נבחנים משובצים: {session.assignmentCount}
                               </span>
                             </div>
-                            {session.title !== null && session.title !== "" ? (
-                              <p className="mt-1 text-sm text-card-foreground">{session.title}</p>
+                            <ExamSessionEditForm
+                              action={updateExamSessionAction.bind(null, context.id)}
+                              sessionId={session.sessionId}
+                              expectedUpdatedAt={session.updatedAt}
+                              definitionId={session.definitionId}
+                              date={day.dateKey}
+                              startTime={session.startTime}
+                              arena={session.arena}
+                              title={session.title}
+                              notes={session.notes}
+                              hasAssignments={session.assignmentCount > 0}
+                              definitions={sessionDefinitionOptions}
+                            />
+                            <ExamSessionDeleteForm
+                              action={deleteExamSessionAction.bind(null, context.id)}
+                              sessionId={session.sessionId}
+                              expectedUpdatedAt={session.updatedAt}
+                              hasAssignments={session.assignmentCount > 0}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))
+                : null}
+
+              {showSessionCreateForm ? (
+                <div className="rounded-xl border border-border bg-card p-5">
+                  <h3 className="text-sm font-semibold text-card-foreground">הוספת מפגש מבחן</h3>
+                  {isPublished ? (
+                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                      התוכנית כבר פורסמה. מפגש חדש שתוסיפי ייכלל בלוח שפורסם.
+                    </p>
+                  ) : null}
+                  <div className="mt-3">
+                    <ExamSessionCreateForm
+                      action={createExamSessionAction.bind(null, context.id)}
+                      definitions={sessionDefinitionOptions}
+                    />
+                  </div>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+
+          {/* =================================================================
+              SECTION 3 — שיבוצים
+
+              The SAME stored schedule, in the SAME three arrangements, with the
+              write surfaces attached: one coherent card per examinee, the order
+              controls, the two create forms and the removal control.
+              ================================================================= */}
+          {activeTab === "assignments" ? (
+            <>
+              <div className="rounded-xl border border-border bg-card p-5">
+                <h3 className="text-sm font-semibold text-card-foreground">
+                  {EXAM_WORKSPACE_TAB_LABELS.assignments}
+                </h3>
+                <div className="mt-3">
+                  {renderScheduleViewNav()}
+                </div>
+                {!grouping.ok ? (
+                  <p className="mt-2 text-sm leading-relaxed text-danger">{GROUPING_FAILED_TEXT}</p>
+                ) : timeline.length === 0 ? (
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    {NO_SESSIONS_TEXT}
+                  </p>
+                ) : (
+                  <ul className="mt-4 flex flex-col gap-6">
+                    {scheduleSections.map((section) => (
+                    <li key={section.key}>
+                      {section.heading !== null ? (
+                        <div className="flex flex-wrap items-baseline gap-2 border-b border-border pb-2">
+                          <span className="text-sm font-semibold text-card-foreground">
+                            {section.heading}
+                          </span>
+                          {section.subheading !== null ? (
+                            <span className="text-xs text-muted-foreground">
+                              {section.subheading}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <ul className="mt-3 flex flex-col gap-5">
+                    {section.entries.map((entry) => {
+                      const session = entry.session;
+                      const { requirements, instructedRows, waves, untimed, blockEndTime } =
+                        describeBlock(session);
+
+                      // IT2's own affordance, derived FIRST and kept entirely
+                      // separate from the examinee gate below. It asks ONE question
+                      // and no other — does this session's exam actually ask for an
+                      // instructed trainee? — and consults neither topic nor branch,
+                      // because refusing this role over the examinee's missing topic
+                      // would block precisely the blocks it exists to complete.
+                      //
+                      // Declared ABOVE the examinee gate on purpose: the committed
+                      // guard proves this flag never enters that gate by reading the
+                      // source window that FOLLOWS it.
+                      const showInstructedTraineeForm =
+                        requirements !== undefined && requirements.requiresInstructedTrainee;
+
+                      // FAIL-CLOSED on unknown requirements, exactly as before: a
+                      // session naming a definition the definition reader did not
+                      // report tells this page nothing about what its exam
+                      // demands, and a write surface must never be opened on a
+                      // requirement nobody can state.
+                      const requirementsUnknown = requirements === undefined;
+
+                      // The teaching-link picker is offered whenever this session's
+                      // exam asks for an instructed trainee OR one is already
+                      // stored, so a historical link is never stranded.
+                      const showTeachingLink =
+                        showInstructedTraineeForm || instructedRows.length > 0;
+
+                      // The trainees this session's cards may offer. Narrowed to
+                      // two display fields, from a bucket keyed by session id.
+                      const instructedChoices = instructedRows.map((row) => ({
+                        assignmentId: row.assignmentId,
+                        traineeName: row.traineeName,
+                      }));
+
+                      // The instructed trainees NOBODY teaches yet. Listed under
+                      // their own heading rather than given a schedule card: they
+                      // hold no slot and no time of their own, but hiding them
+                      // would make the session disagree with its own count.
+                      const unlinkedInstructed = instructedRows.filter(
+                        (row) => row.pairedExamineeAssignmentId === null,
+                      );
+
+                      // The running position of a card across the whole block, so
+                      // the number a manager sees matches the order the move
+                      // buttons act on. Derived from the RENDERED arrangement and
+                      // never from the stored `orderIndex`.
+                      let position = 0;
+
+                      return (
+                        <li key={session.sessionId}>
+                          <div className="rounded-lg border border-border bg-card px-4 py-3">
+                            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                              <span className="text-sm font-semibold text-card-foreground">
+                                {session.startTime}
+                              </span>
+                              <span className="text-sm text-card-foreground">
+                                {session.definitionName}
+                              </span>
+                            </div>
+                            <BlockFacts
+                              dayLabel={entry.dayLabel}
+                              dateLabel={entry.dateLabel}
+                              startTime={session.startTime}
+                              endTime={blockEndTime}
+                              arena={session.arena}
+                              kind={
+                                requirements === undefined
+                                  ? kindText("")
+                                  : kindText(requirements.kind)
+                              }
+                              parallelCapacity={
+                                requirements === undefined ? 0 : requirements.parallelCapacity
+                              }
+                              assignmentCount={session.assignmentCount}
+                            />
+
+                            {waves.length > 0 ? (
+                              <ul className="mt-4 flex flex-col gap-3">
+                                {waves.map((wave) => (
+                                  <li
+                                    key={wave.startTime}
+                                    className="rounded-lg border border-border bg-muted px-3 py-2"
+                                  >
+                                    {/*
+                                      THE WAVE TIME, PRINTED ONCE.
+
+                                      Two examinees examined together share this
+                                      one heading and are laid out as two columns
+                                      where there is room and stacked on a phone.
+                                      No card below repeats the time.
+                                    */}
+                                    <p className="text-xs font-semibold text-card-foreground">
+                                      {WAVE_LABEL} · {wave.startTime} {WAVE_TIME_SEPARATOR}{" "}
+                                      {timeText(wave.endTime)}
+                                    </p>
+                                    <ul className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                      {wave.examinees.map((examinee) => {
+                                        position += 1;
+                                        const topicText = storedDetailText(
+                                          examinee.instructionTopic,
+                                        );
+                                        const disciplineText = storedDetailText(
+                                          examinee.discipline,
+                                        );
+                                        const missingTopic =
+                                          requirements !== undefined &&
+                                          requirements.requiresLessonTopic &&
+                                          topicText === null;
+                                        const missingDiscipline =
+                                          requirements !== undefined &&
+                                          requirements.requiresDiscipline &&
+                                          disciplineText === null;
+
+                                        return (
+                                          <li
+                                            key={examinee.assignmentId}
+                                            className="rounded-lg bg-card px-3 py-2"
+                                          >
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                              <span className="text-xs text-muted-foreground">
+                                                {POSITION_LABEL} {position}
+                                              </span>
+                                              <span className="text-xs text-muted-foreground">
+                                                {roleText("EXAMINEE")}
+                                              </span>
+                                            </div>
+
+                                            {missingTopic ? (
+                                              <p className="mt-1 text-xs text-danger">
+                                                {MISSING_INSTRUCTION_TOPIC_TEXT}
+                                              </p>
+                                            ) : null}
+                                            {missingDiscipline ? (
+                                              <p className="mt-1 text-xs text-danger">
+                                                {MISSING_DISCIPLINE_TEXT}
+                                              </p>
+                                            ) : null}
+
+                                            {/*
+                                              THE ORDERING CONTROLS.
+
+                                              Two one-step forms, never a
+                                              drag-and-drop: none existed, and a
+                                              pointer-only affordance would be
+                                              unusable on the phones this admin
+                                              area is used on. Each carries the
+                                              assignment id as a hidden value and
+                                              a fixed direction literal; the
+                                              committed writer derives the session
+                                              itself and renumbers it atomically,
+                                              after which the derived wave times
+                                              above are recomputed on the re-read.
+                                            */}
+                                            {mayConfigure ? (
+                                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                <form action={boundMoveExamAssignmentAction}>
+                                                  <input
+                                                    type="hidden"
+                                                    name="assignmentId"
+                                                    value={examinee.assignmentId}
+                                                    readOnly
+                                                  />
+                                                  <input
+                                                    type="hidden"
+                                                    name="direction"
+                                                    value="UP"
+                                                    readOnly
+                                                  />
+                                                  <button
+                                                    type="submit"
+                                                    aria-label={MOVE_UP_LABEL}
+                                                    className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-card-foreground"
+                                                  >
+                                                    {MOVE_UP_GLYPH}
+                                                  </button>
+                                                </form>
+                                                <form action={boundMoveExamAssignmentAction}>
+                                                  <input
+                                                    type="hidden"
+                                                    name="assignmentId"
+                                                    value={examinee.assignmentId}
+                                                    readOnly
+                                                  />
+                                                  <input
+                                                    type="hidden"
+                                                    name="direction"
+                                                    value="DOWN"
+                                                    readOnly
+                                                  />
+                                                  <button
+                                                    type="submit"
+                                                    aria-label={MOVE_DOWN_LABEL}
+                                                    className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-card-foreground"
+                                                  >
+                                                    {MOVE_DOWN_GLYPH}
+                                                  </button>
+                                                </form>
+                                                <DeleteExamAssignmentForm
+                                                  action={boundDeleteAssignmentAction}
+                                                  courseOfferingId={context.id}
+                                                  assignmentId={examinee.assignmentId}
+                                                />
+                                              </div>
+                                            ) : null}
+
+                                            {/*
+                                              THE ONE COHERENT EDIT CARD.
+
+                                              Person, horse, topic, branch and the
+                                              ONE instructed trainee this examinee
+                                              teaches — saved by ONE button. With
+                                              `mayConfigure` false the card falls
+                                              back to a read-only summary, so an
+                                              ARCHIVED offering keeps a readable
+                                              roster and gains no affordance.
+                                            */}
+                                            {mayConfigure && !requirementsUnknown ? (
+                                              <EditExamAssignmentCard
+                                                action={boundUpdateExamAssignmentDetailsAction}
+                                                assignmentId={examinee.assignmentId}
+                                                traineeName={examinee.traineeName}
+                                                horseName={examinee.horseName}
+                                                instructionTopic={examinee.instructionTopic}
+                                                discipline={examinee.discipline}
+                                                requiresLessonTopic={
+                                                  requirements.requiresLessonTopic
+                                                }
+                                                requiresDiscipline={requirements.requiresDiscipline}
+                                                showInstructedTrainee={showTeachingLink}
+                                                instructedTraineeOptions={instructedChoices}
+                                                currentInstructedTraineeAssignmentId={
+                                                  examinee.instructedTraineeAssignmentId
+                                                }
+                                              />
+                                            ) : (
+                                              <div className="mt-2">
+                                                <p className="text-sm font-semibold text-card-foreground">
+                                                  {examinee.traineeName}
+                                                </p>
+                                                <p className="text-xs text-muted-foreground">
+                                                  סוס: {horseText(examinee.horseName)}
+                                                </p>
+                                                {topicText !== null ? (
+                                                  <p className="text-xs text-muted-foreground">
+                                                    {INSTRUCTION_TOPIC_LABEL}: {topicText}
+                                                  </p>
+                                                ) : null}
+                                                {disciplineText !== null ? (
+                                                  <p className="text-xs text-muted-foreground">
+                                                    {DISCIPLINE_LABEL}: {disciplineText}
+                                                  </p>
+                                                ) : null}
+                                                <p className="text-xs text-muted-foreground">
+                                                  {TEACHES_LABEL}:{" "}
+                                                  {examinee.instructedTraineeName ??
+                                                    NO_TEACHING_LINK_TEXT}
+                                                </p>
+                                              </div>
+                                            )}
+
+                                          </li>
+                                        );
+                                      })}
+                                    </ul>
+                                  </li>
+                                ))}
+                              </ul>
                             ) : null}
-                            {session.arena !== null && session.arena !== "" ? (
-                              <p className="mt-1 text-xs text-muted-foreground">{session.arena}</p>
+
+                            {/*
+                              The examinees the committed timetable produced no
+                              moment for. They are LISTED rather than hidden: a
+                              block whose timetable failed still has real people
+                              in it, and knowing who they are is what makes it
+                              fixable. No time is invented for them.
+                            */}
+                            {untimed.length > 0 ? (
+                              <div className="mt-4">
+                                <p className="text-xs font-semibold text-warning">
+                                  {UNTIMED_HEADING}
+                                </p>
+                                <ul className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                  {untimed.map((examinee) => (
+                                    <li
+                                      key={examinee.assignmentId}
+                                      className="rounded-lg bg-card px-3 py-2"
+                                    >
+                                      <p className="text-sm text-card-foreground">
+                                        {examinee.traineeName}
+                                      </p>
+                                      <p className="text-xs text-muted-foreground">
+                                        סוס: {horseText(examinee.horseName)}
+                                      </p>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
                             ) : null}
-                            {session.notes !== null && session.notes !== "" ? (
-                              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                                {session.notes}
+
+                            {waves.length === 0 && untimed.length === 0 ? (
+                              <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                                עדיין אין חניכים משובצים ליחידת המבחן הזו.
                               </p>
                             ) : null}
 
                             {/*
-                              THE ASSIGNMENT SECTION.
+                              THE INSTRUCTED TRAINEES NOBODY TEACHES YET.
 
-                              The LIST is rendered whatever the lifecycle allows —
-                              an ARCHIVED offering keeps a readable roster, because
-                              the committed assignment reader is behind the READ
-                              gate and not the write gate. Only the CONTROLS are
-                              behind `mayConfigure`.
-
-                              Every row shows the trainee's display name, the horse
-                              (or the fixed placeholder) and the role. Deliberately
-                              absent: the assignment id, the Student.id and the
-                              order position. The id travels only as a hidden field
-                              inside the removal form, and the reader never selects
-                              a Student.id on this path at all.
+                              A roster and never a schedule card: no time, no wave
+                              and no position, because such a row holds none of
+                              them. It exists so a session never looks emptier
+                              than its own count, and so a trainee assigned before
+                              its examinee was can still be removed.
                             */}
-                            <div className="mt-3 border-t border-border pt-3">
-                              <h4 className="text-xs font-semibold text-card-foreground">
-                                נבחנים משובצים
-                              </h4>
-                              {sessionAssignments.length > 0 ? (
+                            {unlinkedInstructed.length > 0 ? (
+                              <div className="mt-4 border-t border-border pt-3">
+                                <h4 className="text-xs font-semibold text-card-foreground">
+                                  {UNLINKED_INSTRUCTED_HEADING}
+                                </h4>
                                 <ul className="mt-2 flex flex-col gap-1.5">
-                                  {sessionAssignments.map((assignment) => {
-                                    // The two DETAIL values belong to the EXAMINEE's
-                                    // row and to no other. An instructed trainee
-                                    // carries neither — the committed writer for that
-                                    // role cannot store one — so a value found on such
-                                    // a row is malformed history, and repeating it
-                                    // under a label would present a storage fault as a
-                                    // fact about that person. Every row is still
-                                    // RENDERED either way: this decides what a row
-                                    // says, never whether it appears.
-                                    const isExaminee = assignment.role === "EXAMINEE";
-                                    const topicText = storedDetailText(
-                                      assignment.instructionTopic,
-                                    );
-                                    const disciplineText = storedDetailText(
-                                      assignment.discipline,
-                                    );
-
-                                    // The two HISTORICAL diagnostics, against the
-                                    // definition requirements the page already loaded.
-                                    //
-                                    // FAIL CLOSED on unknown requirements — the same
-                                    // `requirements !== undefined` test the two create
-                                    // gates use: a session naming a definition the
-                                    // definition reader did not report tells us nothing
-                                    // about what its exam demanded, and asserting a
-                                    // value is MISSING on that basis would be inventing
-                                    // the requirement. The row and any stored value it
-                                    // does carry are shown regardless.
-                                    const missingTopic =
-                                      isExaminee &&
-                                      requirements !== undefined &&
-                                      requirements.requiresLessonTopic &&
-                                      topicText === null;
-                                    const missingDiscipline =
-                                      isExaminee &&
-                                      requirements !== undefined &&
-                                      requirements.requiresDiscipline &&
-                                      disciplineText === null;
-
-                                    return (
+                                  {unlinkedInstructed.map((assignment) => (
                                     <li
                                       key={assignment.assignmentId}
-                                      className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-card px-3 py-2"
+                                      className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-muted px-3 py-2"
                                     >
                                       <span className="text-sm text-card-foreground">
                                         {assignment.traineeName}
                                       </span>
                                       <span className="text-xs text-muted-foreground">
-                                        סוס: {horseText(assignment.horseName)}
-                                      </span>
-                                      <span className="text-xs text-muted-foreground">
                                         {roleText(assignment.role)}
                                       </span>
-                                      {isExaminee && topicText !== null ? (
-                                        <span className="text-xs text-muted-foreground">
-                                          {INSTRUCTION_TOPIC_LABEL}: {topicText}
-                                        </span>
-                                      ) : null}
-                                      {isExaminee && disciplineText !== null ? (
-                                        <span className="text-xs text-muted-foreground">
-                                          {DISCIPLINE_LABEL}: {disciplineText}
-                                        </span>
-                                      ) : null}
-                                      {missingTopic ? (
-                                        <span className="text-xs text-danger">
-                                          {MISSING_INSTRUCTION_TOPIC_TEXT}
-                                        </span>
-                                      ) : null}
-                                      {missingDiscipline ? (
-                                        <span className="text-xs text-danger">
-                                          {MISSING_DISCIPLINE_TEXT}
-                                        </span>
-                                      ) : null}
                                       {mayConfigure ? (
                                         <DeleteExamAssignmentForm
                                           action={boundDeleteAssignmentAction}
@@ -1815,150 +2554,32 @@ export default async function CourseExamsPage({
                                           assignmentId={assignment.assignmentId}
                                         />
                                       ) : null}
-
-                                      {/*
-                                        EX-PAIR-UI-MVP — THE PAIRING CONTROL.
-
-                                        Rendered for an INSTRUCTED_TRAINEE row and
-                                        for NO other role: an examinee's partners
-                                        are the trainees pointing at it, which is a
-                                        different question with a different
-                                        cardinality, and the committed reader
-                                        publishes `null` for both fields there
-                                        anyway.
-
-                                        WHO IS CURRENTLY PAIRED is read from the
-                                        committed reader's resolved answer and from
-                                        nothing else — never from the query string,
-                                        never from array position and never from a
-                                        pairing index, which this page cannot see.
-                                        An ambiguous, unmatched or absent pairing
-                                        resolves to `null` there, so the sentence
-                                        below says plainly that there is none and
-                                        the picker below pre-selects the unpair
-                                        option rather than an arbitrary examinee.
-
-                                        The OPTIONS are this session's own examinee
-                                        bucket. A session with none gets a sentence
-                                        instead of an empty picker — offering only
-                                        "no partner" would look like a control that
-                                        does nothing.
-
-                                        NO CLIENT COMPONENT. A plain POST-ing form
-                                        on a Server Action, so a GET of this route
-                                        can never change a pairing; there is no
-                                        effect, no auto-submit and no pairing link
-                                        anywhere on this page. Both ids travel only
-                                        as submitted values and neither is ever
-                                        rendered as text.
-
-                                        Behind `mayConfigure`, the SAME single
-                                        lifecycle evaluation every other affordance
-                                        here uses — and never behind publication,
-                                        which is not authorization: a manager may
-                                        still edit a published plan, and the
-                                        existing advisory says so.
-                                      */}
-                                      {assignment.role === "INSTRUCTED_TRAINEE" ? (
-                                        <div className="w-full border-t border-border pt-2">
-                                          <p className="text-xs text-muted-foreground">
-                                            {PAIRING_SECTION_LABEL}:{" "}
-                                            <span className="font-medium text-card-foreground">
-                                              {assignment.pairedExamineeName ??
-                                                PAIRING_UNPAIRED_TEXT}
-                                            </span>
-                                          </p>
-                                          {mayConfigure ? (
-                                            sessionExaminees.length > 0 ? (
-                                              <form action={boundSetExamPairingAction} className="mt-2 flex flex-wrap items-center gap-2">
-                                                <input
-                                                  type="hidden"
-                                                  name="instructedTraineeAssignmentId"
-                                                  value={assignment.assignmentId}
-                                                  readOnly
-                                                />
-                                                <select
-                                                  name="examineeAssignmentId"
-                                                  aria-label={PAIRING_SECTION_LABEL}
-                                                  defaultValue={
-                                                    assignment.pairedExamineeAssignmentId ??
-                                                    EXAM_PAIRING_NONE_VALUE
-                                                  }
-                                                  className="rounded-lg border border-border bg-card px-2 py-1 text-xs text-card-foreground"
-                                                >
-                                                  <option value={EXAM_PAIRING_NONE_VALUE}>
-                                                    {PAIRING_NONE_OPTION_TEXT}
-                                                  </option>
-                                                  {sessionExaminees.map((examinee) => (
-                                                    <option
-                                                      key={examinee.assignmentId}
-                                                      value={examinee.assignmentId}
-                                                    >
-                                                      {examinee.traineeName}
-                                                    </option>
-                                                  ))}
-                                                </select>
-                                                <button
-                                                  type="submit"
-                                                  className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-card-foreground"
-                                                >
-                                                  {PAIRING_SUBMIT_TEXT}
-                                                </button>
-                                              </form>
-                                            ) : (
-                                              <p className="mt-1 text-xs text-muted-foreground">
-                                                {PAIRING_NO_EXAMINEES_TEXT}
-                                              </p>
-                                            )
-                                          ) : null}
-                                        </div>
-                                      ) : null}
                                     </li>
-                                    );
-                                  })}
+                                  ))}
                                 </ul>
-                              ) : (
-                                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                                  עדיין אין חניכים משובצים ליחידת המבחן הזו.
-                                </p>
-                              )}
+                              </div>
+                            ) : null}
 
+                            {/* The two CREATE affordances, on their independent gates. */}
+                            <div className="mt-4 border-t border-border pt-3">
                               {mayConfigure ? (
                                 requirementsUnknown ? (
-                                  <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                                  <p className="text-xs leading-relaxed text-muted-foreground">
                                     לא ניתן לזהות את דרישות סוג המבחן של יחידה זו,
                                     ולכן אין כאן שיבוץ.
                                   </p>
                                 ) : (
-                                  <div className="mt-3">
-                                    <CreateExamAssignmentForm
-                                      action={boundCreateAssignmentAction}
-                                      courseOfferingId={context.id}
-                                      sessionId={session.sessionId}
-                                      eligibleTrainees={eligibleView.trainees}
-                                      requiresLessonTopic={requirements.requiresLessonTopic}
-                                      requiresDiscipline={requirements.requiresDiscipline}
-                                    />
-                                  </div>
+                                  <CreateExamAssignmentForm
+                                    action={boundCreateAssignmentAction}
+                                    courseOfferingId={context.id}
+                                    sessionId={session.sessionId}
+                                    eligibleTrainees={eligibleView.trainees}
+                                    requiresLessonTopic={requirements.requiresLessonTopic}
+                                    requiresDiscipline={requirements.requiresDiscipline}
+                                  />
                                 )
                               ) : null}
 
-                              {/*
-                                THE INSTRUCTED-TRAINEE AFFORDANCE.
-
-                                Its own gate, and deliberately not a branch of the
-                                examinee one: an exam that demands a lesson topic
-                                still legitimately wants its instructed trainee,
-                                and the two forms may therefore be on screen
-                                together, separately or not at all.
-
-                                `&&` rather than a second `mayConfigure ?` ternary,
-                                so the existing positional guards over this block
-                                keep meaning what they meant. With `mayConfigure`
-                                false — an ARCHIVED offering, or any status the
-                                default-deny policy does not recognize — the form
-                                is absent while the list above stays readable.
-                              */}
                               {mayConfigure && showInstructedTraineeForm ? (
                                 <div className="mt-3">
                                   <CreateExamInstructedTraineeAssignmentForm
@@ -1970,77 +2591,237 @@ export default async function CourseExamsPage({
                                 </div>
                               ) : null}
                             </div>
-
-                            {/*
-                              The two PER-SESSION affordances, behind the SAME single
-                              lifecycle evaluation the three create forms use. With
-                              `mayConfigure` false — an ARCHIVED offering, or any status
-                              the default-deny policy does not recognize — neither control
-                              is rendered at all. Each server binding re-evaluates the same
-                              gate and refuses on its own, so this is a display decision
-                              and never the enforcement.
-
-                              `day.dateKey` is the session's own stored day: the grouping
-                              core keyed the day by it, so the edit form's date default is
-                              the stored value and not a derived one. No clock is read.
-                            */}
-                            {mayConfigure ? (
-                              <div className="mt-3 flex flex-col gap-3 border-t border-border pt-3">
-                                <ExamSessionEditForm
-                                  action={updateExamSessionAction.bind(null, context.id)}
-                                  sessionId={session.sessionId}
-                                  expectedUpdatedAt={session.updatedAt}
-                                  definitionId={session.definitionId}
-                                  date={day.dateKey}
-                                  startTime={session.startTime}
-                                  arena={session.arena}
-                                  title={session.title}
-                                  notes={session.notes}
-                                  hasAssignments={session.assignmentCount > 0}
-                                  definitions={sessionDefinitionOptions}
-                                />
-                                <ExamSessionDeleteForm
-                                  action={deleteExamSessionAction.bind(null, context.id)}
-                                  sessionId={session.sessionId}
-                                  expectedUpdatedAt={session.updatedAt}
-                                  hasAssignments={session.assignmentCount > 0}
-                                />
-                              </div>
-                            ) : null}
-                          </li>
-                          );
-                        })}
+                          </div>
+                        </li>
+                      );
+                    })}
                       </ul>
                     </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                  עדיין לא נוצרו מפגשי מבחנים לקורס הזה.
-                </p>
-              )
-            ) : (
-              <p className="mt-2 text-sm leading-relaxed text-danger">
-                לא ניתן להציג כרגע את מפגשי המבחנים. יש לבדוק את נתוני המפגשים.
-              </p>
-            )}
-          </div>
-
-          {showSessionCreateForm ? (
-            <div className="rounded-xl border border-border bg-card p-5">
-              <h3 className="text-sm font-semibold text-card-foreground">הוספת מפגש מבחן</h3>
-              {isPublished ? (
-                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                  התוכנית כבר פורסמה. מפגש חדש שתוסיפי ייכלל בלוח שפורסם.
-                </p>
-              ) : null}
-              <div className="mt-3">
-                <ExamSessionCreateForm
-                  action={createExamSessionAction.bind(null, context.id)}
-                  definitions={sessionDefinitionOptions}
-                />
+                    ))}
+                  </ul>
+                )}
               </div>
-            </div>
+
+              {/* =============================================================
+                  THE BEGINNER-EXAM REGION.
+
+                  ISOLATED AND EMPTY IN THIS BRANCH. It holds one constant
+                  sentence, reads nothing, imports nothing and offers no control.
+                  The read-only projection a separate branch is building lands
+                  HERE, and nothing else on this page has to move when it does.
+                  Beginner exams remain editable only on the Teaching Practice
+                  screen.
+                  ============================================================= */}
+              <section
+                aria-label={BEGINNER_REGION_HEADING}
+                className="rounded-xl border border-dashed border-border bg-muted p-5"
+              >
+                <h3 className="text-sm font-semibold text-card-foreground">
+                  {BEGINNER_REGION_HEADING}
+                </h3>
+                {beginnerRows.length === 0 ? (
+                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                    {BEGINNER_REGION_TEXT}
+                  </p>
+                ) : (
+                  <ul className="mt-3 flex flex-col gap-3">
+                    {beginnerRows.map((row) => (
+                      <li
+                        key={row.sessionId}
+                        className="rounded-lg border border-border bg-card px-4 py-3"
+                      >
+                        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                          <span className="text-sm font-semibold text-card-foreground">
+                            {row.startTime}
+                          </span>
+                          <span className="text-sm text-card-foreground">
+                            {kindText(row.beginnerFormat)}
+                          </span>
+                          {row.isPublished ? null : (
+                            <span className="text-xs text-warning">{BEGINNER_DRAFT_TEXT}</span>
+                          )}
+                        </div>
+                        <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
+                          <DefinitionFact label={BLOCK_DATE_LABEL} value={row.date} />
+                          <DefinitionFact
+                            label={BLOCK_END_LABEL}
+                            value={timeText(row.displayEndTime)}
+                          />
+                          <DefinitionFact
+                            label={BLOCK_ARENA_LABEL}
+                            value={presentTextOr(row.location, NO_ARENA_TEXT)}
+                          />
+                          <DefinitionFact
+                            label={BEGINNER_GROUP_LABEL}
+                            value={presentTextOr(row.groupName, NO_HORSE_TEXT)}
+                          />
+                          <DefinitionFact
+                            label={BEGINNER_RESPONSIBLE_LABEL}
+                            value={presentTextOr(row.responsibleInstructorName, NO_HORSE_TEXT)}
+                          />
+                          <DefinitionFact
+                            label={BEGINNER_PARTICIPANTS_LABEL}
+                            value={String(row.participantCount)}
+                          />
+                        </dl>
+                        {row.participantNames.length > 0 ? (
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            {BEGINNER_PARTICIPANTS_LABEL}: {row.participantNames.join(", ")}
+                          </p>
+                        ) : null}
+                        {row.notes !== null && row.notes !== "" ? (
+                          <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                            {row.notes}
+                          </p>
+                        ) : null}
+                        {row.children.length > 0 ? (
+                          <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {row.children.map((child) => (
+                              <li
+                                key={`${row.sessionId}:${child.fullName}:${child.parentPhone ?? ""}`}
+                                className="rounded-lg bg-muted px-3 py-2"
+                              >
+                                <p className="text-sm text-card-foreground">
+                                  {child.fullName}
+                                  {child.isAbsent ? ` · ${BEGINNER_ABSENT_TEXT}` : ""}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  סוס: {horseText(child.horseName)}
+                                </p>
+                                {child.age !== null ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    {BEGINNER_AGE_LABEL}: {String(child.age)}
+                                  </p>
+                                ) : null}
+                                {child.gender !== null && child.gender !== "" ? (
+                                  <p className="text-xs text-muted-foreground">{child.gender}</p>
+                                ) : null}
+                                {child.parentName !== null && child.parentName !== "" ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    {BEGINNER_PARENT_LABEL}: {child.parentName}
+                                  </p>
+                                ) : null}
+                                {child.parentPhone !== null && child.parentPhone !== "" ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    {BEGINNER_PARENT_PHONE_LABEL}: {child.parentPhone}
+                                  </p>
+                                ) : null}
+                                {child.equipmentNotes !== null && child.equipmentNotes !== "" ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    {child.equipmentNotes}
+                                  </p>
+                                ) : null}
+                                {child.childNotes !== null && child.childNotes !== "" ? (
+                                  <p className="text-xs leading-relaxed text-muted-foreground">
+                                    {child.childNotes}
+                                  </p>
+                                ) : null}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                  {BEGINNER_READ_ONLY_TEXT}
+                </p>
+              </section>
+            </>
+          ) : null}
+
+          {/* =================================================================
+              SECTION 4 — פרסום
+
+              EX-PUB-UI-MVP, unchanged in every respect that matters: the same
+              two mutually-exclusive forms chosen from the committed reader's
+              `publishedAt`, the same warning, the same lifecycle gate and the
+              same lifecycle policy. Only its position moved.
+              ================================================================= */}
+          {activeTab === "publication" ? (
+            <>
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-5 py-4">
+                <span className="text-sm text-muted-foreground">מצב תוכנית המבחנים:</span>
+                <span
+                  className={
+                    isPublished
+                      ? "rounded-lg bg-success-muted px-3 py-1 text-sm font-medium text-success"
+                      : "rounded-lg bg-muted px-3 py-1 text-sm font-medium text-muted-foreground"
+                  }
+                >
+                  {isPublished ? "פורסמה" : "טיוטה"}
+                </span>
+              </div>
+
+              {/*
+                EX-PUB-UI-MVP — THE PUBLICATION CARD.
+
+                The one surface from which a manager makes the exam plan visible
+                to trainees, or takes it back out of sight. It renders the state
+                in the two exact words this slice owns, and — behind the SAME
+                single lifecycle evaluation every other affordance on this page
+                uses — ONE form carrying ONE fixed hidden `operation` value.
+
+                The two forms are MUTUALLY EXCLUSIVE by the stored state: a draft
+                plan gets the publish form and no unpublish control, and a
+                published plan gets the unpublish form and no publish control.
+                Neither is a toggle whose meaning depends on what the client
+                believes, and neither reads the query string: `isPublished` comes
+                from the committed reader's `publishedAt` and from nothing else.
+
+                NO CLIENT COMPONENT. These are plain POST-ing forms on a Server
+                Action, so a GET of this route — a refresh, a back button, a
+                prefetch, a bookmark — can never change publication.
+
+                The warning is INFORMATIONAL. It disables nothing: the definition
+                and session forms stay exactly as available after publication as
+                before, which is the committed lifecycle policy's decision and not
+                this page's. EX-ADMIN-WORKSPACE-UX introduces NO publication
+                blocking rule of any kind.
+              */}
+              <div className="rounded-xl border border-border bg-card p-5">
+                <h3 className="text-sm font-semibold text-card-foreground">
+                  פרסום לוח המבחנים
+                </h3>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  מצב נוכחי:{" "}
+                  <span className="font-medium text-card-foreground">
+                    {isPublished ? PUBLICATION_PUBLISHED_TEXT : PUBLICATION_DRAFT_TEXT}
+                  </span>
+                </p>
+
+                {isPublished ? (
+                  <p className="mt-3 rounded-lg bg-warning-muted px-4 py-3 text-sm leading-relaxed text-warning">
+                    {PUBLISHED_WARNING_TEXT}
+                  </p>
+                ) : null}
+
+                {mayConfigure ? (
+                  isPublished ? (
+                    <form action={boundSetExamPlanPublicationAction} className="mt-4">
+                      <input type="hidden" name="operation" value="UNPUBLISH" readOnly />
+                      <button
+                        type="submit"
+                        className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-card-foreground"
+                      >
+                        {UNPUBLISH_BUTTON_TEXT}
+                      </button>
+                    </form>
+                  ) : (
+                    <form action={boundSetExamPlanPublicationAction} className="mt-4">
+                      <input type="hidden" name="operation" value="PUBLISH" readOnly />
+                      <button
+                        type="submit"
+                        className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
+                      >
+                        {PUBLISH_BUTTON_TEXT}
+                      </button>
+                    </form>
+                  )
+                ) : null}
+              </div>
+            </>
           ) : null}
         </>
       )}

@@ -84,6 +84,9 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-publication-write" + "-io.test.ts",
@@ -140,6 +143,9 @@ const SLICE_PATHS = [
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionEditForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/ExamSessionDeleteForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
   // EX-ASG-UI1, the approved stored-assignment CREATE and REMOVAL UI. It adds two
   // client forms, a closed message module and its own contract suite to this
   // route, and re-points this suite's export list, route file set, revalidation
@@ -150,6 +156,7 @@ const SLICE_PATHS = [
   // make THIS suite a caller of a module it never touches.
   "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
   "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-messages.ts",
   "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
   "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
@@ -192,6 +199,49 @@ const SLICE_PATHS = [
   // ASSEMBLED, because that guard sweeps `app/`, `lib/` and `components/` for its
   // own module name and would otherwise enrol this suite as a caller.
   "lib/actions/" + "detailed-exam-assignment-write" + "-io.test.ts",
+  // EX-ADMIN-WORKSPACE-UX — the four route files the workspace adds, plus the two
+  // new `lib/` modules behind its two operations and their suites. The `lib/`
+  // entries are ASSEMBLED for the reason this suite's header records: the
+  // committed guards sweep raw source text, so a whole literal here would enrol
+  // this file as a caller of a writer it never invokes.
+  "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
+  "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+  "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+  // Every committed `lib/` guard suite EX-ADMIN-WORKSPACE-UX re-points, so the
+  // footprint here matches the working tree in full. All ASSEMBLED, for the
+  // reason this suite's header records.
+  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
+  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
+  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
+  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
+  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
+  "lib/actions/" + "exam-session-write" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
+  "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+  "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
+  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+  // BLOCKER-1 — the canonical wave narrowing, its suite, and the ONE committed
+  // `lib/` production module this slice modifies: the role-reader module, which
+  // gains one ADMIN-ONLY export so the admin schedule can reuse the committed
+  // timetable derivation instead of reproducing it. ASSEMBLED, so this suite
+  // does not enrol itself as a caller of what it names.
+  "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+  "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+  "lib/actions/" + "exam-role" + "-readers" + ".ts",
+  // BLOCKER-1 also re-points the READ-PIPELINE guard suites whose claims the one
+  // admin-only export makes obsolete. ASSEMBLED.
+  "lib/exam/" + "exam-read" + "-dto.test.ts",
+  "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+  "lib/exam/" + "exam-read" + ".contract.test.ts",
 ];
 
 /**
@@ -362,8 +412,14 @@ test("2. the action module is a Server Action module exporting EXACTLY the nine 
     "deleteExamAssignmentAction",
     "deleteExamSessionAction",
     // EX-PAIR-UI-MVP appended a TENTH: the admin pairing endpoint. Still EXHAUSTIVE.
+    // EX-ADMIN-WORKSPACE-UX appended an ELEVENTH and a TWELFTH: the ONE coherent
+    // examinee card save, and the one-step examinee move. Still EXHAUSTIVE — no
+    // helper, parser, constant or type may join them, and no THIRTEENTH endpoint
+    // may appear. They sit here because this list is compared SORTED.
+    "moveExamAssignmentAction",
     "setExamPairingAction",
     "setExamPlanPublicationAction",
+    "updateExamAssignmentDetailsAction",
     "updateExamSessionAction",
   ]);
   assert.equal(/export\s*\{/.test(ACTION), false, "no re-export list is allowed");
@@ -378,7 +434,10 @@ test("2. the action module is a Server Action module exporting EXACTLY the nine 
   // committed writer through ONE authorization boundary and ONE lifecycle gate, so
   // no request can steer between two different operations. Guard 22 pins that
   // field to its two literals from both directions.
-  assert.equal((ACTION.match(/export async function /g) ?? []).length, 10);
+  // RE-POINTED from ten to TWELVE by EX-ADMIN-WORKSPACE-UX, which appends the
+  // examinee card save and the one-step examinee move. Still an EXACT count: a
+  // thirteenth endpoint still fails here.
+  assert.equal((ACTION.match(/export async function /g) ?? []).length, 12);
 });
 
 test("3. the action has the EXACT locked signature, and returns void", () => {
@@ -524,8 +583,11 @@ test("8. success revalidates ONLY this course's exams path, exactly once", () =>
   // that single occurrence sits on the CHANGED branch alone, so a NO_CHANGE
   // publication revalidates nothing, because the committed writer issued no
   // statement and a cache invalidation would be a lie about what happened.
-  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 10);
-  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 10);
+  // RE-POINTED from ten to TWELVE by EX-ADMIN-WORKSPACE-UX, which appends the
+  // examinee card save and the one-step examinee move. Still an EXACT count: a
+  // thirteenth endpoint still fails here.
+  assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 12);
+  assert.equal((ACTION.match(/revalidatePath\(examsPath\)/g) ?? []).length, 12);
   // The two successes are distinguished, and both land on the exams path.
   assert.ok(
     PLAN_ACTION.includes(
@@ -653,9 +715,9 @@ test("13. searchParams carries ONLY closed feedback tokens", () => {
   // version stamp — which the id ban below re-states from the other side.
   assert.ok(
     PAGE_FLAT.includes(
-      "searchParams: Promise<{ created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; updatedSession?: string | string[]; unchangedSession?: string | string[]; sessionEditError?: string | string[]; sessionEditIssues?: string | string[]; deletedSession?: string | string[]; sessionDeleteError?: string | string[]; createdAssignment?: string | string[]; assignmentError?: string | string[]; assignmentIssues?: string | string[]; deletedAssignment?: string | string[]; assignmentDeleteError?: string | string[]; createdInstructedTrainee?: string | string[]; instructedTraineeError?: string | string[]; instructedTraineeIssues?: string | string[]; publication?: string | string[]; pairing?: string | string[]; }>;",
+      "searchParams: Promise<{ tab?: string | string[]; view?: string | string[]; created?: string | string[]; existing?: string | string[]; error?: string | string[]; createdDefinition?: string | string[]; createError?: string | string[]; createIssues?: string | string[]; createdSession?: string | string[]; sessionError?: string | string[]; sessionIssues?: string | string[]; updatedSession?: string | string[]; unchangedSession?: string | string[]; sessionEditError?: string | string[]; sessionEditIssues?: string | string[]; deletedSession?: string | string[]; sessionDeleteError?: string | string[]; createdAssignment?: string | string[]; assignmentError?: string | string[]; assignmentIssues?: string | string[]; deletedAssignment?: string | string[]; assignmentDeleteError?: string | string[]; createdInstructedTrainee?: string | string[]; instructedTraineeError?: string | string[]; instructedTraineeIssues?: string | string[]; publication?: string | string[]; pairing?: string | string[]; assignmentEdit?: string | string[]; assignmentEditIssues?: string | string[]; assignmentOrder?: string | string[]; }>;",
     ),
-    "the searchParams type must be the closed twenty-five-key shape",
+    "the searchParams type must be the closed thirty-key shape",
   );
   // created/existing are honoured only on the exact string "1"; a repeated key
   // (which arrives as an array) is not a recognized token.
@@ -701,6 +763,12 @@ test("15. NO query value can influence which course is read or written", () => {
   // parsers — a second `await searchParams` would let a later reader diverge from
   // the one this suite describes.
   assert.equal(PAGE.split("searchParams").length - 1, 3, "searchParams must appear exactly 3 times");
+  // RE-POINTED by EX-ADMIN-WORKSPACE-UX. `query.` is no longer confined to the
+  // plan parser: the workspace reads the two ARRANGEMENT tokens off the same one
+  // resolved object. The claim is narrowed to the one that matters and is now
+  // stated from both sides — every `query.` use is either inside the closed plan
+  // parser, or one of the two arrangement reads, and NONE of them reaches a
+  // reader, a context, an action binding or an href.
   assert.equal(PAGE.split("await searchParams").length - 1, 1);
   assert.ok(PAGE.includes("const query = await searchParams;"));
   assert.ok(PAGE.includes("const feedback = feedbackFrom(query);"));
@@ -709,9 +777,18 @@ test("15. NO query value can influence which course is read or written", () => {
   // inside the parser — never near the context, the reader or a href.
   const parserStart = PAGE.indexOf("function feedbackFrom(");
   const parserEnd = PAGE.indexOf("const FEEDBACK_CLASS");
+  const ARRANGEMENT_READS = ["explicit: query.tab,", "parseExamScheduleView(query.view)"];
   for (const match of PAGE.matchAll(/query\./g)) {
     const at = match.index ?? -1;
-    assert.ok(at > parserStart && at < parserEnd, "query is referenced outside the closed parser");
+    const inParser = at > parserStart && at < parserEnd;
+    const isArrangement = ARRANGEMENT_READS.some((read) => PAGE.startsWith(read, at - read.indexOf("query.")));
+    assert.ok(
+      inParser || isArrangement,
+      "query is referenced outside the closed parser and the two arrangement reads",
+    );
+  }
+  for (const read of ARRANGEMENT_READS) {
+    assert.equal((PAGE.match(new RegExp(read.replace(/[.()]/g, "\\$&"), "g")) ?? []).length, 1);
   }
 
   // Scope comes from the route param and then from the VERIFIED context id only.
@@ -885,6 +962,11 @@ test("17. no publication, source-date, session, capability or notification work"
     // instructed-trainee write binding's guard pinned its caller list at ZERO
     // before this slice, and at exactly this one Server Action module after it.
     "@/lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io",
+      // ADDED by EX-ADMIN-WORKSPACE-UX, assembled on exactly the same terms: the
+    // workspace edit/move binding, which is the ONE backend addition behind the
+    // examinee card save and the one-step move. It is a NEW module with no
+    // committed caller guard of its own, and no committed writer was replaced.
+    "@/lib/actions/" + "admin-exam-workspace-edit" + "-io",
     // ADDED by EX-ASG-LTD2-B2, and assembled on exactly the same terms: the
     // committed DETAILED examinee write binding's guard pinned its caller list at
     // ZERO before that slice, and at exactly this one Server Action module after
@@ -926,7 +1008,7 @@ test("18. the ExamPlan write binding has EXACTLY one production caller", () => {
   assert.equal(APPROVED_CALLER.endsWith(".tsx"), false);
 });
 
-test("19. the route directory holds EXACTLY the twenty-three approved files", () => {
+test("19. the route directory holds EXACTLY the twenty-seven approved files", () => {
   // Tracked AND untracked, so this holds both before and after the slice is
   // committed. Listing the whole repository and filtering by prefix in JS is
   // deliberate: a `[courseOfferingId]` pathspec would be read by git as a
@@ -951,6 +1033,7 @@ test("19. the route directory holds EXACTLY the twenty-three approved files", ()
     "app/admin/courses/[courseOfferingId]/exams/CreateExamAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignmentForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/DeleteExamAssignmentForm.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamDefinitionCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamPlanCreateForm.tsx",
     "app/admin/courses/[courseOfferingId]/exams/ExamSessionCreateForm.tsx",
@@ -971,6 +1054,9 @@ test("19. the route directory holds EXACTLY the twenty-three approved files", ()
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create-error-messages.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
     "app/admin/courses/[courseOfferingId]/exams/page.tsx",
   ]);
 });

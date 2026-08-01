@@ -736,6 +736,32 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
     "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
     "lib/exam/" + "admin-exam-assignment-read" + "-core.test.ts",
     "lib/actions/" + "exam-assignment-read" + "-io.ts",
+      // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild. It adds four
+    // route files and two `lib/` modules (both NEW; no committed `lib/` production
+    // module is modified), edits the route's page and Server Action module, and
+    // re-points the guard suites listed below. Every entry is spelled in full, so a
+    // path this slice does not touch still fails here. The `lib/` entries are
+    // ASSEMBLED so this suite does not enrol itself as a caller of what it names.
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create.contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete.contract.test.ts",
+    // ...and its two `lib/` modules, which are ADDITIONS: a new pure core and its
+    // new server-only binding. ASSEMBLED, so this suite does not enrol itself as
+    // a caller of either.
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
     // EX-BEGINNER-EXAM-READ - the Level-1 beginner containment gate plus the
     // trainee-only assignment `isSelf` marker. Beginner Teaching-Practice rows are
     // gated to Level 1 in the loader, and the trainee narrowing marks the viewer's
@@ -746,6 +772,7 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
     "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
     "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
     "lib/actions/" + "exam-definition-read" + "-io.test.ts",
+    "lib/actions/" + "exam-definition-write" + "-io.test.ts",
     "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
     "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
     "lib/actions/" + "exam-plan-write" + "-io.test.ts",
@@ -753,6 +780,20 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
     "lib/actions/" + "exam-session-write" + "-io.test.ts",
     "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
     "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
+    "lib/exam/" + "create-exam-plan" + "-core.test.ts",
+    "lib/exam/" + "exam-read" + "-dto.test.ts",
+    "lib/exam/" + "exam-read-scope" + "-core.test.ts",
+    "lib/exam/" + "exam-read" + ".contract.test.ts",
+    "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
+    "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
+    "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+    // BLOCKER-1 — the canonical wave narrowing, and the ONE committed `lib/`
+    // production module the workspace modifies: the role-reader module gains one
+    // ADMIN-ONLY export so the admin schedule reuses the committed timetable
+    // derivation instead of reproducing it. ASSEMBLED.
+    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
+    "lib/exam/" + "admin-exam-wave-view" + "-core.test.ts",
+    "lib/actions/" + "exam-role" + "-readers.ts",
     "lib/actions/" + "instructor-exam-schedule" + ".contract.test.ts",
     "lib/actions/" + "trainee-exam-schedule" + ".contract.test.ts",
     "lib/exam/" + "create-exam-plan" + "-core.test.ts",
@@ -810,6 +851,15 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
     .sort();
   assert.deepEqual(
     libProduction,
+    // RE-POINTED by BLOCKER-1 to an EXACT single entry. The admin read pair was
+    // edited by the PAIRING slice that shared this working tree; the workspace
+    // slice modifies exactly ONE committed `lib/` production module — the
+    // role-reader module, which gains one ADMIN-ONLY export so the admin schedule
+    // reuses the committed timetable derivation instead of reproducing it. Its own
+    // three `lib/` modules are ADDITIONS, which a modifications-only diff does not
+    // report. Any OTHER modification still fails here. ASSEMBLED.
+    // MERGE RESOLUTION — the UNION of both slices' approved lib production edits.
+    //
     // RE-POINTED by EX-BEGINNER-EXAM-READ. The Level-1 beginner containment gate
     // plus the trainee-only assignment `isSelf` marker MODIFY exactly these four
     // lib/ production modules: the plan loader gains the containment option, the
@@ -827,6 +877,10 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
       "lib/exam/" + "exam-read-dto" + ".ts",
       "lib/exam/" + "exam-read-scope" + "-core.ts",
       "lib/exam/" + "exam-trainee-view" + "-core.ts",
+      // EX-ADMIN-WORKSPACE-UX modifies exactly ONE further lib/ production module:
+      // the role-reader module gains one ADMIN-ONLY export so the admin schedule
+      // reuses the committed timetable derivation instead of reproducing it.
+      "lib/actions/" + "exam-role" + "-readers.ts",
     ].sort(),
     `an unapproved lib production module was edited: ${libProduction.join(", ")}`,
   );
