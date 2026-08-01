@@ -1665,16 +1665,17 @@ export default async function CourseExamsPage({
   // once in this file: one binding site is one place to check that the id came
   // from `context`, and never from the raw route param. The offering id therefore
   // travels inside the encrypted Server Action payload and is never a form field.
-  const boundCreateAssignmentAction = createExamAssignmentAction.bind(null, context.id);
-  const boundDeleteAssignmentAction = deleteExamAssignmentAction.bind(null, context.id);
   const boundCreateInstructedTraineeAssignmentAction =
     createExamInstructedTraineeAssignmentAction.bind(null, context.id);
   const boundSetExamPlanPublicationAction =
     setExamPlanPublicationAction.bind(null, context.id);
-  const boundUpdateExamAssignmentDetailsAction =
-    updateExamAssignmentDetailsAction.bind(null, context.id);
-  const boundMoveExamAssignmentAction = moveExamAssignmentAction.bind(null, context.id);
   const boundReplaceExamSourceDatesAction = replaceExamSourceDatesAction.bind(null, context.id);
+  // boundCreateAssignmentAction, boundDeleteAssignmentAction,
+  // boundUpdateExamAssignmentDetailsAction and boundMoveExamAssignmentAction are
+  // all bound further below, once `groupQuery` — the current tab/view/sub-tab —
+  // is known, so every assignment mutation can redirect back to the exact
+  // arrangement the manager was looking at instead of always landing on the
+  // general view.
 
   /**
    * The three arrangements of the stored schedule, built ONCE from the committed
@@ -1948,6 +1949,23 @@ export default async function CourseExamsPage({
    */
   const viewQuery = `tab=${activeTab}&view=${scheduleView}`;
   const groupQuery = scheduleView === "general" ? viewQuery : `${viewQuery}&group=${activeSubTabIndex}`;
+
+  // Every assignment mutation redirects back into THIS arrangement, not always
+  // the general one — `groupQuery` is the same closed tab/view/ordinal tail
+  // every other in-view link already carries, bound in now that it is known,
+  // same as the id above. The create endpoint ALSO gets `addAssignmentOpen`,
+  // so a manager adding several trainees in a row is not kicked out of the
+  // open add form after every save.
+  const boundCreateAssignmentAction = createExamAssignmentAction.bind(
+    null,
+    context.id,
+    groupQuery,
+    addAssignmentOpen,
+  );
+  const boundDeleteAssignmentAction = deleteExamAssignmentAction.bind(null, context.id, groupQuery);
+  const boundUpdateExamAssignmentDetailsAction =
+    updateExamAssignmentDetailsAction.bind(null, context.id, groupQuery);
+  const boundMoveExamAssignmentAction = moveExamAssignmentAction.bind(null, context.id, groupQuery);
 
   /**
    * The view switcher. Plain links carrying ONE closed token and never an id.

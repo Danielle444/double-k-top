@@ -810,14 +810,23 @@ export async function deleteExamSessionAction(
  */
 export async function createExamAssignmentAction(
   courseOfferingId: string,
+  groupQuery: string,
+  addAssignmentOpen: boolean,
   formData: FormData,
 ): Promise<void> {
   // 1. Authorize the manager BEFORE anything is read or written.
   await requireAdmin();
 
   // 2. The exams path of THIS offering — the only path this action revalidates
-  //    and the only one it redirects back to.
+  //    — and the arrangement to return to. `groupQuery` is the same closed
+  //    tab/view/ordinal tail every in-view link already carries, bound in from
+  //    the page at render time and never read from the submission, so a create
+  //    lands back on the exact arrangement it was opened from instead of
+  //    always the general view. `addAssignmentOpen` is the SAME closed
+  //    disclosure the page renders the form from, also bound in rather than
+  //    read from the submission.
   const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
+  const backPath = `${examsPath}?${groupQuery}`;
 
   // 3. The committed DETAILED writer, given the bound route id and the five raw
   //    values. The bound offering id is a REQUEST: the writer runs the admin
@@ -839,10 +848,12 @@ export async function createExamAssignmentAction(
   //    schedule path, no trainee or instructor surface — then return to it. The
   //    new assignment is read back from the database by the page; it is never
   //    inserted optimistically, and neither its id nor its assigned position is
-  //    reflected in the URL.
+  //    reflected in the URL. The add form stays open ONLY if it already was —
+  //    `addAssignmentOpen` is never forced on for a manager who submitted from
+  //    a closed one, since that state does not exist for them to resume.
   if (result.ok) {
     revalidatePath(examsPath);
-    redirect(`${examsPath}?createdAssignment=1`);
+    redirect(addAssignmentOpen ? `${backPath}&createdAssignment=1&add=1` : `${backPath}&createdAssignment=1`);
   }
 
   // 5. The one refusal that is NOT about this page: the offering does not exist,
@@ -859,7 +870,7 @@ export async function createExamAssignmentAction(
   if (result.code === "invalid_input") {
     const codes = result.issues.map((issue) => issue.code).join(",");
     redirect(
-      `${examsPath}?assignmentError=invalid_input&assignmentIssues=${encodeURIComponent(codes)}`,
+      `${backPath}&assignmentError=invalid_input&assignmentIssues=${encodeURIComponent(codes)}`,
     );
   }
 
@@ -869,7 +880,7 @@ export async function createExamAssignmentAction(
   //    "this surface cannot collect those fields" refusal at all — collecting them
   //    is what this endpoint now does — and the route-local table keeps that
   //    retired code anyway, so an older build's redirect still renders a sentence.
-  redirect(`${examsPath}?assignmentError=${encodeURIComponent(result.code)}`);
+  redirect(`${backPath}&assignmentError=${encodeURIComponent(result.code)}`);
 }
 
 /**
@@ -901,14 +912,20 @@ export async function createExamAssignmentAction(
  */
 export async function deleteExamAssignmentAction(
   courseOfferingId: string,
+  groupQuery: string,
   formData: FormData,
 ): Promise<void> {
   // 1. Authorize the manager BEFORE anything is read or removed.
   await requireAdmin();
 
   // 2. The exams path of THIS offering — the only path this action revalidates
-  //    and the only one it redirects back to.
+  //    — and the arrangement to return to. `groupQuery` is the same closed
+  //    tab/view/ordinal tail every in-view link already carries, bound in from
+  //    the page at render time and never read from the submission, so a
+  //    removal lands back on the exact arrangement it was opened from instead
+  //    of always the general view.
   const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
+  const backPath = `${examsPath}?${groupQuery}`;
 
   // 3. The committed writer, which re-runs the admin boundary and the lifecycle
   //    gate, resolves the plan from the DB-verified offering, normalizes the raw
@@ -923,7 +940,7 @@ export async function deleteExamAssignmentAction(
   //    removed assignment's id is NOT reflected in the URL.
   if (result.ok) {
     revalidatePath(examsPath);
-    redirect(`${examsPath}?deletedAssignment=1`);
+    redirect(`${backPath}&deletedAssignment=1`);
   }
 
   // 5. The one refusal that is NOT about this page.
@@ -935,7 +952,7 @@ export async function deleteExamAssignmentAction(
   //    target id, the lifecycle denial, the missing plan and the missing-or-
   //    foreign assignment. No diagnostics list exists for a removal, so there is
   //    no issues token.
-  redirect(`${examsPath}?assignmentDeleteError=${encodeURIComponent(result.code)}`);
+  redirect(`${backPath}&assignmentDeleteError=${encodeURIComponent(result.code)}`);
 }
 
 /**
@@ -1332,16 +1349,20 @@ export async function setExamPairingAction(
  */
 export async function updateExamAssignmentDetailsAction(
   courseOfferingId: string,
+  groupQuery: string,
   formData: FormData,
 ): Promise<void> {
   // 1. Authorize the manager BEFORE anything is read or written.
   await requireAdmin();
 
   // 2. The exams path of THIS offering — the only path this action revalidates
-  //    and the only one it redirects back to. The section token returns the
-  //    manager to the assignments workspace they submitted from.
+  //    and the only one it redirects back to. `groupQuery` is the same closed
+  //    tab/view/ordinal tail the page itself renders every in-view link with —
+  //    bound in from the page at render time, never read from the submission —
+  //    so the manager lands back on the exact arrangement they saved from
+  //    instead of always the general view.
   const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
-  const backPath = `${examsPath}?tab=assignments`;
+  const backPath = `${examsPath}?${groupQuery}`;
 
   // 3. WHICH row, and its three stored detail values. Raw entries, uncoerced.
   const submittedAssignmentId = formData.get("assignmentId");
@@ -1450,14 +1471,18 @@ export async function updateExamAssignmentDetailsAction(
  */
 export async function moveExamAssignmentAction(
   courseOfferingId: string,
+  groupQuery: string,
   formData: FormData,
 ): Promise<void> {
   // 1. Authorize the manager BEFORE anything is read or written.
   await requireAdmin();
 
-  // 2. The exams path of THIS offering, and the section to return to.
+  // 2. The exams path of THIS offering, and the arrangement to return to.
+  //    `groupQuery` is bound in from the page at render time — the same closed
+  //    tab/view/ordinal tail every in-view link carries — so a move returns the
+  //    manager to the exact arrangement they moved a row from.
   const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
-  const backPath = `${examsPath}?tab=assignments`;
+  const backPath = `${examsPath}?${groupQuery}`;
 
   // 3. The committed writer, which re-runs the admin boundary and the lifecycle
   //    gate, resolves the plan from the DB-verified offering, reads the target

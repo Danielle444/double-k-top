@@ -544,16 +544,33 @@ test("5. the module exports EXACTLY the eight approved actions, in order", () =>
 });
 
 test("6. both new actions have the EXACT locked signature, and return void", () => {
-  for (const name of ["createExamAssignmentAction", "deleteExamAssignmentAction"]) {
-    assert.ok(
-      new RegExp(
-        `export async function ${name}\\(\\s*courseOfferingId: string,\\s*formData: FormData,\\s*\\): Promise<void> \\{`,
-      ).test(ACTIONS_SOURCE),
-      `${name}'s signature is not the locked one`,
-    );
-  }
-  // No `prevState`, no options bag, no third parameter and no non-void return:
-  // every outcome is a navigation, so neither action can grow client-visible state.
+  // RE-POINTED: both actions take a SECOND bound parameter, `groupQuery` — the
+  // same closed tab/view/ordinal tail every in-view link already carries —
+  // between the offering id and the submission, so the redirect can return to
+  // the exact arrangement the manager was looking at. Still a closed, EXACT
+  // signature.
+  //
+  // RE-POINTED again: the CREATE endpoint alone takes a THIRD bound parameter,
+  // `addAssignmentOpen` — the same closed disclosure the page renders the form
+  // from — so a manager adding several trainees in a row is not kicked out of
+  // the open add form after every save. The REMOVAL endpoint has no add form to
+  // reopen and keeps its two-parameter shape; a third or fourth parameter on
+  // either still fails here.
+  assert.ok(
+    new RegExp(
+      "export async function createExamAssignmentAction\\(\\s*courseOfferingId: string,\\s*groupQuery: string,\\s*addAssignmentOpen: boolean,\\s*formData: FormData,\\s*\\): Promise<void> \\{",
+    ).test(ACTIONS_SOURCE),
+    "createExamAssignmentAction's signature is not the locked one",
+  );
+  assert.ok(
+    new RegExp(
+      "export async function deleteExamAssignmentAction\\(\\s*courseOfferingId: string,\\s*groupQuery: string,\\s*formData: FormData,\\s*\\): Promise<void> \\{",
+    ).test(ACTIONS_SOURCE),
+    "deleteExamAssignmentAction's signature is not the locked one",
+  );
+  // No `prevState`, no options bag, no unapproved extra parameter and no
+  // non-void return: every outcome is a navigation, so neither action can grow
+  // client-visible state.
   for (const [label, body] of [
     ["create", CREATE_ACTION],
     ["delete", DELETE_ACTION],
@@ -642,10 +659,44 @@ test("9. the offering is the BOUND leading argument and is NEVER read from FormD
   // The page binds the VERIFIED context id, never the raw route param — and binds
   // each action EXACTLY ONCE, hoisted, so there is one place to check the id's
   // provenance no matter how many per-session controls React renders from it.
-  for (const action of ["createExamAssignmentAction", "deleteExamAssignmentAction"]) {
+  //
+  // RE-POINTED: each action now ALSO binds `groupQuery` — the same closed
+  // tab/view/ordinal tail every in-view link already carries — so a create or a
+  // removal redirects back to the exact arrangement it was submitted from
+  // instead of always the general view. The exact bind call is still pinned
+  // whole, immediately after the id, and still never the raw route param.
+  //
+  // RE-POINTED again: the CREATE bind ALSO carries `addAssignmentOpen` — the
+  // same closed disclosure the page renders the form from — so the add form
+  // stays open across a create. It is checked separately below (squashed,
+  // since the fourth argument pushed the call onto several lines); the REMOVAL
+  // bind is unchanged and still fits the shared loop.
+  assert.ok(
+    squash(PAGE).includes(
+      "createExamAssignmentAction.bind( null, context.id, groupQuery, addAssignmentOpen, )",
+    ),
+    "the page must bind the verified context id, the current view and the add-form disclosure into createExamAssignmentAction",
+  );
+  assert.equal(
+    (PAGE.match(/createExamAssignmentAction\.bind\(/g) ?? []).length,
+    1,
+    "createExamAssignmentAction must be bound exactly once",
+  );
+  assert.equal(
+    PAGE.includes("createExamAssignmentAction.bind(null, courseOfferingId)"),
+    false,
+    "the raw route param must never be bound into createExamAssignmentAction",
+  );
+  assert.equal(
+    squash(PAGE).includes("createExamAssignmentAction.bind( null, context.id, groupQuery, )"),
+    false,
+    "createExamAssignmentAction must not be bound WITHOUT the add-form disclosure",
+  );
+
+  for (const action of ["deleteExamAssignmentAction"]) {
     assert.ok(
-      PAGE.includes(`${action}.bind(null, context.id)`),
-      `the page must bind the verified context id into ${action}`,
+      PAGE.includes(`${action}.bind(null, context.id, groupQuery)`),
+      `the page must bind the verified context id and the current view into ${action}`,
     );
     assert.equal(
       (PAGE.match(new RegExp(`${action}\\.bind\\(`, "g")) ?? []).length,
@@ -656,6 +707,16 @@ test("9. the offering is the BOUND leading argument and is NEVER read from FormD
       PAGE.includes(`${action}.bind(null, courseOfferingId)`),
       false,
       `the raw route param must never be bound into ${action}`,
+    );
+    assert.equal(
+      PAGE.includes(`${action}.bind(null, context.id)`),
+      false,
+      `${action} must not be bound WITHOUT the current view — that is the bug this re-pointing fixes`,
+    );
+    assert.equal(
+      PAGE.includes(`${action}.bind(null, context.id, groupQuery, addAssignmentOpen)`),
+      false,
+      `${action} has no add form to reopen and must not bind addAssignmentOpen`,
     );
   }
 });
@@ -729,12 +790,12 @@ test("13. the CREATE maps its closed refusal union and invents no code", () => {
   );
   assert.ok(
     CREATE_ACTION.includes(
-      "`${examsPath}?assignmentError=invalid_input&assignmentIssues=${encodeURIComponent(codes)}`",
+      "`${backPath}&assignmentError=invalid_input&assignmentIssues=${encodeURIComponent(codes)}`",
     ),
   );
   // Every other refusal is fully described by its code alone.
   assert.ok(
-    CREATE_ACTION.includes("`${examsPath}?assignmentError=${encodeURIComponent(result.code)}`"),
+    CREATE_ACTION.includes("`${backPath}&assignmentError=${encodeURIComponent(result.code)}`"),
   );
 });
 
@@ -748,7 +809,7 @@ test("14. the REMOVAL maps its closed refusal union and invents no code", () => 
   assert.ok(DELETE_ACTION.includes('if (result.code === "offering_not_found")'));
   assert.ok(
     DELETE_ACTION.includes(
-      "`${examsPath}?assignmentDeleteError=${encodeURIComponent(result.code)}`",
+      "`${backPath}&assignmentDeleteError=${encodeURIComponent(result.code)}`",
     ),
   );
   // A removal has no per-field diagnostics, so it carries no issues token.
@@ -807,13 +868,25 @@ test("16. NO id, submitted value or raw error ever reaches the query string", ()
       assert.equal(body.includes(forbidden), false, `the ${label} action leaks ${forbidden}`);
     }
     // The ONLY dynamic values in any redirect target are `result.code` — a
-    // compile-time-known literal from a closed set — and the joined issue codes.
+    // compile-time-known literal from a closed set — the joined issue codes,
+    // and now `backPath`/`groupQuery`: the same closed tab/view/ordinal tail
+    // every in-view link already carries, bound in from the page and never
+    // read from the submission. Still a CLOSED, EXACT allow-list — a database
+    // id, a raw submitted value or anything else still fails here.
+    //
+    // RE-POINTED to ADD `backPath` and `groupQuery` — never to relax the check
+    // into a pattern or a prefix match.
     const interpolations = [...body.matchAll(/\$\{([^}]+)\}/g)].map(([, expr]) => expr.trim());
     for (const expr of interpolations) {
       assert.ok(
-        ["encodeURIComponent(courseOfferingId)", "examsPath", "encodeURIComponent(result.code)", "encodeURIComponent(codes)"].includes(
-          expr,
-        ),
+        [
+          "encodeURIComponent(courseOfferingId)",
+          "examsPath",
+          "groupQuery",
+          "backPath",
+          "encodeURIComponent(result.code)",
+          "encodeURIComponent(codes)",
+        ].includes(expr),
         `the ${label} action interpolates ${expr} into a URL`,
       );
     }
@@ -1761,7 +1834,34 @@ test("43. the ONE create endpoint calls the DETAILED writer and nothing else", (
   // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
   // replacement, which is the only way a plan can gain a Teaching-Practice day
   // and therefore the only way a beginner exam can appear anywhere at all.
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 12);
+  assert.equal(
+    (PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length,
+    8,
+    "eight of the twelve ASSIGNMENT-affecting bind sites still take ONLY the verified offering id",
+  );
+  // RE-POINTED: the remaining FOUR — createExamAssignmentAction,
+  // deleteExamAssignmentAction, updateExamAssignmentDetailsAction and
+  // moveExamAssignmentAction — now ALSO bind `groupQuery`, the same closed
+  // tab/view/ordinal tail every in-view link already carries, so every
+  // assignment mutation returns to the exact arrangement it was submitted
+  // from instead of always the general view. Twelve total, unchanged.
+  //
+  // RE-POINTED from four to THREE: createExamAssignmentAction moved to its own
+  // FOUR-argument shape (below), which also adds `addAssignmentOpen` so the add
+  // form stays open across a create. deleteExamAssignmentAction,
+  // updateExamAssignmentDetailsAction and moveExamAssignmentAction still bind
+  // exactly `context.id, groupQuery` — three, not four.
+  assert.equal(
+    (PAGE.match(/\.bind\(null, context\.id, groupQuery\)/g) ?? []).length,
+    3,
+    "exactly three bind sites must forward ONLY the current view",
+  );
+  assert.equal(
+    (squash(PAGE).match(/\.bind\( null, context\.id, groupQuery, addAssignmentOpen, \)/g) ?? [])
+      .length,
+    1,
+    "exactly one bind site — the create endpoint — must ALSO forward the add-form disclosure",
+  );
   // `action=` counts TWO for the publication card, because its two mutually
   // exclusive forms are written out separately so each can carry a LITERAL hidden
   // operation value rather than a computed one.
@@ -2144,7 +2244,34 @@ test("42. the diagnostics add NO write, no route, no query key and no client sta
   // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
   // replacement, which is the only way a plan can gain a Teaching-Practice day
   // and therefore the only way a beginner exam can appear anywhere at all.
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 12);
+  assert.equal(
+    (PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length,
+    8,
+    "eight of the twelve ASSIGNMENT-affecting bind sites still take ONLY the verified offering id",
+  );
+  // RE-POINTED: the remaining FOUR — createExamAssignmentAction,
+  // deleteExamAssignmentAction, updateExamAssignmentDetailsAction and
+  // moveExamAssignmentAction — now ALSO bind `groupQuery`, the same closed
+  // tab/view/ordinal tail every in-view link already carries, so every
+  // assignment mutation returns to the exact arrangement it was submitted
+  // from instead of always the general view. Twelve total, unchanged.
+  //
+  // RE-POINTED from four to THREE: createExamAssignmentAction moved to its own
+  // FOUR-argument shape (below), which also adds `addAssignmentOpen` so the add
+  // form stays open across a create. deleteExamAssignmentAction,
+  // updateExamAssignmentDetailsAction and moveExamAssignmentAction still bind
+  // exactly `context.id, groupQuery` — three, not four.
+  assert.equal(
+    (PAGE.match(/\.bind\(null, context\.id, groupQuery\)/g) ?? []).length,
+    3,
+    "exactly three bind sites must forward ONLY the current view",
+  );
+  assert.equal(
+    (squash(PAGE).match(/\.bind\( null, context\.id, groupQuery, addAssignmentOpen, \)/g) ?? [])
+      .length,
+    1,
+    "exactly one bind site — the create endpoint — must ALSO forward the add-form disclosure",
+  );
   // RE-POINTED from 10 to 11 by EX-PAIR-UI-MVP: ONE more inline form, bound to
   // the SAME verified context id, which the `.bind` count above pins.
   // RE-POINTED from eleven to FOURTEEN by EX-ADMIN-WORKSPACE-UX: the pairing form
@@ -2202,4 +2329,88 @@ test("42. the diagnostics add NO write, no route, no query key and no client sta
     13,
     "the action module gained an export",
   );
+});
+
+// ===========================================================================
+// 46–47. A create or a removal redirects back into the EXACT arrangement it
+// was submitted from, never always the general view
+// ===========================================================================
+
+test("46. saving a new assignment redirects back into the exact TYPE/DATE sub-tab, and reopens an open add form", () => {
+  // The create endpoint is bound with `groupQuery` — the current tab/view/
+  // ordinal tail, computed once the open arrangement's own sub-tabs are known
+  // — and with `addAssignmentOpen`, the SAME closed disclosure the page
+  // renders the form from. Both are server-derived at render time and never
+  // read from the submission.
+  assert.ok(
+    squash(PAGE).includes(
+      "createExamAssignmentAction.bind( null, context.id, groupQuery, addAssignmentOpen, )",
+    ),
+    "the create endpoint is not bound with the current tab/view/sub-tab and the add-form disclosure",
+  );
+  // It forwards `groupQuery` into every redirect target via `backPath`,
+  // instead of the bare `examsPath` this endpoint used to redirect to — which
+  // is what silently reset the manager to the general view regardless of
+  // which TYPE or DATE sub-tab they were creating from.
+  assert.ok(CREATE_ACTION.includes("const backPath = `${examsPath}?${groupQuery}`;"));
+  // 1. A create from an OPEN add form preserves `add=1` on success — the
+  //    manager can add several trainees in a row without reopening the form —
+  //    and a create from a CLOSED add form does not gain one it never had.
+  //    Both branches build from the SAME server-derived `backPath` and a fixed
+  //    literal tail; nothing from `formData` or `result` reaches either.
+  assert.ok(
+    CREATE_ACTION.includes(
+      "redirect(addAssignmentOpen ? `${backPath}&createdAssignment=1&add=1` : `${backPath}&createdAssignment=1`);",
+    ),
+    "success does not conditionally reopen the add form from the bound disclosure alone",
+  );
+  assert.equal(
+    (CREATE_ACTION.match(/addAssignmentOpen/g) ?? []).length,
+    2,
+    "addAssignmentOpen must appear exactly twice: the bound parameter, and the one success-redirect condition",
+  );
+  // 3. No arbitrary query parameter is forwarded: `add` never appears anywhere
+  //    else in the action, and the ONLY dynamic pieces of the success target
+  //    are the two already-closed, server-derived values.
+  assert.equal(
+    (CREATE_ACTION.match(/add=1/g) ?? []).length,
+    1,
+    "the add-form token must appear in exactly the one conditional branch",
+  );
+  assert.equal(CREATE_ACTION.includes("formData.get(\"add\")"), false, "add is read from the submission");
+  assert.equal(CREATE_ACTION.includes("query.add"), false, "add is read from a raw query object");
+  assert.ok(
+    CREATE_ACTION.includes(
+      "`${backPath}&assignmentError=invalid_input&assignmentIssues=${encodeURIComponent(codes)}`",
+    ),
+  );
+  assert.ok(
+    CREATE_ACTION.includes("`${backPath}&assignmentError=${encodeURIComponent(result.code)}`"),
+  );
+  for (const stale of ["?createdAssignment=1", "?assignmentError="]) {
+    assert.equal(
+      CREATE_ACTION.includes(stale),
+      false,
+      `a redirect target still starts from examsPath directly (${stale}), dropping the current arrangement`,
+    );
+  }
+});
+
+test("47. deleting an assignment redirects back into the exact TYPE/DATE sub-tab", () => {
+  assert.ok(
+    PAGE.includes("deleteExamAssignmentAction.bind(null, context.id, groupQuery)"),
+    "the delete endpoint is not bound with the current tab/view/sub-tab",
+  );
+  assert.ok(DELETE_ACTION.includes("const backPath = `${examsPath}?${groupQuery}`;"));
+  assert.ok(DELETE_ACTION.includes("`${backPath}&deletedAssignment=1`"));
+  assert.ok(
+    DELETE_ACTION.includes("`${backPath}&assignmentDeleteError=${encodeURIComponent(result.code)}`"),
+  );
+  for (const stale of ["?deletedAssignment=1", "?assignmentDeleteError="]) {
+    assert.equal(
+      DELETE_ACTION.includes(stale),
+      false,
+      `a redirect target still starts from examsPath directly (${stale}), dropping the current arrangement`,
+    );
+  }
 });

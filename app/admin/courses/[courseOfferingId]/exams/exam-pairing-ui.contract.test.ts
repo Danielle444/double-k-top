@@ -554,9 +554,14 @@ test("10. the offering is the BOUND leading argument, never a submitted field", 
   );
   // The page binds the card save from the VERIFIED admin context, and no longer
   // binds the standalone action at all.
+  //
+  // RE-POINTED: the card save now ALSO binds `groupQuery` — the same closed
+  // tab/view/ordinal tail every in-view link already carries — so a save
+  // redirects back to the exact arrangement it was submitted from instead of
+  // always the general view.
   assert.ok(
-    PAGE.includes("updateExamAssignmentDetailsAction.bind(null, context.id)"),
-    "the card save is not bound to the verified offering id",
+    PAGE.includes("updateExamAssignmentDetailsAction.bind(null, context.id, groupQuery)"),
+    "the card save is not bound to the verified offering id, followed by the current view",
   );
   assert.equal(
     PAGE.includes(ACTION_NAME),

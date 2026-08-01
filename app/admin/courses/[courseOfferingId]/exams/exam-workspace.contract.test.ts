@@ -1896,3 +1896,94 @@ test("66. this suite opens no database and reads no environment", () => {
     assert.equal(own.includes(token), false, `the suite references ${token}`);
   }
 });
+
+// ===========================================================================
+// 67–68. A card save redirects back into the EXACT arrangement it was
+// submitted from, never always the general view
+// ===========================================================================
+
+const UPDATE_DETAILS_ACTION = ACTIONS.slice(
+  ACTIONS.indexOf("export async function updateExamAssignmentDetailsAction"),
+  ACTIONS.indexOf("export async function moveExamAssignmentAction"),
+);
+
+test("67. saving from the TYPE view redirects back into the exact TYPE sub-tab", () => {
+  // The card save is bound with `groupQuery` — the current tab/view/ordinal
+  // tail, computed once the TYPE view's own sub-tabs are known — not just the
+  // verified offering id.
+  assert.ok(
+    squash(PAGE).includes(
+      "updateExamAssignmentDetailsAction.bind(null, context.id, groupQuery)",
+    ),
+    "the card save is not bound with the current tab/view/sub-tab",
+  );
+  // The TYPE view's sub-tabs are ExamDefinition GROUPS, and `groupQuery` carries
+  // their ordinal POSITION — never an ExamDefinition id — exactly like every
+  // other in-view link on this route.
+  assert.ok(
+    squash(PAGE).includes('scheduleView === "type" ? definitionGroups.map((group) => ({'),
+    "the TYPE view's sub-tabs are no longer derived from definitionGroups",
+  );
+  assert.ok(
+    PAGE.includes(
+      'const groupQuery = scheduleView === "general" ? viewQuery : `${viewQuery}&group=${activeSubTabIndex}`;',
+    ),
+    "groupQuery no longer carries the open sub-tab's ordinal for a non-general view",
+  );
+  // The action forwards `groupQuery` straight into its redirect target instead
+  // of a hardcoded `tab=assignments`, which is what silently reset the manager
+  // to the general view regardless of which sub-tab they saved from.
+  assert.ok(
+    UPDATE_DETAILS_ACTION.includes("const backPath = `${examsPath}?${groupQuery}`;"),
+    "the action no longer builds its redirect target from groupQuery",
+  );
+  assert.equal(
+    UPDATE_DETAILS_ACTION.includes("tab=assignments"),
+    false,
+    "the action still hardcodes the section token instead of forwarding the current view",
+  );
+  assert.equal(
+    (UPDATE_DETAILS_ACTION.match(/export async function updateExamAssignmentDetailsAction\(/g) ?? [])
+      .length,
+    1,
+  );
+  assert.ok(
+    /export async function updateExamAssignmentDetailsAction\(\s*courseOfferingId: string,\s*groupQuery: string,\s*formData: FormData,\s*\): Promise<void> \{/.test(
+      ACTIONS,
+    ),
+    "the action no longer accepts the bound groupQuery as its second parameter",
+  );
+});
+
+test("68. saving from the DATE view redirects back into the exact DATE sub-tab", () => {
+  // Same binding, same forwarding — proven again against the DATE arrangement,
+  // whose sub-tabs are a DIFFERENT grouping (by day) sharing the SAME `group`
+  // ordinal convention.
+  assert.ok(
+    squash(PAGE).includes(
+      "updateExamAssignmentDetailsAction.bind(null, context.id, groupQuery)",
+    ),
+    "the card save is not bound with the current tab/view/sub-tab",
+  );
+  assert.ok(
+    squash(PAGE).includes('scheduleView === "date" ? timelineDays.map((day) => ({'),
+    "the DATE view's sub-tabs are no longer derived from timelineDays",
+  );
+  assert.ok(
+    PAGE.includes(
+      'const groupQuery = scheduleView === "general" ? viewQuery : `${viewQuery}&group=${activeSubTabIndex}`;',
+    ),
+    "groupQuery no longer carries the open sub-tab's ordinal for a non-general view",
+  );
+  assert.ok(
+    UPDATE_DETAILS_ACTION.includes("const backPath = `${examsPath}?${groupQuery}`;"),
+    "the action no longer builds its redirect target from groupQuery",
+  );
+  // A date sub-tab is keyed by its OWN date string for React, never posted as a
+  // saved value — the redirect carries only the closed `view`/`group` tail.
+  assert.equal(
+    UPDATE_DETAILS_ACTION.includes("dateKey"),
+    false,
+    "the action reaches into the date grouping instead of forwarding the closed groupQuery tail",
+  );
+});

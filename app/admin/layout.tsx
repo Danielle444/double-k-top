@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Logo } from "@/lib/components/Logo";
 import { requireAdmin } from "@/lib/auth/require-admin";
 import { signOutAdmin } from "@/lib/actions/auth-actions";
+import { ExamAssignmentsScrollRestore } from "@/lib/components/ExamAssignmentsScrollRestore";
 
 // "זמינות" (/admin/availability) and "ביצוע" (/admin/completion) were
 // removed from the top-level nav in favor of the single "מעקב יומי" entry,
@@ -32,6 +33,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
   return (
     <div className="min-h-screen bg-background">
+      <ExamAssignmentsScrollRestore />
       <header className="border-b border-border bg-card sm:sticky sm:top-0 z-30">
         <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
