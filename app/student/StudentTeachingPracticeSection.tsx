@@ -11,12 +11,7 @@ import {
   type TeachingPracticeTraineeTrackChildRow,
   type TeachingPracticeTraineeTrackRow,
 } from "@/lib/actions/teaching-practice-student";
-import type {
-  TeachingPracticeRoleValue,
-  TeachingPracticeTypeValue,
-} from "@/lib/teaching-practice-rotation";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey, todayDateKey } from "@/lib/dates";
-import { Modal } from "@/lib/components/Modal";
 import { buildTelLink, buildWhatsAppLink } from "@/lib/phone-contact-links";
 // Shared with the admin/instructor screen (see that file's own import of
 // the same module) - one palette/rotation rule, so the same actual lesson
@@ -27,35 +22,29 @@ import { timeBlockColorClasses } from "@/lib/teaching-practice-time-colors";
 // surface never disagrees with the admin/instructor one about what counts
 // as "same parent." Nothing else is imported from
 // lib/components/TeachingPracticeManager.tsx (see that file's own header
-// for why this surface deliberately shares no other code with it) - the
-// badge itself is a tiny local component below, not imported, for the same
-// reason ROLE_LABELS/PRACTICE_TYPE_LABELS are duplicated locally instead.
-// The linked-private/group grouping logic further below is likewise
-// duplicated locally (small, pure) rather than imported from the admin
-// component, per product direction.
+// for why this surface deliberately shares no other code with it). The
+// linked-private/group grouping logic further below is likewise duplicated
+// locally (small, pure) rather than imported from the admin component, per
+// product direction.
 import {
-  buildParentKey,
   buildSameParentOtherNamesByChildId,
   type SameParentChildInput,
 } from "@/lib/teaching-practice-same-parent";
-
-// Read-only trainee surface - deliberately not sharing anything with
-// lib/components/TeachingPracticeManager.tsx (the admin/instructor CRUD
-// component), since that component's edit/publish affordances must never
-// reach a trainee. Labels are duplicated locally rather than imported from
-// there for the same reason.
-const PRACTICE_TYPE_LABELS: Record<TeachingPracticeTypeValue, string> = {
-  LUNGE: "לונג׳",
-  BEGINNER_PRIVATE: "שיעור פרטי מתחילים",
-  BEGINNER_GROUP: "שיעור קבוצתי מתחילים",
-};
-
-const ROLE_LABELS: Record<TeachingPracticeRoleValue, string> = {
-  LEAD_INSTRUCTOR: "מדריך ראשון",
-  SECOND_INSTRUCTOR: "מדריך שני",
-  ASSISTANT_INSTRUCTOR: "עוזר מדריך",
-  EVALUATOR: "ממשב",
-};
+// EX-EXAM-TP-CARDS — the "ההתנסויות שלי" card, and `SameParentBadge`, now
+// live in the shared component (reused verbatim by the trainee exam
+// schedule's "לו״ז שלי" view) rather than being defined here; this file
+// imports the badge back so `ChildNameCell` below stays the SAME single
+// source, never a second, possibly-drifting copy.
+import { SameParentBadge, TeachingPracticeLessonCard } from "@/lib/components/TeachingPracticeLessonCard";
+// EX-EXAM-TP-SAME-PARENT — the "אותו הורה" popup and `GroupBadge`, likewise
+// extracted so the exam screen's own popup is the SAME component, never a
+// visually-similar copy. `buildSameParentPopupRows` is the SAME row-building
+// logic that used to live inline here.
+import {
+  GroupBadge,
+  buildSameParentPopupRows,
+  TeachingPracticeSameParentPopup,
+} from "@/lib/components/TeachingPracticeSameParentPopup";
 
 type TraineeTab = "mine" | "all";
 type AllModeTab = "generatedLessons" | "fixedStructure";
@@ -65,9 +54,9 @@ type AllModeTab = "generatedLessons" | "fixedStructure";
 // and keyed under its own localStorage key - never shares state or storage
 // with the admin/instructor column-visibility feature in
 // TeachingPracticeManager.tsx (TRACK_COLUMN_VISIBILITY_STORAGE_KEY there),
-// and never touches "ההתנסויות שלי" (LessonCard has no column concept at
-// all). One shared key set covers every "כל ההתנסויות" table - a table
-// that has no column for a given key (e.g. GeneratedLessonsTable has no
+// and never touches "ההתנסויות שלי" (TeachingPracticeLessonCard has no
+// column concept at all). One shared key set covers every "כל ההתנסויות"
+// table - a table that has no column for a given key (e.g. GeneratedLessonsTable has no
 // "location"/"type" column) simply never renders anything for that key,
 // so toggling it is a harmless no-op there while still working on the
 // table(s) that do have it. "שעה" (and, in the beginner table, "שעה
@@ -156,50 +145,10 @@ function loadStudentColumnVisibility(): StudentColumnVisibility {
   }
 }
 
-// Same "אותו הורה" wording/styling as the admin/instructor surface - never
-// states siblinghood as fact, and never shows a phone number (names only,
-// same as the rest of this card). stopPropagation keeps a badge tap from
-// also triggering any future click behavior on the enclosing card/row.
-function SameParentBadge({ otherNames, onClick }: { otherNames: string[]; onClick: () => void }) {
-  if (otherNames.length === 0) return null;
-  return (
-    <span
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      className="mr-1 cursor-pointer rounded-full bg-warning-muted px-1.5 py-0.5 text-[10px] font-medium text-warning hover:opacity-80"
-      title={`אותו הורה/איש קשר כמו: ${otherNames.join(", ")}`}
-    >
-      אותו הורה
-    </span>
-  );
-}
-
 // Shared cell renderers - used by both the generated-lessons tables and the
 // fixed-structure tables below, so "current trainee" highlighting, the
 // same-parent badge, and the phone actions all look and behave identically
 // in both modes.
-
-// Compact group label/color - a display-only distinguishing aid, never a
-// visibility rule (that's entirely driven by the server action's own
-// published/active filter). "א"/"ב" get their own tint; any other group
-// name (or a track with no group at all) falls back to a neutral tint, so
-// this never breaks for a group name this map doesn't happen to know about.
-const GROUP_BADGE_CLASSES: Record<string, string> = {
-  א: "bg-indigo-100 text-indigo-800",
-  ב: "bg-fuchsia-100 text-fuchsia-800",
-};
-
-function GroupBadge({ groupName }: { groupName: string | null }) {
-  if (!groupName) return <>—</>;
-  const cls = GROUP_BADGE_CLASSES[groupName] ?? "bg-slate-100 text-slate-800";
-  return (
-    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${cls}`}>
-      {`קבוצה ${groupName}`}
-    </span>
-  );
-}
 
 function TraineeNamesCell({
   people,
@@ -278,129 +227,6 @@ function PhoneCell({ phone }: { phone: string | null }) {
               WhatsApp
             </a>
           )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// "ההתנסויות שלי" - unchanged Stage S2 card view.
-function LessonCard({
-  lesson,
-  sameParentOtherNamesByChildId,
-  onOpenSameParentPopup,
-}: {
-  lesson: TeachingPracticeTraineeLessonRow;
-  sameParentOtherNamesByChildId: Map<string, string[]>;
-  onOpenSameParentPopup: (childId: string) => void;
-}) {
-  return (
-    <div className="rounded-xl border-2 border-border p-4">
-      <div className="mb-1 flex flex-wrap items-center justify-between gap-1.5">
-        <span className="text-base font-semibold text-card-foreground">
-          {formatHebrewWeekday(parseDateKey(lesson.date))} · {formatHebrewDate(parseDateKey(lesson.date))}
-        </span>
-        <span className="rounded-full bg-muted px-3 py-1 text-sm text-muted-foreground">
-          {lesson.startTime}-{lesson.endTime}
-        </span>
-      </div>
-
-      <p className="text-lg font-bold text-card-foreground">
-        {PRACTICE_TYPE_LABELS[lesson.practiceType]}
-      </p>
-
-      {/* responsibleInstructorName is intentionally not rendered here (Stage
-          S2 product decision, display-only) - the field itself is still
-          returned by the server action untouched, so this can be
-          re-enabled later with no data change. */}
-      {lesson.location && (
-        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-sm text-muted-foreground">
-          <span>מיקום: {lesson.location}</span>
-        </div>
-      )}
-
-      {lesson.participants.length > 0 && (
-        <div className="mt-3 border-t border-border pt-2">
-          <p className="mb-1 text-sm font-semibold text-muted-foreground">צוות</p>
-          <ul className="flex flex-col gap-1">
-            {lesson.participants.map((p) => (
-              <li
-                key={p.traineeId}
-                className={`text-sm ${
-                  p.isSelf
-                    ? "rounded-lg bg-secondary px-2 py-1 font-bold text-secondary-foreground"
-                    : "text-card-foreground"
-                }`}
-              >
-                {p.traineeName} - {ROLE_LABELS[p.role]}
-                {p.isSelf && " (את/ה)"}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {lesson.children.length > 0 && (
-        <div className="mt-3 border-t border-border pt-2">
-          <p className="mb-1 text-sm font-semibold text-muted-foreground">ילדים</p>
-          <ul className="flex flex-col gap-2">
-            {lesson.children.map((c) => {
-              const telLink = c.parentPhone ? buildTelLink(c.parentPhone) : null;
-              const waLink = c.parentPhone ? buildWhatsAppLink(c.parentPhone) : null;
-              return (
-                <li key={c.childId} className="rounded-lg bg-muted p-2 text-sm text-card-foreground">
-                  <p className="font-semibold">
-                    {c.firstName}
-                    {c.lastName ? ` ${c.lastName}` : ""}
-                    {c.age != null || c.gender ? " · " : ""}
-                    {c.age != null ? `גיל ${c.age}` : ""}
-                    {c.age != null && c.gender ? " · " : ""}
-                    {c.gender ?? ""}
-                    <SameParentBadge
-                      otherNames={sameParentOtherNamesByChildId.get(c.childId) ?? []}
-                      onClick={() => onOpenSameParentPopup(c.childId)}
-                    />
-                  </p>
-                  {(c.horseName || c.equipmentNotes) && (
-                    <p className="text-muted-foreground">
-                      {c.horseName ? `סוס: ${c.horseName}` : ""}
-                      {c.horseName && c.equipmentNotes ? " · " : ""}
-                      {c.equipmentNotes ? `ציוד: ${c.equipmentNotes}` : ""}
-                    </p>
-                  )}
-                  {(c.parentName || c.parentPhone) && (
-                    <p className="text-muted-foreground">
-                      {c.parentName ? `הורה: ${c.parentName}` : ""}
-                      {c.parentName && c.parentPhone ? " · " : ""}
-                      {c.parentPhone ? `טלפון: ${c.parentPhone}` : ""}
-                    </p>
-                  )}
-                  {(telLink || waLink) && (
-                    <div className="mt-1 flex flex-wrap gap-1.5">
-                      {telLink && (
-                        <a
-                          href={telLink}
-                          className="rounded-full bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground hover:opacity-80"
-                        >
-                          התקשר
-                        </a>
-                      )}
-                      {waLink && (
-                        <a
-                          href={waLink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="rounded-full bg-success-muted px-2 py-0.5 text-xs font-medium text-success hover:opacity-80"
-                        >
-                          WhatsApp
-                        </a>
-                      )}
-                    </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
         </div>
       )}
     </div>
@@ -1230,88 +1056,12 @@ export function StudentTeachingPracticeSection({ studentId }: { studentId: strin
     // otherwise a fixed-structure-only match could briefly (or permanently,
     // if this popup is never reopened) show as "no rows found" just
     // because allLessons happened to resolve first. This is exactly the
-    // "empty/incomplete popup" bug being fixed here.
+    // "empty/incomplete popup" bug that was fixed here, and the reason this
+    // screen still gates on `allLessons`/`tracks` itself - the shared builder
+    // (buildSameParentPopupRows) is pure and holds no loading state of its
+    // own.
     if (allLessons === null || tracks === null) return null;
-
-    let targetKey: string | null = null;
-    for (const lesson of allLessons) {
-      const match = lesson.children.find((c) => c.childId === samePopupChildId);
-      if (match) {
-        targetKey = buildParentKey(match.parentName, match.parentPhone);
-        break;
-      }
-    }
-    if (!targetKey) {
-      for (const track of tracks) {
-        const match = track.children.find((c) => c.childId === samePopupChildId);
-        if (match) {
-          targetKey = buildParentKey(match.parentName, match.parentPhone);
-          break;
-        }
-      }
-    }
-    if (!targetKey) return [];
-
-    // Unified row shape - date is null for fixed-structure rows (they have
-    // no concrete date, only a template defaultStartTime), which also
-    // drives the sort (dated rows first, chronological; fixed-structure
-    // rows after).
-    const rows: {
-      key: string;
-      sourceLabel: string;
-      childFullName: string;
-      parentName: string | null;
-      parentPhone: string | null;
-      practiceType: TeachingPracticeTypeValue;
-      groupName: string | null;
-      date: string | null;
-      startTime: string;
-      traineeNames: string[];
-      horseName: string | null;
-      equipmentNotes: string | null;
-    }[] = [];
-    for (const lesson of allLessons) {
-      for (const c of lesson.children) {
-        if (buildParentKey(c.parentName, c.parentPhone) !== targetKey) continue;
-        rows.push({
-          key: `lesson-${lesson.id}-${c.childId}`,
-          sourceLabel: "שיעור בתאריך",
-          childFullName: `${c.firstName}${c.lastName ? ` ${c.lastName}` : ""}`,
-          parentName: c.parentName,
-          parentPhone: c.parentPhone,
-          practiceType: lesson.practiceType,
-          groupName: lesson.groupName,
-          date: lesson.date,
-          startTime: lesson.startTime,
-          traineeNames: lesson.participants.map((p) => p.traineeName),
-          horseName: c.horseName,
-          equipmentNotes: c.equipmentNotes,
-        });
-      }
-    }
-    for (const track of tracks) {
-      for (const c of track.children) {
-        if (buildParentKey(c.parentName, c.parentPhone) !== targetKey) continue;
-        rows.push({
-          key: `track-${track.id}-${c.childId}`,
-          sourceLabel: "מבנה קבוע",
-          childFullName: `${c.firstName}${c.lastName ? ` ${c.lastName}` : ""}`,
-          parentName: c.parentName,
-          parentPhone: c.parentPhone,
-          practiceType: track.practiceType,
-          groupName: track.groupName,
-          date: null,
-          startTime: track.defaultStartTime,
-          traineeNames: track.trainees.map((t) => t.traineeName),
-          horseName: c.horseName,
-          equipmentNotes: c.equipmentNotes,
-        });
-      }
-    }
-
-    return rows.sort(
-      (a, b) => (a.date ?? "9999-99-99").localeCompare(b.date ?? "9999-99-99") || a.startTime.localeCompare(b.startTime)
-    );
+    return buildSameParentPopupRows(samePopupChildId, allLessons, tracks);
   }, [samePopupChildId, allLessons, tracks]);
 
   return (
@@ -1380,7 +1130,7 @@ export function StudentTeachingPracticeSection({ studentId }: { studentId: strin
           ) : (
             <div className="flex flex-col gap-3">
               {displayedMineLessons.map((lesson) => (
-                <LessonCard
+                <TeachingPracticeLessonCard
                   key={lesson.id}
                   lesson={lesson}
                   sameParentOtherNamesByChildId={mineSameParentOtherNamesByChildId}
@@ -1588,60 +1338,11 @@ export function StudentTeachingPracticeSection({ studentId }: { studentId: strin
         </>
       )}
 
-      <Modal
+      <TeachingPracticeSameParentPopup
         open={samePopupChildId !== null}
         onClose={handleCloseSameParentPopup}
-        title="אותו הורה / איש קשר"
-      >
-        <div className="flex flex-col gap-3">
-          <p className="text-xs text-muted-foreground">
-            כדאי לתאם מי יוצר קשר כדי לא לפנות לאותו הורה כמה פעמים.
-          </p>
-          {samePopupRows === null ? (
-            <p className="text-sm text-muted-foreground">טוען...</p>
-          ) : samePopupRows.length === 0 ? (
-            <p className="text-sm text-muted-foreground">לא נמצאו שיעורים משויכים.</p>
-          ) : (
-            <div className="flex max-h-[60vh] flex-col gap-2 overflow-y-auto">
-              {samePopupRows.map((row) => (
-                <div key={row.key} className="rounded-lg border border-border bg-card p-3 text-sm">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                      {row.sourceLabel}
-                    </span>
-                    <GroupBadge groupName={row.groupName} />
-                  </div>
-                  <p className="mt-1 font-semibold text-card-foreground">{row.childFullName}</p>
-                  <p className="mt-1 text-muted-foreground">
-                    {row.parentName ?? "—"}
-                    {row.parentPhone ? ` · ${row.parentPhone}` : ""}
-                  </p>
-                  <p className="mt-1 text-muted-foreground">
-                    {row.date ? (
-                      <>
-                        {formatHebrewDate(parseDateKey(row.date))} · {row.startTime} ·{" "}
-                      </>
-                    ) : (
-                      <>{row.startTime} · </>
-                    )}
-                    {PRACTICE_TYPE_LABELS[row.practiceType]}
-                  </p>
-                  {row.traineeNames.length > 0 && (
-                    <p className="mt-1 text-muted-foreground">חניכים: {row.traineeNames.join(", ")}</p>
-                  )}
-                  {(row.horseName || row.equipmentNotes) && (
-                    <p className="mt-1 text-muted-foreground">
-                      {row.horseName ? `סוס: ${row.horseName}` : ""}
-                      {row.horseName && row.equipmentNotes ? " · " : ""}
-                      {row.equipmentNotes ? `ציוד: ${row.equipmentNotes}` : ""}
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </Modal>
+        rows={samePopupRows}
+      />
     </div>
   );
 }

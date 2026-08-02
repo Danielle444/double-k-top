@@ -1240,6 +1240,35 @@ function approvedSlicePaths(): string[] {
     "app/student/trainee-exams-default-view.contract.test.ts",
     "app/student/trainee-beginner-placeholder-group-wiring.contract.test.ts",
     "app/student/trainee-teaching-practice-home-shortcut.contract.test.ts",
+    // EX-EXAM-TP-CARDS, on the same terms: an EXACT path list, never a
+    // directory and never a glob. The two prior trainee placeholder test
+    // files above are now DELETED (their subject, the temporary trainee
+    // placeholder, no longer exists) - deleting an approved path is still an
+    // approved touch. This slice's own new paths: the extracted shared
+    // Teaching-Practice lesson card (a `lib/components` leaf, exactly like
+    // every other shared exam renderer) and its own render/content suite, the
+    // pure merge/filter core behind "לו״ז שלי" and its own real-behavior
+    // suite, `StudentTeachingPracticeSection.tsx` (now rendering through the
+    // extracted card), and two new trainee contract suites covering the real
+    // cards' wiring. It adds no route, no action, no reader and no `lib/exam`
+    // file; the instructor screen and its own placeholder are untouched (see
+    // this slice's own test 16).
+    "lib/components/TeachingPracticeLessonCard.tsx",
+    "lib/components/TeachingPracticeLessonCard.test.tsx",
+    "app/student/trainee-exam-self-view-core.ts",
+    "app/student/trainee-exam-self-view-core.test.ts",
+    "app/student/StudentTeachingPracticeSection.tsx",
+    "app/student/trainee-teaching-practice-shared-card.contract.test.ts",
+    "app/student/trainee-exam-teaching-practice-cards.contract.test.ts",
+    // EX-EXAM-TP-SAME-PARENT, on the same terms: an EXACT path list, never a
+    // directory and never a glob. The real same-parent badge/popup, extracted
+    // into its own `lib/components` leaf (the "אותו הורה" popup, GroupBadge
+    // and the pure row-builder) so both trainee screens render the identical
+    // popup, plus its own real-behavior suite. It adds no route, no action,
+    // no reader and no `lib/exam` file; the instructor screen is untouched
+    // (see this slice's own test 16).
+    "lib/components/TeachingPracticeSameParentPopup.tsx",
+    "lib/components/TeachingPracticeSameParentPopup.test.ts",
     ];
 }
 
