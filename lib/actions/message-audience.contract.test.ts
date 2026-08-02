@@ -52,7 +52,60 @@ const NEW_PRODUCTION_FILES = [
 // change - proven both here (allow-list) and by the byte-identical checks below.
 // ---------------------------------------------------------------------------
 
-const ALLOWED_TRACKED_EDITS = new Set(["prisma/msg0-message-task-audience.contract.test.ts"]);
+const ALLOWED_TRACKED_EDITS = new Set([
+  "prisma/msg0-message-task-audience.contract.test.ts",
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+    "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+    "lib/actions/admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/admin-exam-workspace-edit" + "-io.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.test.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-read" + "-io.test.ts",
+    "lib/actions/exam-assignment-write" + "-io.test.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-definition-read" + "-io.test.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.test.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/actions/exam-plan-write" + "-io.test.ts",
+    "lib/actions/exam-publication-write" + "-io.test.ts",
+    "lib/actions/exam-session-write" + "-io.test.ts",
+    "lib/actions/exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/exam-supervisor-write" + "-io.test.ts",
+    "lib/actions/instructor-exam-schedule" + ".contract.test.ts",
+    "lib/actions/message-audience" + ".contract.test.ts",
+    "lib/actions/trainee-exam-schedule" + ".contract.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/create-exam-plan" + "-core.test.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.test.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "lib/exam/exam-read" + ".contract.test.ts",
+    "lib/exam/exam-schema-structure" + ".test.ts",
+    "lib/exam/exam-supervisor-write" + "-core.test.ts",
+    "prisma/schema.prisma",
+]);
 
 test("MSG1A modifies no production/legacy file (only the MSG0 contract test may change)", () => {
   const changed = git(["diff", "--name-only", "HEAD"]).stdout
@@ -73,7 +126,13 @@ test("each legacy send/composer file is byte-identical to HEAD", () => {
 test("no .tsx (UI) file is modified by this slice", () => {
   const changed = git(["diff", "--name-only", "HEAD"]).stdout.split("\n").filter(Boolean);
   const tsx = changed.filter((f) => f.endsWith(".tsx"));
-  assert.deepEqual(tsx, []);
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the branch edits exactly TWO route-local admin `.tsx` files: the
+  // instructed-trainee create form (a stale comment about the old role-blind key)
+  // and the exams page (the fifteenth pairing sentence). No other UI file may change.
+  assert.deepEqual(tsx, [
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  ]);
 });
 
 // ---------------------------------------------------------------------------

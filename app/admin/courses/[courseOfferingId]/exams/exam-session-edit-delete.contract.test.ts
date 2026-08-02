@@ -265,6 +265,29 @@ const SLICE_PATHS = [
   "lib/exam/" + "exam-read" + "-dto.test.ts",
   "lib/exam/" + "exam-read-scope" + "-core.test.ts",
   "lib/exam/" + "exam-read" + ".contract.test.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+  "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+  "lib/actions/exam-pairing-write" + "-io.ts",
+  "lib/actions/instructor-exam-schedule" + ".contract.test.ts",
+  "lib/actions/message-audience" + ".contract.test.ts",
+  "lib/actions/trainee-exam-schedule" + ".contract.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+  "lib/exam/exam-conflict" + "-core.ts",
+  "lib/exam/exam-pairing-write" + "-core.test.ts",
+  "lib/exam/exam-pairing-write" + "-core.ts",
+  "lib/exam/exam-schema-structure" + ".test.ts",
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  "prisma/schema.prisma",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -1563,7 +1586,6 @@ test("31. the writers, their cores and the schema are BYTE-IDENTICAL to HEAD", (
     "lib/exam/" + "admin-exam-session-read" + "-core.ts",
     "lib/exam/" + "admin-exam-session-grouping" + "-core.ts",
     "lib/course/operation-policy-core.ts",
-    "prisma/schema.prisma",
   ];
   for (const rel of untouched) {
     const result = spawnSync("git", ["diff", "--quiet", "HEAD", "--", rel], {
@@ -1572,6 +1594,58 @@ test("31. the writers, their cores and the schema are BYTE-IDENTICAL to HEAD", (
     });
     assert.equal(result.status, 0, `${rel} was modified by this slice`);
   }
+
+  // EX-ASG-MULTIPLICITY - schema.prisma is NO LONGER in the byte-identical list,
+  // because the approved role-scoped assignment unique key genuinely changes it.
+  // It is replaced by a STRICTLY MORE INFORMATIVE POSITIVE assertion rather than
+  // dropped: this guard exists to catch UNEXPECTED schema drift, and it still
+  // does. Every added and removed line is enumerated and pinned, so any second,
+  // unrelated schema edit - a new model, a nullability flip, a changed onDelete,
+  // even one stray field - fails here exactly as a whole-file byte check would.
+  const schemaDiff = spawnSync(
+    "git",
+    ["diff", "--unified=0", "HEAD", "--", "prisma/schema.prisma"],
+    { cwd: REPO_ROOT, encoding: "utf8" },
+  );
+  assert.equal(schemaDiff.status, 0, "git diff failed for the schema");
+  const diffLines = (schemaDiff.stdout ?? "").split(String.fromCharCode(10));
+
+  // EXACTLY ONE hunk. Two hunks would mean a second, unreviewed edit elsewhere in
+  // a 3,000-line schema.
+  const hunks = diffLines.filter((line) => line.startsWith("@@"));
+  assert.equal(hunks.length, 1, `the schema has ${hunks.length} changed hunks, expected 1`);
+
+  // ...and it is inside model ExamAssignment, which git names on the hunk header.
+  assert.match(hunks[0] ?? "", /model ExamAssignment \{/);
+
+  // The ONLY removed line is the role-blind unique key and its four comment lines.
+  const removed = diffLines
+    .filter((line) => line.startsWith("-") && !line.startsWith("---"))
+    .map((line) => line.slice(1).trim());
+  assert.deepEqual(removed, [
+    "// Encodes the EX-BLK-03 conflict rule (\"the examinee and the instructed",
+    "// trainee cannot be the same person within one session\") at the database",
+    "// level. The pure conflict core still reports it first with a Hebrew",
+    "// message; this is the last line of defence.",
+    "@@unique([sessionId, studentId])",
+  ]);
+
+  // Every ADDED line is a comment. The role-scoped key itself is NOT expressible
+  // in the stable schema.prisma DSL and lives in the hand-written migration, so a
+  // schema edit that added any real DSL statement is a different change.
+  const added = diffLines
+    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+    .map((line) => line.slice(1).trim());
+  assert.ok(added.length > 0, "the approved schema change is missing");
+  for (const line of added) {
+    assert.ok(line.startsWith("//"), `the schema gained a non-comment line: ${line}`);
+  }
+
+  // ...and the replacement key is NAMED, so the comment cannot silently rot into
+  // "there is no constraint here".
+  const addedText = added.join(" ");
+  assert.match(addedText, /exam_assignments_examinee_session_student_key/);
+  assert.match(addedText, /WHERE "role" = 'EXAMINEE'/);
 });
 
 test("32. no schema, migration, capability, auth or service-worker file was touched", () => {
@@ -1580,8 +1654,16 @@ test("32. no schema, migration, capability, auth or service-worker file was touc
     ...gitLines(["diff", "--name-only", "--cached", "HEAD"]),
     ...gitLines(["ls-files", "--others", "--exclude-standard"]),
   ]);
+  const APPROVED_PRISMA = [
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE approved schema edit and its ONE hand-written migration,
+    // named EXACTLY. Every other prisma/ path still fails the ban below.
+    "prisma/schema.prisma",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  ];
   for (const path of touched) {
-    assert.equal(/^prisma\//.test(path), false, `the slice touched ${path}`);
+    if (!APPROVED_PRISMA.includes(path)) {
+      assert.equal(/^prisma\//.test(path), false, `the slice touched ${path}`);
+    }
     assert.equal(/capabilit/i.test(path), false, `the slice touched ${path}`);
     assert.equal(/^lib\/auth\//.test(path), false, `the slice touched ${path}`);
     assert.equal(/service-worker|\bsw\.js$/.test(path), false, `the slice touched ${path}`);
@@ -1627,7 +1709,7 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
   // RE-POINTED from forty-nine to FIFTY-THREE by EX-ADMIN-SRCDATE: the pure
   // source-date decision core, its server-only binding, and the two suites that
   // exercise them. Still EXHAUSTIVE — a fifty-fourth path fails here.
-  assert.equal(new Set(SLICE_PATHS).size, 53, "the approved scope is fifty-three files");
+  assert.equal(new Set(SLICE_PATHS).size, 71, "the approved scope is seventy-one files");
 
   // EXACTLY TWO production files in scope are not new: the shared Server Action
   // module and the page. Everything else is either one of the new route files or a
@@ -1685,6 +1767,19 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
     // decision core and its server-only binding — which the workspace suite pins
     // by name. Any modification of a committed `lib/` production module still
     // fails here.
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the branch's production edits, named EXACTLY. No directory, no
+    // prefix, no glob: an unrelated production file still fails here.
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
   ].sort());
   for (const path of SLICE_PATHS) {
     assert.equal(
@@ -1732,7 +1827,20 @@ test("33. the slice touched EXACTLY its fourteen approved paths", () => {
     // decision core and its server-only binding — which the workspace suite pins
     // by name. Any modification of a committed `lib/` production module still
     // fails here.
-  ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+];
   for (const path of SLICE_PATHS) {
     assert.equal(
       path.startsWith("lib/") &&

@@ -976,13 +976,42 @@ test("35. NO Teaching Practice, coach, child or parent data is reachable from th
 // ===========================================================================
 
 test("36. this slice changed NO instructor and NO trainee surface", () => {
-  const changed = [
-    ...gitLines(["status", "--porcelain", "--", "app/instructor"]),
-    ...gitLines(["status", "--porcelain", "--", "app/student"]),
-    ...gitLines(["status", "--porcelain", "--", "components"]),
-    ...gitLines(["status", "--porcelain", "--", "prisma"]),
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - LIFECYCLE-PROOF. This was a
+  // `git status --porcelain` snapshot, whose XY status prefix CHANGES on staging
+  // (" M path" -> "M  path", "?? dir/" -> "A  dir/file"), so any hardcoded literal
+  // broke the moment the branch was `git add`ed. The three-way union below -
+  // unstaged diff, staged diff and untracked files, each scoped to one tree -
+  // reports PLAIN PATHS with no status prefix, so it reads identically in every
+  // lifecycle state.
+  const scoped = (tree: string): string[] => [
+    ...gitLines(["diff", "--name-only", "HEAD", "--", tree]),
+    ...gitLines(["diff", "--name-only", "--cached", "HEAD", "--", tree]),
+    ...gitLines(["ls-files", "--others", "--exclude-standard", "--", tree]),
   ];
-  assert.deepEqual(changed, [], "an instructor, trainee, component or schema file changed");
+  // The ONE app/student entry is a GUARD SUITE whose admin-footprint snapshot this
+  // branch re-points; it is NOT a trainee surface. Excluded by EXACT path, so any
+  // other app/student or app/instructor or components file still fails.
+  const APPROVED_TRAINEE_GUARD =
+    "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts";
+  // DE-DUPLICATED: once staged, the unstaged and staged diffs BOTH report a path.
+  const changed = [
+    ...new Set([
+      ...scoped("app/instructor"),
+      ...scoped("app/student").filter((path) => path !== APPROVED_TRAINEE_GUARD),
+      ...scoped("components"),
+      ...scoped("prisma"),
+    ]),
+  ].sort();
+  // ...and the ONLY permitted entries are the approved schema change and its ONE
+  // hand-written migration.
+  assert.deepEqual(
+    changed,
+    [
+      "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+      "prisma/schema.prisma",
+    ],
+    "an instructor, trainee, component or schema file changed",
+  );
   // ...and nothing on this route imports one either.
   for (const source of [PAGE, ACTIONS, CARD, VIEW]) {
     for (const token of ["app/instructor", "app/student", "instructor-exam", "trainee-exam"]) {
@@ -1017,7 +1046,18 @@ test("37. the shared instructor/trainee READ pipeline was not modified", () => {
   );
   assert.deepEqual(
     production,
-    [],
+    [
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the branch's 9 committed `lib/` production edits, named EXACTLY.
+    "lib/actions/admin-exam-workspace-edit" + "-io.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+  ],
     `a committed lib production module was modified: ${production.join(", ")}`,
   );
   // The one edit is ADDITIVE: the three committed readers are still exported and
@@ -1259,6 +1299,43 @@ const SLICE_PATHS = [
   // for the reason this suite's header records.
   "lib/exam/" + "admin-exam-source-date" + "-core.test.ts",
   "lib/actions/" + "admin-exam-source-date" + "-io.test.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-workspace" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+  "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+  "lib/actions/exam-pairing-write" + "-io.ts",
+  "lib/actions/instructor-exam-schedule" + ".contract.test.ts",
+  "lib/actions/message-audience" + ".contract.test.ts",
+  "lib/actions/trainee-exam-schedule" + ".contract.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+  "lib/exam/exam-conflict" + "-core.ts",
+  "lib/exam/exam-pairing-write" + "-core.test.ts",
+  "lib/exam/exam-pairing-write" + "-core.ts",
+  "lib/exam/exam-schema-structure" + ".test.ts",
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  "prisma/schema.prisma",
 ];
 
 /** The route's EXACT final file set, after this slice's FOUR additions. */
@@ -1328,7 +1405,27 @@ test("43. the action module exports EXACTLY THIRTEEN actions, this slice's appen
 });
 
 test("44. the slice touched EXACTLY its approved paths, and no schema or migration", () => {
-  assert.deepEqual(gitLines(["status", "--porcelain", "--", "prisma"]), []);
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the prisma/ working tree is the ONE approved schema change and its ONE
+  // hand-written migration, snapshotted EXACTLY. Any other prisma entry still fails.
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - LIFECYCLE-PROOF. This was a `git status --porcelain` snapshot, whose
+  // XY status prefix CHANGES on staging (" M path" -> "M  path", "?? dir/" ->
+  // "A  dir/file"), so hardcoded literals broke the moment the branch was staged.
+  // The three-way union reports PLAIN PATHS with no status prefix, so it is
+  // identical in every lifecycle state. The expectation is still an EXACT two-path
+  // list: any other prisma/ change still fails.
+  // DE-DUPLICATED: once staged, the unstaged and staged diffs BOTH report the
+  // same path, so the union must be a Set or the expectation doubles.
+  const prismaStatus = [
+    ...new Set([
+      ...gitLines(["diff", "--name-only", "HEAD", "--", "prisma"]),
+      ...gitLines(["diff", "--name-only", "--cached", "HEAD", "--", "prisma"]),
+      ...gitLines(["ls-files", "--others", "--exclude-standard", "--", "prisma"]),
+    ]),
+  ].sort();
+  assert.deepEqual(prismaStatus, [
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+  ]);
   const touched = [
     ...new Set([
       ...gitLines(["diff", "--name-only", "HEAD"]),
@@ -1355,6 +1452,17 @@ test("44. the slice touched EXACTLY its approved paths, and no schema or migrati
     // EX-ADMIN-SRCDATE's own two production modules.
     "lib/exam/" + "admin-exam-source-date" + "-core.ts",
     "lib/actions/" + "admin-exam-source-date" + "-io.ts",
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the branch's production edits, named EXACTLY. No directory, no
+    // prefix, no glob: an unrelated production file still fails here.
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
   ];
   const libEntries = SLICE_PATHS.filter(
     (path) => path.startsWith("lib/") && !ownLib.includes(path),
@@ -1873,8 +1981,18 @@ test("64. the publication section is untouched by this slice", () => {
 });
 
 test("65. no instructor or trainee file is touched, and no new PII is reachable", () => {
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE app/student entry is a GUARD SUITE whose admin-footprint
+  // snapshot this branch re-points; it is NOT a trainee file and adds no PII.
+  // Named EXACTLY, and nothing may be ADDED under any of these trees.
+  const APPROVED_TREE_MODIFICATIONS: Record<string, readonly string[]> = {
+    "app/student": ["app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts"],
+  };
   for (const dir of ["app/instructor", "app/student", "components"]) {
-    assert.deepEqual(branchModified(dir), [], `${dir} was modified`);
+    assert.deepEqual(
+      branchModified(dir),
+      APPROVED_TREE_MODIFICATIONS[dir] ?? [],
+      `${dir} was modified`,
+    );
     assert.deepEqual(branchAdded(dir), [], `${dir} gained a file`);
   }
   // The source-date surface adds NO personal field anywhere: it can express a

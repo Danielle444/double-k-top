@@ -146,22 +146,45 @@
  * kind-shaped opinion here could only drift away from it.
  *
  * ===========================================================================
- * MORE THAN ONE INSTRUCTED TRAINEE IS ALLOWED; THE SAME PERSON TWICE IS NOT
+ * EX-ASG-MULTIPLICITY — THE DATABASE NO LONGER REFUSES A SECOND ROLE
  * ===========================================================================
- * A session may hold SEVERAL instructed trainees, provided they are different
- * students. There is no maximum-one rule here, no pre-check that counts existing
- * rows, and no dependency capable of performing one — a count-then-write would be
- * both a product invention and a race.
+ * A session may hold SEVERAL instructed trainees. There is no maximum-one rule
+ * here, no pre-check that counts existing rows, and no dependency capable of
+ * performing one — a count-then-write would be both a product invention and a
+ * race.
  *
- * What IS prevented is the same student appearing twice in one session, and it is
- * prevented by the database's own unique key over `(sessionId, studentId)`.
+ * The database key over `(sessionId, studentId)` USED TO BE role-blind, and that
+ * paragraph used to end "…so the same student cannot appear twice in one
+ * session". IT NO LONGER DOES. The key is now the PARTIAL index
+ * `UNIQUE ("sessionId", "studentId") WHERE "role" = 'EXAMINEE'`, so both of these
+ * are now ordinary, SUCCEEDING creates rather than conflicts:
+ *   - a trainee who is already the session's EXAMINEE being added as the
+ *     INSTRUCTED_TRAINEE taught by a DIFFERENT examinee of that same session;
+ *   - a trainee who is already an INSTRUCTED_TRAINEE of that session being added
+ *     again as the instructed trainee of a SECOND examinee of it.
  *
- * `assignment_conflict` therefore means: the Student ALREADY HAS AN ASSIGNMENT IN
- * THIS SESSION, REGARDLESS OF ROLE. That deliberately INCLUDES the case where
- * they are already the EXAMINEE of the very same session — a person cannot both
- * sit the exam and be taught in it. The unique key is ROLE-BLIND on purpose, and
- * so is this refusal: the code does not say which role the existing row holds, and
- * must not, because that would turn a failed create into a read of another row.
+ * WHICH MAKES `assignment_conflict` UNREACHABLE FROM THIS SLICE. Every row this
+ * module writes carries the fixed role `INSTRUCTED_TRAINEE`, which the partial
+ * predicate excludes, so no `(sessionId, studentId)` violation can arise from it.
+ * The code, the classifier dependency and the refusal arm are RETAINED anyway:
+ * they cost one comparison, they keep a future widening of this slice's role — or
+ * a future widening of the key — landing as an honest refusal instead of a raw
+ * 500, and deleting a refusal that a database could still in principle produce is
+ * how a fail-open path gets introduced. It is defence in depth, not live
+ * behaviour.
+ *
+ * `assignment_conflict` therefore means, and only means: the write violated the
+ * assignment table's remaining uniqueness key. It still does NOT say which role
+ * the existing row holds, and must not, because that would turn a failed create
+ * into a read of another row.
+ *
+ * ONE THING THE DATABASE NO LONGER GUARDS, STATED PLAINLY RATHER THAN IMPLIED:
+ * "the examinee and the instructed trainee must not be the same person" (the pure
+ * conflict core's EX-BLK-03) used to be a side effect of the role-blind key. It is
+ * now a REPORTED conflict only. This slice writes no `pairingIndex` and therefore
+ * authors no pairing at all, so it cannot create that situation by itself; a
+ * pairing that would create it is the pairing slice's decision to make, and
+ * closing it there would be a separate, approved change.
  *
  * ===========================================================================
  * KNOWN LIMITATION: THIS SLICE WRITES NO `pairingIndex`
@@ -495,9 +518,12 @@ export interface CreateExamInstructedTraineeAssignmentDeps {
   readonly isOperationNotAllowedError: (error: unknown) => boolean;
 
   /**
-   * Is this throw "that student already has an assignment in that session"?
+   * Is this throw a violation of the assignment table's remaining uniqueness
+   * key?
    *
-   * ROLE-BLIND, exactly like the database key it recognizes — see the header.
+   * That key is EXAMINEE-scoped since EX-ASG-MULTIPLICITY, so this predicate
+   * cannot fire for the role this slice writes. It is retained as defence in
+   * depth — see the header.
    */
   readonly isUniqueConstraintError: (error: unknown) => boolean;
 }
@@ -516,7 +542,9 @@ export interface CreateExamInstructedTraineeAssignmentDeps {
  * enforce or an operation it does not carry out.
  *
  * `assignment_conflict` is deliberately SILENT about which role the existing row
- * holds — see the header.
+ * holds, and is UNREACHABLE from this slice since EX-ASG-MULTIPLICITY scoped the
+ * uniqueness key to EXAMINEE rows. It is retained as defence in depth rather than
+ * removed — see the header.
  */
 export type CreateExamInstructedTraineeAssignmentRefusalCode =
   | "offering_not_found"
@@ -690,8 +718,9 @@ export async function createExamInstructedTraineeAssignmentWithDeps(
   // 12. The single write, against the SERVER-VERIFIED session id and the
   //     SERVER-VERIFIED trainee id — not the submitted ones. The role is this
   //     module's constant; the order position is assigned inside the dependency.
-  //     A uniqueness violation means that student already occupies that session in
-  //     SOME role, which is an ordinary outcome and never a defect.
+  //     A uniqueness violation would be an ordinary outcome and never a defect,
+  //     but since EX-ASG-MULTIPLICITY the remaining key covers EXAMINEE rows only,
+  //     so this classifier cannot fire for the role written here — see the header.
   let created: CreatedExamInstructedTraineeAssignmentRecord;
   try {
     created = await deps.createAssignmentAtNextOrder(session.id, {

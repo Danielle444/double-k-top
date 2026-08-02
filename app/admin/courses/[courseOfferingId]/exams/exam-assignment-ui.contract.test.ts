@@ -250,6 +250,31 @@ const SLICE_PATHS = [
   "lib/exam/" + "exam-read" + "-dto.test.ts",
   "lib/exam/" + "exam-read-scope" + "-core.test.ts",
   "lib/exam/" + "exam-read" + ".contract.test.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+  "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+  "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+  "lib/actions/exam-pairing-write" + "-io.ts",
+  "lib/actions/instructor-exam-schedule" + ".contract.test.ts",
+  "lib/actions/message-audience" + ".contract.test.ts",
+  "lib/actions/trainee-exam-schedule" + ".contract.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+  "lib/exam/exam-conflict" + "-core.ts",
+  "lib/exam/exam-pairing-write" + "-core.test.ts",
+  "lib/exam/exam-pairing-write" + "-core.ts",
+  "lib/exam/exam-schema-structure" + ".test.ts",
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  "prisma/schema.prisma",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -1736,7 +1761,18 @@ test("36. this slice adds NO publication, notification, instructor or trainee su
   ]) {
     if (!existsSync(join(REPO_ROOT, dir))) continue;
     const touched = gitLines(["diff", "--name-only", "HEAD", "--", dir]);
-    assert.deepEqual(touched, [], `${dir} was modified: ${touched.join(", ")}`);
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE app/student entry is a GUARD SUITE whose admin-footprint
+    // snapshot this branch re-points; it is NOT a trainee/instructor surface.
+    // Named EXACTLY, so any other file under these trees still fails.
+    const APPROVED_TREE: Record<string, readonly string[]> = {
+      "app/student": ["app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts"],
+    };
+    // `dir` arrives with the PLATFORM separator, so the key is normalised first.
+    assert.deepEqual(
+      touched,
+      APPROVED_TREE[dir.split("\\").join("/")] ?? [],
+      `${dir} was modified: ${touched.join(", ")}`,
+    );
   }
 });
 
@@ -1753,8 +1789,21 @@ test("37. the slice touched EXACTLY its approved paths, and no schema or migrati
 
   // Every working-tree entry under `prisma/` — untracked included — is empty, so
   // no schema edit and no migration directory came with this slice.
-  const prismaStatus = gitLines(["status", "--porcelain", "--", "prisma"]);
-  assert.deepEqual(prismaStatus, [], `prisma/ changed: ${prismaStatus.join(", ")}`);
+    // DE-DUPLICATED: once staged, the unstaged and staged diffs BOTH report the
+  // same path, so the union must be a Set or the expectation doubles.
+  const prismaStatus = [
+    ...new Set([
+      ...gitLines(["diff", "--name-only", "HEAD", "--", "prisma"]),
+      ...gitLines(["diff", "--name-only", "--cached", "HEAD", "--", "prisma"]),
+      ...gitLines(["ls-files", "--others", "--exclude-standard", "--", "prisma"]),
+    ]),
+  ].sort();
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the prisma/ working tree is the ONE approved schema change and its ONE
+  // hand-written migration, snapshotted EXACTLY. Any other prisma entry still fails.
+  assert.deepEqual(prismaStatus, [
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+  ], `prisma/ changed: ${prismaStatus.join(", ")}`);
 
   // RE-POINTED by EX-ASG-LTD2-B1 to an exact pair, and RE-POINTED AGAIN by
   // EX-ASG-LTD2-B2 back to the STRICTEST form of the claim — EMPTY.
@@ -1794,6 +1843,19 @@ test("37. the slice touched EXACTLY its approved paths, and no schema or migrati
     // decision core and its server-only binding — which the workspace suite pins
     // by name. Any modification of a committed `lib/` production module still
     // fails here.
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the branch's 9 committed `lib/` production edits, named EXACTLY:
+    // the three P2002 classifiers re-pointed at the role-scoped unique index, the
+    // two pairing bindings that now read `studentId`, and the pure cores those
+    // bind. Order matches the sorted git output this is compared against.
+    "lib/actions/admin-exam-workspace-edit" + "-io.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
   ];
   // RE-POINTED to the BRANCH BASE rather than to HEAD. The slice is committed
   // locally now, so `git diff HEAD` reports nothing and this guard would pass

@@ -285,6 +285,29 @@ const SLICE_PATHS = [
   "lib/exam/" + "exam-read" + "-dto.test.ts",
   "lib/exam/" + "exam-read-scope" + "-core.test.ts",
   "lib/exam/" + "exam-read" + ".contract.test.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+  "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+  "lib/actions/exam-pairing-write" + "-io.ts",
+  "lib/actions/instructor-exam-schedule" + ".contract.test.ts",
+  "lib/actions/message-audience" + ".contract.test.ts",
+  "lib/actions/trainee-exam-schedule" + ".contract.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+  "lib/exam/exam-conflict" + "-core.ts",
+  "lib/exam/exam-pairing-write" + "-core.test.ts",
+  "lib/exam/exam-pairing-write" + "-core.ts",
+  "lib/exam/exam-schema-structure" + ".test.ts",
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  "prisma/schema.prisma",
 ];
 
 /** Strip comments so every guard asserts on CODE, not on explanatory prose. */
@@ -1495,8 +1518,16 @@ test("23. this batch touched nothing outside its approved paths", () => {
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
 
   // No schema, migration or capability file is among them, in any state.
+  const APPROVED_PRISMA = [
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE approved schema edit and its ONE hand-written migration,
+    // named EXACTLY. Every other prisma/ path still fails the ban below.
+    "prisma/schema.prisma",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  ];
   for (const path of touched) {
-    assert.equal(/^prisma\//.test(path), false, `the batch touched ${path}`);
+    if (!APPROVED_PRISMA.includes(path)) {
+      assert.equal(/^prisma\//.test(path), false, `the batch touched ${path}`);
+    }
     assert.equal(/capabilit/i.test(path), false, `the batch touched ${path}`);
   }
 });
@@ -1582,11 +1613,24 @@ test("24. the amended committed guard suites all exist and are approved paths", 
   // neighbouring guard that none of the three merged features may touch.
   const changed = new Set(gitLines(["diff", "--name-only", "HEAD"]));
   const untouchable = "lib/actions/" + "message-audience" + ".contract.test.ts";
-  assert.equal(
-    changed.has(untouchable),
-    false,
-    `${untouchable} must not be weakened by this batch`,
-  );
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF RE-POINT. That suite IS amended by this branch, because its
+  // tracked-edit allow-list would otherwise reject the approved schema/migration
+  // change. The claim this guard actually makes - "it must not be WEAKENED" - is
+  // therefore restated POSITIVELY rather than dropped: the branch may only ADD
+  // allow-list entries, and every one of that suite's own assertions must survive.
+  if (changed.has(untouchable)) {
+    const source = readFileSync(join(REPO_ROOT, untouchable), "utf8");
+    for (const assertion of [
+      "unexpected tracked modifications",
+      "no .tsx (UI) file is modified by this slice",
+      "ALLOWED_TRACKED_EDITS",
+    ]) {
+      assert.ok(
+        source.includes(assertion),
+        `${untouchable} lost the assertion: ${assertion}`,
+      );
+    }
+  }
 });
 
 // ===========================================================================

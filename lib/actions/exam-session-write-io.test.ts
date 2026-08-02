@@ -157,6 +157,13 @@ const APPROVED_NEW_FILES = [
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
   "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/",
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
 ];
 
 /**
@@ -343,6 +350,27 @@ const APPROVED_MODIFIED_FILES = [
   "lib/exam/" + "exam-read" + ".contract.test.ts",
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/exam/" + "exam-trainee-view" + "-core.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+  "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+  "lib/actions/exam-pairing-write" + "-io.ts",
+  "lib/actions/message-audience" + ".contract.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+  "lib/exam/exam-conflict" + "-core.ts",
+  "lib/exam/exam-pairing-write" + "-core.test.ts",
+  "lib/exam/exam-pairing-write" + "-core.ts",
+  "lib/exam/exam-schema-structure" + ".test.ts",
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  "prisma/schema.prisma",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
@@ -1733,6 +1761,8 @@ test("50. the slice adds no schema, migration, capability, policy, route or UI f
     "20260729120000_add_exam_plan_tree",
     "20260729140000_add_exam_teaching_practice_source_date",
     "20260730120000_add_exam_definition_and_breaks",
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE hand-written migration this branch adds.
+    "20260802120000_scope_exam_assignment_unique_to_examinee",
   ]);
 
   // The committed course-operation policy gained no exam operation.

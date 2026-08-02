@@ -28,6 +28,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   decideExamInstructedTraineePairing,
+  isExamSelfPairing,
   setExamInstructedTraineePairingWithDeps,
   type ExamPairingAssignmentFacts,
   type ExamPairingDecision,
@@ -61,6 +62,13 @@ const PLAN = "plan-1";
 const SESSION = "session-1";
 const OTHER_SESSION = "session-2";
 
+// EX-PAIR-NO-SELF - participant identity. Two DISTINCT people by default, so no
+// pre-existing expectation in this suite changes meaning; STUDENT_SHARED is the
+// value a test uses when it deliberately wants ONE person on BOTH rows.
+const STUDENT_EXAMINEE = "student-examinee";
+const STUDENT_INSTRUCTED = "student-instructed";
+const STUDENT_SHARED = "student-shared";
+
 function instructedFacts(
   overrides: Partial<ExamPairingAssignmentFacts> = {},
 ): ExamPairingAssignmentFacts {
@@ -69,6 +77,9 @@ function instructedFacts(
     sessionId: SESSION,
     role: "INSTRUCTED_TRAINEE",
     pairingIndex: null,
+    // EX-PAIR-NO-SELF - a DIFFERENT person from the examinee fixture, which is the
+    // ordinary case every pre-existing test in this file assumes.
+    studentId: STUDENT_INSTRUCTED,
     ...overrides,
   };
 }
@@ -81,6 +92,7 @@ function examineeFacts(
     sessionId: SESSION,
     role: "EXAMINEE",
     pairingIndex: null,
+    studentId: STUDENT_EXAMINEE,
     ...overrides,
   };
 }
@@ -1261,8 +1273,13 @@ test("24. the module is DB-free, clock-free and env-free", () => {
 
 test("25. the module never names orderIndex, and never writes any other column", () => {
   assert.equal(CORE_CODE.includes("orderIndex"), false, "orderIndex is modelled");
+  // EX-PAIR-NO-SELF RE-POINTED `studentId` OUT OF THIS LIST, and replaced it with
+  // a STRICTLY MORE PRECISE pair of claims below rather than dropping the concern.
+  // The core must now MODEL a student id, because "an examinee may never teach
+  // themselves" is an identity question that ids, roles and indexes cannot answer.
+  // What it must still never do is WRITE one, or read anything else about the
+  // person - and those are the two things now asserted, individually.
   for (const column of [
-    "studentId:",
     "horseName:",
     "instructionTopic:",
     "discipline:",
@@ -1273,6 +1290,46 @@ test("25. the module never names orderIndex, and never writes any other column",
   ]) {
     assert.equal(CORE_SOURCE.includes(column), false, `the core models ${column}`);
   }
+
+  // EX-PAIR-NO-SELF - `studentId` is COMPARED and never WRITTEN. Every write
+  // command this core can build is asserted elsewhere to name only the pairing
+  // column; here the claim is that no write payload, command type or result arm
+  // mentions the identity at all.
+  for (const forbidden of [
+    "studentId: value",
+    "studentId: command",
+    "studentId: row",
+    "data: { studentId",
+  ]) {
+    assert.equal(CORE_SOURCE.includes(forbidden), false, `the core writes ${forbidden}`);
+  }
+  // ...and it is the OPAQUE ID ONLY. No name, and therefore no name comparison:
+  // two different people may share a display name and one person may be spelled
+  // two ways, so a name-based identity check would be wrong in BOTH directions.
+  //
+  // Asserted over the COMMENT-STRIPPED code, because the header legitimately
+  // discusses the very fields it promises never to read.
+  for (const personal of [
+    "fullName",
+    "firstName",
+    "lastName",
+    "identityNumber",
+    "phone",
+    "traineeName",
+    "toLowerCase",
+    "localeCompare",
+    "normalize(",
+  ]) {
+    assert.equal(CORE_CODE.includes(personal), false, `the core reads ${personal}`);
+  }
+  // The identity reaches the decision through the facts and nowhere else: it is
+  // not a parameter of the public orchestration.
+  assert.equal(
+    /setExamInstructedTraineePairingWithDeps\([\s\S]*?\)/.test(CORE_SOURCE) &&
+      /setExamInstructedTraineePairingWithDeps\([^)]*studentId/.test(CORE_SOURCE),
+    false,
+    "a caller can supply a student id",
+  );
 });
 
 test("26. the boundary exposes no create, delete, reorder, publish or notify effect", () => {
@@ -1316,9 +1373,197 @@ test("27. the refusal vocabulary is fixed and has no catch-all", () => {
     // EX-PAIR-1TO1's one addition, and it is FIXED: one code for "this examinee
     // already has an instructed trainee", with no variant that says which.
     "examinee_already_paired",
+    // EX-PAIR-NO-SELF's one addition, and it is FIXED too: one code for "the
+    // examinee and the chosen trainee are the same person". It is DISTINCT from
+    // invalid_input on purpose - the request was well formed, and the correction
+    // is "pick somebody else" rather than "resend it properly".
+    "self_pairing",
     "stale_write",
   ]);
   for (const forbidden of ["unexpected", "unknown_error", "failed"]) {
     assert.equal(listed.includes(forbidden), false, `a catch-all code ${forbidden} exists`);
   }
+});
+
+// ===========================================================================
+// 28. EX-PAIR-NO-SELF — an examinee may never teach themselves
+// ===========================================================================
+//
+// THE BUG THIS BLOCK EXISTS FOR. The only self-pairing guard used to be
+// `examinee.assignmentId === instructed.assignmentId`. That catches ONE row used
+// as both halves of a pair — but a person who is an EXAMINEE and an
+// INSTRUCTED_TRAINEE of one session holds TWO DIFFERENT rows, so two different
+// assignment ids sailed straight through it. The database's role-blind unique key
+// hid that: one person could not hold two rows of a session at all. Scoping that
+// key to `WHERE "role" = 'EXAMINEE'` (EX-ASG-MULTIPLICITY) is exactly what made
+// those two rows legal — and therefore exactly what made this reachable.
+
+test("28. THE BUG: two DIFFERENT assignment ids for the SAME student cannot self-pair", () => {
+  const decision = decide({
+    // Two genuinely different rows — different ids, both usable, same session,
+    // correct roles — so every OTHER check in the core passes and only identity
+    // can refuse this.
+    instructed: instructedFacts({
+      assignmentId: "assignment-instructed",
+      studentId: STUDENT_SHARED,
+    }),
+    examinee: examineeFacts({ assignmentId: "assignment-examinee", studentId: STUDENT_SHARED }),
+    sessionExaminees: [{ assignmentId: "assignment-examinee", pairingIndex: null }],
+  });
+  assert.equal(decision.kind, "REFUSE");
+  assert.equal(decision.kind === "REFUSE" ? decision.code : null, "self_pairing");
+  // Proof the ID check alone would NOT have caught it: the two ids differ.
+  assert.notEqual("assignment-instructed", "assignment-examinee");
+});
+
+test("28a. it refuses BEFORE any index branch, so a pre-existing self-pair is never re-affirmed", () => {
+  // Both rows already carry index 1 — the session ALREADY holds a self-pair (bad
+  // legacy data). Re-submitting it used to be a NO_CHANGE success; it must now
+  // refuse, because "already satisfied" must never be a way past the rule.
+  const decision = decide({
+    instructed: instructedFacts({ pairingIndex: 1, studentId: STUDENT_SHARED }),
+    examinee: examineeFacts({ pairingIndex: 1, studentId: STUDENT_SHARED }),
+    sessionExaminees: [{ assignmentId: "assignment-examinee", pairingIndex: 1 }],
+  });
+  assert.equal(decision.kind === "REFUSE" ? decision.code : null, "self_pairing");
+
+  // ...and on the ALLOCATION path too, where neither row holds an index yet.
+  const allocating = decide({
+    instructed: instructedFacts({ pairingIndex: null, studentId: STUDENT_SHARED }),
+    examinee: examineeFacts({ pairingIndex: null, studentId: STUDENT_SHARED }),
+    sessionExaminees: [{ assignmentId: "assignment-examinee", pairingIndex: null }],
+  });
+  assert.equal(allocating.kind === "REFUSE" ? allocating.code : null, "self_pairing");
+});
+
+test("28b. NO FALSE POSITIVE: two DIFFERENT students pair exactly as before", () => {
+  const decision = decide({
+    instructed: instructedFacts({ studentId: STUDENT_INSTRUCTED }),
+    examinee: examineeFacts({ studentId: STUDENT_EXAMINEE }),
+    sessionExaminees: [{ assignmentId: "assignment-examinee", pairingIndex: null }],
+  });
+  assert.equal(decision.kind, "PAIR_WITH_NEW_INDEX");
+  assert.equal(decision.kind === "PAIR_WITH_NEW_INDEX" ? decision.pairingIndex : null, 1);
+});
+
+test("28c. a trainee who IS an examinee may still be instructed by ANOTHER examinee", () => {
+  // EX-ASG-MULTIPLICITY rule 1, end to end. The instructed row belongs to a person
+  // who is ALSO an examinee of this very session, and is being paired to a
+  // DIFFERENT examinee. That must SUCCEED.
+  const decision = decide({
+    instructed: instructedFacts({
+      assignmentId: "assignment-instructed",
+      studentId: "student-dual",
+    }),
+    examinee: examineeFacts({ assignmentId: "assignment-examinee-other", studentId: "student-b" }),
+    sessionExaminees: [
+      // The dual trainee's OWN examinee row is present in the session and is
+      // deliberately NOT the pairing target.
+      { assignmentId: "assignment-examinee-self", pairingIndex: null },
+      { assignmentId: "assignment-examinee-other", pairingIndex: null },
+    ],
+  });
+  assert.equal(decision.kind, "PAIR_WITH_NEW_INDEX");
+});
+
+test("28d. one trainee may be instructed by MULTIPLE DIFFERENT examinees", () => {
+  // EX-ASG-MULTIPLICITY rule 2. Two SEPARATE instructed rows for one person, each
+  // pointed at a different examinee. Neither is a self-pair, so both are allowed —
+  // the one-to-one rule is per EXAMINEE, never per person.
+  const pairs = [
+    ["assignment-instructed-1", "assignment-examinee-1"],
+    ["assignment-instructed-2", "assignment-examinee-2"],
+  ] as const;
+  for (const [instructedId, examineeId] of pairs) {
+    const decision = decide({
+      instructed: instructedFacts({ assignmentId: instructedId, studentId: "student-popular" }),
+      examinee: examineeFacts({ assignmentId: examineeId, studentId: "student-" + examineeId }),
+      sessionExaminees: [
+        { assignmentId: "assignment-examinee-1", pairingIndex: null },
+        { assignmentId: "assignment-examinee-2", pairingIndex: null },
+      ],
+      // The OTHER instructed row of the same person exists and claims nothing.
+      sessionInstructedTrainees: [
+        { assignmentId: "assignment-instructed-1", pairingIndex: null },
+        { assignmentId: "assignment-instructed-2", pairingIndex: null },
+      ],
+    });
+    assert.notEqual(decision.kind, "REFUSE");
+  }
+});
+
+test("28e. a NULL studentId means 'no participant', never 'the same participant'", () => {
+  // Two participant-less rows must NOT be read as one person: SQL NULL semantics,
+  // and the only reason the column is nullable at all.
+  const bothNull = decide({
+    instructed: instructedFacts({ studentId: null }),
+    examinee: examineeFacts({ studentId: null }),
+    sessionExaminees: [{ assignmentId: "assignment-examinee", pairingIndex: null }],
+  });
+  assert.notEqual(bothNull.kind, "REFUSE");
+  // One null and one present is likewise not a match.
+  const oneNull = decide({
+    instructed: instructedFacts({ studentId: null }),
+    examinee: examineeFacts({ studentId: STUDENT_SHARED }),
+    sessionExaminees: [{ assignmentId: "assignment-examinee", pairingIndex: null }],
+  });
+  assert.notEqual(oneNull.kind, "REFUSE");
+  // The predicate itself agrees, including on the empty string, and is
+  // CASE-SENSITIVE because an opaque id is compared byte for byte.
+  assert.equal(isExamSelfPairing({ studentId: null }, { studentId: null }), false);
+  assert.equal(isExamSelfPairing({ studentId: "" }, { studentId: "" }), false);
+  assert.equal(isExamSelfPairing({ studentId: "s" }, { studentId: "s" }), true);
+  assert.equal(isExamSelfPairing({ studentId: "s" }, { studentId: "S" }), false);
+});
+
+test("28f. UNPAIRING a self-pair is never blocked — the repair path stays open", () => {
+  // A rule that forbade the repair of the state it forbids would be a trap: the
+  // unpair branch returns long before the identity check, so bad legacy data can
+  // always be taken apart.
+  const decision = decide({
+    instructed: instructedFacts({ pairingIndex: 1, studentId: STUDENT_SHARED }),
+    examinee: null,
+    sessionExaminees: [],
+  });
+  assert.equal(decision.kind, "UNPAIR");
+});
+
+test("28g. the earlier, more specific refusals are NOT swallowed by the identity check", () => {
+  // Placement matters: role and session diagnostics must keep their own codes even
+  // when the two rows happen to be the same person.
+  const wrongRole = decide({
+    instructed: instructedFacts({ role: "EXAMINEE", studentId: STUDENT_SHARED }),
+    examinee: examineeFacts({ studentId: STUDENT_SHARED }),
+    sessionExaminees: [],
+  });
+  assert.equal(wrongRole.kind === "REFUSE" ? wrongRole.code : null, "instructed_role_mismatch");
+
+  const crossSession = decide({
+    instructed: instructedFacts({ studentId: STUDENT_SHARED }),
+    examinee: examineeFacts({ sessionId: OTHER_SESSION, studentId: STUDENT_SHARED }),
+    sessionExaminees: [],
+  });
+  assert.equal(crossSession.kind === "REFUSE" ? crossSession.code : null, "different_sessions");
+
+  // One row used as BOTH halves is still `invalid_input`, not `self_pairing`: the
+  // assignment-id check is RETAINED, and runs first.
+  const sameRow = decide({
+    instructed: instructedFacts({ assignmentId: "same", studentId: STUDENT_SHARED }),
+    examinee: examineeFacts({ assignmentId: "same", studentId: STUDENT_SHARED }),
+    sessionExaminees: [],
+  });
+  assert.equal(sameRow.kind === "REFUSE" ? sameRow.code : null, "invalid_input");
+});
+
+test("28h. the refusal carries NO identity, and describes no write", () => {
+  const decision = decide({
+    instructed: instructedFacts({ studentId: STUDENT_SHARED }),
+    examinee: examineeFacts({ studentId: STUDENT_SHARED }),
+    sessionExaminees: [{ assignmentId: "assignment-examinee", pairingIndex: null }],
+  });
+  const serialized = JSON.stringify(decision);
+  for (const leaked of [STUDENT_SHARED, "assignment-examinee", "assignment-instructed", SESSION]) {
+    assert.equal(serialized.includes(leaked), false, "the refusal echoes " + leaked);
+  }
+  assert.deepEqual(Object.keys(decision).sort(), ["code", "kind"]);
 });

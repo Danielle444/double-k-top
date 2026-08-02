@@ -23,11 +23,30 @@ import {
 const REPO_ROOT = join(import.meta.dirname, "..", "..");
 const SESSION = "s1";
 
-function examinee(pairingIndex: number | null, id = "E"): ExamReplacementAssignmentFacts {
-  return { assignmentId: id, sessionId: SESSION, role: "EXAMINEE", pairingIndex };
+// EX-PAIR-NO-SELF - participant identity, DERIVED FROM THE ROW ID by default so
+// every fixture row is a DIFFERENT person unless a test says otherwise. That keeps
+// every pre-existing expectation in this suite meaning exactly what it did, and
+// makes the self-pairing case something a test must ask for EXPLICITLY by handing
+// both builders the SAME studentId.
+function examinee(
+  pairingIndex: number | null,
+  id = "E",
+  studentId: string | null = `student-of-${id}`,
+): ExamReplacementAssignmentFacts {
+  return { assignmentId: id, sessionId: SESSION, role: "EXAMINEE", pairingIndex, studentId };
 }
-function trainee(id: string, pairingIndex: number | null): ExamReplacementAssignmentFacts {
-  return { assignmentId: id, sessionId: SESSION, role: "INSTRUCTED_TRAINEE", pairingIndex };
+function trainee(
+  id: string,
+  pairingIndex: number | null,
+  studentId: string | null = `student-of-${id}`,
+): ExamReplacementAssignmentFacts {
+  return {
+    assignmentId: id,
+    sessionId: SESSION,
+    role: "INSTRUCTED_TRAINEE",
+    pairingIndex,
+    studentId,
+  };
 }
 function facts(rows: readonly ExamReplacementAssignmentFacts[]) {
   return rows.map((row) => ({ assignmentId: row.assignmentId, pairingIndex: row.pairingIndex }));
@@ -436,4 +455,220 @@ test("19. the route action calls the atomic operation EXACTLY ONCE per save", ()
     false,
     "the card save still calls the trainee-first pairing writer",
   );
+});
+
+// ===========================================================================
+// 20. EX-PAIR-NO-SELF — the EXAMINEE-FIRST direction of the same rule
+// ===========================================================================
+//
+// The examinee-first surface is the one the admin workspace actually uses, so the
+// rule has to hold here and not merely in the trainee-first core it delegates to.
+// The bug being closed: the guard on the line above these tests compared
+// ASSIGNMENT IDS, and one person who is both an EXAMINEE and an
+// INSTRUCTED_TRAINEE of a session holds TWO DIFFERENT rows. That combination was
+// unreachable only because the database's role-blind unique key forbade it;
+// EX-ASG-MULTIPLICITY scoped that key to EXAMINEE rows and made it legal.
+
+const SAME_PERSON = "student-shared";
+
+test("20. THE BUG: an examinee cannot be given ITSELF as its instructed trainee", () => {
+  // E and T are DIFFERENT assignment rows — so the pre-existing assignment-id
+  // guard does NOT fire — but they are the SAME PERSON.
+  const decision = decideExamExamineeInstructedTraineeReplacement({
+    examinee: examinee(null, "E", SAME_PERSON),
+    next: trainee("T", null, SAME_PERSON),
+    sessionExaminees: [{ assignmentId: "E", pairingIndex: null }],
+    sessionInstructedTrainees: [{ assignmentId: "T", pairingIndex: null }],
+  });
+  assert.equal(decision.ok, false);
+  assert.equal(decision.ok === false ? decision.code : null, "self_pairing");
+  assert.notEqual("E", "T");
+});
+
+test("20a. it refuses BEFORE the NO_CHANGE short circuit, so a stored self-pair is not re-affirmed", () => {
+  // The session ALREADY holds the self-pair (both rows on index 1), which is the
+  // exact state the old NO_CHANGE branch would have reported as a success without
+  // ever reaching the delegate. It must refuse.
+  const decision = decideExamExamineeInstructedTraineeReplacement({
+    examinee: examinee(1, "E", SAME_PERSON),
+    next: trainee("T", 1, SAME_PERSON),
+    sessionExaminees: [{ assignmentId: "E", pairingIndex: 1 }],
+    sessionInstructedTrainees: [{ assignmentId: "T", pairingIndex: 1 }],
+  });
+  assert.equal(decision.ok === false ? decision.code : null, "self_pairing");
+});
+
+test("20b. NO FALSE POSITIVE: different people still pair, replace and unpair", () => {
+  // First assignment.
+  const first = decideExamExamineeInstructedTraineeReplacement({
+    examinee: examinee(null, "E"),
+    next: trainee("A", null),
+    sessionExaminees: [{ assignmentId: "E", pairingIndex: null }],
+    sessionInstructedTrainees: [{ assignmentId: "A", pairingIndex: null }],
+  });
+  assert.equal(first.ok, true);
+  assert.equal(first.ok === true ? first.kind : null, "REPLACE");
+
+  // REPLACE A with B — both halves in one command.
+  const replaced = decideExamExamineeInstructedTraineeReplacement({
+    examinee: examinee(1, "E"),
+    next: trainee("B", null),
+    sessionExaminees: [{ assignmentId: "E", pairingIndex: 1 }],
+    sessionInstructedTrainees: [
+      { assignmentId: "A", pairingIndex: 1 },
+      { assignmentId: "B", pairingIndex: null },
+    ],
+  });
+  assert.equal(replaced.ok === true ? replaced.kind : null, "REPLACE");
+
+  // REMOVE.
+  const removed = decideExamExamineeInstructedTraineeReplacement({
+    examinee: examinee(1, "E"),
+    next: null,
+    sessionExaminees: [{ assignmentId: "E", pairingIndex: 1 }],
+    sessionInstructedTrainees: [{ assignmentId: "A", pairingIndex: 1 }],
+  });
+  assert.equal(removed.ok === true ? removed.kind : null, "UNPAIR");
+});
+
+test("20c. a DUAL trainee is still assignable to a DIFFERENT examinee of the same session", () => {
+  // EX-ASG-MULTIPLICITY rule 1: the trainee behind T is also the person behind
+  // examinee row E_SELF, and is being pointed at E_OTHER. Must SUCCEED.
+  const decision = decideExamExamineeInstructedTraineeReplacement({
+    examinee: examinee(null, "E_OTHER", "student-other"),
+    next: trainee("T", null, "student-dual"),
+    sessionExaminees: [
+      { assignmentId: "E_SELF", pairingIndex: null },
+      { assignmentId: "E_OTHER", pairingIndex: null },
+    ],
+    sessionInstructedTrainees: [{ assignmentId: "T", pairingIndex: null }],
+  });
+  assert.equal(decision.ok, true);
+});
+
+test("20d. one trainee may still be instructed by MULTIPLE DIFFERENT examinees", () => {
+  // EX-ASG-MULTIPLICITY rule 2: two separate instructed rows for ONE person, each
+  // claimed by a different examinee. Neither is a self-pair.
+  const first = decideExamExamineeInstructedTraineeReplacement({
+    examinee: examinee(null, "E1", "student-e1"),
+    next: trainee("T1", null, "student-popular"),
+    sessionExaminees: [
+      { assignmentId: "E1", pairingIndex: null },
+      { assignmentId: "E2", pairingIndex: 2 },
+    ],
+    sessionInstructedTrainees: [
+      { assignmentId: "T1", pairingIndex: null },
+      { assignmentId: "T2", pairingIndex: 2 },
+    ],
+  });
+  assert.equal(first.ok, true);
+});
+
+test("20e. NULL participants are never treated as the same person", () => {
+  const decision = decideExamExamineeInstructedTraineeReplacement({
+    examinee: examinee(null, "E", null),
+    next: trainee("T", null, null),
+    sessionExaminees: [{ assignmentId: "E", pairingIndex: null }],
+    sessionInstructedTrainees: [{ assignmentId: "T", pairingIndex: null }],
+  });
+  assert.equal(decision.ok, true);
+});
+
+test("20f. the more specific refusals still win, and one row as both halves is still invalid_input", () => {
+  const wrongRole = decideExamExamineeInstructedTraineeReplacement({
+    examinee: examinee(null, "E", SAME_PERSON),
+    next: examinee(null, "T", SAME_PERSON),
+    sessionExaminees: [],
+    sessionInstructedTrainees: [],
+  });
+  assert.equal(wrongRole.ok === false ? wrongRole.code : null, "instructed_role_mismatch");
+
+  const sameRow = decideExamExamineeInstructedTraineeReplacement({
+    examinee: examinee(null, "SAME", SAME_PERSON),
+    next: trainee("SAME", null, SAME_PERSON),
+    sessionExaminees: [],
+    sessionInstructedTrainees: [],
+  });
+  assert.equal(sameRow.ok === false ? sameRow.code : null, "invalid_input");
+});
+
+test("20g. the self-pair refusal reaches NO write, through the real orchestration", async () => {
+  const rows = {
+    E: examinee(null, "E", SAME_PERSON),
+    T: trainee("T", null, SAME_PERSON),
+  };
+  const { deps: d, applied } = deps({}, rows);
+  const result = await setExamExamineeInstructedTraineeWithDeps("c1", "E", "T", d);
+  assert.deepEqual({ ...result }, { ok: false, code: "self_pairing" });
+  // NOTHING was written: a refusal leaves the pairing the examinee had.
+  assert.deepEqual(applied, []);
+});
+
+test("20h. lifecycle and stale-write protections are UNCHANGED by the identity check", async () => {
+  const rows = {
+    E: examinee(null, "E", SAME_PERSON),
+    T: trainee("T", null, SAME_PERSON),
+    G: trainee("G", null, "student-different"),
+  };
+
+  // LIFECYCLE still denies FIRST — before any assignment is read, so a denied
+  // offering never learns whether these rows exist, self-pair or not.
+  const lifecycle = deps(
+    {
+      assertConfigurationAllowed: () => {
+        throw new NotAllowed();
+      },
+      findAssignmentForPlan: async () => {
+        throw new Error("no assignment may be read after a lifecycle denial");
+      },
+    },
+    rows,
+  );
+  const denied = await setExamExamineeInstructedTraineeWithDeps("c1", "E", "T", lifecycle.deps);
+  assert.deepEqual({ ...denied }, { ok: false, code: "operation_not_allowed" });
+  assert.deepEqual(lifecycle.applied, []);
+
+  // OFFERING not-found still wins too.
+  const missing = deps(
+    {
+      requireCourseContext: async () => {
+        throw new NotFound();
+      },
+    },
+    rows,
+  );
+  assert.deepEqual(
+    { ...(await setExamExamineeInstructedTraineeWithDeps("c1", "E", "T", missing.deps)) },
+    { ok: false, code: "offering_not_found" },
+  );
+
+  // STALE WRITE still reported for a LEGITIMATE pairing whose condition failed —
+  // the identity check must not short-circuit or mask it.
+  //
+  // A fixture holding ONE instructed trainee, deliberately: with two index-less
+  // trainees in a one-examinee session the committed single-examinee FALLBACK
+  // already reads BOTH as that examinee's partner, so the one-to-one rule refuses
+  // first and this case would never reach a write at all.
+  const staleRows = {
+    E: examinee(null, "E", SAME_PERSON),
+    G: trainee("G", null, "student-different"),
+  };
+  // The override REPLACES the harness's recording writer, so attempts are counted
+  // here rather than through `applied`.
+  let attempts = 0;
+  const stale = deps(
+    {
+      applyReplacement: async () => {
+        attempts += 1;
+        return false;
+      },
+    },
+    staleRows,
+  );
+  const staleResult = await setExamExamineeInstructedTraineeWithDeps("c1", "E", "G", stale.deps);
+  assert.deepEqual({ ...staleResult }, { ok: false, code: "stale_write" });
+  // ...and it really did ATTEMPT the write, which is what makes this a STALE
+  // write rather than a refusal: the identity check let a legitimate pairing
+  // through to the write layer exactly as it did before.
+  assert.equal(attempts, 1);
 });

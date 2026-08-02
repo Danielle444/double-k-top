@@ -1125,9 +1125,30 @@ test("59. exactly three classifiers exist, each guarding ONE call, with no catch
 
 test("60. the two locked decisions are WRITTEN DOWN, not merely implemented", () => {
   const flat = COMMENTS.replace(/\s+/g, " ");
-  // The role-blind conflict, including the EXAMINEE case.
-  assert.ok(/regardless of role/i.test(flat), "the role-blind conflict is undocumented");
-  assert.ok(/EXAMINEE/.test(flat), "the already-the-examinee case is undocumented");
+  // EX-ASG-MULTIPLICITY RE-POINTED this, and did not drop it. The claim used to be
+  // "the ROLE-BLIND conflict, including the already-the-EXAMINEE case, is written
+  // down". That key is gone — it is now scoped to `WHERE "role" = 'EXAMINEE'` — so
+  // the header must document the OPPOSITE fact just as explicitly: that one
+  // trainee MAY hold an EXAMINEE row and an INSTRUCTED_TRAINEE row in one session,
+  // and that the refusal is therefore unreachable from this fixed-role slice and
+  // retained only as defence in depth. A header that merely stopped mentioning any
+  // of it would pass a silent deletion of those lines, which is precisely what
+  // this guard exists to prevent.
+  assert.equal(
+    /regardless of role/i.test(flat),
+    false,
+    "the header still claims the DROPPED role-blind conflict",
+  );
+  assert.ok(/EXAMINEE/.test(flat), "the examinee-role case is undocumented");
+  assert.ok(/INSTRUCTED_TRAINEE/.test(flat), "the now-permitted second role is undocumented");
+  assert.ok(
+    /WHERE "role" = 'EXAMINEE'/.test(flat),
+    "the EXAMINEE-scoped partial key is unnamed",
+  );
+  assert.ok(
+    /UNREACHABLE/i.test(flat),
+    "the refusal being unreachable from this slice is not stated",
+  );
   assert.ok(/sessionId\), studentId\)|\(sessionId, studentId\)/.test(flat), "the unique key is unnamed");
   // The no-pairing limitation, and BOTH of its consequences.
   assert.ok(/pairingIndex/.test(flat), "the pairing limitation is undocumented");

@@ -97,9 +97,30 @@ test("no instructor or admin home surface was touched by this trainee-only addit
     { cwd: fileURLToPath(new URL("../..", import.meta.url)), encoding: "utf8" },
   );
   assert.equal(diff.status, 0, "git diff failed");
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the instructor home shortcuts file is STILL untouched, which is what
+  // this guard is about. The admin exams route is not: this branch edits it, so
+  // the expectation is an EXACT path snapshot rather than "empty". Any OTHER
+  // admin file, and ANY change to InstructorClient.tsx, still fails here.
+  const touched = (diff.stdout ?? "").trim().split(String.fromCharCode(10)).filter(Boolean);
   assert.equal(
-    (diff.stdout ?? "").trim(),
-    "",
-    "this trainee-only home-shortcut addition must not touch the instructor home shortcuts file or any admin file",
+    touched.includes("app/instructor/InstructorClient.tsx"),
+    false,
+    "the instructor home shortcuts file was touched",
   );
+  assert.deepEqual(touched, [
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  ]);
 });

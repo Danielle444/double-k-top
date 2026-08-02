@@ -860,6 +860,26 @@ const EXAM_PAIRING_MESSAGES: Readonly<Record<string, PlanFeedback>> = Object.fre
     tone: "error",
     message: "הנבחן/ת כבר משויך/ת לחניך/ה מודרך/ת אחר/ת.",
   },
+  /*
+    EX-PAIR-NO-SELF — the BACKEND'S rule too, exactly like the one above, and
+    nothing on this page re-derives it.
+
+    Since EX-ASG-MULTIPLICITY narrowed the assignment table's unique key to
+    EXAMINEE rows, one trainee may legitimately hold BOTH an examinee row and an
+    instructed-trainee row in a single session — that is the point of the change.
+    What it made newly REACHABLE is the one arrangement nobody wants: a person
+    listed as their own pupil. The committed pairing decision compares the two
+    rows' student ids and refuses; this sentence is how that refusal reads.
+
+    It names NOTHING — not the trainee, not the examinee, not an assignment id,
+    not a student id and not any submitted value — and it arrives through the SAME
+    closed parser and the SAME `pairing` query token as every other outcome in
+    this table, so no new mechanism exists to review.
+  */
+  self_pairing: {
+    tone: "error",
+    message: "לא ניתן לשייך חניך/ה כמדריך/ה של עצמו/ה. יש לבחור חניך/ה מודרך/ת אחר/ת.",
+  },
   stale_write: {
     tone: "error",
     message: "השיוך השתנה מאז שהדף נטען, ולכן לא נשמר. יש לרענן את הדף ולנסות שוב.",

@@ -61,6 +61,48 @@ const S3_MIGRATION = readFileSync(
   "utf8",
 );
 
+// EX-ASG-MULTIPLICITY — the index-only migration that narrows the assignment
+// uniqueness key from ROLE-BLIND to EXAMINEE-ONLY. Hand-written, because the
+// stable schema.prisma DSL has no WHERE-qualified `@@unique`.
+const MULTIPLICITY_MIGRATION_DIR = "20260802120000_scope_exam_assignment_unique_to_examinee";
+const MULTIPLICITY_MIGRATION = readFileSync(
+  join(REPO_ROOT, "prisma", "migrations", MULTIPLICITY_MIGRATION_DIR, "migration.sql"),
+  "utf8",
+);
+
+/** The hand-chosen, stable name of the replacement partial unique index. */
+const EXAMINEE_UNIQUE_INDEX = "exam_assignments_examinee_session_student_key";
+
+/** The role-blind index it replaces, created by EX-C1 and dropped by this stage. */
+const ROLE_BLIND_UNIQUE_INDEX = "exam_assignments_sessionId_studentId_key";
+
+/**
+ * The EXACT `CREATE UNIQUE INDEX` statement the migration must carry, matched as
+ * one whole statement rather than as loose fragments — a predicate that drifted
+ * to another role, another column pair or another table would still satisfy a
+ * substring check on the index name alone.
+ */
+const EXAMINEE_UNIQUE_STATEMENT =
+  `CREATE UNIQUE INDEX "${EXAMINEE_UNIQUE_INDEX}" ON "exam_assignments"` +
+  `("sessionId", "studentId") WHERE "role" = 'EXAMINEE';`;
+
+/**
+ * The partial key, re-expressed as the PREDICATE it denotes, so the multiplicity
+ * rules below are asserted as behaviour rather than as prose.
+ *
+ * Two rows collide iff BOTH are EXAMINEE rows of the same session naming the same
+ * non-null student. Postgres treats every NULL as distinct, which is why a null
+ * `studentId` never collides — unchanged from the old blanket key.
+ */
+function collidesUnderExamineeKey(
+  a: { sessionId: string; studentId: string | null; role: string },
+  b: { sessionId: string; studentId: string | null; role: string },
+): boolean {
+  if (a.role !== "EXAMINEE" || b.role !== "EXAMINEE") return false;
+  if (a.studentId === null || b.studentId === null) return false;
+  return a.sessionId === b.sessionId && a.studentId === b.studentId;
+}
+
 const EXAM_ENUMS = [
   "ExamKind",
   "ExamPhase",
@@ -345,7 +387,15 @@ test("every approved unique constraint exists, including the copy idempotency ke
       "@@unique([planId, sourceTeachingPracticeLessonId])",
     ),
   );
-  assert.ok(block("model", "ExamAssignment").includes("@@unique([sessionId, studentId])"));
+  // EX-ASG-MULTIPLICITY — ExamAssignment's `@@unique([sessionId, studentId])` is
+  // deliberately ABSENT from the DSL now. It was replaced by an EXAMINEE-scoped
+  // PARTIAL unique index that schema.prisma cannot express; the dedicated block
+  // of tests further down owns that claim in full.
+  assert.equal(
+    block("model", "ExamAssignment").includes("@@unique([sessionId, studentId])"),
+    false,
+    "the role-blind assignment unique key is back in the DSL",
+  );
   assert.ok(
     block("model", "ExamBeginnerChild").includes(
       "@@unique([sessionId, sourceChildAssignmentId])",
@@ -358,6 +408,8 @@ test("every approved unique constraint exists, including the copy idempotency ke
   for (const idx of [
     "exam_plans_courseOfferingId_key",
     "exam_sessions_planId_sourceTeachingPracticeLessonId_key",
+    // The creating migration is HISTORY and stays byte-identical: it really did
+    // create the role-blind key. The LATER migration is what drops it.
     "exam_assignments_sessionId_studentId_key",
     "exam_beginner_children_sessionId_sourceChildAssignmentId_key",
     "exam_session_supervisors_sessionId_instructorId_key",
@@ -387,6 +439,172 @@ test("every approved unique constraint exists, including the copy idempotency ke
     assert.ok(
       S3_MIGRATION.includes(`CREATE UNIQUE INDEX "${idx}"`),
       `missing unique index ${idx}`,
+    );
+  }
+});
+
+// --- EX-ASG-MULTIPLICITY: the role-scoped assignment uniqueness key ----------
+//
+// These tests are TEXT-level proofs over schema.prisma and the migration SQL,
+// exactly like the rest of this suite. They open no database and execute no SQL,
+// so what they prove is that the authored constraint SAYS the right thing —
+// applying it and observing PostgreSQL enforce it is a deployment step, not a
+// test step.
+
+test("EX-ASG-MULTIPLICITY: the role-blind unique key is dropped, once, by name", () => {
+  assert.ok(
+    MULTIPLICITY_MIGRATION.includes(`DROP INDEX "${ROLE_BLIND_UNIQUE_INDEX}";`),
+    "the old role-blind key is not dropped",
+  );
+  // Exactly ONE drop, and it names that index. A second drop would be reaching
+  // for a constraint this stage never approved touching.
+  const drops = [...MULTIPLICITY_MIGRATION.matchAll(/^\s*DROP\s+INDEX\s+"([^"]+)"/gim)].map(
+    (m) => m[1],
+  );
+  assert.deepEqual(drops, [ROLE_BLIND_UNIQUE_INDEX]);
+});
+
+test("EX-ASG-MULTIPLICITY: exactly one partial unique index replaces it, verbatim", () => {
+  assert.ok(
+    MULTIPLICITY_MIGRATION.includes(EXAMINEE_UNIQUE_STATEMENT),
+    "the EXAMINEE-scoped partial unique index statement is missing or altered",
+  );
+  // ONE create, and it is that one. The index name is HAND-CHOSEN rather than
+  // left to Postgres, so it stays stable for the P2002 classifiers to match.
+  const creates = [
+    ...MULTIPLICITY_MIGRATION.matchAll(/^\s*CREATE\s+UNIQUE\s+INDEX\s+"([^"]+)"/gim),
+  ].map((m) => m[1]);
+  assert.deepEqual(creates, [EXAMINEE_UNIQUE_INDEX]);
+  // The predicate is present and is a ROLE predicate — not a status, not a date,
+  // not a nullability test.
+  assert.match(MULTIPLICITY_MIGRATION, /WHERE "role" = 'EXAMINEE'/);
+});
+
+test("EX-ASG-MULTIPLICITY: the migration is index-only and touches no other table", () => {
+  // No DML of any kind: this stage must never read, rewrite or delete a row.
+  for (const [label, pattern] of [
+    ["INSERT", /^\s*INSERT\s+INTO\b/im],
+    ["UPDATE", /^\s*UPDATE\s+"/im],
+    ["DELETE", /^\s*DELETE\s+FROM\b/im],
+    ["DROP TABLE", /^\s*DROP\s+TABLE\b/im],
+    ["DROP COLUMN", /\bDROP\s+COLUMN\b/i],
+    ["ALTER TABLE", /^\s*ALTER\s+TABLE\b/im],
+    ["CREATE TABLE", /^\s*CREATE\s+TABLE\b/im],
+    ["CREATE TYPE", /^\s*CREATE\s+TYPE\b/im],
+    ["TRUNCATE", /^\s*TRUNCATE\b/im],
+  ] as const) {
+    assert.equal(
+      pattern.test(MULTIPLICITY_MIGRATION),
+      false,
+      `the migration carries a ${label} statement`,
+    );
+  }
+  // Every table it names is the assignment table.
+  const tables = [...MULTIPLICITY_MIGRATION.matchAll(/\bON\s+"(\w+)"/g)].map((m) => m[1]);
+  assert.deepEqual([...new Set(tables)], ["exam_assignments"]);
+});
+
+test("EX-ASG-MULTIPLICITY: no unrelated assignment index or constraint is weakened", () => {
+  const model = block("model", "ExamAssignment");
+  // The two ordinary indexes are untouched, in the DSL and in the SQL.
+  assert.ok(model.includes("@@index([studentId])"));
+  assert.ok(model.includes("@@index([sessionId, orderIndex])"));
+  // They may be NAMED in the migration's prose (it says explicitly which objects
+  // it leaves alone), but no STATEMENT may touch them. Comments are stripped
+  // first so the documentation cannot satisfy — or trip — this check.
+  const statements = MULTIPLICITY_MIGRATION.split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n");
+  for (const survivor of [
+    "exam_assignments_studentId_idx",
+    "exam_assignments_sessionId_orderIndex_idx",
+    "exam_assignments_pkey",
+    "exam_assignments_sessionId_fkey",
+    "exam_assignments_studentId_fkey",
+  ]) {
+    assert.equal(
+      statements.includes(survivor),
+      false,
+      `a statement in the migration touches ${survivor}`,
+    );
+  }
+  // The relations and their delete behaviour are exactly as before.
+  assert.match(model, /session\s+ExamSession\s+@relation\([^)]*onDelete: Cascade\)/);
+  assert.match(model, /student\s+Student\?\s+@relation\([^)]*onDelete: Restrict\)/);
+});
+
+test("EX-ASG-MULTIPLICITY: a trainee may be EXAMINEE and INSTRUCTED_TRAINEE in one session", () => {
+  const examinee = { sessionId: "s1", studentId: "stu1", role: "EXAMINEE" };
+  const instructed = { sessionId: "s1", studentId: "stu1", role: "INSTRUCTED_TRAINEE" };
+  assert.equal(
+    collidesUnderExamineeKey(examinee, instructed),
+    false,
+    "the same trainee as examinee + instructed trainee is still blocked",
+  );
+});
+
+test("EX-ASG-MULTIPLICITY: a trainee may be INSTRUCTED_TRAINEE of several examinees at once", () => {
+  // Two instructed-trainee rows for one person in one session — one per examinee
+  // they accompany. Distinguished by pairingIndex, which the key never reads.
+  const first = { sessionId: "s1", studentId: "stu1", role: "INSTRUCTED_TRAINEE" };
+  const second = { sessionId: "s1", studentId: "stu1", role: "INSTRUCTED_TRAINEE" };
+  assert.equal(collidesUnderExamineeKey(first, second), false);
+});
+
+test("EX-ASG-MULTIPLICITY: TWO EXAMINEE rows for one trainee in one session stay blocked", () => {
+  const first = { sessionId: "s1", studentId: "stu1", role: "EXAMINEE" };
+  const second = { sessionId: "s1", studentId: "stu1", role: "EXAMINEE" };
+  assert.equal(
+    collidesUnderExamineeKey(first, second),
+    true,
+    "the one invariant that must NOT regress has regressed",
+  );
+  // ...and it is scoped: another session, or another trainee, is not a collision.
+  assert.equal(
+    collidesUnderExamineeKey(first, { ...second, sessionId: "s2" }),
+    false,
+  );
+  assert.equal(
+    collidesUnderExamineeKey(first, { ...second, studentId: "stu2" }),
+    false,
+  );
+  // NULL studentId is unconstrained, as it was under the old blanket key.
+  assert.equal(
+    collidesUnderExamineeKey(
+      { sessionId: "s1", studentId: null, role: "EXAMINEE" },
+      { sessionId: "s1", studentId: null, role: "EXAMINEE" },
+    ),
+    false,
+  );
+});
+
+test("EX-ASG-MULTIPLICITY: the partial index is documented, not silently dropped", () => {
+  const model = block("model", "ExamAssignment");
+  // schema.prisma must POINT AT the migration, so the next reader of the model
+  // learns the constraint exists rather than concluding there is none.
+  assert.ok(model.includes(MULTIPLICITY_MIGRATION_DIR), "the model does not cite the migration");
+  assert.ok(model.includes(EXAMINEE_UNIQUE_INDEX), "the model does not name the index");
+  // ...and the migration must say it is hand-written and must be preserved,
+  // the same warning the three existing partial indexes carry.
+  assert.match(MULTIPLICITY_MIGRATION, /PRESERVED BY HAND/i);
+});
+
+test("EX-ASG-MULTIPLICITY: every P2002 classifier names the NEW index and not the old", () => {
+  // Each module name is SPLIT, exactly as the exam guard suites split theirs:
+  // those suites detect "who reaches this binding" by searching for the module
+  // name as a contiguous substring, and a whole literal here would enrol this
+  // structural suite in their caller allow-lists.
+  for (const rel of [
+    join("lib", "actions", "exam-assignment-write" + "-io.ts"),
+    join("lib", "actions", "exam-instructed-trainee-assignment-write" + "-io.ts"),
+    join("lib", "actions", "detailed-exam-assignment-write" + "-io.ts"),
+  ]) {
+    const code = readFileSync(join(REPO_ROOT, rel), "utf8");
+    assert.ok(code.includes(`"${EXAMINEE_UNIQUE_INDEX}"`), `${rel} does not name the new index`);
+    assert.equal(
+      code.includes(`"${ROLE_BLIND_UNIQUE_INDEX}"`),
+      false,
+      `${rel} still matches the DROPPED index name`,
     );
   }
 });

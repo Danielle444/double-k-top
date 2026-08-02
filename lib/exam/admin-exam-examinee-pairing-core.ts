@@ -45,6 +45,7 @@
  */
 import {
   decideExamInstructedTraineePairing,
+  isExamSelfPairing,
   type ExamPairingDecision,
   type ExamPairingExamineeFacts,
   type ExamPairingInstructedTraineeFacts,
@@ -56,6 +57,15 @@ export interface ExamReplacementAssignmentFacts {
   readonly sessionId: string;
   readonly role: string;
   readonly pairingIndex: number | null;
+  /**
+   * EX-PAIR-NO-SELF — WHO this row is, as a stable id and never as a name.
+   *
+   * Present for exactly one rule — an examinee may never teach THEMSELVES — and
+   * forwarded UNCHANGED into the committed pairing decision below, so both
+   * directions of the same relationship answer the question identically.
+   * `null` means "no participant", never "the same participant".
+   */
+  readonly studentId: string | null;
 }
 
 /** Every refusal the pure replacement decision can produce. */
@@ -66,7 +76,9 @@ export type ExamReplacementDecisionRefusalCode =
   | "different_sessions"
   | "ambiguous_pairing_index"
   | "instructed_trainee_already_paired"
-  | "examinee_already_paired";
+  | "examinee_already_paired"
+  // EX-PAIR-NO-SELF — the examinee and the chosen trainee are the same person.
+  | "self_pairing";
 
 /**
  * ONE conditional clear of the trainee being replaced.
@@ -192,6 +204,25 @@ export function decideExamExamineeInstructedTraineeReplacement(input: {
   if (next.role !== "INSTRUCTED_TRAINEE") return refuse("instructed_role_mismatch");
   if (next.sessionId !== examinee.sessionId) return refuse("different_sessions");
 
+  // EX-PAIR-NO-SELF — an examinee may NEVER teach themselves.
+  //
+  // ASKED, NOT RESTATED: the predicate is the committed pairing core's, imported
+  // above, so the examinee-first and trainee-first directions of the same
+  // relationship can never develop two different opinions about who counts as
+  // "the same person".
+  //
+  // IT CANNOT BE LEFT TO THE DELEGATE BELOW, and that is the whole reason it
+  // appears here at all. The delegate is reached only on the REPLACE path; the
+  // `NO_CHANGE` short circuit on the very next lines returns BEFORE it, so a
+  // session that somehow already holds a self-pair would have it silently
+  // re-affirmed by a manager re-submitting the same trainee. Checking first
+  // makes the answer the same on every path.
+  //
+  // The assignment-id comparison three lines above is NOT this check: it catches
+  // ONE row used as both halves of a pair, while this catches TWO DIFFERENT rows
+  // belonging to ONE PERSON — the case EX-ASG-MULTIPLICITY made representable.
+  if (isExamSelfPairing(examinee, next)) return refuse("self_pairing");
+
   // Already the one being taught: nothing is written.
   if (current !== null && current.assignmentId === next.assignmentId) {
     return Object.freeze({ ok: true as const, kind: "NO_CHANGE" as const });
@@ -217,12 +248,18 @@ export function decideExamExamineeInstructedTraineeReplacement(input: {
       sessionId: next.sessionId,
       role: next.role,
       pairingIndex: next.pairingIndex,
+      // Forwarded UNCHANGED, so the delegate re-applies EX-PAIR-NO-SELF over the
+      // very same identities this decision just checked. Belt and braces on one
+      // rule is cheap; a delegate that could not see identity would be a second
+      // path to the same write with one fewer guard on it.
+      studentId: next.studentId,
     },
     examinee: {
       assignmentId: examinee.assignmentId,
       sessionId: examinee.sessionId,
       role: examinee.role,
       pairingIndex: examinee.pairingIndex,
+      studentId: examinee.studentId,
     },
     sessionExaminees: examinees,
     sessionInstructedTrainees: postClear,

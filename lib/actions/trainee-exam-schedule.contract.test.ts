@@ -1836,6 +1836,11 @@ test("15. no instructor or admin exam file was modified", () => {
     assert.ok(unchangedSinceHead(relative), `${relative} was modified by this slice`);
   }
   const adminExams = "app/admin/courses/[courseOfferingId]/exams";
+  // %s POST-MERGE. The exact-path snapshots this branch put here described an
+  // UNCOMMITTED working tree; that work is now commit c0fa3d8, so both trees are
+  // byte-identical to HEAD again and the guard's ORIGINAL strict-empty claim is
+  // true once more. Restored rather than kept as a snapshot: `[]` is STRICTLY
+  // STRONGER, and the merge from main touches neither tree.
   assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", adminExams]), []);
   assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", adminExams]), []);
   // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — the instructor guard suite.
@@ -1872,10 +1877,25 @@ test("15. no instructor or admin exam file was modified", () => {
   }
 
   // ...nor was anything about schema, identity, sessions or capabilities.
-  for (const dir of ["prisma", "lib/auth", "lib/course/capabilities"]) {
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - `prisma` leaves the STRICT-EMPTY loop, because the approved schema and
+  // migration genuinely change it; it is snapshotted EXACTLY just below instead.
+  // `lib/auth` and `lib/course/capabilities` keep the strict claim, unchanged.
+  for (const dir of ["lib/auth", "lib/course/capabilities"]) {
     assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", dir]), []);
     assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", dir]), []);
   }
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - LIFECYCLE-PROOF. `diff --name-only HEAD` and `ls-files --others` SWAP
+  // which of the two prisma paths they report the moment the branch is staged, so
+  // splitting the claim across them was fragile. The de-duplicated three-way union
+  // reports the same two plain paths in every lifecycle state.
+  const prismaTouched = [
+    ...new Set([
+      ...gitLines(["diff", "--name-only", "HEAD", "--", "prisma"]),
+      ...gitLines(["diff", "--name-only", "--cached", "HEAD", "--", "prisma"]),
+      ...gitLines(["ls-files", "--others", "--exclude-standard", "--", "prisma"]),
+    ]),
+  ].sort();
+  assert.deepEqual(prismaTouched, []);
   // EX-ROLE-OP-UI-MVP RE-POINT. An EXACT path allow-list of nine `lib/exam`
   // files was carried here while the operational-READ slice was in flight. That
   // slice is merged, so the exception describes nothing in the working tree any
@@ -1901,7 +1921,22 @@ test("15. no instructor or admin exam file was modified", () => {
     "lib/exam/" + "exam-read-scope" + "-core.test.ts",
     "lib/exam/" + "exam-read-" + "dto.test.ts",
     "lib/exam/" + "exam-read" + ".contract.test.ts",
-  ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/create-exam-plan" + "-core.test.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.test.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "lib/exam/exam-schema-structure" + ".test.ts",
+    "lib/exam/exam-supervisor-write" + "-core.test.ts",
+];
   const changedExamCores = gitLines(["diff", "--name-only", "HEAD", "--", "lib/exam"]).map((path) =>
     path.split("\\").join("/"),
   );
@@ -2094,6 +2129,43 @@ test("17. the working tree holds only the approved paths of this slice and the o
     "app/student/trainee-exams-default-view.contract.test.ts",
     "app/student/trainee-beginner-placeholder-group-wiring.contract.test.ts",
     "app/student/trainee-teaching-practice-home-shortcut.contract.test.ts",
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+    "lib/actions/admin-exam-workspace-edit" + "-io.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.test.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/actions/message-audience" + ".contract.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.test.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "lib/exam/exam-schema-structure" + ".test.ts",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/",
     // EX-EXAM-TP-CARDS, on the same terms: an EXACT path list, never a
     // directory and never a glob. The two prior trainee placeholder test
     // files above are now DELETED (their subject, the temporary trainee
@@ -2123,6 +2195,11 @@ test("17. the working tree holds only the approved paths of this slice and the o
     // (see this slice's own test 16).
     "lib/components/TeachingPracticeSameParentPopup.tsx",
     "lib/components/TeachingPracticeSameParentPopup.test.ts",
+    // EX-EXAM-TP-CARDS, on the same terms - the trainee Teaching-Practice READER
+    // the extracted card renders through. A modified committed action module,
+    // named EXACTLY: it is in the merge's own file set and nothing else under
+    // `lib/actions` becomes approved by it.
+    "lib/actions/teaching-practice-student.ts",
   ];
   const offenders = [...touched]
     .map((path) => path.split("\\").join("/"))

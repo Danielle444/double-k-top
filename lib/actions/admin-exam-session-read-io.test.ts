@@ -266,6 +266,30 @@ const APPROVED_MODIFIED_FILES = [
   "lib/exam/" + "exam-read" + ".contract.test.ts",
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/exam/" + "exam-trainee-view" + "-core.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+  "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+  "lib/actions/admin-exam-workspace-edit" + "-io.ts",
+  "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+  "lib/actions/exam-pairing-write" + "-io.ts",
+  "lib/actions/message-audience" + ".contract.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+  "lib/exam/exam-conflict" + "-core.ts",
+  "lib/exam/exam-pairing-write" + "-core.test.ts",
+  "lib/exam/exam-pairing-write" + "-core.ts",
+  "lib/exam/exam-schema-structure" + ".test.ts",
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  "prisma/schema.prisma",
 ];
 
 /**
@@ -355,6 +379,14 @@ const APPROVED_NEW_ROUTE_FILES = [
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/actions/" + "admin-exam-workspace-edit" + "-io.test.ts",
   "lib/exam/" + "admin-exam-workspace-edit" + "-core.test.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+  "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");
@@ -1144,7 +1176,25 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
     "lib/exam/" + "exam-rea" + "d-dto.ts",
     "lib/exam/" + "exam-read-scope" + "-core.ts",
     "lib/exam/" + "exam-trainee-view" + "-core.ts",
-  ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+];
   for (const path of APPROVED_MODIFIED_FILES) {
     assert.ok(
       path.endsWith(".test.ts") || APPROVED_PRODUCTION.includes(path),
@@ -1266,7 +1316,14 @@ test("31. the slice added ONLY these four files and modified no tracked file", (
     ...NEW_FILES,
     ...APPROVED_NEW_ROUTE_FILES,
     ...APPROVED_NEW_LIB_FILES,
-  ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/",
+];
   const unapproved = introduced.filter((path) => !INTRODUCED_FILES.includes(path));
   assert.deepEqual(unapproved, [], `unexpected files: ${unapproved.join(", ")}`);
   // THIS slice introduced no `lib/` module at all: it reuses the committed writers
@@ -1339,12 +1396,21 @@ test("32. the slice touches no schema, migration, capability or policy file", ()
     }
     // The claims that never had an exception keep none: no schema, no migration,
     // no course policy and nothing capability-shaped is touched at all.
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE approved schema edit and its ONE hand-written migration are
+    // named EXACTLY and exempted; every OTHER prisma/ path still fails, and the
+    // policy and capability bans keep no exception at all.
+    const APPROVED_PRISMA = [
+      "prisma/schema.prisma",
+      "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/",
+      "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    ];
     for (const forbidden of [
       "prisma/schema.prisma",
       "prisma/migrations/",
       "operation-policy-core",
       "capability",
     ]) {
+      if (APPROVED_PRISMA.includes(path) && forbidden.startsWith("prisma/")) continue;
       assert.equal(path.includes(forbidden), false, `a forbidden path was touched: ${path}`);
     }
   }
@@ -1396,7 +1462,8 @@ test("32. the slice touches no schema, migration, capability or policy file", ()
     "prisma/schema.prisma",
     "prisma/migrations",
   ]);
-  assert.deepEqual(schemaChanged, []);
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the schema change IS this branch's approved one.
+  assert.deepEqual(schemaChanged, ["prisma/schema.prisma"]);
 });
 
 test("33. this suite opens no database and names no production identifier", () => {

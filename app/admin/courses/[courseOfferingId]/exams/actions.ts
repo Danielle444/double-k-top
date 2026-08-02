@@ -1067,7 +1067,13 @@ export async function createExamInstructedTraineeAssignmentAction(
   // 7. Every other refusal is fully described by its code alone: the lifecycle
   //    denial, the missing plan, the missing-or-foreign session, the definition
   //    that does not ask for this role at all, the ineligible trainee and the
-  //    role-blind already-assigned conflict.
+  //    already-assigned conflict.
+  //
+  //    That last one is no longer ROLE-BLIND, and since EX-ASG-MULTIPLICITY it is
+  //    no longer REACHABLE from this action either: the assignment table's
+  //    uniqueness key is now scoped to `WHERE "role" = 'EXAMINEE'`, and every row
+  //    this path writes carries the fixed role INSTRUCTED_TRAINEE. The code is
+  //    retained on the writer as defence in depth, so it is still mapped here.
   redirect(`${backPath}&instructedTraineeError=${encodeURIComponent(result.code)}`);
 }
 

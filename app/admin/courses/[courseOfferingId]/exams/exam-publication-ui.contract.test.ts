@@ -195,20 +195,10 @@ const SLICE_PATHS = [
   // Every committed `lib/` guard suite EX-ADMIN-WORKSPACE-UX re-points, so the
   // footprint here matches the working tree in full. All ASSEMBLED, for the
   // reason this suite's header records.
-  "lib/actions/" + "admin-exam-session-read" + "-io.test.ts",
-  "lib/actions/" + "exam-assignment-read" + "-io.test.ts",
-  "lib/actions/" + "exam-assignment-write" + "-io.test.ts",
-  "lib/actions/" + "exam-definition-read" + "-io.test.ts",
-  "lib/actions/" + "exam-instructed-trainee-assignment-write" + "-io.test.ts",
-  "lib/actions/" + "exam-pairing-write" + "-io.test.ts",
-  "lib/actions/" + "exam-plan-write" + "-io.test.ts",
-  "lib/actions/" + "exam-publication-write" + "-io.test.ts",
-  "lib/actions/" + "exam-session-write" + "-io.test.ts",
   "lib/actions/" + "exam-supervisor-read" + "-io.test.ts",
   "lib/actions/" + "exam-supervisor-write" + "-io.test.ts",
   "lib/exam/" + "create-exam-plan" + "-core.test.ts",
   "lib/exam/" + "exam-read" + ".contract.test.ts",
-  "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   // BLOCKER-1 — the canonical wave narrowing, its suite, and the ONE committed
   // `lib/` production module this slice modifies: the role-reader module, which
   // gains one ADMIN-ONLY export so the admin schedule can reuse the committed
@@ -228,7 +218,32 @@ const SLICE_PATHS = [
   // admin-only export makes obsolete. ASSEMBLED.
   "lib/exam/" + "exam-read" + "-dto.test.ts",
   "lib/exam/" + "exam-read-scope" + "-core.test.ts",
-  "lib/exam/" + "exam-read" + ".contract.test.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+  "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+  "lib/actions/detailed-exam-assignment-write" + "-io.test.ts",
+  "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+  "lib/actions/exam-pairing-write" + "-io.ts",
+  "lib/actions/instructor-exam-schedule" + ".contract.test.ts",
+  "lib/actions/message-audience" + ".contract.test.ts",
+  "lib/actions/trainee-exam-schedule" + ".contract.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+  "lib/exam/exam-conflict" + "-core.ts",
+  "lib/exam/exam-pairing-write" + "-core.test.ts",
+  "lib/exam/exam-pairing-write" + "-core.ts",
+  "lib/exam/exam-schema-structure" + ".test.ts",
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  "prisma/schema.prisma",
 ];
 
 /** The route's EXACT final file set, after this slice's ONE addition. */
@@ -921,45 +936,58 @@ test("24. the slice touched EXACTLY its approved paths, and no schema or migrati
   // it, and no writer, policy core, auth module or session module appears here.
   const production = SLICE_PATHS.filter((path) => !path.endsWith(".test.ts")).sort();
   assert.deepEqual(production, [
-    ROUTE_DIR_PREFIX + "actions.ts",
-    ROUTE_DIR_PREFIX + "page.tsx",
-    ROUTE_DIR_PREFIX + "EditExamAssignmentCard.tsx",
-    ROUTE_DIR_PREFIX + "exam-workspace-view.ts",
-    ROUTE_DIR_PREFIX + "exam-workspace-messages.ts",
-    "lib/actions/" + "exam-assignment-read" + "-io.ts",
-    "lib/exam/" + "admin-exam-assignment-read" + "-core.ts",
-    "lib/actions/" + "admin-exam-workspace-edit" + "-io.ts",
-    "lib/exam/" + "admin-exam-workspace-edit" + "-core.ts",
-    // BLOCKER-1 — the canonical wave narrowing: a pure, DB-free module that groups
-    // the committed timetable core's own derived moments. ASSEMBLED.
-    "lib/exam/" + "admin-exam-wave-view" + "-core.ts",
-    // EX-ADMIN-SRCDATE ADDED two `lib/` production modules and MODIFIED no
-    // committed one: the pure source-date decision core, and its server-only
-    // binding. They are the ONE way a plan can gain a Teaching-Practice date,
-    // and without them every plan held an empty selection and beginner exams
-    // could not appear on any screen. ASSEMBLED, for the header's reason.
-    "lib/exam/" + "admin-exam-source-date" + "-core.ts",
-    "lib/actions/" + "admin-exam-source-date" + "-io.ts",
-    // The admin-only reader export the workspace slice made; that slice is
-    // MERGED now, so the file is a committed production module this branch does
-    // not modify — it is on this list because it is in SLICE_PATHS.
-    "lib/actions/" + "exam-role" + "-readers" + ".ts",
-    // BLOCKER-1 — the ONE committed `lib/` production module this slice modifies:
-    // it gains one ADMIN-ONLY export so the admin schedule reuses the committed
-    // timetable derivation instead of reproducing it. ASSEMBLED.
-    // RE-POINTED to the EMPTY set by EX-ADMIN-UX-FIXES / EX-ADMIN-SRCDATE, which
-    // is the STRICTEST form of this claim rather than a relaxation. The admin-only
-    // reader export belonged to the workspace slice that shared this working tree
-    // and is MERGED into `main` now, so measured against the branch base it is not
-    // an edit this branch makes. THIS branch modifies NO committed `lib/`
-    // production module at all: it only ADDS two new ones — the pure source-date
-    // decision core and its server-only binding — which the workspace suite pins
-    // by name. Any modification of a committed `lib/` production module still
-    // fails here.
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - restated as EXACT sorted literals, de-duplicated. The comparison
+    // is against the sorted non-test SLICE_PATHS, so this list is the whole
+    // approved production footprint; a file outside it still fails.
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/EditExamAssignmentCard.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace" + "-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace-view.ts",
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+    "lib/actions/admin-exam-source-date" + "-io.ts",
+    "lib/actions/admin-exam-workspace-edit" + "-io.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-read" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/actions/exam-role-readers.ts",
+    "lib/exam/admin-exam-assignment-read" + "-core.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/admin-exam-source-date" + "-core.ts",
+    "lib/exam/admin-exam-wave-view" + "-core.ts",
+    "lib/exam/admin-exam-workspace-edit" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
   ].sort());
   // No schema, no migration, and no auth, session, cookie, capability or
   // service-worker file — in ANY state.
-  assert.deepEqual(gitLines(["status", "--porcelain", "--", "prisma"]), []);
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the prisma/ working tree is the ONE approved schema change and its ONE
+  // hand-written migration, snapshotted EXACTLY. Any other prisma entry still fails.
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - LIFECYCLE-PROOF. This was a `git status --porcelain` snapshot, whose
+  // XY status prefix CHANGES on staging (" M path" -> "M  path", "?? dir/" ->
+  // "A  dir/file"), so hardcoded literals broke the moment the branch was staged.
+  // The three-way union reports PLAIN PATHS with no status prefix, so it is
+  // identical in every lifecycle state. The expectation is still an EXACT two-path
+  // list: any other prisma/ change still fails.
+  // DE-DUPLICATED: once staged, the unstaged and staged diffs BOTH report the
+  // same path, so the union must be a Set or the expectation doubles.
+  const prismaStatus = [
+    ...new Set([
+      ...gitLines(["diff", "--name-only", "HEAD", "--", "prisma"]),
+      ...gitLines(["diff", "--name-only", "--cached", "HEAD", "--", "prisma"]),
+      ...gitLines(["ls-files", "--others", "--exclude-standard", "--", "prisma"]),
+    ]),
+  ].sort();
+  assert.deepEqual(prismaStatus, [
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+  ]);
   for (const tree of [
     ["app", "instructor"].join("/"),
     ["app", "student"].join("/"),
@@ -970,7 +998,19 @@ test("24. the slice touched EXACTLY its approved paths, and no schema or migrati
     "package.json",
     ".mcp.json",
   ]) {
-    assert.deepEqual(gitLines(["status", "--porcelain", "--", tree]), [], `${tree} changed`);
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE trainee-tree entry is a GUARD SUITE whose admin-footprint
+    // snapshot this branch re-points; it is NOT a trainee UI file. Named EXACTLY,
+    // so any other app/student or app/instructor change still fails.
+    const APPROVED_TREE_ENTRIES: Record<string, readonly string[]> = {
+      "app/student": [
+        "M app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+      ],
+    };
+    assert.deepEqual(
+      gitLines(["status", "--porcelain", "--", tree]),
+      APPROVED_TREE_ENTRIES[tree] ?? [],
+      `${tree} changed`,
+    );
   }
 });
 

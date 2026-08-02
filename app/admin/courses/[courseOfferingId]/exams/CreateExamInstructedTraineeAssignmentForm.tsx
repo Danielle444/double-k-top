@@ -43,9 +43,22 @@
  * nothing here should ever be read as if it were.
  *
  * The list is NOT narrowed by who is already assigned, here or on the server.
- * Whether a person may take a second place in one session is the DATABASE's
- * role-blind unique key to decide, and a client-side filter over a read that has
- * already finished could only ever disagree with it.
+ * Whether a person may take a second place in one session is the SERVER's to
+ * decide, and a client-side filter over a read that has already finished could
+ * only ever disagree with it.
+ *
+ * EX-ASG-MULTIPLICITY CORRECTED WHAT THAT DECISION IS. It used to be the
+ * database's ROLE-BLIND unique key over (sessionId, studentId), which refused a
+ * person ANY second row in a session. That key is now scoped to
+ * `WHERE "role" = 'EXAMINEE'`, so a trainee may legitimately be a session's
+ * examinee AND an instructed trainee of a different examinee of it, and may
+ * accompany two different examinees. Adding somebody twice in THIS role is
+ * therefore no longer refused at all, which is one more reason this list must not
+ * pretend to know the answer.
+ *
+ * The one arrangement still forbidden — an examinee teaching THEMSELVES — is not
+ * this form's business either: it is a PAIRING decision, made by the pairing core
+ * against the two rows' student ids, on a different screen.
  *
  * ONLY `fullName` IS DISPLAYED. Two trainees who share a display name therefore
  * look identical in the list while remaining DISTINCT options, because their
