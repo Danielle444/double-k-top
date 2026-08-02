@@ -4,10 +4,11 @@
  * `לו״ז כללי` (navMode === "all") must show only schedule-level facts (date,
  * start/end time, exam type/name, arena/location) - exactly like the admin
  * general view - and must never show a trainee name, an examinee name, an
- * instructed-trainee name, a supervisor name, an assignment, a horse, a topic
- * or a self/role marker. The by-date and by-type views must keep their full
- * existing detail, and the two static beginner placeholder cards must remain
- * scoped to their approved by-date locations only.
+ * instructed-trainee name, a supervisor name, an assignment, a horse, a topic,
+ * a self/role marker, a computed-timetable status label (e.g. "הלוח חושב") or
+ * an operational diagnostic message. The by-date and by-type views must keep
+ * their full existing detail, and the two static beginner placeholder cards
+ * must remain scoped to their approved by-date locations only.
  *
  * InstructorExamsSection.tsx cannot be rendered in node:test (no DOM/testing-
  * library in this project - see the admin exam-workspace.contract.test.ts
@@ -27,19 +28,27 @@ function readSource(relative: string): string {
 }
 
 const SRC = readSource("./InstructorExamsSection.tsx");
+// Normalized-newline copy used ONLY for the multi-line GUARD_CLOSE_ANCHOR
+// search below (the file uses CRLF line endings, like its sibling
+// StudentExamsSection.tsx - see that file's own placeholder test comment).
+// Every assertion still reads from this same normalized text, so line-ending
+// differences cannot change what is or is not found.
+const SRC_LF = SRC.replace(/\r\n/g, "\n");
 
-// The participant-detail block, delimited by the general-view guard on one
-// side and the next unconditional block (the timetable status label) on the
-// other - both anchors already exist in the file regardless of this change.
+// The participant-detail AND timetable-status block, delimited by the
+// general-view guard on one side and the end of the per-row card render (the
+// map callback's own closing) on the other - both anchors exist in the file
+// regardless of this change, and the second one is unique (there is exactly
+// one row-rendering `.map` in this file).
 const GUARD_OPEN = '{navMode !== "all" && (';
-const GUARD_CLOSE_ANCHOR = "{statusLabel !== null && (";
+const GUARD_CLOSE_ANCHOR = "</div>\n                );\n              })}";
 
 function guardedBlock(): string {
-  const start = SRC.indexOf(GUARD_OPEN);
+  const start = SRC_LF.indexOf(GUARD_OPEN);
   assert.notEqual(start, -1, "the by-type/by-date-only guard must exist");
-  const end = SRC.indexOf(GUARD_CLOSE_ANCHOR, start);
-  assert.ok(end > start, "the guarded block must be delimited before the status label");
-  return SRC.slice(start, end);
+  const end = SRC_LF.indexOf(GUARD_CLOSE_ANCHOR, start);
+  assert.ok(end > start, "the guarded block must be delimited before the end of the row card");
+  return SRC_LF.slice(start, end);
 }
 
 test("1. every participant-level element is gated behind navMode !== 'all'", () => {
@@ -61,6 +70,28 @@ test("1. every participant-level element is gated behind navMode !== 'all'", () 
       `every occurrence of ${mustBeGuarded} must be inside the navMode !== "all" guard`,
     );
   }
+});
+
+test("1b. the computed-timetable status label and its operational messages are ALSO gated behind navMode !== 'all'", () => {
+  const guarded = guardedBlock();
+  for (const mustBeGuarded of ["{statusLabel !== null && (", "{messages.map((message) => ("]) {
+    const totalCount = SRC.split(mustBeGuarded).length - 1;
+    const guardedCount = guarded.split(mustBeGuarded).length - 1;
+    assert.equal(totalCount, 1, `${mustBeGuarded} must appear exactly once in the file`);
+    assert.equal(
+      guardedCount,
+      1,
+      `${mustBeGuarded} must be inside the navMode !== "all" guard, so it never renders in the general view`,
+    );
+  }
+  // The specific incorrect text this guard exists to hide from the general
+  // view. It legitimately still appears inside the guard (rendered in the
+  // by-type/by-date views), so this asserts position, not absence.
+  assert.ok(SRC.includes('OK: "הלוח חושב"'), 'the "הלוח חושב" status label text must still exist');
+  assert.ok(
+    guarded.includes("statusLabel"),
+    '"הלוח חושב" (via statusLabel) must render only inside the navMode !== "all" guard',
+  );
 });
 
 test("2. the general view still renders the block facts unconditionally: date, start/end time, type, place", () => {

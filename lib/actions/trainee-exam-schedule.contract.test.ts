@@ -777,8 +777,14 @@ test("9. no exam route directory was created in any role area", () => {
     assert.equal(existsSync(join(REPO_ROOT, dir)), false, `${dir} was created`);
   }
   // The feature is hosted inside the existing student page/client architecture.
+  // EX-C3-GROUP-PLACEHOLDER — the section now takes exactly one prop, the
+  // trainee's own already-loaded groupName, reused (not re-fetched) to scope
+  // the beginner Teaching-Practice placeholder; it is still a plain component,
+  // not a route module (still no `export default` below).
   assert.ok(
-    SECTION_CODE.includes("export function StudentExamsSection()"),
+    SECTION_CODE.includes(
+      "export function StudentExamsSection({ groupName }: { groupName: string | null }) {",
+    ),
     "the screen is not a plain section component",
   );
   assert.equal(SECTION_CODE.includes("export default"), false, "the section became a route module");
@@ -1940,6 +1946,19 @@ test("17. the working tree holds only the approved paths of this slice and the o
     "lib/exam/" + "exam-read" + ".contract.test.ts",
     "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
     "lib/exam/" + "exam-trainee-view" + "-core.ts",
+    // fix/exam-role-ui-urgent, on the same terms: an EXACT path list, never a
+    // directory and never a glob. This branch's four NEW test files - the
+    // instructor general/all overview-only regression test (re-pointed to also
+    // pin the timetable-status label gate), and three new trainee contract
+    // tests (default-view, beginner-placeholder group wiring, and the
+    // Teaching-Practice home shortcut). It adds no route, no action, no reader
+    // and no `lib/exam` file. SECTION_REL, CLIENT_REL and the other
+    // already-approved paths above already cover this branch's four
+    // implementation-file edits.
+    "app/instructor/instructor-exams-general-overview.contract.test.ts",
+    "app/student/trainee-exams-default-view.contract.test.ts",
+    "app/student/trainee-beginner-placeholder-group-wiring.contract.test.ts",
+    "app/student/trainee-teaching-practice-home-shortcut.contract.test.ts",
   ];
   const offenders = [...touched]
     .map((path) => path.split("\\").join("/"))
