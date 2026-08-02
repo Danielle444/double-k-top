@@ -31,6 +31,9 @@ function stripComments(source: string): string {
 
 const CODE = stripComments(SRC);
 
+const EXAMS_SRC = readSource("./StudentExamsSection.tsx");
+const EXAMS_CODE = stripComments(EXAMS_SRC);
+
 // ===========================================================================
 // 2. The screen renders through the shared card, with no local copy
 // ===========================================================================
@@ -44,6 +47,41 @@ test("2a. the local LessonCard/SameParentBadge/label-map definitions are GONE", 
     "a local PRACTICE_TYPE_LABELS definition survives",
   );
   assert.equal(/const ROLE_LABELS\s*[:=]/.test(CODE), false, "a local ROLE_LABELS definition survives");
+});
+
+test("2f. StudentExamsSection.tsx (the exam trainee \"לו\"ז שלי\" view) routes through the SAME shared TeachingPracticeLessonCard, with no separate/duplicate TP role-label resolution logic in either surface file", () => {
+  // EX-EXAM-TP-CARDS-ROLE-LABEL - both trainee-facing mount points
+  // (StudentTeachingPracticeSection.tsx and StudentExamsSection.tsx) consume
+  // the same reader (listMyTeachingPracticeLessonsForTrainee) and must render
+  // participant role labels through the exact same shared card, never a
+  // second, independently-maintained resolution.
+  assert.match(
+    EXAMS_CODE.replace(/\s+/g, " "),
+    /import \{ TeachingPracticeLessonCard \} from "@\/lib\/components\/TeachingPracticeLessonCard";/,
+    "StudentExamsSection.tsx does not import the shared TeachingPracticeLessonCard",
+  );
+  assert.ok(
+    EXAMS_CODE.includes("<TeachingPracticeLessonCard"),
+    "StudentExamsSection.tsx does not render the shared TeachingPracticeLessonCard",
+  );
+  // Neither surface file re-declares its own TP ROLE_LABELS map or resolves
+  // a role label inline - that logic lives only inside the shared card.
+  for (const [label, code] of [
+    ["StudentTeachingPracticeSection.tsx", CODE],
+    ["StudentExamsSection.tsx", EXAMS_CODE],
+  ] as const) {
+    assert.equal(/const ROLE_LABELS\s*[:=]/.test(code), false, `${label} declares a local duplicate ROLE_LABELS map`);
+    // Word-boundary check: StudentExamsSection.tsx legitimately has its own,
+    // unrelated SELF_ROLE_LABELS map (EXAMINEE/INSTRUCTED_TRAINEE) - only a
+    // bare "ROLE_LABELS[" (the TP role map) must be absent, not that longer,
+    // differently-named identifier.
+    assert.equal(
+      /(?<![A-Za-z0-9_])ROLE_LABELS\[/.test(code),
+      false,
+      `${label} resolves a TP role label inline instead of through the shared card`,
+    );
+    assert.equal(code.includes("roleLabelOverrides?."), false, `${label} resolves roleLabelOverrides inline instead of through the shared card`);
+  }
 });
 
 test("2b. the shared card and badge are imported from the extracted module, not re-implemented", () => {

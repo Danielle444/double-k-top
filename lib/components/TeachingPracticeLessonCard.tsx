@@ -1,9 +1,7 @@
 "use client";
 
-import type {
-  TeachingPracticeRoleValue,
-  TeachingPracticeTypeValue,
-} from "@/lib/teaching-practice-rotation";
+import type { TeachingPracticeTypeValue } from "@/lib/teaching-practice-rotation";
+import { ROLE_LABELS } from "@/lib/teaching-practice-rotation";
 import type { TeachingPracticeTraineeLessonRow } from "@/lib/actions/teaching-practice-student";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates";
 import { buildTelLink, buildWhatsAppLink } from "@/lib/phone-contact-links";
@@ -37,13 +35,6 @@ export const PRACTICE_TYPE_LABELS: Record<TeachingPracticeTypeValue, string> = {
   LUNGE: "לונג׳",
   BEGINNER_PRIVATE: "שיעור פרטי מתחילים",
   BEGINNER_GROUP: "שיעור קבוצתי מתחילים",
-};
-
-const ROLE_LABELS: Record<TeachingPracticeRoleValue, string> = {
-  LEAD_INSTRUCTOR: "מדריך ראשון",
-  SECOND_INSTRUCTOR: "מדריך שני",
-  ASSISTANT_INSTRUCTOR: "עוזר מדריך",
-  EVALUATOR: "ממשב",
 };
 
 // Same "אותו הורה" wording/styling as the admin/instructor surface - never
@@ -120,7 +111,7 @@ export function TeachingPracticeLessonCard({
                     : "text-card-foreground"
                 }`}
               >
-                {p.traineeName} - {ROLE_LABELS[p.role]}
+                {p.traineeName} - {lesson.roleLabelOverrides?.[p.role] ?? ROLE_LABELS[p.role]}
                 {p.isSelf && " (את/ה)"}
               </li>
             ))}

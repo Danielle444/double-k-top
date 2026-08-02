@@ -19,6 +19,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { ROLE_LABELS } from "@/lib/teaching-practice-rotation";
+import type { TeachingPracticeRoleValue } from "@/lib/teaching-practice-rotation";
 
 const SRC = readFileSync(
   fileURLToPath(new URL("./TeachingPracticeLessonCard.tsx", import.meta.url)),
@@ -64,14 +66,60 @@ test("5. location is rendered when present", () => {
   assert.ok(CODE.includes("מיקום: {lesson.location}"));
 });
 
-test("6. the team/participants list is rendered, with the current trainee highlighted", () => {
+test("6. the team/participants list is rendered, with the current trainee highlighted, and the role label resolves through the lesson's own roleLabelOverrides before falling back to the canonical default", () => {
   assert.ok(CODE.includes('<p className="mb-1 text-sm font-semibold text-muted-foreground">צוות</p>'));
   assert.ok(CODE.includes("lesson.participants.map((p) =>"));
-  assert.ok(CODE.includes("{p.traineeName} - {ROLE_LABELS[p.role]}"));
+  assert.ok(
+    CODE.includes("{p.traineeName} - {lesson.roleLabelOverrides?.[p.role] ?? ROLE_LABELS[p.role]}"),
+    "role label no longer resolves lesson.roleLabelOverrides before the canonical ROLE_LABELS default",
+  );
   // The current trainee's own row is styled distinctly and labelled.
   assert.ok(CODE.includes("p.isSelf"));
   assert.ok(CODE.includes('{p.isSelf && " (את/ה)"}'));
-  assert.match(CODE.replace(/\s+/g, " "), /LEAD_INSTRUCTOR: "מדריך ראשון"/);
+  // ROLE_LABELS is now the canonical constant, imported rather than
+  // re-declared locally.
+  assert.equal(/const ROLE_LABELS\s*[:=]/.test(CODE), false, "a local duplicate ROLE_LABELS constant survives");
+  assert.match(
+    CODE.replace(/\s+/g, " "),
+    /import \{ ROLE_LABELS \} from "@\/lib\/teaching-practice-rotation";/,
+    "ROLE_LABELS is not imported from the canonical lib/teaching-practice-rotation module",
+  );
+});
+
+test("6a. role-label resolution is generic over any role/override value (not hardcoded to specific labels or dates)", () => {
+  // The exact expression the component renders. This is the same rule the
+  // admin/instructor surface already uses (lesson.roleLabelOverrides?.[role]
+  // ?? ROLE_LABELS[role]) - reproduced here as plain logic (no rendering
+  // engine available in this suite; see the file header) against the
+  // canonical ROLE_LABELS constant and synthetic, arbitrary-date-free
+  // fixtures, so this proves actual resolution behavior rather than only
+  // the presence of the expression's source text.
+  function resolveParticipantRoleLabel(
+    roleLabelOverrides: Record<string, string> | null | undefined,
+    role: TeachingPracticeRoleValue,
+  ): string {
+    return roleLabelOverrides?.[role] ?? ROLE_LABELS[role];
+  }
+
+  // (a) ASSISTANT_INSTRUCTOR with an override renders the override text.
+  const onlyAssistantOverride = { ASSISTANT_INSTRUCTOR: "מדריך שני" };
+  assert.equal(resolveParticipantRoleLabel(onlyAssistantOverride, "ASSISTANT_INSTRUCTOR"), "מדריך שני");
+
+  // (d) a role with no override on that same lesson is unaffected - proves
+  // per-role-key resolution, not an all-or-nothing swap.
+  assert.equal(resolveParticipantRoleLabel(onlyAssistantOverride, "LEAD_INSTRUCTOR"), ROLE_LABELS.LEAD_INSTRUCTOR);
+
+  // (b) EVALUATOR with an override (on a lesson with no other overrides)
+  // renders the override text.
+  const onlyEvaluatorOverride = { EVALUATOR: "מדריך שלישי" };
+  assert.equal(resolveParticipantRoleLabel(onlyEvaluatorOverride, "EVALUATOR"), "מדריך שלישי");
+
+  // (c) with no roleLabelOverrides at all (null/undefined), a participant
+  // falls back to the existing canonical default label - checked with a
+  // role/value pair distinct from the two override examples above, to
+  // prove the fallback itself is generic, not hardcoded to just those two.
+  assert.equal(resolveParticipantRoleLabel(null, "LEAD_INSTRUCTOR"), "מדריך ראשון");
+  assert.equal(resolveParticipantRoleLabel(undefined, "SECOND_INSTRUCTOR"), ROLE_LABELS.SECOND_INSTRUCTOR);
 });
 
 test("7. the child list is rendered: name, age, gender, horse, equipment, parent name/phone", () => {

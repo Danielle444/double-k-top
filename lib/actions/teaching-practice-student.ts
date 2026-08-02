@@ -74,6 +74,39 @@ export interface TeachingPracticeTraineeLessonRow {
   responsibleInstructorName: string | null;
   participants: TeachingPracticeTraineeParticipantRow[];
   children: TeachingPracticeTraineeChildRow[];
+  // Per-lesson role-label text overrides (keyed by TeachingPracticeRoleValue),
+  // normalized from the unvalidated `TeachingPracticeLesson.roleLabelOverrides`
+  // Json? column - see normalizeRoleLabelOverrides() below. null when absent
+  // or malformed. Consumers must resolve a participant's display label as
+  // `roleLabelOverrides?.[participant.role] ?? ROLE_LABELS[participant.role]`,
+  // the same rule already used on the admin/instructor side
+  // (lib/components/TeachingPracticeManager.tsx).
+  roleLabelOverrides: Record<string, string> | null;
+}
+
+// Defensively normalize the unvalidated `roleLabelOverrides` Json? column into
+// a plain string->string record, or null. Anything that is not a flat object
+// of string values fails closed (array/string/number/null -> null;
+// non-string values dropped; inherited/`__proto__` keys never copied) -
+// mirrors the equivalent helper in
+// lib/exam/exam-tp-source-adapter-core.ts (normalizeRoleLabelOverrides),
+// kept local here rather than imported to avoid a new cross-module
+// dependency from this student-actions file into the exam module.
+function normalizeRoleLabelOverrides(value: unknown): Record<string, string> | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object" || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const out: Record<string, string> = {};
+  let count = 0;
+  for (const key of Object.keys(source)) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+    if (key === "__proto__") continue;
+    const label = source[key];
+    if (typeof label !== "string" || label.length === 0) continue;
+    out[key] = label;
+    count += 1;
+  }
+  return count === 0 ? null : out;
 }
 
 const TRAINEE_LESSON_INCLUDE = {
@@ -135,6 +168,7 @@ function toTraineeLessonRow(
       parentName: c.child.parentName,
       parentPhone: c.child.parentPhone,
     })),
+    roleLabelOverrides: normalizeRoleLabelOverrides(lesson.roleLabelOverrides),
   };
 }
 
