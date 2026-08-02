@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ExamAssignmentRows } from "@/lib/components/ExamAssignmentRows";
 import { ExamBeginnerRows } from "@/lib/components/ExamBeginnerRows";
 import { ExamDateTabs } from "@/lib/components/ExamDateTabs";
@@ -16,6 +16,48 @@ import {
   getTraineeExamSchedule,
   type TraineeExamScheduleView,
 } from "@/lib/actions/trainee-exam-schedule";
+// EX-EXAM-TP-CARDS — the SAME existing reader/DTO the trainee Teaching-
+// Practice screen ("ההתנסויות שלי") already calls, reused verbatim: no new
+// reader, no new Server Action, no duplicated data. Identity, course
+// resolution, the TEACHING_PRACTICE capability gate and the published/
+// participant filters all live inside this ONE call, exactly as they do for
+// that screen - see its own file header for the full contract.
+import { listMyTeachingPracticeLessonsForTrainee } from "@/lib/actions/teaching-practice-student";
+// EX-EXAM-TP-SAME-PARENT-TRACKS — the SAME existing "מבנה קבוע" reader
+// "ההתנסויות שלי"'s own popup already calls, reused verbatim, for the SAME
+// reason it does there: a child currently assigned to a fixed-structure slot
+// can have no published GENERATED lesson of their own yet, so they would be
+// entirely invisible to (and their same-parent match undiscoverable from)
+// `myTeachingPracticeLessons` alone - see the file header (EX-EXAM-TP-SAME-PARENT-TRACKS)
+// for the full contract. Bound through the SAME authorization dependency
+// (`TRAINEE_TEACHING_PRACTICE_DEPS`) as the lessons reader - identical
+// session/course/capability gates, not re-implemented.
+import { listPublishedTeachingPracticeTracksForTrainee } from "@/lib/actions/teaching-practice-student";
+import type {
+  TeachingPracticeTraineeLessonRow,
+  TeachingPracticeTraineeTrackRow,
+} from "@/lib/actions/teaching-practice-student";
+// The SAME shared card "ההתנסויות שלי" renders, extracted so both screens
+// render the identical component - never a second, visually-similar copy.
+import { TeachingPracticeLessonCard } from "@/lib/components/TeachingPracticeLessonCard";
+// The SAME shared same-parent popup "ההתנסויות שלי" renders, and the SAME
+// pure detection rule - reused, not re-implemented, so the badge/popup this
+// screen shows can never disagree with the original screen's.
+import {
+  buildSameParentPopupRows,
+  TeachingPracticeSameParentPopup,
+} from "@/lib/components/TeachingPracticeSameParentPopup";
+import {
+  buildSameParentOtherNamesByChildId,
+  type SameParentChildInput,
+} from "@/lib/teaching-practice-same-parent";
+// The PURE merge/filter core behind "לו״ז שלי" - see its own file header.
+// This screen holds no comparator or date rule of its own; it only calls in.
+import {
+  buildSelfViewEntries,
+  collectBeginnerExamDates,
+  filterBeginnerLessonsForExamDays,
+} from "@/app/student/trainee-exam-self-view-core";
 import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates";
 
 /**
@@ -102,24 +144,86 @@ import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates
  * even representable in the renderer's prop type.
  *
  * ===========================================================================
- * LIVE BEGINNER ROWS ARE A SECOND KIND OF ROW (EX-BEGINNER-EXAM-UI)
+ * LIVE BEGINNER ROWS, IN "לפי תאריך" (EX-BEGINNER-EXAM-UI)
  * ===========================================================================
  * A beginner row is a LIVE projection of a Teaching-Practice lesson. It has no
  * stored exam assignment at all, so handing it to the wave/examinee renderer
- * above produced an empty block — which is precisely why beginner entries were
- * invisible on this screen even when the server sent them.
+ * above produced an empty block. "לפי תאריך" ROUTES on the contract's own
+ * `source` field: a beginner row would go to `lib/components/ExamBeginnerRows`,
+ * the shared compact beginner presentation, and NEVER into the advanced
+ * renderer — but `filteredRows` below excludes every beginner row before that
+ * routing is ever reached (EX-C2-0-SUSPEND-UI), so this branch stays in place
+ * as dead code rather than a reachable path. "לפי תאריך" deliberately shows NO
+ * Teaching-Practice detail of any kind — real cards or the old live
+ * projection — see EX-EXAM-TP-CARDS below for where the real detail now lives.
  *
- * Both views therefore ROUTE on the contract's own `source` field: a beginner
- * row goes to `lib/components/ExamBeginnerRows`, the shared compact beginner
- * presentation, and NEVER into the advanced renderer. Its people are the
- * lesson's PARTICIPANTS — this screen invents no `EXAMINEE` and no
- * `INSTRUCTED_TRAINEE` to make them fit, and it does not print the advanced
- * participant summary over them either.
+ * ===========================================================================
+ * REAL BEGINNER TEACHING-PRACTICE CARDS, IN "לו״ז שלי" ONLY (EX-EXAM-TP-CARDS)
+ * ===========================================================================
+ * "לו״ז שלי" no longer shows a live re-projection of Teaching-Practice data
+ * (EX-BEGINNER-EXAM-UI) or a static placeholder (EX-C2-0-SUSPEND-UI, now
+ * fully removed). It shows the trainee's REAL "ההתנסויות שלי" cards, via the
+ * SAME shared `TeachingPracticeLessonCard` component and the SAME
+ * `listMyTeachingPracticeLessonsForTrainee()` reader that screen already
+ * calls — reused verbatim, never a second copy and never duplicated data.
+ * That reader is its OWN authorization boundary (signed session, resolved
+ * course, TEACHING_PRACTICE capability, published lessons, real participant
+ * match by `traineeId`) and is not re-implemented or re-checked here.
  *
- * THE COMMITTED VISIBILITY DECISION IS PRESERVED. Child, parent and phone detail
- * is carried to trainees by the read layer on purpose; this screen neither
- * widens it nor quietly hides it. Lesson notes and lesson publication state are
- * NOT on the trainee contract and are not requested here.
+ * Loaded ONCE on mount, in its own effect beside the exam-schedule one below —
+ * never per-date, never re-fetched on a mode/date-tab change. Narrowed to
+ * any practice type (LUNGE included) on the dates this trainee's OWN
+ * exam contract already marks as beginner exam days (`view.myRows` rows whose
+ * `source` is `"BEGINNER"` — a set the contract already computed, not a new
+ * date rule invented here), then merged chronologically with the advanced
+ * rows below by (date, startTime, stable original order) — see
+ * `buildSelfViewEntries`. A Teaching-Practice lesson is rendered as the real
+ * card, in its correct chronological slot, and NEVER as an exam row.
+ *
+ * ===========================================================================
+ * THE SAME-PARENT INDICATOR/POPUP IS THE SAME FEATURE, REAL (EX-EXAM-TP-SAME-PARENT)
+ * ===========================================================================
+ * "ההתנסויות שלי"'s "אותו הורה" badge and popup are fully reproduced here —
+ * not a placeholder, not a no-op. Both are built from `myTeachingPracticeLessons`,
+ * the trainee's FULL authorized Teaching-Practice result already loaded once
+ * above (never the date-filtered `beginnerLessonsForSelfView`, so a same-parent
+ * relation is found even when the OTHER matching child's only lesson falls
+ * outside a beginner exam day, exactly as "ההתנסויות שלי"'s own badge is built
+ * from that screen's full `myLessons`, not its currently-displayed subset).
+ * `examSameParentOtherNamesByChildId` uses the SAME exported
+ * `buildSameParentOtherNamesByChildId`, keyed by real `childId` — never a
+ * display name. The popup reuses the SAME `buildSameParentPopupRows` and the
+ * SAME `TeachingPracticeSameParentPopup` component "ההתנסויות שלי" mounts.
+ *
+ * ===========================================================================
+ * WHY TRACKS ARE READ TOO (EX-EXAM-TP-SAME-PARENT-TRACKS)
+ * ===========================================================================
+ * `tracks` ("מבנה קבוע") is NOT redundant with `lessons`: a child can be
+ * CURRENTLY assigned to a fixed-structure slot with no PUBLISHED generated
+ * lesson of their own yet (the very "empty/incomplete popup" bug
+ * "ההתנסויות שלי"'s own popup was fixed for — see `handleOpenSameParentPopup`
+ * there). Such a child is invisible to, and their same-parent match
+ * undiscoverable from, `lessons` alone. Proven with representative non-empty
+ * track fixtures in `lib/components/TeachingPracticeSameParentPopup.test.ts`.
+ *
+ * So `tracks` is read here too, via `listPublishedTeachingPracticeTracksForTrainee` -
+ * the SAME reader "ההתנסויות שלי" calls, bound through the SAME authorization
+ * dependency as the lessons reader (identical session/course/capability
+ * gates). LAZILY, on the FIRST popup open, exactly like "ההתנסויות שלי"'s
+ * own `handleOpenSameParentPopup` — loaded ONCE and cached, never per-click
+ * and never per-date: a trainee who never opens the popup never fetches it.
+ * The popup shows "טוען..." for the one open that has to wait on it, exactly
+ * the SAME loading state "ההתנסויות שלי" shows.
+ *
+ * WHAT REMAINS DELIBERATELY NARROWER, AND WHY THAT IS NOT "REDUCED": `lessons`
+ * here is `myTeachingPracticeLessons` (this trainee's OWN participant
+ * lessons), never `allLessons` (every trainee's published lessons) — a prior,
+ * explicit product decision (EX-EXAM-TP-CARDS) to reuse only the ONE reader
+ * this screen already needed for the cards themselves, never a second,
+ * roster-wide read. `tracks` is ALSO roster-wide by construction (there is no
+ * "my tracks" reader), so reading it does not violate that same boundary -
+ * it is a single existing, already-capability-gated read, not a new,
+ * differently-scoped one.
  *
  * ===========================================================================
  * THE TWO VIEWS ARE DELIBERATELY NOT THE SAME LAYOUT (EX-TRAINEE-DATE-NAV)
@@ -193,16 +297,6 @@ const NO_SELF_TEXT = "אין לך שיבוץ למבחן.";
 const NO_MATCHING_ROWS_TEXT = "אין מבחנים בתצוגה שנבחרה.";
 
 /**
- * EX-C2-0-SUSPEND-UI — TEMPORARY static placeholder dates.
- *
- * The live BEGINNER Teaching-Practice projection is suspended from THIS screen
- * only, for these two fixed dates. Nothing upstream (reader/adapter/DTO) is
- * touched, and nothing here is a permanent product rule.
- */
-const BEGINNER_PLACEHOLDER_DATE_A = "2026-08-02";
-const BEGINNER_PLACEHOLDER_DATE_B = "2026-08-03";
-
-/**
  * THE TWO TRAINEE VIEWS, and the only two. There is deliberately no general
  * schedule label and no by-exam-type label anywhere in this file — not in code
  * and not in a comment — so neither can be rendered and neither can be revived
@@ -261,42 +355,7 @@ function PeopleLine({
   );
 }
 
-/**
- * EX-C2-0-SUSPEND-UI — a TEMPORARY static informational card.
- *
- * Pure static text: no fetched data, no row, no assignment, no child, no
- * parent, no phone and no id of any kind. Three fixed lines, in the same
- * outer card style already used by every other row on this screen.
- */
-function BeginnerPlaceholderCard({
-  title,
-  dateLabel,
-  timeLabel,
-}: {
-  title: string;
-  dateLabel: string;
-  timeLabel: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-      <p className="text-base font-bold text-card-foreground">{title}</p>
-      <p className="text-xs text-muted-foreground">{dateLabel}</p>
-      <p className="text-sm font-semibold text-muted-foreground">{timeLabel}</p>
-    </div>
-  );
-}
-
-/**
- * `groupName` is the trainee's OWN main-group cache value, exactly as the
- * signed-in session already carries it (`StoredSession.groupName` in
- * StudentClient.tsx - the same "א"/"ב"/null the schedule/Teaching-Practice
- * surfaces already key off, see normalizeGroup). No new read: the caller
- * threads through a value it already has in hand. Used ONLY to pick which of
- * the two TEMPORARY static beginner placeholders (if either) applies to this
- * trainee - never to compare a display name, and never to filter anything
- * else on this screen.
- */
-export function StudentExamsSection({ groupName }: { groupName: string | null }) {
+export function StudentExamsSection() {
   const [mode, setMode] = useState<DayMode>("self");
   const [view, setView] = useState<TraineeExamScheduleView | null>(null);
   const [failed, setFailed] = useState(false);
@@ -306,6 +365,13 @@ export function StudentExamsSection({ groupName }: { groupName: string | null })
   // "no explicit choice yet", which resolves to the EARLIEST date below — it is
   // never rendered as "no date selected".
   const [navDate, setNavDate] = useState<string | null>(null);
+  // EX-EXAM-TP-CARDS — the trainee's own real beginner Teaching-Practice
+  // lessons, for "לו״ז שלי" only. `null` = not yet loaded (never rendered as
+  // "no lessons"); `[]` = loaded, genuinely none (including every denial the
+  // reader fails closed to - no session, no capability, nothing published).
+  const [myTeachingPracticeLessons, setMyTeachingPracticeLessons] = useState<
+    TeachingPracticeTraineeLessonRow[] | null
+  >(null);
 
   useEffect(() => {
     // ONE LOAD, ON MOUNT, AND NEVER AGAIN. The dependency list is EMPTY: no view
@@ -330,8 +396,111 @@ export function StudentExamsSection({ groupName }: { groupName: string | null })
     };
   }, []);
 
+  // EX-EXAM-TP-CARDS — the SAME single load "ההתנסויות שלי" already performs,
+  // called ONCE on mount in its OWN effect (empty deps, exactly like the exam
+  // schedule effect above): no per-date request, no re-fetch on a mode/date-tab
+  // change. A rejection fails closed to an empty list rather than surfacing a
+  // second error state on this screen - the worst case is simply no real card,
+  // never a broken exam schedule.
+  useEffect(() => {
+    let cancelled = false;
+    // The reader's `studentId` parameter is RETAINED on its signature for
+    // caller compatibility only and is DELIBERATELY DISCARDED inside it (see
+    // teaching-practice-student.ts's own file header) - identity comes from
+    // the signed session server-side. This screen holds no student id at all
+    // (EX-TRAINEE-ID-CONTAINMENT), so the empty string passed here is inert
+    // by construction, never read, and never could identify anyone.
+    listMyTeachingPracticeLessonsForTrainee("")
+      .then((result) => {
+        if (cancelled) return;
+        setMyTeachingPracticeLessons(result);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setMyTeachingPracticeLessons([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const allRows = view === null ? [] : view.allRows;
   const myRows = view === null ? [] : view.myRows;
+  // "לו״ז שלי" ONLY. Real Teaching-Practice lessons on this trainee's own
+  // beginner exam days, any practice type (LUNGE included) - see
+  // {@link collectBeginnerExamDates} and {@link filterBeginnerLessonsForExamDays}.
+  const beginnerExamDates = collectBeginnerExamDates(myRows);
+  const beginnerLessonsForSelfView = filterBeginnerLessonsForExamDays(
+    myTeachingPracticeLessons ?? [],
+    beginnerExamDates,
+  );
+  // The advanced rows "לו״ז שלי" has always shown - a live beginner exam row
+  // is never rendered as an exam row (unchanged from EX-C2-0-SUSPEND-UI); it
+  // is now replaced by the real card above instead of being dropped silently.
+  const myAdvancedRows = myRows.filter((row) => !isBeginnerExamRow(row));
+  const selfViewEntries = buildSelfViewEntries(myAdvancedRows, beginnerLessonsForSelfView);
+
+  // EX-EXAM-TP-SAME-PARENT — the badge map, from the trainee's FULL
+  // Teaching-Practice result (`myTeachingPracticeLessons`, already loaded
+  // above), never the date-narrowed `beginnerLessonsForSelfView`. Same
+  // convention as "ההתנסויות שלי"'s own `mineSameParentOtherNamesByChildId`:
+  // deduped by childId first, keyed by real id, never by display name.
+  const examSameParentOtherNamesByChildId = useMemo(() => {
+    const uniqueChildren = new Map<string, SameParentChildInput>();
+    for (const lesson of myTeachingPracticeLessons ?? []) {
+      for (const c of lesson.children) {
+        if (!uniqueChildren.has(c.childId)) {
+          uniqueChildren.set(c.childId, {
+            id: c.childId,
+            displayName: `${c.firstName}${c.lastName ? ` ${c.lastName}` : ""}`,
+            parentName: c.parentName,
+            parentPhone: c.parentPhone,
+          });
+        }
+      }
+    }
+    return buildSameParentOtherNamesByChildId([...uniqueChildren.values()]);
+  }, [myTeachingPracticeLessons]);
+
+  // EX-EXAM-TP-SAME-PARENT — the popup state.
+  const [samePopupChildId, setSamePopupChildId] = useState<string | null>(null);
+  // EX-EXAM-TP-SAME-PARENT-TRACKS — see the file header. `null` = not yet
+  // loaded (the popup shows "טוען..." while this trainee's FIRST popup open
+  // is still in flight); `[]` = loaded, genuinely none.
+  const [tracks, setTracks] = useState<TeachingPracticeTraineeTrackRow[] | null>(null);
+
+  function handleOpenSameParentPopup(childId: string) {
+    setSamePopupChildId(childId);
+    // Loaded ONCE, lazily, on the FIRST open - exactly like "ההתנסויות
+    // שלי"'s own `handleOpenSameParentPopup`. A no-op on every open after
+    // the first (and for every trainee who never opens the popup at all,
+    // this reader is never called).
+    if (tracks === null) {
+      // Same discarded/inert `studentId` argument, same reason, as the
+      // lessons load above.
+      listPublishedTeachingPracticeTracksForTrainee("")
+        .then((result) => {
+          setTracks(result);
+        })
+        .catch(() => {
+          setTracks([]);
+        });
+    }
+  }
+
+  function handleCloseSameParentPopup() {
+    setSamePopupChildId(null);
+  }
+
+  const samePopupRows = useMemo(() => {
+    if (!samePopupChildId) return null;
+    // Wait for tracks to resolve before computing final rows - otherwise a
+    // fixed-structure-only match could briefly show as "no rows found" just
+    // because the popup opened before the load settled. The SAME guard
+    // "ההתנסויות שלי"'s own popup uses for the same reason.
+    if (tracks === null) return null;
+    return buildSameParentPopupRows(samePopupChildId, myTeachingPracticeLessons ?? [], tracks);
+  }, [samePopupChildId, myTeachingPracticeLessons, tracks]);
   // The date sub-tabs are the REAL dates of the loaded schedule, so a date is
   // offered only when the server sent something on it — a day the publication
   // gates hid is not among them and cannot be asked for.
@@ -361,7 +530,7 @@ export function StudentExamsSection({ groupName }: { groupName: string | null })
     view !== null &&
     !loading &&
     !failed &&
-    (mode === "self" ? myRows.length === 0 : groups.length === 0);
+    (mode === "self" ? selfViewEntries.length === 0 : groups.length === 0);
   /**
    * WHICH sentence, and never a broader claim than the one this view can make.
    * "The schedule is empty" is the ONLY answer that touches publication, and it
@@ -451,21 +620,25 @@ export function StudentExamsSection({ groupName }: { groupName: string | null })
       {!loading &&
         !failed &&
         mode === "self" &&
-        myRows.map((row) => {
-          // EX-C2-0-SUSPEND-UI — TEMPORARY: the live beginner projection is
-          // suspended from this screen; the dead branch further down that would
-          // have rendered it is left untouched.
-          if (isBeginnerExamRow(row)) return null;
+        selfViewEntries.map((entry) => {
+          // EX-EXAM-TP-CARDS — a real Teaching-Practice lesson, rendered by the
+          // SAME shared card "ההתנסויות שלי" uses, in its correct chronological
+          // slot. It is never turned into (or handed to) the exam-row renderer
+          // below. The same-parent badge/popup IS wired here, real - see the
+          // file header (EX-EXAM-TP-SAME-PARENT).
+          if (entry.kind === "practice") {
+            return (
+              <TeachingPracticeLessonCard
+                key={`practice:${entry.lesson.id}`}
+                lesson={entry.lesson}
+                sameParentOtherNamesByChildId={examSameParentOtherNamesByChildId}
+                onOpenSameParentPopup={handleOpenSameParentPopup}
+              />
+            );
+          }
+          const row = entry.row;
           const place = row.arena ?? row.location;
-          // A live beginner lesson has no exam ROLE. The contract still carries
-          // `selfRole` for it, and printing that label here would tell a trainee
-          // they are a "נבחן" on a Teaching-Practice lesson — an advanced role
-          // this screen would have invented. The row's own banner says what it
-          // actually is instead.
-          const roleLabel =
-            isBeginnerExamRow(row) || row.selfRole === null
-              ? null
-              : SELF_ROLE_LABELS[row.selfRole];
+          const roleLabel = row.selfRole === null ? null : SELF_ROLE_LABELS[row.selfRole];
           return (
             <div
               key={row.rowKey}
@@ -508,53 +681,13 @@ export function StudentExamsSection({ groupName }: { groupName: string | null })
                 <p className="mt-1 text-sm text-muted-foreground">מקום: {place}</p>
               )}
 
-              {/* ROUTED BY THE CONTRACT'S OWN `source`.
-
-                  A live beginner row carries an EMPTY assignment array by
-                  construction, so the personal-detail renderer below has
-                  nothing to find in it and would print a blank card — which is
-                  exactly why beginner entries were invisible here. It gets the
-                  dedicated compact beginner presentation instead, with the full
-                  detail the read layer chose to carry to trainees.
-
-                  The viewer's OWN horse, topic, discipline and counterpart on a
-                  STORED block. The rows carry the SERVER's own `isSelf` marker,
-                  so the whole array is handed over verbatim and the renderer
-                  reads exactly one boolean to find the viewer — this screen
-                  passes no marker, no role and no time to select with. */}
-              {isBeginnerExamRow(row) ? (
-                <ExamBeginnerRows detail={row.beginner} />
-              ) : (
-                <ExamPersonalAssignmentDetail assignments={row.assignments} />
-              )}
+              {/* selfViewEntries never carries a beginner row (see
+                  myAdvancedRows above), so this is always a STORED block's own
+                  personal detail. */}
+              <ExamPersonalAssignmentDetail assignments={row.assignments} />
             </div>
           );
         })}
-
-      {/* EX-C2-0-SUSPEND-UI — TEMPORARY static informational cards, shown
-          unconditionally in "לו״ז שלי" alongside (never instead of) the
-          trainee's own real rows above. Pure static text, no fetched data. */}
-      {!loading && !failed && mode === "self" && (
-        <>
-          {/* Group-scoped by the trainee's OWN groupName cache value only -
-              never by comparing a display name. A trainee whose group is
-              unknown (null) sees neither placeholder rather than a guess. */}
-          {groupName === "א" && (
-            <BeginnerPlaceholderCard
-              title="הדרכות מתחילים — קבוצה א"
-              dateLabel="יום ראשון, 2.8.2026"
-              timeLabel="16:00–19:30"
-            />
-          )}
-          {groupName === "ב" && (
-            <BeginnerPlaceholderCard
-              title="הדרכות מתחילים — קבוצה ב"
-              dateLabel="יום שני, 3.8.2026"
-              timeLabel="16:00–19:30"
-            />
-          )}
-        </>
-      )}
 
       {!loading &&
         !failed &&
@@ -655,31 +788,11 @@ export function StudentExamsSection({ groupName }: { groupName: string | null })
           </div>
         ))}
 
-      {/* EX-C2-0-SUSPEND-UI — TEMPORARY static informational cards for "לפי
-          תאריך", shown only when the selected date is one of the two fixed
-          suspended dates. Pure static text, no fetched data. */}
-      {!loading &&
-        !failed &&
-        mode === "date" &&
-        activeDate === BEGINNER_PLACEHOLDER_DATE_A &&
-        groupName === "א" && (
-          <BeginnerPlaceholderCard
-            title="הדרכות מתחילים — קבוצה א"
-            dateLabel="יום ראשון, 2.8.2026"
-            timeLabel="16:00–19:30"
-          />
-        )}
-      {!loading &&
-        !failed &&
-        mode === "date" &&
-        activeDate === BEGINNER_PLACEHOLDER_DATE_B &&
-        groupName === "ב" && (
-          <BeginnerPlaceholderCard
-            title="הדרכות מתחילים — קבוצה ב"
-            dateLabel="יום שני, 3.8.2026"
-            timeLabel="16:00–19:30"
-          />
-        )}
+      <TeachingPracticeSameParentPopup
+        open={samePopupChildId !== null}
+        onClose={handleCloseSameParentPopup}
+        rows={samePopupRows}
+      />
     </div>
   );
 }

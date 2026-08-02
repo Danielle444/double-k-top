@@ -777,14 +777,13 @@ test("9. no exam route directory was created in any role area", () => {
     assert.equal(existsSync(join(REPO_ROOT, dir)), false, `${dir} was created`);
   }
   // The feature is hosted inside the existing student page/client architecture.
-  // EX-C3-GROUP-PLACEHOLDER — the section now takes exactly one prop, the
-  // trainee's own already-loaded groupName, reused (not re-fetched) to scope
-  // the beginner Teaching-Practice placeholder; it is still a plain component,
-  // not a route module (still no `export default` below).
+  // EX-EXAM-TP-CARDS — the temporary groupName-based placeholder prop is GONE
+  // (the static placeholders it drove are fully removed, see the beginner-row
+  // tests below); the section is back to taking no props at all, exactly like
+  // every other identity/course value on this screen, and is still a plain
+  // component, not a route module (still no `export default` below).
   assert.ok(
-    SECTION_CODE.includes(
-      "export function StudentExamsSection({ groupName }: { groupName: string | null }) {",
-    ),
+    SECTION_CODE.includes("export function StudentExamsSection() {"),
     "the screen is not a plain section component",
   );
   assert.equal(SECTION_CODE.includes("export default"), false, "the section became a route module");
@@ -869,14 +868,34 @@ test("11. loading and error states are fixed strings that expose no raw error", 
 // ===========================================================================
 
 test("12. unpublished data cannot be displayed by this UI", () => {
-  // The screen has exactly ONE server seam, and it carries only a date — there
-  // is no argument through which a draft reading could be requested...
+  // The exam-schedule seam still carries only a date — there is no argument
+  // through which a draft reading could be requested...
   const specifiers = [...SECTION_CODE.matchAll(/from\s+"([^"]+)"/g)].map(([, value]) => value);
+  // EX-EXAM-TP-CARDS RE-POINT — a SECOND `@/lib/actions/` module is now
+  // imported: the SAME lessons reader "ההתנסויות שלי" already calls, reused
+  // verbatim rather than duplicated (once as a value import, once as a
+  // type-only import). It is likewise called with no argument that could
+  // request a draft — see the second `assert.deepEqual` below.
+  //
+  // EX-EXAM-TP-SAME-PARENT-TRACKS RE-POINT — a THIRD specifier from the SAME
+  // module: the roster-wide fixed-structure ("מבנה קבוע") reader, the SAME
+  // one "ההתנסויות שלי"'s own popup already calls, feeding ONLY the
+  // same-parent popup (never a card) - see the file header
+  // (EX-EXAM-TP-SAME-PARENT-TRACKS) and the dedicated tests below for why.
   assert.deepEqual(specifiers.filter((value) => value.startsWith("@/lib/actions/")), [
     "@/lib/actions/trainee-exam-schedule",
+    "@/lib/actions/teaching-practice-student",
+    "@/lib/actions/teaching-practice-student",
+    "@/lib/actions/teaching-practice-student",
   ]);
   const calls = SECTION_CODE.match(/getTraineeExamSchedule\([^)]*\)/g) ?? [];
   assert.deepEqual(calls, ["getTraineeExamSchedule()"]);
+  // The Teaching-Practice call sites take the SAME empty-string inert
+  // argument documented at their call sites - never a client-supplied identity.
+  const practiceCalls = SECTION_CODE.match(/listMyTeachingPracticeLessonsForTrainee\([^)]*\)/g) ?? [];
+  assert.deepEqual(practiceCalls, ['listMyTeachingPracticeLessonsForTrainee("")']);
+  const tracksCalls = SECTION_CODE.match(/listPublishedTeachingPracticeTracksForTrainee\([^)]*\)/g) ?? [];
+  assert.deepEqual(tracksCalls, ['listPublishedTeachingPracticeTracksForTrainee("")']);
 
   // ...and the UI names no publication concept at all, so it can neither ask for
   // a draft nor label one.
@@ -937,6 +956,22 @@ test("13. no personal time is invented when the contract does not carry one", ()
 });
 
 test("14. no internal id and no raw contract object is rendered", () => {
+  // EX-EXAM-TP-SAME-PARENT RE-POINT — `parentName`, `parentPhone` and
+  // `children` LEAVE the blanket sweep, and nothing else does.
+  //
+  // They were banned because this screen had no reason to name Teaching-
+  // Practice child/parent fields at all. That stopped being true the moment
+  // the real same-parent badge/popup were approved: building
+  // `examSameParentOtherNamesByChildId` (the SAME construction
+  // "ההתנסויות שלי" already performs for its own badge) requires reading
+  // `lesson.children` and each child's `parentName`/`parentPhone` to compute
+  // the client-side lookup Map the shared, separately-reviewed
+  // `buildSameParentOtherNamesByChildId` needs. The claim is REPLACED below
+  // by an EXACT approved-use count, confined to that ONE construction site -
+  // none of the three is ever interpolated into rendered JSX in this file;
+  // every child/parent VALUE that reaches the screen is rendered only inside
+  // the shared `TeachingPracticeLessonCard`/`TeachingPracticeSameParentPopup`
+  // components, whose own render suites pin exactly what they show.
   for (const token of [
     "JSON.stringify",
     "Object.entries",
@@ -954,17 +989,38 @@ test("14. no internal id and no raw contract object is rendered", () => {
     "courseOfferingId",
     "nationalId",
     "identityNumber",
-    "parentName",
-    "parentPhone",
     "childNotes",
     "equipmentNotes",
     "email",
     "phone",
-    "children",
     "narrowingIssues",
     "diagnostics",
   ]) {
     assert.equal(SECTION_CODE.includes(token), false, `the UI reaches ${token}`);
+  }
+  // The ONE approved construction site, and nowhere else.
+  const badgeMapStart = SECTION_CODE.indexOf("const examSameParentOtherNamesByChildId = useMemo(() => {");
+  assert.notEqual(badgeMapStart, -1, "the same-parent badge map construction is missing");
+  const badgeMapEnd = SECTION_CODE.indexOf("}, [myTeachingPracticeLessons]);", badgeMapStart);
+  assert.ok(badgeMapEnd > badgeMapStart);
+  const badgeMapBlock = SECTION_CODE.slice(badgeMapStart, badgeMapEnd);
+  for (const token of ["parentName", "parentPhone", "children"]) {
+    const totalCount = SECTION_CODE.split(token).length - 1;
+    const insideCount = badgeMapBlock.split(token).length - 1;
+    assert.equal(
+      totalCount,
+      insideCount,
+      `${token} is read outside the one approved same-parent construction site`,
+    );
+  }
+  assert.equal((SECTION_CODE.match(/parentName/g) ?? []).length, 2, "parentName's approved use count changed");
+  assert.equal((SECTION_CODE.match(/parentPhone/g) ?? []).length, 2, "parentPhone's approved use count changed");
+  assert.equal((SECTION_CODE.match(/\bchildren\b/g) ?? []).length, 1, "children's approved use count changed");
+  // Never interpolated into JSX text content directly in this file - the
+  // values only ever flow INTO the Map that `buildSameParentOtherNamesByChildId`
+  // returns, never printed here.
+  for (const token of ["{c.parentName}", "{c.parentPhone}", ">{c.parentName", ">{c.parentPhone"]) {
+    assert.equal(SECTION_CODE.includes(token), false, `${token} is rendered directly in this file`);
   }
   // EX-BEGINNER-EXAM-UI RE-POINT — the bare token `beginner` LEAVES the sweep,
   // and nothing else does.
@@ -975,15 +1031,20 @@ test("14. no internal id and no raw contract object is rendered", () => {
   // so a trainee saw an empty card where a Teaching-Practice lesson should have
   // been. Satisfying the old claim now means keeping that defect.
   //
-  // The claim is REPLACED by an EXACT approved-use list, which is stronger than
-  // the ban it replaces: the detail is read TWICE — once per view — is handed
-  // WHOLE to the shared beginner renderer both times, and is never indexed into
-  // here. Every child, parent and contact field therefore stays out of this
-  // file, which is why `parentName`, `parentPhone`, `childNotes`,
-  // `equipmentNotes`, `childAssignmentId` and `children` all stay swept above.
-  // They are rendered only inside `lib/components/ExamBeginnerRows.tsx`, whose
-  // own render suite pins exactly what it shows — including that the committed
-  // trainee visibility decision on child and parent contact is preserved.
+  // EX-EXAM-TP-CARDS RE-POINT — the hand-off count drops from TWO to ONE.
+  // "לו״ז שלי" no longer routes a live beginner row to `ExamBeginnerRows` at
+  // all: `myAdvancedRows` excludes every beginner row before `selfViewEntries`
+  // is built, so there is no `row.beginner` left to read there. ONLY "לפי
+  // תאריך" still carries the (dead, since `filteredRows` already excludes
+  // every beginner row too — EX-C2-0-SUSPEND-UI) hand-off. The claim is an
+  // EXACT approved-use list, which is stronger than the ban it replaces: the
+  // ONE remaining detail is handed WHOLE to the shared beginner renderer and
+  // is never indexed into here. Every child, parent and contact field
+  // therefore stays out of this file, which is why `parentName`,
+  // `parentPhone`, `childNotes`, `equipmentNotes`, `childAssignmentId` and
+  // `children` all stay swept above. They are rendered only inside
+  // `lib/components/ExamBeginnerRows.tsx`, whose own render suite pins exactly
+  // what it shows.
   assert.ok(
     SECTION_CODE.includes("<ExamBeginnerRows detail={row.beginner} />"),
     "the trainee screen does not render the live beginner detail",
@@ -994,13 +1055,13 @@ test("14. no internal id and no raw contract object is rendered", () => {
   );
   assert.equal(
     (SECTION_CODE.match(/row\.beginner/g) ?? []).length,
-    2,
-    "the beginner detail is read beyond the two approved hand-offs",
+    1,
+    "the beginner detail is read beyond the one approved hand-off",
   );
   assert.equal(
     (SECTION_CODE.match(/<ExamBeginnerRows/g) ?? []).length,
-    2,
-    "a view stopped rendering beginner rows, or a third renderer was added",
+    1,
+    "a view still routes to ExamBeginnerRows, or a third renderer was added",
   );
   // THE OPERATIONAL OPT-IN IS NEVER SET HERE. Lesson notes and lesson
   // publication state are not on the trainee contract, and this screen must not
@@ -1020,6 +1081,37 @@ test("14. no internal id and no raw contract object is rendered", () => {
   ]) {
     assert.equal(SECTION_CODE.includes(token), false, `the screen reaches into ${token}`);
   }
+  // EX-EXAM-TP-CARDS — the SAME privacy shape, restated for the real
+  // Teaching-Practice card: `entry.lesson` is handed WHOLE to
+  // `TeachingPracticeLessonCard` and is never indexed into here, exactly like
+  // `row.beginner` above. Every child/parent/contact field the lesson DTO
+  // carries therefore stays out of this file too - it is rendered only inside
+  // the shared card, whose own render suite pins exactly what it shows.
+  assert.ok(
+    SECTION_CODE.includes("<TeachingPracticeLessonCard"),
+    "the real Teaching-Practice card is not wired",
+  );
+  assert.equal(
+    (SECTION_CODE.match(/<TeachingPracticeLessonCard/g) ?? []).length,
+    1,
+    "the real card is rendered more than once, or not at all",
+  );
+  // EX-EXAM-TP-SAME-PARENT RE-POINT — `lesson.children` LEAVES this
+  // particular ban (it is now the ONE approved same-parent construction site,
+  // checked precisely above); `lesson.participants`/`.location`/
+  // `.practiceType` are still never read anywhere in this file.
+  for (const token of ["lesson.participants", "lesson.location", "lesson.practiceType"]) {
+    assert.equal(SECTION_CODE.includes(token), false, `the screen reaches into ${token}`);
+  }
+  // The ONE field read out of `entry.lesson` (the merged/tagged self-view
+  // entry, as opposed to the same-parent loop's own `lesson` variable above)
+  // is `.id`, used ONLY as the React list key - the same positional-key
+  // pattern already approved for `row.rowKey` above, never a privacy field.
+  assert.deepEqual(
+    Array.from(new Set(SECTION_CODE.match(/entry\.lesson\.\w+/g) ?? [])).sort(),
+    ["entry.lesson.id"],
+    "a field of entry.lesson beyond .id (the list key) is read directly",
+  );
   // EX-TRAINEE-ID-CONTAINMENT RE-POINT — the list key is `row.rowKey`, not
   // `row.sessionId`. The trainee contract no longer carries a session id at
   // all: it was a database primary key (or, for a live beginner row, the
@@ -1179,11 +1271,25 @@ test('14c. "לו״ז כולם" renders the COMPLETE operational schedule, throug
 // ===========================================================================
 
 test('14e. "לו״ז שלי" is COMPACT: only the viewer\'s rows, and only their own detail', () => {
-  // It renders `view.myRows` — the SERVER's own list — and nothing else.
+  // EX-EXAM-TP-CARDS RE-POINT — it renders `selfViewEntries`, the chronological
+  // merge of `myAdvancedRows` (itself `view.myRows` with beginner rows removed
+  // - the SAME server list as before, just no longer including the rows now
+  // shown as real cards) and the trainee's real beginner Teaching-Practice
+  // lessons. It is still built from nothing the server did not already send.
   assert.match(
     SECTION_CODE.replace(/\s+/g, " "),
-    /mode === "self" && myRows\.map\(\(row\) => \{/,
-    "the personal view is not the server's own row list",
+    /mode === "self" && selfViewEntries\.map\(\(entry\) => \{/,
+    "the personal view is not built from the server's own row list plus the real lessons",
+  );
+  assert.ok(
+    SECTION_CODE.includes("const myAdvancedRows = myRows.filter((row) => !isBeginnerExamRow(row));"),
+    "myAdvancedRows is not derived from the server's own myRows",
+  );
+  assert.ok(
+    SECTION_CODE.includes(
+      "const selfViewEntries = buildSelfViewEntries(myAdvancedRows, beginnerLessonsForSelfView);",
+    ),
+    "selfViewEntries is not built from myAdvancedRows and the real lessons",
   );
 
   // It does NOT reprint the all-participants structure: no participant summary
@@ -1352,20 +1458,28 @@ test('14g. "לפי תאריך" navigates the loaded day, and never re-reads it',
   );
   assert.ok(SECTION_CODE.includes("filterExamRows(allRows, {"), "the views are not one narrowing");
 
-  // NAVIGATING ISSUES NO REQUEST. There is exactly one server call, it takes the
-  // DATE and nothing else, and the load is keyed by that date alone — so no view
-  // selection can re-read, widen or reach past the reader.
+  // NAVIGATING ISSUES NO REQUEST. There is exactly one exam-schedule server
+  // call, it takes the DATE and nothing else, and the load is keyed by that
+  // date alone — so no view selection can re-read, widen or reach past the
+  // reader.
   const calls = SECTION_CODE.match(/getTraineeExamSchedule\([^)]*\)/g) ?? [];
   assert.deepEqual(calls, ["getTraineeExamSchedule()"]);
-  assert.equal((SECTION_CODE.match(/useEffect\(/g) ?? []).length, 1);
+  // EX-EXAM-TP-CARDS RE-POINT — a SECOND `useEffect` now exists, for the
+  // trainee's real Teaching-Practice lessons (test 4 in the sibling suite
+  // pins that its OWN call, `listMyTeachingPracticeLessonsForTrainee`, is
+  // issued exactly once). Both effects are independent, ONE-LOAD-ON-MOUNT
+  // effects with empty dependency arrays - neither can re-enter on a
+  // mode/date-tab change, and neither depends on the other's state.
+  assert.equal((SECTION_CODE.match(/useEffect\(/g) ?? []).length, 2);
   // EX-TRAINEE-MULTIDAY-READ RE-POINT — the effect was keyed by the DATE, which
   // is what made every date change a fresh request and left the sub-tabs holding
   // exactly one date. The dependency list is now EMPTY, which is the strongest
   // possible form of "navigating issues no request": there is no value left that
-  // could re-enter the effect at all.
-  assert.ok(
-    SECTION_CODE.includes("}, []);"),
-    "the schedule is not loaded exactly once, on mount",
+  // could re-enter the effect at all. BOTH effects now end this way.
+  assert.equal(
+    (SECTION_CODE.match(/\}, \[\]\);/g) ?? []).length,
+    2,
+    "both the exam-schedule and the Teaching-Practice load must be loaded exactly once, on mount",
   );
   assert.equal(
     SECTION_CODE.includes("}, [selectedDate]);"),
@@ -1560,23 +1674,31 @@ test("14l. ONE date is shown at a time, ordered by start time", () => {
 });
 
 test("14m. live beginner rows are ROUTED away from the advanced renderer, in BOTH views", () => {
-  // Two routing conditionals — one per view — each on the CONTRACT's own
-  // `source`, so a beginner row cannot reach the wave/examinee renderer or the
-  // personal-detail renderer even by accident.
+  // EX-EXAM-TP-CARDS RE-POINT — ONE routing conditional survives, not two.
+  // "לו״ז שלי" no longer routes a beginner row to `ExamBeginnerRows` at all:
+  // `myAdvancedRows` (see 14n below) excludes every beginner row before
+  // `selfViewEntries` exists, so there is no `isBeginnerExamRow(row) ? (...)`
+  // branch left to write there - a beginner row reaches that view as a REAL
+  // Teaching-Practice card instead (see test 14 above). ONLY "לפי תאריך" still
+  // carries this conditional, on the CONTRACT's own `source`, so a beginner
+  // row cannot reach the wave/examinee renderer there even by accident.
   assert.equal(
     (SECTION_CODE.match(/\{isBeginnerExamRow\(row\) \? \(/g) ?? []).length,
-    2,
-    "a view does not route beginner rows to their own renderer",
+    1,
+    "a view still routes beginner rows to their own renderer, or the one remaining route was lost",
   );
   // The ORIGIN is the shared pure predicate, never a guess from emptiness.
   for (const token of ['=== "BEGINNER"', '=== "STORED"', "row.source ===", "row.kind ==="]) {
     assert.equal(SECTION_CODE.includes(token), false, `the screen re-implements the origin test: ${token}`);
   }
-  // NO INVENTED ROLE. The two exam-role labels reach a beginner row through
-  // neither the self-role pill nor the participant summary.
+  // NO INVENTED ROLE. The one remaining exam-role label reaches a beginner row
+  // through neither the self-role pill nor the participant summary. "לו״ז
+  // שלי"'s OWN role-label computation no longer needs this guard at all - a
+  // beginner row can never reach it (see 14n) - so only "לפי תאריך" still
+  // states it.
   assert.equal(
     (SECTION_CODE.match(/isBeginnerExamRow\(row\) \|\| row\.selfRole === null/g) ?? []).length,
-    2,
+    1,
     "a beginner row can still be labelled with an exam role",
   );
   assert.ok(
@@ -1596,15 +1718,26 @@ test("14n. the personal view's beginner rows are the SERVER's relevance answer",
   // marked the row from the signed session's own student id. A beginner row is
   // in it for exactly that reason and no other — this screen performs no
   // matching of any kind, for beginner rows or for stored ones.
-  assert.match(
-    SECTION_CODE.replace(/\s+/g, " "),
-    /mode === "self" && myRows\.map\(\(row\) => \{/,
-    "the personal view is not the server's own row list",
-  );
   assert.ok(SECTION_CODE.includes("const myRows = view === null ? [] : view.myRows;"));
-  // Nothing beginner-specific narrows or re-derives that list.
+  // EX-EXAM-TP-CARDS RE-POINT — `myAdvancedRows` is the ONE approved narrowing
+  // of `myRows`: a PRESENTATIONAL split by the contract's own `source` (kept
+  // vs. dropped, never re-derived), exactly replacing the dead
+  // `isBeginnerExamRow(row) ? ... : ...` branch this view used to write
+  // inline. It answers "is this a beginner row", never "is this row mine" -
+  // that question is answered once, server-side, by `view.myRows` itself.
+  assert.ok(
+    SECTION_CODE.includes("const myAdvancedRows = myRows.filter((row) => !isBeginnerExamRow(row));"),
+    "the personal view's advanced rows are not myRows with beginner rows split out",
+  );
+  assert.equal(
+    (SECTION_CODE.match(/myRows\.filter/g) ?? []).length,
+    1,
+    "myRows is narrowed more than once, or by something other than the approved split",
+  );
+  // Nothing beginner-specific narrows or re-derives THAT relevance - no
+  // second, disagreeing filter/find/some/concat over myRows or the real
+  // Teaching-Practice lessons, and no name-based matching of any kind.
   for (const token of [
-    "myRows.filter",
     "myRows.find",
     "myRows.some",
     "myRows.concat",
@@ -1625,9 +1758,11 @@ test("14n. the personal view's beginner rows are the SERVER's relevance answer",
 // ===========================================================================
 
 test("14o. the WHOLE schedule is loaded ONCE, and a date change reads nothing", () => {
-  // ONE effect, ONE call, and an EMPTY dependency list — so no view selection,
-  // no date and no state of any kind can re-enter it.
-  assert.equal((SECTION_CODE.match(/useEffect\(/g) ?? []).length, 1);
+  // ONE effect PER data source (see test 14g/4's own re-point - a second,
+  // independent, empty-deps effect now also loads the real Teaching-Practice
+  // lessons), ONE call each, and an EMPTY dependency list on both — so no view
+  // selection, no date and no state of any kind can re-enter either.
+  assert.equal((SECTION_CODE.match(/useEffect\(/g) ?? []).length, 2);
   assert.ok(SECTION_CODE.includes("}, []);"), "the load is not a mount-only effect");
   const calls = SECTION_CODE.match(/getTraineeExamSchedule\([^)]*\)/g) ?? [];
   assert.deepEqual(calls, ["getTraineeExamSchedule()"], "the schedule is read more than once");
@@ -1701,25 +1836,12 @@ test("15. no instructor or admin exam file was modified", () => {
     assert.ok(unchangedSinceHead(relative), `${relative} was modified by this slice`);
   }
   const adminExams = "app/admin/courses/[courseOfferingId]/exams";
-  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE approved schema change and its ONE hand-written migration,
-  // and this branch's exact admin-exams edits. Snapshotted EXACTLY: any OTHER
-  // path under these trees still fails.
-  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", adminExams]), [
-    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
-    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-session-create" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-workspace" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
-  ]);
+  // %s POST-MERGE. The exact-path snapshots this branch put here described an
+  // UNCOMMITTED working tree; that work is now commit c0fa3d8, so both trees are
+  // byte-identical to HEAD again and the guard's ORIGINAL strict-empty claim is
+  // true once more. Restored rather than kept as a snapshot: `[]` is STRICTLY
+  // STRONGER, and the merge from main touches neither tree.
+  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", adminExams]), []);
   assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", adminExams]), []);
   // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — the instructor guard suite.
   //
@@ -1773,10 +1895,7 @@ test("15. no instructor or admin exam file was modified", () => {
       ...gitLines(["ls-files", "--others", "--exclude-standard", "--", "prisma"]),
     ]),
   ].sort();
-  assert.deepEqual(prismaTouched, [
-    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
-    "prisma/schema.prisma",
-  ]);
+  assert.deepEqual(prismaTouched, []);
   // EX-ROLE-OP-UI-MVP RE-POINT. An EXACT path allow-list of nine `lib/exam`
   // files was carried here while the operational-READ slice was in flight. That
   // slice is merged, so the exception describes nothing in the working tree any
@@ -2047,7 +2166,41 @@ test("17. the working tree holds only the approved paths of this slice and the o
     "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
     "prisma/schema.prisma",
     "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/",
-];
+    // EX-EXAM-TP-CARDS, on the same terms: an EXACT path list, never a
+    // directory and never a glob. The two prior trainee placeholder test
+    // files above are now DELETED (their subject, the temporary trainee
+    // placeholder, no longer exists) - deleting an approved path is still an
+    // approved touch. This slice's own new paths: the extracted shared
+    // Teaching-Practice lesson card (a `lib/components` leaf, exactly like
+    // every other shared exam renderer) and its own render/content suite, the
+    // pure merge/filter core behind "לו״ז שלי" and its own real-behavior
+    // suite, `StudentTeachingPracticeSection.tsx` (now rendering through the
+    // extracted card), and two new trainee contract suites covering the real
+    // cards' wiring. It adds no route, no action, no reader and no `lib/exam`
+    // file; the instructor screen and its own placeholder are untouched (see
+    // this slice's own test 16).
+    "lib/components/TeachingPracticeLessonCard.tsx",
+    "lib/components/TeachingPracticeLessonCard.test.tsx",
+    "app/student/trainee-exam-self-view-core.ts",
+    "app/student/trainee-exam-self-view-core.test.ts",
+    "app/student/StudentTeachingPracticeSection.tsx",
+    "app/student/trainee-teaching-practice-shared-card.contract.test.ts",
+    "app/student/trainee-exam-teaching-practice-cards.contract.test.ts",
+    // EX-EXAM-TP-SAME-PARENT, on the same terms: an EXACT path list, never a
+    // directory and never a glob. The real same-parent badge/popup, extracted
+    // into its own `lib/components` leaf (the "אותו הורה" popup, GroupBadge
+    // and the pure row-builder) so both trainee screens render the identical
+    // popup, plus its own real-behavior suite. It adds no route, no action,
+    // no reader and no `lib/exam` file; the instructor screen is untouched
+    // (see this slice's own test 16).
+    "lib/components/TeachingPracticeSameParentPopup.tsx",
+    "lib/components/TeachingPracticeSameParentPopup.test.ts",
+    // EX-EXAM-TP-CARDS, on the same terms - the trainee Teaching-Practice READER
+    // the extracted card renders through. A modified committed action module,
+    // named EXACTLY: it is in the merge's own file set and nothing else under
+    // `lib/actions` becomes approved by it.
+    "lib/actions/teaching-practice-student.ts",
+  ];
   const offenders = [...touched]
     .map((path) => path.split("\\").join("/"))
     .filter((path) => !approved.includes(path))

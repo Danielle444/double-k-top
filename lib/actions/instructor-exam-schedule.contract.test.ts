@@ -1277,30 +1277,51 @@ function approvedSlicePaths(): string[] {
     "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
     "prisma/schema.prisma",
     "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/",
+    // EX-EXAM-TP-CARDS, on the same terms: an EXACT path list, never a
+    // directory and never a glob. The two prior trainee placeholder test
+    // files above are now DELETED (their subject, the temporary trainee
+    // placeholder, no longer exists) - deleting an approved path is still an
+    // approved touch. This slice's own new paths: the extracted shared
+    // Teaching-Practice lesson card (a `lib/components` leaf, exactly like
+    // every other shared exam renderer) and its own render/content suite, the
+    // pure merge/filter core behind "לו״ז שלי" and its own real-behavior
+    // suite, `StudentTeachingPracticeSection.tsx` (now rendering through the
+    // extracted card), and two new trainee contract suites covering the real
+    // cards' wiring. It adds no route, no action, no reader and no `lib/exam`
+    // file; the instructor screen and its own placeholder are untouched (see
+    // this slice's own test 16).
+    "lib/components/TeachingPracticeLessonCard.tsx",
+    "lib/components/TeachingPracticeLessonCard.test.tsx",
+    "app/student/trainee-exam-self-view-core.ts",
+    "app/student/trainee-exam-self-view-core.test.ts",
+    "app/student/StudentTeachingPracticeSection.tsx",
+    "app/student/trainee-teaching-practice-shared-card.contract.test.ts",
+    "app/student/trainee-exam-teaching-practice-cards.contract.test.ts",
+    // EX-EXAM-TP-SAME-PARENT, on the same terms: an EXACT path list, never a
+    // directory and never a glob. The real same-parent badge/popup, extracted
+    // into its own `lib/components` leaf (the "אותו הורה" popup, GroupBadge
+    // and the pure row-builder) so both trainee screens render the identical
+    // popup, plus its own real-behavior suite. It adds no route, no action,
+    // no reader and no `lib/exam` file; the instructor screen is untouched
+    // (see this slice's own test 16).
+    "lib/components/TeachingPracticeSameParentPopup.tsx",
+    "lib/components/TeachingPracticeSameParentPopup.test.ts",
+    // EX-EXAM-TP-CARDS, on the same terms - the trainee Teaching-Practice READER
+    // the extracted card renders through. A modified committed action module,
+    // named EXACTLY: it is in the merge's own file set and nothing else under
+    // `lib/actions` becomes approved by it.
+    "lib/actions/teaching-practice-student.ts",
   ];
 }
 
 test("14. no admin exam file was modified, and no schema or migration", () => {
   const adminExams = "app/admin/courses/[courseOfferingId]/exams";
-  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE approved schema change and its ONE hand-written migration,
-  // and this branch's exact admin-exams edits. Snapshotted EXACTLY: any OTHER
-  // path under these trees still fails.
-  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", adminExams]), [
-    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
-    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-session-create" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/exam-workspace" + ".contract.test.ts",
-    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
-  ]);
+  // %s POST-MERGE. The exact-path snapshots this branch put here described an
+  // UNCOMMITTED working tree; that work is now commit c0fa3d8, so both trees are
+  // byte-identical to HEAD again and the guard's ORIGINAL strict-empty claim is
+  // true once more. Restored rather than kept as a snapshot: `[]` is STRICTLY
+  // STRONGER, and the merge from main touches neither tree.
+  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", adminExams]), []);
   assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", adminExams]), []);
   // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - LIFECYCLE-PROOF. `diff --name-only HEAD` and `ls-files --others` SWAP
   // which of the two prisma paths they report the moment the branch is staged, so
@@ -1313,10 +1334,7 @@ test("14. no admin exam file was modified, and no schema or migration", () => {
       ...gitLines(["ls-files", "--others", "--exclude-standard", "--", "prisma"]),
     ]),
   ].sort();
-  assert.deepEqual(prismaTouched, [
-    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
-    "prisma/schema.prisma",
-  ]);
+  assert.deepEqual(prismaTouched, []);
   // ...nor anything about identity, sessions or capabilities. `lib/exam` joins
   // this list with EX-ROLE-OP-UI-MVP: the operational-READ slice that legitimately
   // edited those cores is merged, so from here on any change under that directory
