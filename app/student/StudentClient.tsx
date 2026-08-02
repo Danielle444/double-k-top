@@ -1534,12 +1534,10 @@ export function StudentClient() {
 
         {activeTab === "teachingPractice" && <StudentTeachingPracticeSection studentId={session.id} />}
 
-        {/* No studentId prop, and no course prop: the exam reader behind this
-            screen derives both server-side from the signed session.
-            groupName is the ONLY prop - the trainee's own already-loaded
-            session field, reused (not re-fetched) to scope the beginner
-            Teaching-Practice placeholder to this trainee's real group. */}
-        {activeTab === "exams" && <StudentExamsSection groupName={session.groupName} />}
+        {/* No props at all: the exam reader AND the real Teaching-Practice
+            reader it now also calls (EX-EXAM-TP-CARDS) both derive the
+            trainee's identity/course server-side from the signed session. */}
+        {activeTab === "exams" && <StudentExamsSection />}
 
         {activeTab === "weeklyFeedback" && (
           <StudentWeeklyFeedbackSection studentId={session.id} onOpenChange={setHasOpenWeeklyFeedback} />
