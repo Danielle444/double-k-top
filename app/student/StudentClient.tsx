@@ -151,6 +151,14 @@ const STUDENT_QUICK_ACTIONS: { id: MainTabId; label: string }[] = [
   // "עוד" menu entry above) - filtered by the SAME filterTraineeNavEntries call
   // visibleQuickActions already uses, so its visibility rules are unchanged.
   { id: "exams", label: "מבחנים" },
+  // Home shortcut to the existing trainee Beginner Teaching-Practice screen
+  // (same id/label as the "עוד" menu entry above, "התנסויות מתחילים") -
+  // reuses the SAME setActiveTab tab-switch mechanism and goes through the
+  // SAME filterTraineeNavEntries call, so it opens the existing
+  // StudentTeachingPracticeSection tab and inherits its existing visibility
+  // gating unchanged (teachingPractice is not on the Level-2-only allow-list,
+  // exactly like the "עוד" menu entry).
+  { id: "teachingPractice", label: "התנסויות מתחילים" },
 ];
 
 interface StoredSession {
@@ -1527,8 +1535,11 @@ export function StudentClient() {
         {activeTab === "teachingPractice" && <StudentTeachingPracticeSection studentId={session.id} />}
 
         {/* No studentId prop, and no course prop: the exam reader behind this
-            screen derives both server-side from the signed session. */}
-        {activeTab === "exams" && <StudentExamsSection />}
+            screen derives both server-side from the signed session.
+            groupName is the ONLY prop - the trainee's own already-loaded
+            session field, reused (not re-fetched) to scope the beginner
+            Teaching-Practice placeholder to this trainee's real group. */}
+        {activeTab === "exams" && <StudentExamsSection groupName={session.groupName} />}
 
         {activeTab === "weeklyFeedback" && (
           <StudentWeeklyFeedbackSection studentId={session.id} onOpenChange={setHasOpenWeeklyFeedback} />

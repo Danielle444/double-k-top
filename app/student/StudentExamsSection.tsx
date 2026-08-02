@@ -286,8 +286,18 @@ function BeginnerPlaceholderCard({
   );
 }
 
-export function StudentExamsSection() {
-  const [mode, setMode] = useState<DayMode>("date");
+/**
+ * `groupName` is the trainee's OWN main-group cache value, exactly as the
+ * signed-in session already carries it (`StoredSession.groupName` in
+ * StudentClient.tsx - the same "א"/"ב"/null the schedule/Teaching-Practice
+ * surfaces already key off, see normalizeGroup). No new read: the caller
+ * threads through a value it already has in hand. Used ONLY to pick which of
+ * the two TEMPORARY static beginner placeholders (if either) applies to this
+ * trainee - never to compare a display name, and never to filter anything
+ * else on this screen.
+ */
+export function StudentExamsSection({ groupName }: { groupName: string | null }) {
+  const [mode, setMode] = useState<DayMode>("self");
   const [view, setView] = useState<TraineeExamScheduleView | null>(null);
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -526,16 +536,23 @@ export function StudentExamsSection() {
           trainee's own real rows above. Pure static text, no fetched data. */}
       {!loading && !failed && mode === "self" && (
         <>
-          <BeginnerPlaceholderCard
-            title="הדרכות מתחילים — קבוצה א"
-            dateLabel="יום ראשון, 2.8.2026"
-            timeLabel="16:00–19:30"
-          />
-          <BeginnerPlaceholderCard
-            title="הדרכות מתחילים — קבוצה ב"
-            dateLabel="יום שני, 3.8.2026"
-            timeLabel="16:00–19:30"
-          />
+          {/* Group-scoped by the trainee's OWN groupName cache value only -
+              never by comparing a display name. A trainee whose group is
+              unknown (null) sees neither placeholder rather than a guess. */}
+          {groupName === "א" && (
+            <BeginnerPlaceholderCard
+              title="הדרכות מתחילים — קבוצה א"
+              dateLabel="יום ראשון, 2.8.2026"
+              timeLabel="16:00–19:30"
+            />
+          )}
+          {groupName === "ב" && (
+            <BeginnerPlaceholderCard
+              title="הדרכות מתחילים — קבוצה ב"
+              dateLabel="יום שני, 3.8.2026"
+              timeLabel="16:00–19:30"
+            />
+          )}
         </>
       )}
 
@@ -641,20 +658,28 @@ export function StudentExamsSection() {
       {/* EX-C2-0-SUSPEND-UI — TEMPORARY static informational cards for "לפי
           תאריך", shown only when the selected date is one of the two fixed
           suspended dates. Pure static text, no fetched data. */}
-      {!loading && !failed && mode === "date" && activeDate === BEGINNER_PLACEHOLDER_DATE_A && (
-        <BeginnerPlaceholderCard
-          title="הדרכות מתחילים — קבוצה א"
-          dateLabel="יום ראשון, 2.8.2026"
-          timeLabel="16:00–19:30"
-        />
-      )}
-      {!loading && !failed && mode === "date" && activeDate === BEGINNER_PLACEHOLDER_DATE_B && (
-        <BeginnerPlaceholderCard
-          title="הדרכות מתחילים — קבוצה ב"
-          dateLabel="יום שני, 3.8.2026"
-          timeLabel="16:00–19:30"
-        />
-      )}
+      {!loading &&
+        !failed &&
+        mode === "date" &&
+        activeDate === BEGINNER_PLACEHOLDER_DATE_A &&
+        groupName === "א" && (
+          <BeginnerPlaceholderCard
+            title="הדרכות מתחילים — קבוצה א"
+            dateLabel="יום ראשון, 2.8.2026"
+            timeLabel="16:00–19:30"
+          />
+        )}
+      {!loading &&
+        !failed &&
+        mode === "date" &&
+        activeDate === BEGINNER_PLACEHOLDER_DATE_B &&
+        groupName === "ב" && (
+          <BeginnerPlaceholderCard
+            title="הדרכות מתחילים — קבוצה ב"
+            dateLabel="יום שני, 3.8.2026"
+            timeLabel="16:00–19:30"
+          />
+        )}
     </div>
   );
 }
