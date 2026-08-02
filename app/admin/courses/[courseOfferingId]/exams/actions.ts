@@ -997,14 +997,24 @@ export async function deleteExamAssignmentAction(
  */
 export async function createExamInstructedTraineeAssignmentAction(
   courseOfferingId: string,
+  groupQuery: string,
+  addAssignmentOpen: boolean,
   formData: FormData,
 ): Promise<void> {
   // 1. Authorize the manager BEFORE anything is read or written.
   await requireAdmin();
 
   // 2. The exams path of THIS offering — the only path this action revalidates
-  //    and the only one it redirects back to.
+  //    — and the arrangement to return to. `groupQuery` is the same closed
+  //    tab/view/ordinal tail every in-view link already carries, bound in from
+  //    the page at render time and never read from the submission, so a create
+  //    lands back on the exact arrangement it was opened from instead of always
+  //    the general view. `addAssignmentOpen` is the SAME closed disclosure the
+  //    page renders this form (and its examinee sibling) from, also bound in
+  //    rather than read from the submission — mirroring `createExamAssignmentAction`
+  //    exactly, since both create forms live behind the one shared disclosure.
   const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`;
+  const backPath = `${examsPath}?${groupQuery}`;
 
   // 3. The committed writer, given the bound route id and the two raw values.
   //    The bound offering id is a REQUEST: the writer runs the admin boundary and
@@ -1020,13 +1030,20 @@ export async function createExamInstructedTraineeAssignmentAction(
   });
 
   // 4. Success: revalidate EXACTLY this exams path — no course dashboard, no
-  //    schedule path, no trainee or instructor surface — then return to it. The
-  //    new assignment is read back from the database by the page; it is never
-  //    inserted optimistically, and neither its id nor its assigned position is
-  //    reflected in the URL.
+  //    schedule path, no trainee or instructor surface — then return to the
+  //    exact arrangement the manager was looking at. The new assignment is read
+  //    back from the database by the page; it is never inserted optimistically,
+  //    and neither its id nor its assigned position is reflected in the URL. The
+  //    add form stays open ONLY if it already was — `addAssignmentOpen` is never
+  //    forced on for a manager who submitted from a closed one, since that state
+  //    does not exist for them to resume.
   if (result.ok) {
     revalidatePath(examsPath);
-    redirect(`${examsPath}?createdInstructedTrainee=1`);
+    redirect(
+      addAssignmentOpen
+        ? `${backPath}&createdInstructedTrainee=1&add=1`
+        : `${backPath}&createdInstructedTrainee=1`,
+    );
   }
 
   // 5. The one refusal that is NOT about this page: the offering does not exist,
@@ -1043,7 +1060,7 @@ export async function createExamInstructedTraineeAssignmentAction(
   if (result.code === "invalid_input") {
     const codes = result.issues.map((issue) => issue.code).join(",");
     redirect(
-      `${examsPath}?instructedTraineeError=invalid_input&instructedTraineeIssues=${encodeURIComponent(codes)}`,
+      `${backPath}&instructedTraineeError=invalid_input&instructedTraineeIssues=${encodeURIComponent(codes)}`,
     );
   }
 
@@ -1051,7 +1068,7 @@ export async function createExamInstructedTraineeAssignmentAction(
   //    denial, the missing plan, the missing-or-foreign session, the definition
   //    that does not ask for this role at all, the ineligible trainee and the
   //    role-blind already-assigned conflict.
-  redirect(`${examsPath}?instructedTraineeError=${encodeURIComponent(result.code)}`);
+  redirect(`${backPath}&instructedTraineeError=${encodeURIComponent(result.code)}`);
 }
 
 /**

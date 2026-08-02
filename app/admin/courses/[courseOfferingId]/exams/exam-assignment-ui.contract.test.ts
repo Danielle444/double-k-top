@@ -1834,10 +1834,16 @@ test("43. the ONE create endpoint calls the DETAILED writer and nothing else", (
   // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
   // replacement, which is the only way a plan can gain a Teaching-Practice day
   // and therefore the only way a beginner exam can appear anywhere at all.
+  // RE-POINTED from EIGHT to SEVEN by the instructed-trainee navigation-state
+  // fix: `createExamInstructedTraineeAssignmentAction` moved OUT of this bucket
+  // — it used to be one of the bind sites that still took only the verified
+  // offering id, dropping the manager's arrangement on every save, exactly the
+  // bug `createExamAssignmentAction` never had. It now joins that sibling's own
+  // bucket instead (pinned below), so this count NARROWS rather than relaxes.
   assert.equal(
     (PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length,
-    8,
-    "eight of the twelve ASSIGNMENT-affecting bind sites still take ONLY the verified offering id",
+    7,
+    "seven of the twelve ASSIGNMENT-affecting bind sites still take ONLY the verified offering id",
   );
   // RE-POINTED: the remaining FOUR — createExamAssignmentAction,
   // deleteExamAssignmentAction, updateExamAssignmentDetailsAction and
@@ -1856,11 +1862,17 @@ test("43. the ONE create endpoint calls the DETAILED writer and nothing else", (
     3,
     "exactly three bind sites must forward ONLY the current view",
   );
+  // RE-POINTED from ONE to TWO by the instructed-trainee navigation-state fix:
+  // `createExamInstructedTraineeAssignmentAction` now shares the EXACT same
+  // four-argument shape as its examinee sibling `createExamAssignmentAction`,
+  // for the same reason — both create forms live behind the ONE shared
+  // `addAssignmentOpen` disclosure, so both must reopen it identically on
+  // success.
   assert.equal(
     (squash(PAGE).match(/\.bind\( null, context\.id, groupQuery, addAssignmentOpen, \)/g) ?? [])
       .length,
-    1,
-    "exactly one bind site — the create endpoint — must ALSO forward the add-form disclosure",
+    2,
+    "exactly two bind sites — both create endpoints — must ALSO forward the add-form disclosure",
   );
   // `action=` counts TWO for the publication card, because its two mutually
   // exclusive forms are written out separately so each can carry a LITERAL hidden
@@ -2244,10 +2256,16 @@ test("42. the diagnostics add NO write, no route, no query key and no client sta
   // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
   // replacement, which is the only way a plan can gain a Teaching-Practice day
   // and therefore the only way a beginner exam can appear anywhere at all.
+  // RE-POINTED from EIGHT to SEVEN by the instructed-trainee navigation-state
+  // fix: `createExamInstructedTraineeAssignmentAction` moved OUT of this bucket
+  // — it used to be one of the bind sites that still took only the verified
+  // offering id, dropping the manager's arrangement on every save, exactly the
+  // bug `createExamAssignmentAction` never had. It now joins that sibling's own
+  // bucket instead (pinned below), so this count NARROWS rather than relaxes.
   assert.equal(
     (PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length,
-    8,
-    "eight of the twelve ASSIGNMENT-affecting bind sites still take ONLY the verified offering id",
+    7,
+    "seven of the twelve ASSIGNMENT-affecting bind sites still take ONLY the verified offering id",
   );
   // RE-POINTED: the remaining FOUR — createExamAssignmentAction,
   // deleteExamAssignmentAction, updateExamAssignmentDetailsAction and
@@ -2266,11 +2284,17 @@ test("42. the diagnostics add NO write, no route, no query key and no client sta
     3,
     "exactly three bind sites must forward ONLY the current view",
   );
+  // RE-POINTED from ONE to TWO by the instructed-trainee navigation-state fix:
+  // `createExamInstructedTraineeAssignmentAction` now shares the EXACT same
+  // four-argument shape as its examinee sibling `createExamAssignmentAction`,
+  // for the same reason — both create forms live behind the ONE shared
+  // `addAssignmentOpen` disclosure, so both must reopen it identically on
+  // success.
   assert.equal(
     (squash(PAGE).match(/\.bind\( null, context\.id, groupQuery, addAssignmentOpen, \)/g) ?? [])
       .length,
-    1,
-    "exactly one bind site — the create endpoint — must ALSO forward the add-form disclosure",
+    2,
+    "exactly two bind sites — both create endpoints — must ALSO forward the add-form disclosure",
   );
   // RE-POINTED from 10 to 11 by EX-PAIR-UI-MVP: ONE more inline form, bound to
   // the SAME verified context id, which the `.bind` count above pins.
