@@ -172,7 +172,7 @@ import { formatHebrewDate, formatHebrewWeekday, parseDateKey } from "@/lib/dates
  *
  * Loaded ONCE on mount, in its own effect beside the exam-schedule one below —
  * never per-date, never re-fetched on a mode/date-tab change. Narrowed to
- * BEGINNER practice types (LUNGE excluded) on the dates this trainee's OWN
+ * any practice type (LUNGE included) on the dates this trainee's OWN
  * exam contract already marks as beginner exam days (`view.myRows` rows whose
  * `source` is `"BEGINNER"` — a set the contract already computed, not a new
  * date rule invented here), then merged chronologically with the advanced
@@ -427,7 +427,7 @@ export function StudentExamsSection() {
   const allRows = view === null ? [] : view.allRows;
   const myRows = view === null ? [] : view.myRows;
   // "לו״ז שלי" ONLY. Real Teaching-Practice lessons on this trainee's own
-  // beginner exam days, narrowed to BEGINNER practice types - see
+  // beginner exam days, any practice type (LUNGE included) - see
   // {@link collectBeginnerExamDates} and {@link filterBeginnerLessonsForExamDays}.
   const beginnerExamDates = collectBeginnerExamDates(myRows);
   const beginnerLessonsForSelfView = filterBeginnerLessonsForExamDays(

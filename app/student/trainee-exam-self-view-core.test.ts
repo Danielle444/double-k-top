@@ -102,21 +102,25 @@ test("collectBeginnerExamDates: duplicate dates across multiple beginner rows co
 // filterBeginnerLessonsForExamDays
 // ===========================================================================
 
-test("filterBeginnerLessonsForExamDays: excludes LUNGE lessons even on a relevant exam day", () => {
+test("filterBeginnerLessonsForExamDays: includes a LUNGE lesson on a relevant exam day", () => {
   const dates = new Set(["2026-08-10"]);
   const lessons = [lesson({ id: "lunge", practiceType: "LUNGE", date: "2026-08-10" })];
-  assert.deepEqual(filterBeginnerLessonsForExamDays(lessons, dates), []);
+  assert.deepEqual(
+    filterBeginnerLessonsForExamDays(lessons, dates).map((l) => l.id),
+    ["lunge"],
+  );
 });
 
-test("filterBeginnerLessonsForExamDays: includes BEGINNER_PRIVATE and BEGINNER_GROUP on a relevant date", () => {
+test("filterBeginnerLessonsForExamDays: includes BEGINNER_PRIVATE, BEGINNER_GROUP, and LUNGE together on a relevant date", () => {
   const dates = new Set(["2026-08-10"]);
   const lessons = [
     lesson({ id: "private", practiceType: "BEGINNER_PRIVATE", date: "2026-08-10" }),
     lesson({ id: "group", practiceType: "BEGINNER_GROUP", date: "2026-08-10" }),
+    lesson({ id: "lunge", practiceType: "LUNGE", date: "2026-08-10" }),
   ];
   assert.deepEqual(
     filterBeginnerLessonsForExamDays(lessons, dates).map((l) => l.id),
-    ["private", "group"],
+    ["private", "group", "lunge"],
   );
 });
 

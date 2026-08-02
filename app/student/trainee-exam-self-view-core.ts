@@ -90,17 +90,15 @@ export function collectBeginnerExamDates(myRows: readonly ExamRow[]): Set<string
 }
 
 /**
- * The real Teaching-Practice lessons this "לו״ז שלי" view may show: BEGINNER
- * practice types only (LUNGE excluded) on a beginner exam day (see
+ * The real Teaching-Practice lessons this "לו״ז שלי" view may show: any
+ * practice type (LUNGE included) on a beginner exam day (see
  * {@link collectBeginnerExamDates}). Identity/participation/publication are
  * already decided by the reader that produced `lessons` - this filters ONLY
- * on `practiceType` and `date`, never on a name.
+ * on `date`, never on `practiceType` or a name.
  */
 export function filterBeginnerLessonsForExamDays(
   lessons: readonly TeachingPracticeTraineeLessonRow[],
   beginnerExamDates: ReadonlySet<string>,
 ): TeachingPracticeTraineeLessonRow[] {
-  return lessons.filter(
-    (lesson) => lesson.practiceType !== "LUNGE" && beginnerExamDates.has(lesson.date),
-  );
+  return lessons.filter((lesson) => beginnerExamDates.has(lesson.date));
 }
