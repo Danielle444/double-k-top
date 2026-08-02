@@ -150,6 +150,7 @@ import type {
 } from "./exam-live-beginner-adapter-core";
 import type {
   TraineeExamDayProjection,
+  TraineeExamPersonalSlot,
   TraineeExamRole,
 } from "./exam-trainee-view-core";
 import type {
@@ -535,6 +536,25 @@ export interface OperationalExamBeginnerDetailDto {
  * through the narrow {@link TraineeExamSessionDisplayDetail} sibling — never
  * from the conflict input, which this builder is not given.
  */
+/**
+ * ONE of the viewer's own personal slots inside a {@link TraineeExamDayRowDto}
+ * row. A trainee may legitimately hold several in one row — an EXAMINEE slot
+ * plus one or more INSTRUCTED_TRAINEE slots for different examinees, or several
+ * INSTRUCTED_TRAINEE slots alone — since instructed-trainee multiplicity became
+ * legal. This is a straight passthrough of the committed trainee core's own
+ * fail-closed `TraineeExamPersonalSlot`, never recomputed here.
+ *
+ * `role` is `null` for a live beginner row's own slot — see the "NO INVENTED
+ * EXAM ROLE ON A LIVE BEGINNER ROW" note on {@link buildTraineeExamDayDto}.
+ */
+export interface TraineeExamPersonalSlotDto {
+  readonly role: TraineeExamRole | null;
+  /** The viewer's EXACT personal start for THIS slot. Never the block start. */
+  readonly startTime: string;
+  /** The viewer's EXACT personal end for THIS slot. Never the block end. */
+  readonly endTime: string;
+}
+
 export interface TraineeExamDayRowDto {
   /**
    * The POSITIONAL display key — `<date>#<index within that date>`.
@@ -579,11 +599,16 @@ export interface TraineeExamDayRowDto {
   readonly isSelf: boolean;
   /** "השיבוץ שלי" when this is the viewer's own row; otherwise `null`. */
   readonly selfLabel: string | null;
-  readonly selfRole: TraineeExamRole | null;
-  /** The viewer's EXACT personal start. Never the block start. */
-  readonly selfStartTime: string | null;
-  /** The viewer's EXACT personal end. Never the block end. */
-  readonly selfEndTime: string | null;
+  /**
+   * The viewer's personal slots inside this row — EMPTY when `isSelf` is
+   * `false`, ONE entry for the common case, and TWO OR MORE when the viewer
+   * legitimately holds several assignments in one session. Always in
+   * chronological order by `startTime`. Replaces the single-slot
+   * `selfRole`/`selfStartTime`/`selfEndTime` fields this contract used to
+   * carry — a row is never partially represented by both a singular field and
+   * a list.
+   */
+  readonly personalSlots: readonly TraineeExamPersonalSlotDto[];
   readonly examineeNames: readonly string[];
   readonly examineeCount: number;
   readonly instructedTraineeNames: readonly string[];
@@ -1377,9 +1402,15 @@ export function buildTraineeExamDayDto(
         // both come from the same server-side student-id match. The trainee's
         // real personal window is likewise untouched below — it is the lesson's
         // own interval, which is a TIME, not a role.
-        selfRole: source === "BEGINNER" ? null : (row.selfRole ?? null),
-        selfStartTime: row.selfStartTime ?? null,
-        selfEndTime: row.selfEndTime ?? null,
+        personalSlots: Object.freeze(
+          row.personalSlots.map((slot: TraineeExamPersonalSlot) =>
+            Object.freeze({
+              role: source === "BEGINNER" ? null : slot.role,
+              startTime: slot.startTime,
+              endTime: slot.endTime,
+            }),
+          ),
+        ),
         examineeNames: examinees.names,
         examineeCount: examinees.count,
         instructedTraineeNames: instructed.names,

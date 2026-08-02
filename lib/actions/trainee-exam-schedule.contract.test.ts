@@ -916,15 +916,15 @@ test("12. unpublished data cannot be displayed by this UI", () => {
 });
 
 test("13. no personal time is invented when the contract does not carry one", () => {
-  // Both personal values are rendered ONLY behind an explicit non-null test.
-  assert.ok(SECTION_CODE.includes("row.selfStartTime !== null &&"));
-  assert.ok(SECTION_CODE.includes("row.selfEndTime !== null &&"));
-  // ...and neither is ever defaulted from the block times or from a duration.
+  // EX-TRN-MULTI-SLOT RE-POINT — a personal-time line is now rendered by
+  // mapping over `row.personalSlots`, not by a single nullable field behind an
+  // explicit-null guard: an empty array renders nothing, and the array itself
+  // (built entirely server-side by the committed trainee core) is the
+  // fail-closed gate. Neither the start nor the end is ever defaulted from the
+  // block times or from a duration.
   for (const fallback of [
-    "selfStartTime ??",
-    "selfEndTime ??",
-    "selfStartTime ||",
-    "selfEndTime ||",
+    "personalSlots ??",
+    "personalSlots ||",
     "?? row.startTime",
     "?? row.displayEndTime",
     "DEFAULT_DURATION",
@@ -937,21 +937,16 @@ test("13. no personal time is invented when the contract does not carry one", ()
   //
   // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — this count was ONE, when both trainee
   // views shared a single card. "לו״ז שלי" is now a different, much shorter card
-  // of its own, so the personal-time line exists once per view. The claim is
-  // replaced by the property it was standing in for: EVERY personal-time line is
-  // behind the same explicit non-null test on the same `self*` field, and there
-  // are exactly as many guards as lines.
+  // of its own, so the personal-time line's rendering site exists once per view.
+  // The claim is replaced by the property it was standing in for: EVERY
+  // personal-time rendering site is driven by `row.personalSlots.map(`, and
+  // there are exactly as many map sites as `.map(` call sites.
   const personalLines = (SECTION_CODE.match(/השעה שלך/g) ?? []).length;
   assert.equal(personalLines, 2, "a personal-time line was added or dropped");
   assert.equal(
-    (SECTION_CODE.match(/\{row\.selfStartTime !== null && \(/g) ?? []).length,
+    (SECTION_CODE.match(/row\.personalSlots\.map\(/g) ?? []).length,
     personalLines,
-    "a personal-time line is not behind its own explicit non-null test",
-  );
-  assert.equal(
-    (SECTION_CODE.match(/row\.selfEndTime !== null &&/g) ?? []).length,
-    personalLines,
-    "a personal end is rendered without its own explicit non-null test",
+    "a personal-time line is not driven by row.personalSlots",
   );
 });
 
@@ -1142,9 +1137,10 @@ test("14b. the approved trainee display fields are the ones rendered", () => {
     "row.location",
     "row.isSelf",
     "row.selfLabel",
-    "row.selfRole",
-    "row.selfStartTime",
-    "row.selfEndTime",
+    "row.personalSlots",
+    "slot.role",
+    "slot.startTime",
+    "slot.endTime",
     "row.examineeNames",
     "row.examineeCount",
     "row.instructedTraineeNames",
@@ -1322,9 +1318,10 @@ test('14e. "לו״ז שלי" is COMPACT: only the viewer\'s rows, and only their
     "row.displayEndTime",
     "row.arena ?? row.location",
     "row.selfLabel",
-    "row.selfRole",
-    "row.selfStartTime",
-    "row.selfEndTime",
+    "row.personalSlots",
+    "slot.role",
+    "slot.startTime",
+    "slot.endTime",
   ]) {
     assert.ok(personal.includes(fragment), `the personal view dropped ${fragment}`);
   }
@@ -1535,8 +1532,8 @@ test('14d. "לו״ז שלי" still identifies "mine" by the server-computed mark
   assert.ok(SECTION_CODE.includes("view.myRows"), "the personal view is no longer the server filter");
   assert.ok(SECTION_CODE.includes("row.isSelf ?"), "the viewer's own row is no longer highlighted");
   assert.ok(SECTION_CODE.includes("row.selfLabel !== null &&"), "the self label was dropped");
-  assert.ok(SECTION_CODE.includes("row.selfRole"), "the viewer's own role was dropped");
-  assert.ok(SECTION_CODE.includes("row.selfStartTime !== null &&"), "the personal window was dropped");
+  assert.ok(SECTION_CODE.includes("row.personalSlots"), "the viewer's own personal slots were dropped");
+  assert.ok(SECTION_CODE.includes("slot.role"), "the viewer's own role was dropped");
 
   // NO NAME IS EVER COMPARED to decide what is "mine". A display name is not an
   // identity: two trainees may share one, and the screen holds no name of the
@@ -1691,15 +1688,18 @@ test("14m. live beginner rows are ROUTED away from the advanced renderer, in BOT
   for (const token of ['=== "BEGINNER"', '=== "STORED"', "row.source ===", "row.kind ==="]) {
     assert.equal(SECTION_CODE.includes(token), false, `the screen re-implements the origin test: ${token}`);
   }
-  // NO INVENTED ROLE. The one remaining exam-role label reaches a beginner row
-  // through neither the self-role pill nor the participant summary. "לו״ז
-  // שלי"'s OWN role-label computation no longer needs this guard at all - a
-  // beginner row can never reach it (see 14n) - so only "לפי תאריך" still
-  // states it.
+  // NO INVENTED ROLE. EX-TRN-MULTI-SLOT RE-POINT — the guard moved from this
+  // screen into the contract itself: `TraineeExamPersonalSlotDto.role` is now
+  // `null` for EVERY personal slot of a `BEGINNER` source row (see
+  // `buildTraineeExamDayDto` in `lib/exam/exam-read-dto.ts`), so both views can
+  // share the SAME per-slot rule — `slot.role === null` — without naming
+  // `isBeginnerExamRow` at the label site at all. The property is unchanged: a
+  // beginner row is never labelled with an invented exam role.
   assert.equal(
-    (SECTION_CODE.match(/isBeginnerExamRow\(row\) \|\| row\.selfRole === null/g) ?? []).length,
-    1,
-    "a beginner row can still be labelled with an exam role",
+    (SECTION_CODE.match(/slot\.role === null \? null : SELF_ROLE_LABELS\[slot\.role\]/g) ?? [])
+      .length,
+    2,
+    "a personal-slot role label is not guarded against a null (beginner) role",
   );
   assert.ok(
     SECTION_CODE.includes("{isBeginnerExamRow(row) ? (\n                    <ExamBeginnerRows") ||
@@ -1936,6 +1936,17 @@ test("15. no instructor or admin exam file was modified", () => {
     "lib/exam/exam-pairing-write" + "-core.ts",
     "lib/exam/exam-schema-structure" + ".test.ts",
     "lib/exam/exam-supervisor-write" + "-core.test.ts",
+
+    // EX-TRN-MULTI-SLOT RE-POINT — this slice's EXACT, CLOSED footprint. The
+    // trainee reader stops dropping a whole session when the authenticated
+    // trainee legitimately resolves to more than one assignment in it
+    // (EX-ASG-MULTIPLICITY). Four files, all named exactly — the pure core and
+    // its own suite, the DTO layer and the one sibling suite whose fixtures
+    // exercise the same personal-slot shape.
+    "lib/exam/exam-trainee-view" + "-core.ts",
+    "lib/exam/exam-trainee-view" + "-core.test.ts",
+    "lib/exam/exam-read-" + "dto.ts",
+    "lib/exam/exam-stored-adapter" + "-core.test.ts",
 ];
   const changedExamCores = gitLines(["diff", "--name-only", "HEAD", "--", "lib/exam"]).map((path) =>
     path.split("\\").join("/"),
@@ -2116,6 +2127,16 @@ test("17. the working tree holds only the approved paths of this slice and the o
     "lib/exam/" + "exam-read" + ".contract.test.ts",
     "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
     "lib/exam/" + "exam-trainee-view" + "-core.ts",
+
+    // EX-TRN-MULTI-SLOT, on the same terms: an EXACT path list, never a
+    // directory and never a glob. The trainee reader stops dropping a whole
+    // session when the authenticated trainee legitimately resolves to more
+    // than one assignment in it. `exam-trainee-view-core.ts` is already
+    // approved above (EX-TRAINEE-MULTIDAY-READ); its own suite and the
+    // sibling adapter suite whose fixtures exercise the same personal-slot
+    // shape are the two new entries.
+    "lib/exam/" + "exam-trainee-view" + "-core.test.ts",
+    "lib/exam/" + "exam-stored-adapter" + "-core.test.ts",
     // fix/exam-role-ui-urgent, on the same terms: an EXACT path list, never a
     // directory and never a glob. This branch's four NEW test files - the
     // instructor general/all overview-only regression test (re-pointed to also

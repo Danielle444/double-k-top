@@ -15,12 +15,12 @@
  * their lesson — and nothing else. Everyone else's rows stay in "לו״ז כולם".
  *
  * ===========================================================================
- * THE SERVER SAYS WHICH ROW IS THE VIEWER'S
+ * THE SERVER SAYS WHICH ROWS ARE THE VIEWER'S
  * ===========================================================================
- * The trainee contract marks the viewer's own assignment with `isSelf`, decided
+ * The trainee contract marks the viewer's own assignments with `isSelf`, decided
  * server-side by EXACT STUDENT-ID EQUALITY against the identity proven from the
  * signed session. The id itself never leaves the server. This component hands
- * the block's rows to the pure core, which returns the ONE row carrying that
+ * the block's rows to the pure core, which returns EVERY row carrying that
  * boolean.
  *
  * IT REPLACED A HEURISTIC. An earlier version matched the viewer by `selfRole`
@@ -30,10 +30,13 @@
  * for exactly the trainees most likely to be unsure of them. Nothing of that
  * heuristic remains: no role, no time, no horse, no topic, no discipline, no
  * pairing and no array position is consulted to CHOOSE a row. They are only ever
- * read out of the row the server already chose.
+ * read out of the rows the server already chose.
  *
- * FAIL CLOSED AT BOTH ENDS. No marked row, or more than one, renders NOTHING —
- * a missing detail is a gap; a guessed one is a wrong schedule.
+ * ZERO, ONE OR SEVERAL ROWS — ALL LEGITIMATE. A trainee may legitimately hold
+ * several assignments in one block (EX-ASG-MULTIPLICITY): an EXAMINEE row plus
+ * one or more INSTRUCTED_TRAINEE rows for different examinees, or several
+ * INSTRUCTED_TRAINEE rows alone. Every marked row renders its own detail block;
+ * none is dropped, and none is picked arbitrarily over the others.
  *
  * NO DISPLAY NAME IS EVER COMPARED to decide what is "mine": the viewer's name
  * is not a prop, is not representable in the props at all, and is nowhere in the
@@ -52,7 +55,7 @@
  * no button, no Server Action and no publication concept.
  */
 import {
-  selectSelfAssignmentRow,
+  selectSelfAssignmentRows,
   type TraineeExamAssignmentRowView,
 } from "./exam-schedule-view-core";
 
@@ -85,46 +88,53 @@ function DetailChip({ label, value }: { label: string; value: string | null }) {
 }
 
 /**
- * The viewer's own horse, topic, discipline and counterpart — or nothing.
+ * The viewer's own horse, topic, discipline and counterpart, for EVERY
+ * assignment that is theirs — or nothing.
  *
  * `assignments` is the block's whole trainee contract array, handed over
  * verbatim, and it is the ONLY prop: no viewer identity, no marker and no
  * selection hint is passed in, because the array already carries the server's
- * answer. The component reads it only through the pure core's fail-closed
- * selector, so a row that is not provably the viewer's can never reach the
- * markup.
+ * answer. The component reads it only through the pure core's selector, so a
+ * row that is not provably the viewer's can never reach the markup.
  */
 export function ExamPersonalAssignmentDetail({
   assignments,
 }: {
   readonly assignments: readonly TraineeExamAssignmentRowView[];
 }) {
-  const detail = selectSelfAssignmentRow(assignments);
-  if (detail === null) return null;
+  const details = selectSelfAssignmentRows(assignments);
+  if (details.length === 0) return null;
 
-  const counterpartLabel = COUNTERPART_LABELS[detail.role];
   return (
-    <div className="mt-1 flex flex-col gap-1">
-      <div className="flex flex-wrap gap-x-3 gap-y-1">
-        <DetailChip label={HORSE_LABEL} value={detail.horseName} />
-        <DetailChip label={TOPIC_LABEL} value={detail.instructionTopic} />
-        <DetailChip label={DISCIPLINE_LABEL} value={detail.discipline} />
-      </div>
+    <div className="mt-1 flex flex-col gap-2">
+      {details.map((detail, index) => {
+        const counterpartLabel = COUNTERPART_LABELS[detail.role];
+        return (
+          <div key={`${index}-${detail.role}`} className="flex flex-col gap-1">
+            <div className="flex flex-wrap gap-x-3 gap-y-1">
+              <DetailChip label={HORSE_LABEL} value={detail.horseName} />
+              <DetailChip label={TOPIC_LABEL} value={detail.instructionTopic} />
+              <DetailChip label={DISCIPLINE_LABEL} value={detail.discipline} />
+            </div>
 
-      {/* The other side of the lesson. An empty list renders NOTHING: a bare
-          label with no name behind it would suggest a partner the contract does
-          not have. The names are separate elements, never one joined string. */}
-      {detail.pairedParticipantNames.length > 0 && (
-        <p className="text-xs text-card-foreground">
-          <span className="font-semibold">{counterpartLabel}: </span>
-          {detail.pairedParticipantNames.map((name, index) => (
-            <span key={`${index}-${name}`}>
-              {index > 0 && ", "}
-              {name}
-            </span>
-          ))}
-        </p>
-      )}
+            {/* The other side of the lesson. An empty list renders NOTHING: a
+                bare label with no name behind it would suggest a partner the
+                contract does not have. The names are separate elements, never
+                one joined string. */}
+            {detail.pairedParticipantNames.length > 0 && (
+              <p className="text-xs text-card-foreground">
+                <span className="font-semibold">{counterpartLabel}: </span>
+                {detail.pairedParticipantNames.map((name, nameIndex) => (
+                  <span key={`${nameIndex}-${name}`}>
+                    {nameIndex > 0 && ", "}
+                    {name}
+                  </span>
+                ))}
+              </p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
