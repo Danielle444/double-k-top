@@ -309,12 +309,6 @@ const SELF_MODE_LABEL = "לו״ז שלי";
 type ExamRow = TraineeExamScheduleView["allRows"][number];
 type DayMode = "date" | "self";
 
-/** The Hebrew label for the viewer's own role on a row. */
-const SELF_ROLE_LABELS: Record<"EXAMINEE" | "INSTRUCTED_TRAINEE", string> = {
-  EXAMINEE: "נבחן",
-  INSTRUCTED_TRAINEE: "חניך מודרך",
-};
-
 /**
  * Group the rows by calendar day, preserving the server's row order exactly.
  *
@@ -664,32 +658,22 @@ export function StudentExamsSection() {
                 <p className="mt-1 text-sm font-bold text-primary">{row.selfLabel}</p>
               )}
 
-              {/* One line per personal slot — the viewer may legitimately hold
-                  several in one row (e.g. an EXAMINEE slot plus one or more
-                  INSTRUCTED_TRAINEE slots for different examinees). Always in
-                  chronological order, and nothing here falls back to the block
-                  times above. */}
-              {row.personalSlots.map((slot, index) => {
-                const slotRoleLabel = slot.role === null ? null : SELF_ROLE_LABELS[slot.role];
-                return (
-                  <p
-                    key={`${row.rowKey}-slot-${index}`}
-                    className="text-sm font-bold text-primary"
-                  >
-                    {slotRoleLabel !== null && `${slotRoleLabel} · `}
-                    השעה שלך: {slot.startTime} - {slot.endTime}
-                  </p>
-                );
-              })}
+              {/* ONE nested card per personal slot, each carrying only that
+                  slot's own role, time and detail — the viewer may legitimately
+                  hold several in one row (e.g. an EXAMINEE slot plus one or more
+                  INSTRUCTED_TRAINEE slots for different examinees), and a shared
+                  block below several time lines cannot say which detail belongs
+                  to which. selfViewEntries never carries a beginner row (see
+                  myAdvancedRows above), so this is always a STORED block's own
+                  personal detail. */}
+              <ExamPersonalAssignmentDetail
+                personalSlots={row.personalSlots}
+                assignments={row.assignments}
+              />
 
               {place !== null && place.trim().length > 0 && (
                 <p className="mt-1 text-sm text-muted-foreground">מקום: {place}</p>
               )}
-
-              {/* selfViewEntries never carries a beginner row (see
-                  myAdvancedRows above), so this is always a STORED block's own
-                  personal detail. */}
-              <ExamPersonalAssignmentDetail assignments={row.assignments} />
             </div>
           );
         })}
@@ -727,23 +711,29 @@ export function StudentExamsSection() {
                     <p className="mt-1 text-sm font-bold text-primary">{row.selfLabel}</p>
                   )}
 
-                  {/* One line per personal slot — see the same rule in the
-                      personal view above. A live beginner lesson has no exam
-                      ROLE, so `slot.role` is `null` there and only the time
-                      shows. Nothing here falls back to the block times above. */}
-                  {row.personalSlots.map((slot, index) => {
-                    const slotRoleLabel =
-                      slot.role === null ? null : SELF_ROLE_LABELS[slot.role];
-                    return (
+                  {/* A LIVE BEGINNER LESSON keeps its own simple flat time line,
+                      UNCHANGED — it has no exam ROLE and no stored assignment to
+                      pair a nested card's detail against (`row.assignments` is
+                      always empty for it), and its card is unaffected by this
+                      slice. A STORED BLOCK gets ONE nested card per personal
+                      slot, each carrying only that slot's own role, time and
+                      detail — see the same rule in the personal view above.
+                      Nothing here falls back to the block times above. */}
+                  {isBeginnerExamRow(row) ? (
+                    row.personalSlots.map((slot, index) => (
                       <p
                         key={`${row.rowKey}-slot-${index}`}
                         className="text-sm font-bold text-primary"
                       >
-                        {slotRoleLabel !== null && `${slotRoleLabel} · `}
                         השעה שלך: {slot.startTime} - {slot.endTime}
                       </p>
-                    );
-                  })}
+                    ))
+                  ) : (
+                    <ExamPersonalAssignmentDetail
+                      personalSlots={row.personalSlots}
+                      assignments={row.assignments}
+                    />
+                  )}
 
                   {place !== null && place.trim().length > 0 && (
                     <p className="mt-1 text-sm text-muted-foreground">מקום: {place}</p>

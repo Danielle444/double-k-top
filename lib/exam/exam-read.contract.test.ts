@@ -1673,9 +1673,12 @@ test("F2. no forbidden CHANNEL exists in the trainee contract", async () => {
     "personalEndTime",
     "pairedParticipantName",
     "pairedParticipantNames",
-    // The ONE trainee-only addition. A BOOLEAN - never an id, never a name
-    // comparison - so marking the viewer's own row opens no identifier channel.
+    // The TWO trainee-only additions. `isSelf` is a BOOLEAN - never an id,
+    // never a name comparison. `assignmentKey` is a SYNTHETIC, non-database
+    // token, present only when `isSelf` is true — see EX-TRN-MULTI-SLOT-DETAIL
+    // — so marking the viewer's own row opens no real identifier channel.
     "isSelf",
+    "assignmentKey",
   ]);
 });
 
@@ -2580,37 +2583,43 @@ const ASSIGNMENT_ROW_KEYS = [
 
 /**
  * The exact field set of one TRAINEE assignment row: the operational contract
- * above plus EXACTLY ONE key, `isSelf`.
+ * above plus EXACTLY TWO keys, `isSelf` and `assignmentKey`.
  *
  * Spelled as a SPREAD of the shared list rather than as a second literal, so the
  * two cannot drift: a field added to the operational contract appears here
  * automatically, and the only difference this suite tolerates between the roles
- * is the one key named below.
+ * is the two keys named below.
  *
  * ADMIN AND INSTRUCTOR ROWS KEEP {@link ASSIGNMENT_ROW_KEYS} UNCHANGED — no
- * `isSelf` and no other addition — which the cases below assert PER ROLE rather
- * than assume.
+ * `isSelf`, no `assignmentKey` and no other addition — which the cases below
+ * assert PER ROLE rather than assume.
  */
-const TRAINEE_ASSIGNMENT_ROW_KEYS = [...ASSIGNMENT_ROW_KEYS, "isSelf"] as const;
+const TRAINEE_ASSIGNMENT_ROW_KEYS = [
+  ...ASSIGNMENT_ROW_KEYS,
+  "isSelf",
+  "assignmentKey",
+] as const;
 
 /**
  * A trainee assignment row set, reduced to the SHARED operational contract by
- * dropping the one trainee-only key.
+ * dropping the two trainee-only keys.
  *
  * It exists so "both roles agree, field for field" can still be asserted as the
  * strong claim it always was. The alternative - comparing only a few fields -
- * would let a real divergence slip through unnoticed, so instead the ONE known
- * difference is removed explicitly and everything else is still compared whole.
- * Each call site separately asserts that the removed key was really there.
+ * would let a real divergence slip through unnoticed, so instead the two known
+ * differences are removed explicitly and everything else is still compared
+ * whole. Each call site separately asserts that the removed keys were really
+ * there.
  */
 function withoutIsSelf(
   rows: readonly TraineeExamAssignmentOperationalRowDto[],
 ): ExamAssignmentOperationalRowDto[] {
   return rows.map((row) => {
-    // Destructured rather than deleted, so the discarded key is named in the
+    // Destructured rather than deleted, so the discarded keys are named in the
     // source and the result is a fresh plain object with no leftover descriptor.
-    const { isSelf: _isSelf, ...rest } = row;
+    const { isSelf: _isSelf, assignmentKey: _assignmentKey, ...rest } = row;
     void _isSelf;
+    void _assignmentKey;
     return rest as ExamAssignmentOperationalRowDto;
   });
 }

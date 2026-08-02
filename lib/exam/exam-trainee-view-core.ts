@@ -199,8 +199,20 @@ export interface TraineeExamViewIssue {
  * instructed-trainee multiplicity became legal (EX-ASG-MULTIPLICITY). Each slot
  * carries its own EXACT role and interval; nothing here is ever a block-level
  * fallback.
+ *
+ * `assignmentId` is the REAL internal id, carried verbatim from
+ * {@link StoredExamAssignmentSlot} for a stored row, and `null` for a live
+ * beginner row's own slot (which has no stored assignment to correlate with).
+ * IT IS INTERNAL ONLY: `TraineeExamDayRow` is never returned to a client (see
+ * its own doc), and the DTO narrowing layer that IS client-facing reads this
+ * value ONLY as a lookup key — to pair a personal slot with its matching entry
+ * in the assignment-level operational contract, which is resolved through a
+ * SEPARATE sibling lookup and would otherwise have no way to agree with this
+ * one on which entry is which — and mints a SYNTHETIC, non-database key from
+ * it. This raw id is never itself projected into any client contract.
  */
 export interface TraineeExamPersonalSlot {
+  readonly assignmentId: string | null;
   readonly role: TraineeExamRole;
   /** The viewer's EXACT personal start for THIS slot, `HH:MM`. Never the block start. */
   readonly startTime: string;
@@ -518,6 +530,7 @@ export function projectTraineeExamDay(
         rows.push(
           makeRow(session, [
             {
+              assignmentId: null,
               role: "EXAMINEE",
               startTime: session.startTime,
               endTime: session.endTime,
@@ -626,6 +639,7 @@ export function projectTraineeExamDay(
       makeRow(
         session,
         matches.map((match) => ({
+          assignmentId: normalizedId(match.assignmentId),
           role: match.role,
           startTime: match.startTime,
           endTime: match.endTime,

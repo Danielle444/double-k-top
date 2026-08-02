@@ -205,11 +205,18 @@ test("12. the advanced exam row's rendered fields and renderer are unchanged", (
     "row.arena ?? row.location",
     "row.selfLabel",
     "row.personalSlots",
-    "<ExamPersonalAssignmentDetail assignments={row.assignments} />",
   ]) {
     assert.ok(CODE.includes(fragment), `the advanced row dropped ${fragment}`);
   }
-  assert.equal((CODE.match(/<ExamPersonalAssignmentDetail/g) ?? []).length, 1);
+  // EX-TRN-MULTI-SLOT-DETAIL RE-POINT — the shared nested-card renderer now
+  // takes TWO props, `personalSlots` and `assignments`, both handed over
+  // verbatim, and is used in BOTH views (see the trainee contract suite's own
+  // tests 13/14e/14c), so the count is 2, not 1.
+  assert.match(
+    CODE.replace(/\s+/g, " "),
+    /<ExamPersonalAssignmentDetail personalSlots=\{row\.personalSlots\} assignments=\{row\.assignments\} \/>/,
+  );
+  assert.equal((CODE.match(/<ExamPersonalAssignmentDetail/g) ?? []).length, 2);
   // "לפי תאריך" advanced rendering (ExamAssignmentRows + PeopleLine summary) is untouched.
   assert.ok(CODE.includes("<ExamAssignmentRows assignments={row.assignments} />"));
   assert.equal((CODE.match(/<ExamAssignmentRows/g) ?? []).length, 1);
