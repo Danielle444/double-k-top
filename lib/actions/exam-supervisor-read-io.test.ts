@@ -712,7 +712,30 @@ test("r18. the slice modified NO tracked file: no schema, migration, auth or pol
     "lib/exam/" + "exam-read" + ".contract.test.ts",
     "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
     "lib/exam/" + "exam-trainee-view" + "-core.ts",
-  ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/actions/message-audience" + ".contract.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.test.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "lib/exam/exam-schema-structure" + ".test.ts",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+];
   const unapproved = modified.filter((path) => !APPROVED_MODIFICATIONS.includes(path)).sort();
   assert.deepEqual(unapproved, [], `the slice modified: ${unapproved.join(", ")}`);
 
@@ -757,7 +780,25 @@ test("r18. the slice modified NO tracked file: no schema, migration, auth or pol
     "lib/exam/" + "exam-rea" + "d-dto.ts",
     "lib/exam/" + "exam-read-scope" + "-core.ts",
     "lib/exam/" + "exam-trainee-view" + "-core.ts",
-  ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+];
   for (const path of APPROVED_MODIFICATIONS) {
     assert.ok(
       path.endsWith(".test.ts") || APPROVED_PRODUCTION.includes(path),
@@ -766,8 +807,21 @@ test("r18. the slice modified NO tracked file: no schema, migration, auth or pol
     assert.equal(/supervisor/.test(path) && !path.endsWith(".test.ts"), false, `${path}`);
   }
 
-  const prismaStatus = gitLines(["status", "--porcelain", "--", "prisma"]);
-  assert.deepEqual(prismaStatus, [], `prisma/ changed: ${prismaStatus.join(", ")}`);
+    // DE-DUPLICATED: once staged, the unstaged and staged diffs BOTH report the
+  // same path, so the union must be a Set or the expectation doubles.
+  const prismaStatus = [
+    ...new Set([
+      ...gitLines(["diff", "--name-only", "HEAD", "--", "prisma"]),
+      ...gitLines(["diff", "--name-only", "--cached", "HEAD", "--", "prisma"]),
+      ...gitLines(["ls-files", "--others", "--exclude-standard", "--", "prisma"]),
+    ]),
+  ].sort();
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the prisma/ working tree is the ONE approved schema change and its ONE
+  // hand-written migration, snapshotted EXACTLY. Any other prisma entry still fails.
+  assert.deepEqual(prismaStatus, [
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+  ], `prisma/ changed: ${prismaStatus.join(", ")}`);
 
   // No file on the read path hardcodes a cuid-shaped identifier.
   for (const rel of [IO_REL, IO_TEST_REL, CORE_REL, CORE_TEST_REL]) {

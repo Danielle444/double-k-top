@@ -256,20 +256,33 @@ function isOperationNotAllowedError(error: unknown): boolean {
 // ===========================================================================
 
 /**
- * The database index behind `@@unique([sessionId, studentId])` on
+ * The ONE remaining unique index over `(sessionId, studentId)` on
  * `exam_assignments`. Named here as a STRING so the classifier can recognize the
  * conflict structurally, without importing a Prisma error class.
+ *
+ * EX-ASG-MULTIPLICITY renamed and NARROWED it. It is now the hand-written PARTIAL
+ * index `UNIQUE ("sessionId", "studentId") WHERE "role" = 'EXAMINEE'`, so its
+ * generated name no longer describes it and a stable one is chosen in the
+ * migration instead. See prisma/schema.prisma's model comment.
  */
-const EXAM_ASSIGNMENT_CONFLICT_INDEX = "exam_assignments_sessionId_studentId_key";
+const EXAM_ASSIGNMENT_CONFLICT_INDEX = "exam_assignments_examinee_session_student_key";
 
 /**
  * Recognize the Prisma unique-constraint violation (`P2002`) that means "that
- * trainee is ALREADY assigned to that session", and nothing else.
+ * trainee is ALREADY an EXAMINEE of that session", and nothing else.
  *
  * This is the ONE reachable, ordinary conflict of the create path: a double
  * submit, or two managers assigning the same person at once. It is classified AT
  * THE WRITE rather than pre-checked by a read, because a read-then-write would
  * reintroduce exactly the race the unique key exists to close.
+ *
+ * IT IS STILL FULLY REACHABLE HERE, and that is the point of the narrowed key:
+ * this slice's role is the fixed literal `EXAMINEE`, the one role the partial
+ * predicate still covers, because nobody sits the same session's exam twice. What
+ * the narrowing removed is the refusal of a SECOND row in ANOTHER role — one
+ * trainee may now be this session's examinee and ALSO an instructed trainee
+ * taught by a different examinee of it — and that case never reaches this
+ * predicate, because it is no longer a database violation at all.
  *
  * DELIBERATELY NARROW IN BOTH DIRECTIONS:
  *  - a non-object and a `null` are rejected;
@@ -279,16 +292,21 @@ const EXAM_ASSIGNMENT_CONFLICT_INDEX = "exam_assignments_sessionId_studentId_key
  *    single column name — fail to match, so a future statement violating some
  *    other unique index is never reported to a manager as "already assigned";
  *  - the index-name form must equal the exact index above, not merely contain a
- *    fragment of it;
+ *    fragment of it. The OLD, dropped index name is deliberately NOT accepted: an
+ *    error naming it would mean the migration has not been applied, which is a
+ *    deployment fault to surface rather than a manager-facing form error to
+ *    absorb;
  *  - a framework redirect carries a `digest` and no `code`, so an unauthenticated
  *    admin's redirect can never be laundered into a form error.
  *
- * WHY THE UNREADABLE-METADATA FALLBACK IS SAFE, and it is the established
- * convention in the committed course and exam create cores: the bound
- * transaction writes exactly ONE model, `ExamAssignment`, whose only unique keys
- * are the primary key — a freshly generated cuid that cannot realistically
- * collide — and this very `(sessionId, studentId)` pair. A `P2002` from that
- * transaction whose target cannot be read is therefore this conflict.
+ * WHY THE UNREADABLE-METADATA FALLBACK IS STILL SAFE — and the argument got
+ * SIMPLER, not harder, because FEWER distinct constraints can now fire. The bound
+ * transaction writes exactly ONE model, `ExamAssignment`, which after
+ * EX-ASG-MULTIPLICITY carries exactly TWO unique keys: the primary key — a freshly
+ * generated cuid that cannot realistically collide — and the EXAMINEE-only partial
+ * index above, which is precisely the key this slice's inserts are subject to. A
+ * `P2002` from that transaction whose target cannot be read is therefore this
+ * conflict, and there is no third key it could belong to.
  *
  * The offending error is never inspected beyond these two shapes, never
  * unwrapped, never logged and never echoed, so no database detail and no

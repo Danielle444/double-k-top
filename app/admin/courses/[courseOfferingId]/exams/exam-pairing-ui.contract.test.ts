@@ -246,6 +246,42 @@ const SLICE_PATHS = [
   "lib/exam/" + "exam-read" + "-dto.test.ts",
   "lib/exam/" + "exam-read-scope" + "-core.test.ts",
   "lib/exam/" + "exam-read" + ".contract.test.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+  "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definition-create" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-plan-create" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-create" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete" + ".contract.test.ts",
+  "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+  "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+  "lib/actions/exam-pairing-write" + "-io.ts",
+  "lib/actions/message-audience" + ".contract.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+  "lib/exam/exam-conflict" + "-core.ts",
+  "lib/exam/exam-pairing-write" + "-core.test.ts",
+  "lib/exam/exam-pairing-write" + "-core.ts",
+  "lib/exam/exam-schema-structure" + ".test.ts",
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  "prisma/schema.prisma",
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the untracked migration DIRECTORY, as `git status --porcelain` reports it.
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/",
 ];
 
 /** The route's EXACT final file set, after this slice's ONE addition. */
@@ -307,6 +343,14 @@ const FAILURE_TEXTS: ReadonlyArray<readonly [string, string]> = [
   // The ONE-TO-ONE refusal the pairing backend added. The rule is the backend's
   // and this route re-implements none of it — only the sentence lives here.
   ["examinee_already_paired", "הנבחן/ת כבר משויך/ת לחניך/ה מודרך/ת אחר/ת."],
+  // EX-PAIR-NO-SELF - the FIFTEENTH outcome. The rule is the BACKEND'S: the
+  // committed pairing core compares the two rows' studentIds and refuses an
+  // examinee that would teach ITSELF. Only the SENTENCE lives here, and listing it
+  // is what makes the render loop below assert the page really shows it.
+  [
+    "self_pairing",
+    "לא ניתן לשייך חניך/ה כמדריך/ה של עצמו/ה. יש לבחור חניך/ה מודרך/ת אחר/ת.",
+  ],
   ["stale_write", "השיוך השתנה מאז שהדף נטען, ולכן לא נשמר. יש לרענן את הדף ולנסות שוב."],
 ];
 
@@ -877,7 +921,7 @@ test("19. the outcome table is FROZEN, closed, and owns EXACTLY the fourteen sen
     ...SUCCESS_TEXTS.map(([code]) => code),
     ...FAILURE_TEXTS.map(([code]) => code),
   ]);
-  assert.equal(codes.length, 14);
+  assert.equal(codes.length, 15);
   // `offering_not_found` is deliberately absent: that refusal routes to the
   // courses list and never returns to this course-scoped route.
   assert.equal(table.includes("offering_not_found"), false);
@@ -1064,7 +1108,27 @@ test("24. no GET can pair, and the card adds no client state of its own", () => 
 
 test("25. the slice touched EXACTLY its approved paths, and no schema or migration", () => {
   // Every working-tree entry under `prisma/` — untracked included — is empty.
-  assert.deepEqual(gitLines(["status", "--porcelain", "--", "prisma"]), []);
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the prisma/ working tree is the ONE approved schema change and its ONE
+  // hand-written migration, snapshotted EXACTLY. Any other prisma entry still fails.
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - LIFECYCLE-PROOF. This was a `git status --porcelain` snapshot, whose
+  // XY status prefix CHANGES on staging (" M path" -> "M  path", "?? dir/" ->
+  // "A  dir/file"), so hardcoded literals broke the moment the branch was staged.
+  // The three-way union reports PLAIN PATHS with no status prefix, so it is
+  // identical in every lifecycle state. The expectation is still an EXACT two-path
+  // list: any other prisma/ change still fails.
+  // DE-DUPLICATED: once staged, the unstaged and staged diffs BOTH report the
+  // same path, so the union must be a Set or the expectation doubles.
+  const prismaStatus = [
+    ...new Set([
+      ...gitLines(["diff", "--name-only", "HEAD", "--", "prisma"]),
+      ...gitLines(["diff", "--name-only", "--cached", "HEAD", "--", "prisma"]),
+      ...gitLines(["ls-files", "--others", "--exclude-standard", "--", "prisma"]),
+    ]),
+  ].sort();
+  assert.deepEqual(prismaStatus, [
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+  ]);
 
   const touched = gitLines([
     "status",
@@ -1118,7 +1182,20 @@ test("25. the slice touched EXACTLY its approved paths, and no schema or migrati
     // decision core and its server-only binding — which the workspace suite pins
     // by name. Any modification of a committed `lib/` production module still
     // fails here.
-  ].sort());
+
+      // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the branch's 9 committed `lib/` production edits, named EXACTLY:
+      // the three P2002 classifiers re-pointed at the role-scoped unique index,
+      // the two pairing bindings that now read `studentId` for EX-PAIR-NO-SELF,
+      // and the pure cores those bind. A fourth still fails here.
+      "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+      "lib/actions/exam-assignment-write" + "-io.ts",
+      "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+      "lib/actions/exam-pairing-write" + "-io.ts",
+      "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+      "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+      "lib/exam/exam-conflict" + "-core.ts",
+      "lib/exam/exam-pairing-write" + "-core.ts",
+].sort());
 
   // No instructor or trainee UI, no auth, session, middleware, capability,
   // notification or service-worker file is in scope at all.
@@ -1134,6 +1211,12 @@ test("25. the slice touched EXACTLY its approved paths, and no schema or migrati
       "service-worker",
       "prisma/",
     ]) {
+      // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE trainee-tree entry is a GUARD SUITE whose admin-footprint
+      // snapshot this branch re-points; named EXACTLY, and still a `.test.ts`.
+      if (path === "app/student/trainee-teaching-practice-home-shortcut.contract.test.ts") continue;
+      // ...and the ONE approved schema edit plus its ONE hand-written migration,
+      // named EXACTLY. Every OTHER prisma/ path still fails this scope check.
+      if (path === "prisma/schema.prisma" || path === "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql" || path === "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/") continue;
       assert.equal(path.includes(forbidden), false, `${path} is out of scope (${forbidden})`);
     }
   }

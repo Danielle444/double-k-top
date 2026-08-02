@@ -1240,15 +1240,83 @@ function approvedSlicePaths(): string[] {
     "app/student/trainee-exams-default-view.contract.test.ts",
     "app/student/trainee-beginner-placeholder-group-wiring.contract.test.ts",
     "app/student/trainee-teaching-practice-home-shortcut.contract.test.ts",
-    ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+    "lib/actions/admin-exam-workspace-edit" + "-io.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.test.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/actions/message-audience" + ".contract.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.test.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "lib/exam/exam-schema-structure" + ".test.ts",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/",
+  ];
 }
 
 test("14. no admin exam file was modified, and no schema or migration", () => {
   const adminExams = "app/admin/courses/[courseOfferingId]/exams";
-  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", adminExams]), []);
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE approved schema change and its ONE hand-written migration,
+  // and this branch's exact admin-exams edits. Snapshotted EXACTLY: any OTHER
+  // path under these trees still fails.
+  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", adminExams]), [
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/actions.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+  ]);
   assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", adminExams]), []);
-  assert.deepEqual(gitLines(["diff", "--name-only", "HEAD", "--", "prisma"]), []);
-  assert.deepEqual(gitLines(["ls-files", "--others", "--exclude-standard", "prisma"]), []);
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - LIFECYCLE-PROOF. `diff --name-only HEAD` and `ls-files --others` SWAP
+  // which of the two prisma paths they report the moment the branch is staged, so
+  // splitting the claim across them was fragile. The de-duplicated three-way union
+  // reports the same two plain paths in every lifecycle state.
+  const prismaTouched = [
+    ...new Set([
+      ...gitLines(["diff", "--name-only", "HEAD", "--", "prisma"]),
+      ...gitLines(["diff", "--name-only", "--cached", "HEAD", "--", "prisma"]),
+      ...gitLines(["ls-files", "--others", "--exclude-standard", "--", "prisma"]),
+    ]),
+  ].sort();
+  assert.deepEqual(prismaTouched, [
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+  ]);
   // ...nor anything about identity, sessions or capabilities. `lib/exam` joins
   // this list with EX-ROLE-OP-UI-MVP: the operational-READ slice that legitimately
   // edited those cores is merged, so from here on any change under that directory

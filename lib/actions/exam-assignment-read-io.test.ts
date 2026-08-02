@@ -809,7 +809,28 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
     "lib/exam/" + "exam-read" + ".contract.test.ts",
     "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
     "lib/exam/" + "exam-trainee-view" + "-core.ts",
-  ].sort();
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/actions/message-audience" + ".contract.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.test.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "lib/exam/exam-schema-structure" + ".test.ts",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+].sort();
 
   const modified = gitLines([
     "diff",
@@ -886,12 +907,39 @@ test("18. only the approved wiring paths are modified: no schema, migration, aut
       // the pure source-date decision core and its server-only binding, which a
       // modifications-only diff does not report — and does everything else under
       // `app/`. A modification of ANY `lib/` production module fails here again.
-    ].sort(),
+
+      // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the branch's 9 committed `lib/` production edits, named EXACTLY:
+      // the three P2002 classifiers re-pointed at the role-scoped unique index,
+      // the two pairing bindings that now read `studentId` for EX-PAIR-NO-SELF,
+      // and the pure cores those bind. A fourth still fails here.
+      "lib/actions/admin-exam-workspace-edit" + "-io.ts",
+      "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+      "lib/actions/exam-assignment-write" + "-io.ts",
+      "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+      "lib/actions/exam-pairing-write" + "-io.ts",
+      "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+      "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+      "lib/exam/exam-conflict" + "-core.ts",
+      "lib/exam/exam-pairing-write" + "-core.ts",
+].sort(),
     `an unapproved lib production module was edited: ${libProduction.join(", ")}`,
   );
 
-  const prismaStatus = gitLines(["status", "--porcelain", "--", "prisma"]);
-  assert.deepEqual(prismaStatus, [], `prisma/ changed: ${prismaStatus.join(", ")}`);
+    // DE-DUPLICATED: once staged, the unstaged and staged diffs BOTH report the
+  // same path, so the union must be a Set or the expectation doubles.
+  const prismaStatus = [
+    ...new Set([
+      ...gitLines(["diff", "--name-only", "HEAD", "--", "prisma"]),
+      ...gitLines(["diff", "--name-only", "--cached", "HEAD", "--", "prisma"]),
+      ...gitLines(["ls-files", "--others", "--exclude-standard", "--", "prisma"]),
+    ]),
+  ].sort();
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the prisma/ working tree is the ONE approved schema change and its ONE
+  // hand-written migration, snapshotted EXACTLY. Any other prisma entry still fails.
+  assert.deepEqual(prismaStatus, [
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+  ], `prisma/ changed: ${prismaStatus.join(", ")}`);
 });
 
 test("19. this suite opens no database and reads no environment", () => {

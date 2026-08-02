@@ -927,7 +927,29 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
     "lib/exam/" + "exam-read" + ".contract.test.ts",
     "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
     "lib/exam/" + "exam-trainee-view" + "-core.ts",
-  ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+    "lib/actions/admin-exam-workspace-edit" + "-io.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/actions/message-audience" + ".contract.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.test.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "lib/exam/exam-schema-structure" + ".test.ts",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+];
   /**
    * The neighbouring slices' NEW files: EX-ASG-UI1's four route files, and
    * EX-PUB-BE-MVP's four `lib/` files — the exam-plan publish/unpublish pure core,
@@ -1016,7 +1038,14 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
     "lib/exam/" + "exam-beginner-course-scope" + "-core.ts",
     "lib/exam/" + "exam-beginner-course-scope" + "-core.test.ts",
     "lib/exam/" + "exam-beginner-course-scope" + ".contract.test.ts",
-  ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+];
 
   // What EXISTS IN HEAD and was edited, deleted, renamed or type-changed.
   const diff = spawnSync(
@@ -1090,7 +1119,21 @@ test("S40. this slice's own six files are additive, and every neighbour is appro
       // `app/`. Neither is a supervisor module, which the assertion above proves
       // independently, and a modification of ANY `lib/` production module fails
       // here again.
-    ].sort(),
+
+      // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the branch's 9 committed `lib/` production edits, named EXACTLY:
+      // the three P2002 classifiers re-pointed at the role-scoped unique index,
+      // the two pairing bindings that now read `studentId` for EX-PAIR-NO-SELF,
+      // and the pure cores those bind. A fourth still fails here.
+      "lib/actions/admin-exam-workspace-edit" + "-io.ts",
+      "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+      "lib/actions/exam-assignment-write" + "-io.ts",
+      "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+      "lib/actions/exam-pairing-write" + "-io.ts",
+      "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+      "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+      "lib/exam/exam-conflict" + "-core.ts",
+      "lib/exam/exam-pairing-write" + "-core.ts",
+].sort(),
     `an unapproved lib production module was edited: ${libProduction.join(", ")}`,
   );
 

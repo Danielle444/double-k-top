@@ -100,9 +100,16 @@ export const EXAM_INSTRUCTED_TRAINEE_CREATED_TEXT = "החניך המודרך ש�
  * can do — never a database detail, never an id, never a submitted value.
  *
  * `assignment_conflict` deliberately does NOT say which role the existing row
- * holds. The database key behind it is role-blind, the committed writer's refusal
- * is role-blind, and naming the other row's role here would turn a failed create
- * into a read of that row.
+ * holds: naming it would turn a failed create into a read of that row.
+ *
+ * EX-ASG-MULTIPLICITY narrowed the database key behind it from ROLE-BLIND to
+ * `WHERE "role" = 'EXAMINEE'`, precisely so one trainee MAY be a session's
+ * examinee and ALSO the instructed trainee of a different examinee of it. Every
+ * row this slice writes carries the fixed role INSTRUCTED_TRAINEE, which that
+ * predicate excludes, so the refusal is now UNREACHABLE from this surface. The
+ * sentence is retained rather than deleted because the writer retains the code as
+ * defence in depth, and a mapping table with a hole in it is worse than one with
+ * an unused row.
  *
  * `trainee_not_eligible` deliberately does NOT distinguish "no such trainee" from
  * "a trainee of another course" from "a trainee whose enrolment ended", and

@@ -334,6 +334,24 @@ const SLICE_PATHS = [
   "lib/exam/" + "exam-read" + ".contract.test.ts",
   "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
   "lib/exam/" + "exam-trainee-view" + "-core.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+  "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+  "lib/actions/message-audience" + ".contract.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+  "lib/exam/exam-conflict" + "-core.ts",
+  "lib/exam/exam-schema-structure" + ".test.ts",
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  "prisma/schema.prisma",
 ];
 
 const SOURCE = readFileSync(join(REPO_ROOT, IO_REL), "utf8");

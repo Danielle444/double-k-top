@@ -410,10 +410,18 @@ class ExamReplacementConditionFailed extends Error {}
  * so an assignment under ANOTHER course's plan reads as `null` rather than being
  * found and then rejected by a comparison someone could later remove.
  *
- * FOUR columns. No `studentId`, no name, no horse, no topic, no discipline and
- * no timestamp: a pairing decision needs identity, session, role and the index,
- * and reading a person's details for it would put personal data in a place with
- * no use for one.
+ * FIVE columns. No name, no horse, no topic, no discipline and no timestamp, and
+ * no `student` RELATION: a pairing decision needs the row's own id, its session,
+ * its role, its index — and, since EX-PAIR-NO-SELF, WHO it is.
+ *
+ * `studentId` is the OPAQUE FOREIGN KEY, read for exactly one rule: an examinee
+ * may never teach THEMSELVES. That is an IDENTITY question and cannot be answered
+ * from assignment ids, because two DIFFERENT rows may belong to ONE person. Until
+ * EX-ASG-MULTIPLICITY the database's role-blind unique key made that combination
+ * unreachable as a side effect; scoping that key to EXAMINEE rows is exactly what
+ * made it legal, so the identity must now be read and compared here. The
+ * `student` relation stays absent, so no name, identity number, phone or parent
+ * contact reaches this module — an id is compared, never rendered or returned.
  */
 async function findReplacementAssignmentForPlan(
   planId: string,
@@ -421,7 +429,7 @@ async function findReplacementAssignmentForPlan(
 ): Promise<ExamReplacementAssignmentFacts | null> {
   const row = await prisma.examAssignment.findFirst({
     where: { id: assignmentId, session: { planId } },
-    select: { id: true, sessionId: true, role: true, pairingIndex: true },
+    select: { id: true, sessionId: true, role: true, pairingIndex: true, studentId: true },
   });
   if (row === null) return null;
   return {
@@ -429,6 +437,7 @@ async function findReplacementAssignmentForPlan(
     sessionId: row.sessionId,
     role: row.role,
     pairingIndex: row.pairingIndex,
+    studentId: row.studentId,
   };
 }
 

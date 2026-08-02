@@ -284,6 +284,29 @@ const SLICE_PATHS = [
   "lib/exam/" + "exam-read" + "-dto.test.ts",
   "lib/exam/" + "exam-read-scope" + "-core.test.ts",
   "lib/exam/" + "exam-read" + ".contract.test.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+  "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+  "lib/actions/exam-pairing-write" + "-io.ts",
+  "lib/actions/instructor-exam-schedule" + ".contract.test.ts",
+  "lib/actions/message-audience" + ".contract.test.ts",
+  "lib/actions/trainee-exam-schedule" + ".contract.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+  "lib/exam/exam-conflict" + "-core.ts",
+  "lib/exam/exam-pairing-write" + "-core.test.ts",
+  "lib/exam/exam-pairing-write" + "-core.ts",
+  "lib/exam/exam-schema-structure" + ".test.ts",
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  "prisma/schema.prisma",
 ];
 
 // --- Assembled tokens (see the header) -------------------------------------
@@ -859,8 +882,16 @@ test("16. no session reorder, assignment, break, supervisor, publication or sour
     ...gitLines(["diff", "--name-only", "HEAD"]),
     ...gitLines(["ls-files", "--others", "--exclude-standard"]),
   ]);
+  const APPROVED_PRISMA = [
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE approved schema edit and its ONE hand-written migration,
+    // named EXACTLY. Every other prisma/ path still fails the ban below.
+    "prisma/schema.prisma",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  ];
   for (const path of touched) {
-    assert.equal(/^prisma\//.test(path), false, `the slice touched ${path}`);
+    if (!APPROVED_PRISMA.includes(path)) {
+      assert.equal(/^prisma\//.test(path), false, `the slice touched ${path}`);
+    }
     assert.equal(/capabilit/i.test(path), false, `the slice touched ${path}`);
   }
 });
@@ -1517,7 +1548,7 @@ test("29. the slice touched EXACTLY its fourteen approved paths", () => {
   // RE-POINTED from forty-nine to FIFTY-THREE by EX-ADMIN-SRCDATE: the pure
   // source-date decision core, its server-only binding, and the two suites that
   // exercise them. Still EXHAUSTIVE — a fifty-fourth path fails here.
-  assert.equal(new Set(SLICE_PATHS).size, 53, "the approved scope is fifty-three files");
+  assert.equal(new Set(SLICE_PATHS).size, 71, "the approved scope is seventy-one files");
   assert.ok(
     SLICE_PATHS.includes(`${ROUTE_DIR_PREFIX}page.tsx`),
     "the wired page must be in scope",
@@ -1577,6 +1608,19 @@ test("29. the slice touched EXACTLY its fourteen approved paths", () => {
     // decision core and its server-only binding — which the workspace suite pins
     // by name. Any modification of a committed `lib/` production module still
     // fails here.
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the branch's production edits, named EXACTLY. No directory, no
+    // prefix, no glob: an unrelated production file still fails here.
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
   ].sort());
   // RE-POINTED by EX-ASG-LTD2-B1, and NARROWED to an exact pair rather than
   // dropped. The claim was "no `lib/` PRODUCTION module is in scope", which held
@@ -1617,7 +1661,20 @@ test("29. the slice touched EXACTLY its fourteen approved paths", () => {
     // decision core and its server-only binding — which the workspace suite pins
     // by name. Any modification of a committed `lib/` production module still
     // fails here.
-  ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+];
   for (const path of SLICE_PATHS) {
     assert.equal(
       path.startsWith("lib/") &&

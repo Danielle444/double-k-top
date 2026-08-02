@@ -70,7 +70,15 @@
  *    - EX-BLK-02  The same internal trainee is an examinee in one slot and an
  *                 instructed trainee in another overlapping slot.
  *    - EX-BLK-03  The examinee and the instructed trainee are the same person
- *                 within one session.
+ *                 within one session. REPORTED ONLY — it has NO database
+ *                 backstop. It used to fall out of `exam_assignments`' role-blind
+ *                 `UNIQUE ("sessionId", "studentId")`; EX-ASG-MULTIPLICITY scoped
+ *                 that key to `WHERE "role" = 'EXAMINEE'` precisely so that one
+ *                 trainee MAY be a session's examinee and ALSO the instructed
+ *                 trainee of a DIFFERENT examinee of it, and MAY accompany two
+ *                 different examinees of it. Both of those now store cleanly, and
+ *                 this code is what still names the one arrangement that remains
+ *                 wrong.
  *    - EX-BLK-04  Two external-candidate records in the same ExamPlan share the
  *                 same non-empty nationalId / identity key.
  *
@@ -740,6 +748,14 @@ export function detectExamConflicts(input: ConflictInput): readonly ExamConflict
     // EX-BLK-03: the same person is both an examinee AND an instructed trainee
     // within this one session. Block-grained by nature — there is no second
     // interval to compare, and a person cannot be their own pupil in any wave.
+    //
+    // DETECTION ONLY. Since EX-ASG-MULTIPLICITY narrowed the assignment table's
+    // uniqueness key to `WHERE "role" = 'EXAMINEE'`, storing both rows is
+    // permitted and this is the only place the arrangement is named. The check is
+    // deliberately left exactly as it was: whether a same-person pair should be
+    // downgraded from BLOCK to WARN now that the two rows may legitimately
+    // coexist (the person examined in one wave, taught in another) is a product
+    // decision, not a consequence of the schema change.
     const examinees = keysByRole(s, ROLE_EXAMINEE);
     const instructed = keysByRole(s, ROLE_INSTRUCTED_TRAINEE);
     for (const key of sortedIntersection(examinees, instructed)) {

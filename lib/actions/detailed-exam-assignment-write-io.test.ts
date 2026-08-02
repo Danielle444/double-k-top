@@ -475,7 +475,16 @@ test("24. the P2002 classifier is private, local and exactly the approved shape"
   assert.equal(body.includes("target.includes("), false, "the index name is matched loosely");
   assert.equal(body.includes("startsWith"), false, "the index name is prefix-matched");
   assert.equal(body.includes("endsWith"), false, "the index name is suffix-matched");
-  assert.match(CODE, /exam_assignments_sessionId_studentId_key/);
+  // EX-ASG-MULTIPLICITY RE-POINTED this, and did not weaken it. The role-blind key
+  // this used to name is DROPPED; the classifier must name the EXAMINEE-scoped
+  // PARTIAL index that replaced it — which is exactly the key this slice's fixed
+  // EXAMINEE role is still subject to — and must NOT accept the dropped name.
+  assert.match(CODE, /exam_assignments_examinee_session_student_key/);
+  assert.equal(
+    CODE.includes("exam_assignments_sessionId" + "_studentId_key"),
+    false,
+    "the classifier still matches the DROPPED role-blind index name",
+  );
 });
 
 test("25. no other Prisma code is classified, and no error is inspected further", () => {

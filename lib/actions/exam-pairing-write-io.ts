@@ -335,12 +335,22 @@ function findExamPlanByCourseOfferingId(
  * not a check, that makes a cross-plan pairing unreachable, and it is why the
  * pure core can report a foreign assignment and a missing one identically.
  *
- * The select is EXACTLY four columns. NOT selected, and therefore not leakable by
- * any later mapper: `studentId`, `horseName`, `instructionTopic`, `discipline`,
- * `notes`, `sourcePracticeRole`, `createdAt`, `updatedAt` — and `orderIndex`,
- * which this slice must never read, write or confuse with the pairing label. No
- * student, session, definition or plan relation is included, so no name, date or
- * publication state can reach the decision.
+ * The select is EXACTLY five columns. NOT selected, and therefore not leakable by
+ * any later mapper: `horseName`, `instructionTopic`, `discipline`, `notes`,
+ * `sourcePracticeRole`, `createdAt`, `updatedAt` — and `orderIndex`, which this
+ * slice must never read, write or confuse with the pairing label. No session,
+ * definition or plan relation is included, and the `student` RELATION is not
+ * included either, so no name, date or publication state can reach the decision.
+ *
+ * EX-PAIR-NO-SELF ADDED THE FIFTH COLUMN, `studentId`, and it is load-bearing
+ * rather than convenient. "An examinee may never teach themselves" is an IDENTITY
+ * rule and cannot be answered from assignment ids, roles and indexes: two
+ * DIFFERENT rows may belong to ONE person. Until EX-ASG-MULTIPLICITY the
+ * database's role-blind unique key made that unreachable as a side effect;
+ * scoping that key to EXAMINEE rows is exactly what made those two rows legal, so
+ * the identity now has to be read and compared here. It is the OPAQUE FOREIGN
+ * KEY only — never `student: { … }` — so the pure core compares an id and no
+ * name, identity number, phone or parent contact exists in this module to leak.
  */
 async function findAssignmentForPlan(
   planId: string,
@@ -348,7 +358,7 @@ async function findAssignmentForPlan(
 ): Promise<ExamPairingAssignmentFacts | null> {
   const row = await prisma.examAssignment.findFirst({
     where: { id: assignmentId, session: { planId } },
-    select: { id: true, sessionId: true, role: true, pairingIndex: true },
+    select: { id: true, sessionId: true, role: true, pairingIndex: true, studentId: true },
   });
 
   if (row === null) {
@@ -359,6 +369,7 @@ async function findAssignmentForPlan(
     sessionId: row.sessionId,
     role: row.role,
     pairingIndex: row.pairingIndex,
+    studentId: row.studentId,
   };
 }
 

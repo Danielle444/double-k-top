@@ -281,6 +281,63 @@ export interface ExamPairingAssignmentFacts {
   readonly sessionId: string;
   readonly role: string;
   readonly pairingIndex: number | null;
+  /**
+   * EX-PAIR-NO-SELF — WHO this row is, as a stable id and never as a name.
+   *
+   * The ONE piece of participant identity this decision may see, and it exists
+   * for exactly one rule: an examinee may never teach THEMSELVES. Before
+   * EX-ASG-MULTIPLICITY the database's role-blind key made that unreachable as a
+   * side effect — one person could not hold two rows of one session at all — so
+   * the only guard here was an ASSIGNMENT-ID comparison, which two DIFFERENT
+   * rows of the SAME person sail straight through. Scoping that key to EXAMINEE
+   * rows is exactly what made those two rows legal, so the rule has to be stated
+   * here, on identity, or it is not stated anywhere.
+   *
+   * `null` because the column is nullable: a null `studentId` means "no
+   * participant", NOT "the same participant", and two nulls are therefore never
+   * equal for this purpose.
+   *
+   * It is COMPARED and nothing else. It is never returned, echoed, counted,
+   * logged or carried into a decision, a command or a result.
+   */
+  readonly studentId: string | null;
+}
+
+/**
+ * EX-PAIR-NO-SELF — would pairing these two rows make somebody their own pupil?
+ *
+ * THE SINGLE HOME OF THE RULE. It is exported so the examinee-first replacement
+ * decision can ASK it rather than restate it: two copies of a fail-closed
+ * identity check are two things to keep in step, and the one that drifts is the
+ * one nobody is looking at.
+ *
+ * PERMISSIVE ON ABSENCE, DELIBERATELY, AND ONLY ON ABSENCE. A missing id means
+ * "there is no participant on this row", which is what the column's nullability
+ * exists for — treating two absences as a match would refuse every legitimate
+ * pairing of participant-less rows. A refusal requires two ids that are both
+ * PRESENT and EQUAL, so this can never fire on ignorance alone.
+ *
+ * Identity is compared BY ID ONLY. No name, no normalization, no case-folding
+ * and no trimming: two different people may share a display name, one person may
+ * be spelled two ways, and a name comparison would both refuse legitimate
+ * pairings and miss the real one.
+ *
+ * `Pick` rather than the whole fact object, so no caller can be tempted to
+ * believe this consults a role, a session or an index — it consults identity.
+ */
+export function isExamSelfPairing(
+  examinee: Pick<ExamPairingAssignmentFacts, "studentId">,
+  instructed: Pick<ExamPairingAssignmentFacts, "studentId">,
+): boolean {
+  const examineeStudentId = examinee.studentId;
+  const instructedStudentId = instructed.studentId;
+  if (typeof examineeStudentId !== "string" || typeof instructedStudentId !== "string") {
+    return false;
+  }
+  if (examineeStudentId.length === 0 || instructedStudentId.length === 0) {
+    return false;
+  }
+  return examineeStudentId === instructedStudentId;
 }
 
 /**
@@ -344,7 +401,14 @@ export type ExamPairingDecisionRefusalCode =
   | "examinee_role_mismatch"
   | "different_sessions"
   | "ambiguous_pairing_index"
-  | "examinee_already_paired";
+  | "examinee_already_paired"
+  /**
+   * EX-PAIR-NO-SELF — the two rows are the SAME PERSON, so this pairing would
+   * make somebody their own pupil. A code of its own rather than `invalid_input`,
+   * because the manager's request was well-formed and the correction is a
+   * different one: pick somebody else.
+   */
+  | "self_pairing";
 
 /**
  * What the caller must do about it.
@@ -556,6 +620,31 @@ export function decideExamInstructedTraineePairing(
   // pair, however similar their dates or definitions look.
   if (examinee.sessionId !== instructed.sessionId) {
     return refuseDecision("different_sessions");
+  }
+
+  // EX-PAIR-NO-SELF — an examinee may NEVER teach themselves.
+  //
+  // PLACED HERE ON PURPOSE, and the position is the guarantee:
+  //  - AFTER the structural, role and session checks, so a malformed, wrong-role
+  //    or cross-session request still gets its own precise refusal and none of
+  //    those diagnostics is swallowed by this one;
+  //  - BEFORE every index branch — reuse, allocation, ambiguity and the
+  //    one-to-one rule — and therefore BEFORE the two `NO_CHANGE` short circuits.
+  //    That is what makes it FAIL CLOSED over pre-existing bad data: a session
+  //    that somehow already holds a self-pair cannot have it re-affirmed by a
+  //    manager's double-click, which is exactly what an "already satisfied"
+  //    early return would do.
+  //
+  // The assignment-id check above is NOT this check and does not subsume it: it
+  // catches ONE row used as both halves, while this catches TWO DIFFERENT rows
+  // belonging to ONE PERSON — the case EX-ASG-MULTIPLICITY made representable by
+  // scoping the database key to EXAMINEE rows. Both are kept.
+  //
+  // UNPAIRING IS UNAFFECTED: the unpair branch returns far above, so a self-pair
+  // that already exists can always be taken apart. A rule that blocked the repair
+  // of the state it forbids would be a trap.
+  if (isExamSelfPairing(examinee, instructed)) {
+    return refuseDecision("self_pairing");
   }
 
   // The examinee already owns a usable label: REUSE it, provided it is
@@ -794,6 +883,8 @@ export type SetExamInstructedTraineePairingRefusalCode =
   | "different_sessions"
   | "ambiguous_pairing_index"
   | "examinee_already_paired"
+  // EX-PAIR-NO-SELF — the examinee and the chosen trainee are the same person.
+  | "self_pairing"
   | "stale_write";
 
 /** What THIS call did. */

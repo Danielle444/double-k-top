@@ -3041,11 +3041,50 @@ model ExamAssignment {
   session ExamSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   student Student?    @relation(fields: [studentId], references: [id], onDelete: Restrict)
 
-  // Encodes the EX-BLK-03 conflict rule ("the examinee and the instructed
-  // trainee cannot be the same person within one session") at the database
-  // level. The pure conflict core still reports it first with a Hebrew
-  // message; this is the last line of defence.
-  @@unique([sessionId, studentId])
+  // EX-ASG-MULTIPLICITY - THE UNIQUENESS KEY IS ROLE-SCOPED, AND LIVES IN SQL.
+  //
+  // There is deliberately NO role-blind `@@unique` over the session + trainee
+  // pair here any more. The key that used to stand on this line blocked a trainee
+  // from holding ANY second assignment in one session, whatever the roles were,
+  // which wrongly forbade both of these legitimate arrangements:
+  //   - one trainee sitting their OWN exam (EXAMINEE) while also being the
+  //     INSTRUCTED_TRAINEE taught by a different examinee of that same session;
+  //   - one trainee being the INSTRUCTED_TRAINEE of TWO DIFFERENT examinees of
+  //     that same session.
+  //
+  // What must still never happen is TWO EXAMINEE rows for one trainee in one
+  // session (nobody sits the same session's exam twice), so the key is now
+  // scoped to that role by a hand-written PARTIAL unique index:
+  //
+  //   exam_assignments_examinee_session_student_key
+  //     UNIQUE ("sessionId", "studentId") WHERE "role" = 'EXAMINEE'
+  //
+  // It is authored by hand in
+  // prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee -
+  // the SAME "hand-append to the migration" pattern already used by
+  // teaching_practice_signed_forms, course_groups and message_task_audiences,
+  // and it must be PRESERVED BY HAND in any future migration touching this
+  // table. The stable schema.prisma DSL has no WHERE-qualified `@@unique`
+  // (Prisma 7 exposes one only behind the `partialIndexes` PREVIEW feature,
+  // which this repo deliberately does not enable), so the index is intentionally
+  // NOT represented above and `prisma migrate dev` will offer to drop it - the
+  // same accepted cost the three partial indexes named above already carry.
+  //
+  // NOT the rule that an examinee teaches AT MOST ONE instructed trainee. That
+  // one is EXAMINEE-ASSIGNMENT-scoped, not student-scoped, and is enforced by
+  // pairingIndex application logic (lib/exam/exam-pairing-write-core.ts, its
+  // examinee-first replacement core, and the conditional writes those bind), not
+  // by any key on this table.
+  //
+  // NOT the EX-BLK-03 conflict rule either. The pure conflict core still reports
+  // "the examinee and the instructed trainee are the same person within one
+  // session" with a Hebrew message, but that is now a REPORTED conflict only -
+  // the database no longer refuses it, because refusing it is exactly what made
+  // the two legitimate arrangements above unrepresentable.
+  //
+  // studentId is NULLABLE, and Postgres treats every NULL as distinct, so the
+  // partial key constrains nothing for participant-less rows - unchanged from
+  // the old blanket key.
   @@index([studentId])
   // EX-S3 - the ordered examinee fetch that feeds the derived wave calculation.
   @@index([sessionId, orderIndex])

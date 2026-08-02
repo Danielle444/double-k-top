@@ -21,8 +21,8 @@
  * DIVISION OF LABOUR
  * ===========================================================================
  * In the exam slice (pure, DB-free): the CREATE order, the two submitted fields,
- * the fixed role, the fail-closed definition gate, the role-blind conflict
- * meaning and every outcome code.
+ * the fixed role, the fail-closed definition gate, the conflict meaning and every
+ * outcome code.
  *
  * And here: the REAL admin, policy, Prisma and error-classification bindings, and
  * nothing else.
@@ -253,26 +253,40 @@ function isOperationNotAllowedError(error: unknown): boolean {
 // ===========================================================================
 
 /**
- * The database index behind `@@unique([sessionId, studentId])` on
+ * The ONE remaining unique index over `(sessionId, studentId)` on
  * `exam_assignments`. Named here as a STRING so the classifier can recognize the
  * conflict structurally, without importing a Prisma error class.
+ *
+ * EX-ASG-MULTIPLICITY renamed and NARROWED it. It is now the hand-written PARTIAL
+ * index `UNIQUE ("sessionId", "studentId") WHERE "role" = 'EXAMINEE'`, so its
+ * generated name no longer describes it and a stable one is chosen in the
+ * migration instead. See prisma/schema.prisma's model comment.
  */
-const EXAM_ASSIGNMENT_CONFLICT_INDEX = "exam_assignments_sessionId_studentId_key";
+const EXAM_ASSIGNMENT_CONFLICT_INDEX = "exam_assignments_examinee_session_student_key";
 
 /**
  * Recognize the Prisma unique-constraint violation (`P2002`) that means "that
  * student ALREADY HAS AN ASSIGNMENT IN THAT SESSION", and nothing else.
  *
- * ROLE-BLIND, exactly like the key it recognizes. It fires whether the existing
- * row is another INSTRUCTED_TRAINEE entry for the same person or the session's
- * EXAMINEE — a person cannot both sit the exam and be taught in it. The refusal
- * the pure core produces does not say which, and must not: naming the other row's
- * role would turn a failed create into a read of that row.
+ * NO LONGER ROLE-BLIND, because the key it recognizes no longer is. EX-ASG-
+ * MULTIPLICITY scoped that key to `role = 'EXAMINEE'`, which is the whole point
+ * of that change: one trainee may now be the session's EXAMINEE *and* an
+ * INSTRUCTED_TRAINEE taught by a different examinee of the same session, and may
+ * be the INSTRUCTED_TRAINEE of two different examinees of it. Neither is a
+ * conflict any more, and neither reaches this predicate.
  *
- * This is a PRIVATE, LOCAL classifier. The sibling examinee binding declares its
- * own; that one is private to that module and is deliberately neither imported
- * nor edited here, so neither slice can silently change the other's conflict
- * semantics.
+ * WHICH MEANS THIS REFUSAL IS NOW UNREACHABLE FROM THIS SLICE, and is retained
+ * DELIBERATELY rather than deleted. The write below inserts a row whose `role` is
+ * the fixed literal `INSTRUCTED_TRAINEE`, so the partial predicate excludes it and
+ * no `(sessionId, studentId)` violation can arise from it. Keeping the classifier
+ * costs one comparison and means a future edit that widens this slice's role — or
+ * a future key that widens back — degrades into an ordinary, honest refusal
+ * instead of a raw 500. It is defence in depth, not live behaviour, and the pure
+ * core's `assignment_conflict` code is retained on the same grounds.
+ *
+ * This is a PRIVATE, LOCAL classifier. The sibling examinee bindings declare their
+ * own; those are private to those modules and are deliberately neither imported
+ * nor edited here, so no slice can silently change another's conflict semantics.
  *
  * DELIBERATELY NARROW IN BOTH DIRECTIONS:
  *  - a non-object and a `null` are rejected;
@@ -283,17 +297,22 @@ const EXAM_ASSIGNMENT_CONFLICT_INDEX = "exam_assignments_sessionId_studentId_key
  *    other unique index is never reported to a manager as "already assigned". A
  *    target naming only one of them returns `false`;
  *  - the index-name form must EQUAL the exact index above. A prefix, a suffix or
- *    any other partial match returns `false`;
+ *    any other partial match returns `false`. The OLD, dropped index name is
+ *    deliberately NOT accepted: an error naming it would mean the migration has
+ *    not been applied, which is a deployment fault to surface rather than a
+ *    manager-facing form error to absorb;
  *  - a framework redirect carries a `digest` and no `code`, so an unauthenticated
  *    admin's redirect can never be laundered into a form error;
  *  - `P2025` is not classified here at all — this operation deletes nothing.
  *
- * WHY THE UNREADABLE-METADATA FALLBACK IS SAFE, and it is the established
- * convention in the committed course and exam create bindings: the bound
- * transaction writes exactly ONE model, `ExamAssignment`, whose only unique keys
- * are the primary key — a freshly generated cuid that cannot realistically
- * collide — and this very `(sessionId, studentId)` pair. A `P2002` from that
- * transaction whose target cannot be read is therefore this conflict.
+ * WHY THE UNREADABLE-METADATA FALLBACK IS STILL SAFE — and the argument got
+ * SIMPLER, not harder, because FEWER distinct constraints can now fire. The bound
+ * transaction writes exactly ONE model, `ExamAssignment`, which after
+ * EX-ASG-MULTIPLICITY carries exactly TWO unique keys: the primary key — a freshly
+ * generated cuid that cannot realistically collide — and the EXAMINEE-only partial
+ * index above, which this slice's fixed role puts out of reach. A `P2002` from
+ * that transaction whose target cannot be read is therefore attributable to the
+ * one conflict this code names, and there is no third key it could belong to.
  *
  * The offending error is never inspected beyond these two shapes, never
  * unwrapped, never logged and never echoed, so no database detail and no
@@ -519,7 +538,8 @@ function createAssignmentAtNextOrder(
  *  10. ONE transaction: one MAX aggregate + one create.
  *
  * Only three failures are classified — the offering not-found, the lifecycle
- * denial and the role-blind assignment conflict. Every other error propagates
+ * denial and the (now EXAMINEE-scoped, and therefore unreachable from this
+ * fixed-role slice) assignment conflict. Every other error propagates
  * unchanged, so a real defect is never laundered into a form error, and the
  * authorization redirect is never swallowed: neither `instanceof` check matches a
  * `NEXT_REDIRECT` throw, and the conflict classifier requires a `P2002` code that

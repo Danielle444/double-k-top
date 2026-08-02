@@ -1208,7 +1208,19 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     "lib/exam/" + "exam-read-scope" + "-core.test.ts",
     "lib/exam/" + "exam-read" + ".contract.test.ts",
     "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
-  ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.test.ts",
+    "lib/actions/message-audience" + ".contract.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+    "lib/exam/exam-pairing-write" + "-core.test.ts",
+    "lib/exam/exam-schema-structure" + ".test.ts",
+];
   // RE-POINTED by EX-SES-UI-2 from ONE tolerated production file to TWO. That
   // slice adds the approved session EDIT and REMOVAL endpoints to the route's
   // SHARED Server Action module, so that module — and not a new one — is what
@@ -1263,6 +1275,22 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     "lib/exam/" + "exam-rea" + "d-dto.ts",
     "lib/exam/" + "exam-read-scope" + "-core.ts",
     "lib/exam/" + "exam-trainee-view" + "-core.ts",
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's production edits, each
+    // named EXACTLY. `actions.ts` and the page are already covered above by
+    // P3_ACTIONS_TRACKED_PATH / P3_PAGE_TRACKED_PATH and are deliberately NOT
+    // repeated. Module names are SPLIT so this list never enrols itself as a caller.
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "prisma/schema.prisma",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
   ];
   const TOLERATED = [...TOLERATED_SUITES, ...TOLERATED_PRODUCTION];
   const unexpected = modified.filter((path) => !TOLERATED.includes(path));
@@ -1309,6 +1337,21 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
     "lib/exam/" + "exam-read-dto" + ".ts",
     "lib/exam/" + "exam-read-scope" + "-core.ts",
     "lib/exam/" + "exam-trainee-view" + "-core.ts",
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the MIRROR of the additions above.
+    // Restated as literals so a silent growth of TOLERATED_PRODUCTION still fails
+    // here. Kept in lockstep, entry for entry.
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "prisma/schema.prisma",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
   ].sort());
   for (const path of TOLERATED_PRODUCTION) {
     const isApprovedLibModule =
@@ -1322,9 +1365,25 @@ test("S14. the slice modified NO production file outside the approved P3 wiring"
       path === "lib/exam/" + "exam-plan-loader" + "-core.ts" ||
       path === "lib/exam/" + "exam-read-dto" + ".ts" ||
       path === "lib/exam/" + "exam-read-scope" + "-core.ts" ||
-      path === "lib/exam/" + "exam-trainee-view" + "-core.ts";
+      path === "lib/exam/" + "exam-trainee-view" + "-core.ts" ||
+      // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - each named EXACTLY, for the same
+      // reason: no other lib/ module qualifies and no prefix can widen this.
+      path === "lib/actions/detailed-exam-assignment-write" + "-io.ts" ||
+      path === "lib/actions/exam-assignment-write" + "-io.ts" ||
+      path === "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts" ||
+      path === "lib/actions/exam-pairing-write" + "-io.ts" ||
+      path === "lib/exam/admin-exam-examinee-pairing" + "-core.ts" ||
+      path === "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts" ||
+      path === "lib/exam/exam-conflict" + "-core.ts" ||
+      path === "lib/exam/exam-pairing-write" + "-core.ts";
+    // The ONE approved schema edit and its ONE hand-written migration are the only
+    // non-route, non-lib entries permitted here, and both are named EXACTLY.
+    const isApprovedPrismaFile =
+      path === "prisma/schema.prisma" ||
+      path ===
+        "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql";
     assert.ok(
-      path.startsWith(`${ROUTE_DIR}/`) || isApprovedLibModule,
+      path.startsWith(`${ROUTE_DIR}/`) || isApprovedLibModule || isApprovedPrismaFile,
       `${path} is outside the approved route`,
     );
     assert.equal(
@@ -1500,5 +1559,7 @@ test("S16. the binding is reachable from EXACTLY ONE app Server Action, and no U
     "20260729120000_add_exam_plan_tree",
     "20260729140000_add_exam_teaching_practice_source_date",
     "20260730120000_add_exam_definition_and_breaks",
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE hand-written migration this branch adds.
+    "20260802120000_scope_exam_assignment_unique_to_examinee",
   ]);
 });

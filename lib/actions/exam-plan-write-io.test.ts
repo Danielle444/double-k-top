@@ -1056,7 +1056,31 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
     "lib/exam/" + "exam-read" + ".contract.test.ts",
     "lib/exam/" + "exam-supervisor-write" + "-core.test.ts",
     "lib/exam/" + "exam-trainee-view" + "-core.ts",
-  ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.test.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/actions/message-audience" + ".contract.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.test.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "lib/exam/exam-schema-structure" + ".test.ts",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+];
   // RE-POINTED by EX-SES-UI-2 from ONE approved production file to TWO, and AGAIN
   // by EX-ASG-LTD2-B1 to FOUR — the assignment READ pair it must edit to publish
   // two more stored columns. All four are named EXACTLY: a fifth production file
@@ -1101,7 +1125,58 @@ test("32. the slice MODIFIED only guard suites and the ONE approved P3 page", ()
     "lib/exam/" + "exam-rea" + "d-dto.ts",
     "lib/exam/" + "exam-read-scope" + "-core.ts",
     "lib/exam/" + "exam-trainee-view" + "-core.ts",
-  ];
+
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+    // ADDED, never widened: every entry is one exact literal path. No directory,
+    // no prefix, no glob - an unrelated file still fails this guard. Module names
+    // are SPLIT so this list never reads as a REFERENCE to the module it names.
+    "app/admin/courses/[courseOfferingId]/exams/CreateExamInstructedTraineeAssignment" + "Form.tsx",
+    "app/admin/courses/[courseOfferingId]/exams/exam-assignment-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definition-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-definitions-page" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment" + "-messages.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-instructed-trainee-assignment-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-pairing-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-plan-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-publication-ui" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-create" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-session-edit-delete" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/exam-workspace" + ".contract.test.ts",
+    "app/admin/courses/[courseOfferingId]/exams/page.tsx",
+    "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+    "lib/actions/admin-exam-session-read" + "-io.test.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.test.ts",
+    "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-assignment-read" + "-io.test.ts",
+    "lib/actions/exam-assignment-write" + "-io.test.ts",
+    "lib/actions/exam-assignment-write" + "-io.ts",
+    "lib/actions/exam-definition-read" + "-io.test.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.test.ts",
+    "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+    "lib/actions/exam-pairing-write" + "-io.test.ts",
+    "lib/actions/exam-pairing-write" + "-io.ts",
+    "lib/actions/exam-plan-write" + "-io.test.ts",
+    "lib/actions/exam-publication-write" + "-io.test.ts",
+    "lib/actions/exam-session-write" + "-io.test.ts",
+    "lib/actions/exam-supervisor-read" + "-io.test.ts",
+    "lib/actions/exam-supervisor-write" + "-io.test.ts",
+    "lib/actions/instructor-exam-schedule" + ".contract.test.ts",
+    "lib/actions/message-audience" + ".contract.test.ts",
+    "lib/actions/trainee-exam-schedule" + ".contract.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+    "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+    "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+    "lib/exam/create-exam-plan" + "-core.test.ts",
+    "lib/exam/exam-conflict" + "-core.ts",
+    "lib/exam/exam-pairing-write" + "-core.test.ts",
+    "lib/exam/exam-pairing-write" + "-core.ts",
+    "lib/exam/exam-read" + ".contract.test.ts",
+    "lib/exam/exam-schema-structure" + ".test.ts",
+    "lib/exam/exam-supervisor-write" + "-core.test.ts",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+    "prisma/schema.prisma",
+];
   for (const path of TOLERATED) {
     assert.ok(
       path.endsWith(".test.ts") || TOLERATED_PRODUCTION.includes(path),

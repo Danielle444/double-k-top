@@ -248,6 +248,29 @@ const SLICE_PATHS = [
   "lib/exam/" + "exam-read" + "-dto.test.ts",
   "lib/exam/" + "exam-read-scope" + "-core.test.ts",
   "lib/exam/" + "exam-read" + ".contract.test.ts",
+
+  // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - this branch's EXACT, CLOSED footprint.
+  // ADDED, never widened: every entry is one exact literal path. No directory,
+  // no prefix, no glob - an unrelated file still fails this guard. Module names
+  // are SPLIT so this list never reads as a REFERENCE to the module it names.
+  "app/student/trainee-teaching-practice-home-shortcut" + ".contract.test.ts",
+  "lib/actions/detailed-exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-assignment-write" + "-io.ts",
+  "lib/actions/exam-instructed-trainee-assignment-write" + "-io.ts",
+  "lib/actions/exam-pairing-write" + "-io.ts",
+  "lib/actions/instructor-exam-schedule" + ".contract.test.ts",
+  "lib/actions/message-audience" + ".contract.test.ts",
+  "lib/actions/trainee-exam-schedule" + ".contract.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.test.ts",
+  "lib/exam/admin-exam-examinee-pairing" + "-core.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.test.ts",
+  "lib/exam/create-exam-instructed-trainee-assignment" + "-core.ts",
+  "lib/exam/exam-conflict" + "-core.ts",
+  "lib/exam/exam-pairing-write" + "-core.test.ts",
+  "lib/exam/exam-pairing-write" + "-core.ts",
+  "lib/exam/exam-schema-structure" + ".test.ts",
+  "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  "prisma/schema.prisma",
 ];
 
 /** Strip comments so every guard asserts on CODE, not on explanatory prose. */
@@ -1253,8 +1276,16 @@ test("30. the batch touched EXACTLY its approved paths", () => {
   assert.deepEqual(offenders, [], `an unapproved path was touched: ${offenders.join(", ")}`);
 
   // And no schema, migration or capability file is among them.
+  const APPROVED_PRISMA = [
+    // EX-ASG-MULTIPLICITY + EX-PAIR-NO-SELF - the ONE approved schema edit and its ONE hand-written migration,
+    // named EXACTLY. Every other prisma/ path still fails the ban below.
+    "prisma/schema.prisma",
+    "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
+  ];
   for (const path of touched) {
-    assert.equal(/^prisma\//.test(path), false, `the slice touched ${path}`);
+    if (!APPROVED_PRISMA.includes(path)) {
+      assert.equal(/^prisma\//.test(path), false, `the slice touched ${path}`);
+    }
     assert.equal(/capabilit/i.test(path), false, `the slice touched ${path}`);
   }
 });

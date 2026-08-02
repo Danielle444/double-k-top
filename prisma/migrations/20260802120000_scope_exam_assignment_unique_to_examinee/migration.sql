@@ -1,0 +1,78 @@
+-- EX-ASG-MULTIPLICITY: narrow the exam-assignment uniqueness key from ROLE-BLIND
+-- to EXAMINEE-ONLY.
+--
+-- INDEX-ONLY / NON-DESTRUCTIVE. This migration ONLY drops one unique index on
+-- the existing exam_assignments table and creates a narrower one in its place.
+-- It creates no table, enum, column, FK or CHECK, alters no column, and contains
+-- NO INSERT / UPDATE / DELETE / backfill of any kind. No row is read, rewritten
+-- or removed.
+--
+-- WHY: the dropped key, exam_assignments_sessionId_studentId_key (created by
+-- 20260729120000_add_exam_plan_tree), was UNIQUE ("sessionId", "studentId") with
+-- no role predicate. Because ExamAssignment stores EXAMINEE rows and
+-- INSTRUCTED_TRAINEE rows in the SAME table, a role-blind key over that pair
+-- means "this trainee may hold at most ONE assignment in this session, whatever
+-- the role", which forbade two arrangements the exam module is supposed to
+-- support:
+--
+--   1. one trainee sitting their OWN exam (EXAMINEE) while ALSO being the
+--      INSTRUCTED_TRAINEE taught by a DIFFERENT examinee of the same session;
+--   2. one trainee being the INSTRUCTED_TRAINEE of TWO DIFFERENT examinees of
+--      the same session.
+--
+-- THE FIX: keep exactly the invariant that is genuinely invalid - two EXAMINEE
+-- rows for one trainee in one session, i.e. sitting the same session's exam
+-- twice - and stop constraining every other role combination. A partial unique
+-- index scoped to WHERE "role" = 'EXAMINEE' says precisely that, and leaves
+-- INSTRUCTED_TRAINEE rows for the same (sessionId, studentId) pair entirely
+-- unconstrained at the database level.
+--
+-- WHY INSTRUCTED_TRAINEE ROWS GET NO KEY OF THEIR OWN: the remaining rule -
+-- "each examinee assignment has at most ONE instructed trainee" - is
+-- EXAMINEE-ASSIGNMENT-scoped, not student-scoped. It is answered by
+-- ExamAssignment.pairingIndex plus the committed pairing application logic
+-- (lib/exam/exam-pairing-write-core.ts, the examinee-first replacement core, and
+-- the conditional/row-locking writes those bind), and a student-scoped unique
+-- key cannot express it: the same person legitimately accompanying two different
+-- examinees is exactly business rule 2 above. The only duplicate that is ever
+-- invalid on the instructed side is the same relationship for the SAME examinee
+-- assignment, which the pairing layer already refuses.
+--
+-- STRICTLY LOOSER, SO NO EXISTING ROW CAN BE REJECTED. The new predicate selects
+-- a SUBSET of the rows the old key covered, over the SAME two columns, so every
+-- row set that satisfied the old key satisfies the new one by construction. The
+-- pre-flight verification query is nonetheless documented in the
+-- implementation report and is expected to return ZERO rows:
+--
+--   SELECT "sessionId", "studentId", COUNT(*)
+--   FROM "exam_assignments"
+--   WHERE "role" = 'EXAMINEE' AND "studentId" IS NOT NULL
+--   GROUP BY "sessionId", "studentId"
+--   HAVING COUNT(*) > 1;
+--
+-- ATOMIC: Prisma runs a migration file inside one transaction on PostgreSQL, and
+-- CREATE INDEX / DROP INDEX are transactional DDL there, so there is no moment
+-- at which the table is visible to another session with neither key in place.
+--
+-- HAND-WRITTEN AND MUST STAY THAT WAY. The stable schema.prisma DSL has no
+-- syntax for a WHERE-qualified/partial unique index (Prisma 7 exposes one only
+-- behind the `partialIndexes` PREVIEW feature, which this repo deliberately does
+-- not enable), so this index CANNOT be generated from the schema and must be
+-- PRESERVED BY HAND in any future migration touching this table - the same
+-- pattern, and the same accepted `prisma migrate dev` drift cost, already
+-- carried by teaching_practice_signed_forms, course_groups and
+-- message_task_audiences. See the model comment in schema.prisma.
+--
+-- NULLS: "studentId" is nullable and PostgreSQL treats every NULL as distinct,
+-- so the new key constrains nothing for participant-less rows - unchanged from
+-- the old blanket key.
+--
+-- UNTOUCHED: exam_assignments_studentId_idx,
+-- exam_assignments_sessionId_orderIndex_idx, the primary key, both foreign keys
+-- and every constraint of every other table.
+
+-- DropIndex
+DROP INDEX "exam_assignments_sessionId_studentId_key";
+
+-- CreateIndex
+CREATE UNIQUE INDEX "exam_assignments_examinee_session_student_key" ON "exam_assignments"("sessionId", "studentId") WHERE "role" = 'EXAMINEE';
