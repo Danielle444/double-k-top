@@ -60,7 +60,10 @@ test("1. the placeholder card component takes only three plain string props", ()
   // because the file uses CRLF line endings and the destructured prop object's
   // own closing brace would otherwise end the slice too early.
   const bodyStart = SECTION_CODE.indexOf("function BeginnerPlaceholderCard(");
-  const bodyEnd = SECTION_CODE.indexOf("export function StudentExamsSection()", bodyStart);
+  const bodyEnd = SECTION_CODE.indexOf(
+    "export function StudentExamsSection({ groupName }: { groupName: string | null }) {",
+    bodyStart,
+  );
   assert.ok(bodyEnd > bodyStart, "the placeholder card's body could not be located");
   const body = SECTION_CODE.slice(bodyStart, bodyEnd);
   for (const token of [
@@ -81,7 +84,10 @@ test("1. the placeholder card component takes only three plain string props", ()
 
 test("2. the placeholder card reuses the existing outer card style", () => {
   const bodyStart = SECTION_CODE.indexOf("function BeginnerPlaceholderCard(");
-  const bodyEnd = SECTION_CODE.indexOf("export function StudentExamsSection()", bodyStart);
+  const bodyEnd = SECTION_CODE.indexOf(
+    "export function StudentExamsSection({ groupName }: { groupName: string | null }) {",
+    bodyStart,
+  );
   assert.ok(bodyEnd > bodyStart, "the placeholder card's body could not be located");
   const body = SECTION_CODE.slice(bodyStart, bodyEnd);
   assert.ok(
@@ -150,23 +156,47 @@ test("6. the existing dead beginner-routing branches are UNTOUCHED", () => {
 // 3. The two placeholders are wired to the right views, with the right text
 // ===========================================================================
 
-test('7. both placeholders render unconditionally in the self ("לו״ז שלי") view', () => {
+test('7. both placeholders are reachable from the self ("לו״ז שלי") view, each gated on the trainee\'s OWN groupName', () => {
   const flat = SECTION_CODE.replace(/\s+/g, " ");
   assert.match(
     flat,
-    /mode === "self" && \(\s*<>[\s\S]*הדרכות מתחילים — קבוצה א[\s\S]*הדרכות מתחילים — קבוצה ב[\s\S]*<\/>\s*\)/,
-    "the self view does not unconditionally render both placeholders",
+    /mode === "self" && \(\s*<>[\s\S]*groupName === "א"[\s\S]*הדרכות מתחילים — קבוצה א[\s\S]*groupName === "ב"[\s\S]*הדרכות מתחילים — קבוצה ב[\s\S]*<\/>\s*\)/,
+    "the self view does not gate each placeholder on the trainee's own groupName",
   );
 });
 
-test('8. each placeholder in "לפי תאריך" is gated on its OWN fixed date, not the other\'s', () => {
+test('7b. neither self-view placeholder is unconditional — each requires its OWN group value', () => {
   assert.ok(
-    SECTION_CODE.includes('mode === "date" && activeDate === BEGINNER_PLACEHOLDER_DATE_A && ('),
-    "placeholder A is not gated on the date view + its fixed date",
+    SECTION_CODE.includes('{groupName === "א" && ('),
+    "group A placeholder is not gated on groupName",
   );
   assert.ok(
-    SECTION_CODE.includes('mode === "date" && activeDate === BEGINNER_PLACEHOLDER_DATE_B && ('),
-    "placeholder B is not gated on the date view + its fixed date",
+    SECTION_CODE.includes('{groupName === "ב" && ('),
+    "group B placeholder is not gated on groupName",
+  );
+});
+
+test("7c. group filtering never compares a display name (fullName, selected.fullName, etc.)", () => {
+  for (const forbidden of ["fullName", "displayName", ".name ==="]) {
+    assert.equal(
+      SECTION_CODE.includes(forbidden),
+      false,
+      `group filtering must not reference ${forbidden}`,
+    );
+  }
+});
+
+test('8. each placeholder in "לפי תאריך" is gated on its OWN fixed date AND the trainee\'s OWN groupName, not the other\'s', () => {
+  const flat = SECTION_CODE.replace(/\s+/g, " ");
+  assert.match(
+    flat,
+    /mode === "date" &&\s*activeDate === BEGINNER_PLACEHOLDER_DATE_A &&\s*groupName === "א" &&/,
+    "placeholder A is not gated on the date view + its fixed date + groupName === א",
+  );
+  assert.match(
+    flat,
+    /mode === "date" &&\s*activeDate === BEGINNER_PLACEHOLDER_DATE_B &&\s*groupName === "ב" &&/,
+    "placeholder B is not gated on the date view + its fixed date + groupName === ב",
   );
   assert.ok(SECTION_CODE.includes('const BEGINNER_PLACEHOLDER_DATE_A = "2026-08-02";'));
   assert.ok(SECTION_CODE.includes('const BEGINNER_PLACEHOLDER_DATE_B = "2026-08-03";'));

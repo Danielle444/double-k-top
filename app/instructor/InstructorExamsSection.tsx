@@ -484,18 +484,23 @@ export function InstructorExamsSection() {
                         ) : (
                           <ExamAssignmentRows assignments={row.assignments} />
                         )}
+
+                        {/* EX-INST-GENERAL-OVERVIEW-ONLY — the computed-timetable
+                            status and its operational messages are diagnostics
+                            about the assignment-level rows above; they belong to
+                            the SAME by-type/by-date-only guard, not the general
+                            timetable-facts view. */}
+                        {statusLabel !== null && (
+                          <p className="mt-2 text-xs text-muted-foreground">{statusLabel}</p>
+                        )}
+
+                        {messages.map((message) => (
+                          <p key={message} className="mt-1 text-xs text-warning">
+                            {message}
+                          </p>
+                        ))}
                       </>
                     )}
-
-                    {statusLabel !== null && (
-                      <p className="mt-2 text-xs text-muted-foreground">{statusLabel}</p>
-                    )}
-
-                    {messages.map((message) => (
-                      <p key={message} className="mt-1 text-xs text-warning">
-                        {message}
-                      </p>
-                    ))}
                   </div>
                 );
               })}

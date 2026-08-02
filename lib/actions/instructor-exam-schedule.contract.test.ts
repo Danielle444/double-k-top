@@ -1227,6 +1227,19 @@ function approvedSlicePaths(): string[] {
     // no reader and no `lib/exam` file.
     "lib/components/StudentExamsSectionBeginnerPlaceholder.test.tsx",
     "lib/components/InstructorExamsSectionBeginnerPlaceholder.test.tsx",
+    // fix/exam-role-ui-urgent, on the same terms: an EXACT path list, never a
+    // directory and never a glob. This branch's four NEW test files - the
+    // instructor general/all overview-only regression test (re-pointed to also
+    // pin the timetable-status label gate), and three new trainee contract
+    // tests (default-view, beginner-placeholder group wiring, and the
+    // Teaching-Practice home shortcut). It adds no route, no action, no reader
+    // and no `lib/exam` file. SECTION_REL, CLIENT_REL and the other
+    // already-approved paths above already cover this branch's four
+    // implementation-file edits.
+    "app/instructor/instructor-exams-general-overview.contract.test.ts",
+    "app/student/trainee-exams-default-view.contract.test.ts",
+    "app/student/trainee-beginner-placeholder-group-wiring.contract.test.ts",
+    "app/student/trainee-teaching-practice-home-shortcut.contract.test.ts",
     ];
 }
 
