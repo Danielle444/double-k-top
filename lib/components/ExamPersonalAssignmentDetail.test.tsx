@@ -173,12 +173,20 @@ test("3c. ZERO rows marked isSelf renders nothing", () => {
   assert.equal(render([]), "", "an empty block produced markup");
 });
 
-test("3d. MORE THAN ONE row marked isSelf renders nothing — the first is never taken", () => {
+test("3d. MORE THAN ONE row marked isSelf renders a detail block for EACH one — none dropped", () => {
+  // EX-ASG-MULTIPLICITY: a trainee legitimately holds several assignments in one
+  // block. Both must render; neither is picked arbitrarily over the other.
   const html = render([
-    self(examinee({ participantName: "דנה", horseName: "רקיע" }), true),
-    self(examinee({ participantName: "רון", horseName: "סופה" }), true),
+    self(examinee({ participantName: "דנה", horseName: "רקיע", discipline: "אילוף" }), true),
+    self(
+      instructed({ participantName: "רון", instructionTopic: "קפיצה", discipline: "ראווה" }),
+      true,
+    ),
   ]);
-  assert.equal(html, "", "a contradictory marking was resolved by guessing");
+  assert.ok(html.includes("רקיע"), "the EXAMINEE slot's horse is missing");
+  assert.ok(html.includes("ראווה"), "the INSTRUCTED_TRAINEE slot's discipline is missing");
+  assert.ok(html.includes(EXAMINEE_COUNTERPART_LABEL), "the EXAMINEE slot's counterpart label is missing");
+  assert.ok(html.includes(TRAINEE_COUNTERPART_LABEL), "the INSTRUCTED_TRAINEE slot's counterpart label is missing");
 });
 
 test("3e. a marked row with no detail at all renders nothing rather than empty labels", () => {
@@ -288,7 +296,7 @@ test("5a. the REMOVED heuristic is absent: no role or time selection remains", (
   // Selection is ONE call into the pure core, and the component performs no
   // filtering, finding or indexing of its own.
   assert.ok(
-    SOURCE_CODE.includes("selectSelfAssignmentRow(assignments)"),
+    SOURCE_CODE.includes("selectSelfAssignmentRows(assignments)"),
     "the component does not delegate selection to the pure core",
   );
   for (const token of ["assignments.filter", "assignments.find", "assignments[", "isSelf ==="]) {

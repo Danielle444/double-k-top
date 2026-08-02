@@ -1311,6 +1311,15 @@ function approvedSlicePaths(): string[] {
     // named EXACTLY: it is in the merge's own file set and nothing else under
     // `lib/actions` becomes approved by it.
     "lib/actions/teaching-practice-student.ts",
+    // EX-TRN-MULTI-SLOT, on the same terms: an EXACT path list, never a
+    // directory and never a glob. The trainee reader stops dropping a whole
+    // session when the authenticated trainee legitimately resolves to more
+    // than one assignment in it. `exam-trainee-view-core.ts`, `exam-read-dto.ts`
+    // and `exam-read-dto.test.ts` are already approved above; its own suite
+    // and the sibling adapter suite whose fixtures exercise the same
+    // personal-slot shape are the two new entries.
+    "lib/exam/" + "exam-trainee-view" + "-core.test.ts",
+    "lib/exam/" + "exam-stored-adapter" + "-core.test.ts",
   ];
 }
 

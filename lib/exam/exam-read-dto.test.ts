@@ -792,20 +792,19 @@ test("a self stored row preserves the EXACT personal start and end", () => {
   const row = rowById(traineeDto().allRows, "s1");
   assert.equal(row.isSelf, true);
   assert.equal(row.selfLabel, TRAINEE_SELF_ROW_LABEL);
-  assert.equal(row.selfRole, "EXAMINEE");
-  assert.equal(row.selfStartTime, "09:00");
-  assert.equal(row.selfEndTime, "09:20");
+  assert.equal(row.personalSlots.length, 1);
+  assert.equal(row.personalSlots[0].role, "EXAMINEE");
+  assert.equal(row.personalSlots[0].startTime, "09:00");
+  assert.equal(row.personalSlots[0].endTime, "09:20");
   // ...and never the block interval.
-  assert.notEqual(row.selfEndTime, row.displayEndTime);
+  assert.notEqual(row.personalSlots[0].endTime, row.displayEndTime);
 });
 
-test("a non-self stored row carries null self state", () => {
+test("a non-self stored row carries empty self state", () => {
   const row = rowById(traineeDto().allRows, "s2");
   assert.equal(row.isSelf, false);
   assert.equal(row.selfLabel, null);
-  assert.equal(row.selfRole, null);
-  assert.equal(row.selfStartTime, null);
-  assert.equal(row.selfEndTime, null);
+  assert.deepEqual(row.personalSlots, []);
 });
 
 test("displayEndTime matches the committed end-time rule in every case", () => {

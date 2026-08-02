@@ -638,7 +638,6 @@ export function StudentExamsSection() {
           }
           const row = entry.row;
           const place = row.arena ?? row.location;
-          const roleLabel = row.selfRole === null ? null : SELF_ROLE_LABELS[row.selfRole];
           return (
             <div
               key={row.rowKey}
@@ -662,20 +661,26 @@ export function StudentExamsSection() {
               </p>
 
               {row.selfLabel !== null && (
-                <p className="mt-1 text-sm font-bold text-primary">
-                  {row.selfLabel}
-                  {roleLabel !== null && ` · ${roleLabel}`}
-                </p>
+                <p className="mt-1 text-sm font-bold text-primary">{row.selfLabel}</p>
               )}
 
-              {/* The viewer's EXACT personal window, and only when the contract
-                  carries it. Nothing here falls back to the block times above. */}
-              {row.selfStartTime !== null && (
-                <p className="text-sm font-bold text-primary">
-                  השעה שלך: {row.selfStartTime}
-                  {row.selfEndTime !== null && ` - ${row.selfEndTime}`}
-                </p>
-              )}
+              {/* One line per personal slot — the viewer may legitimately hold
+                  several in one row (e.g. an EXAMINEE slot plus one or more
+                  INSTRUCTED_TRAINEE slots for different examinees). Always in
+                  chronological order, and nothing here falls back to the block
+                  times above. */}
+              {row.personalSlots.map((slot, index) => {
+                const slotRoleLabel = slot.role === null ? null : SELF_ROLE_LABELS[slot.role];
+                return (
+                  <p
+                    key={`${row.rowKey}-slot-${index}`}
+                    className="text-sm font-bold text-primary"
+                  >
+                    {slotRoleLabel !== null && `${slotRoleLabel} · `}
+                    השעה שלך: {slot.startTime} - {slot.endTime}
+                  </p>
+                );
+              })}
 
               {place !== null && place.trim().length > 0 && (
                 <p className="mt-1 text-sm text-muted-foreground">מקום: {place}</p>
@@ -701,12 +706,6 @@ export function StudentExamsSection() {
 
             {group.rows.map((row) => {
               const place = row.arena ?? row.location;
-              // A live beginner lesson has no exam ROLE — see the same rule in
-              // the personal view above.
-              const roleLabel =
-                isBeginnerExamRow(row) || row.selfRole === null
-                  ? null
-                  : SELF_ROLE_LABELS[row.selfRole];
               return (
                 <div
                   key={row.rowKey}
@@ -725,21 +724,26 @@ export function StudentExamsSection() {
                   </div>
 
                   {row.selfLabel !== null && (
-                    <p className="mt-1 text-sm font-bold text-primary">
-                      {row.selfLabel}
-                      {roleLabel !== null && ` · ${roleLabel}`}
-                    </p>
+                    <p className="mt-1 text-sm font-bold text-primary">{row.selfLabel}</p>
                   )}
 
-                  {/* The viewer's EXACT personal window, and only when the
-                      contract carries it. Nothing here falls back to the block
-                      times above. */}
-                  {row.selfStartTime !== null && (
-                    <p className="text-sm font-bold text-primary">
-                      השעה שלך: {row.selfStartTime}
-                      {row.selfEndTime !== null && ` - ${row.selfEndTime}`}
-                    </p>
-                  )}
+                  {/* One line per personal slot — see the same rule in the
+                      personal view above. A live beginner lesson has no exam
+                      ROLE, so `slot.role` is `null` there and only the time
+                      shows. Nothing here falls back to the block times above. */}
+                  {row.personalSlots.map((slot, index) => {
+                    const slotRoleLabel =
+                      slot.role === null ? null : SELF_ROLE_LABELS[slot.role];
+                    return (
+                      <p
+                        key={`${row.rowKey}-slot-${index}`}
+                        className="text-sm font-bold text-primary"
+                      >
+                        {slotRoleLabel !== null && `${slotRoleLabel} · `}
+                        השעה שלך: {slot.startTime} - {slot.endTime}
+                      </p>
+                    );
+                  })}
 
                   {place !== null && place.trim().length > 0 && (
                     <p className="mt-1 text-sm text-muted-foreground">מקום: {place}</p>

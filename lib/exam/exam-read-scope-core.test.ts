@@ -1413,7 +1413,7 @@ test("no foreign Student.id, stored slot, conflict field or payload reaches a tr
   // The row is the viewer's own, so the self flags ARE present — as booleans and
   // times, never as an id to compare.
   assert.equal(dto.myRows.length, 1);
-  assert.equal(dto.myRows[0].selfStartTime, "09:00");
+  assert.equal(dto.myRows[0].personalSlots[0].startTime, "09:00");
 });
 
 test("the collectors read only the visible rows", () => {

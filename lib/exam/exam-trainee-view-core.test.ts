@@ -193,13 +193,14 @@ test("5. a stored EXAMINEE receives its EXACT slot time, not the block interval"
 
   const { myRows } = projectTraineeExamDay([row], details, DATE, VIEWER);
   assert.equal(myRows.length, 1);
-  assert.equal(myRows[0].selfRole, "EXAMINEE");
-  assert.equal(myRows[0].selfStartTime, "16:15");
-  assert.equal(myRows[0].selfEndTime, "16:30");
+  assert.equal(myRows[0].personalSlots.length, 1);
+  assert.equal(myRows[0].personalSlots[0].role, "EXAMINEE");
+  assert.equal(myRows[0].personalSlots[0].startTime, "16:15");
+  assert.equal(myRows[0].personalSlots[0].endTime, "16:30");
   // Explicitly NOT the block's own interval, and NOT the derived block end.
-  assert.notEqual(myRows[0].selfStartTime, row.startTime);
-  assert.notEqual(myRows[0].selfEndTime, row.endTime);
-  assert.notEqual(myRows[0].selfEndTime, row.derivedBlockEndTime);
+  assert.notEqual(myRows[0].personalSlots[0].startTime, row.startTime);
+  assert.notEqual(myRows[0].personalSlots[0].endTime, row.endTime);
+  assert.notEqual(myRows[0].personalSlots[0].endTime, row.derivedBlockEndTime);
 });
 
 test("6. a stored INSTRUCTED_TRAINEE receives its inherited EXACT slot time", () => {
@@ -219,9 +220,102 @@ test("6. a stored INSTRUCTED_TRAINEE receives its inherited EXACT slot time", ()
 
   const { myRows } = projectTraineeExamDay([row], details, DATE, VIEWER);
   assert.equal(myRows.length, 1);
-  assert.equal(myRows[0].selfRole, "INSTRUCTED_TRAINEE");
-  assert.equal(myRows[0].selfStartTime, "16:30");
-  assert.equal(myRows[0].selfEndTime, "16:45");
+  assert.equal(myRows[0].personalSlots.length, 1);
+  assert.equal(myRows[0].personalSlots[0].role, "INSTRUCTED_TRAINEE");
+  assert.equal(myRows[0].personalSlots[0].startTime, "16:30");
+  assert.equal(myRows[0].personalSlots[0].endTime, "16:45");
+});
+
+test("6b. EX-ASG-MULTIPLICITY: 1 EXAMINEE + 2 INSTRUCTED_TRAINEE slots for one viewer are ALL kept, not dropped", () => {
+  // The exact reported production regression: a trainee (e.g. Gili Rubin) holds
+  // an EXAMINEE slot of her own AND instructs two different examinees in the
+  // very same session. The row must survive and carry all three personal slots.
+  const row = stored({
+    sessionId: "A",
+    examineeStudentIds: [VIEWER, "stu-examinee-2", "stu-examinee-3"],
+    instructedTraineeStudentIds: [VIEWER, VIEWER],
+  });
+  const details = lookup(
+    detail("A", [
+      { assignmentId: "a1", studentId: VIEWER, role: "EXAMINEE", startTime: "16:00", endTime: "16:15" },
+      { assignmentId: "a2", studentId: "stu-examinee-2", role: "EXAMINEE", startTime: "16:15", endTime: "16:30" },
+      { assignmentId: "a3", studentId: "stu-examinee-3", role: "EXAMINEE", startTime: "16:30", endTime: "16:45" },
+      { assignmentId: "a4", studentId: VIEWER, role: "INSTRUCTED_TRAINEE", startTime: "16:15", endTime: "16:30" },
+      { assignmentId: "a5", studentId: VIEWER, role: "INSTRUCTED_TRAINEE", startTime: "16:30", endTime: "16:45" },
+    ]),
+  );
+
+  const result = projectTraineeExamDay([row], details, DATE, VIEWER);
+  assert.deepEqual(result.issues, [], "no EX-TRN-DUPLICATE-STUDENT-SLOT for legal multiplicity");
+  assert.equal(result.allRows.length, 1, "the session is NOT dropped");
+  assert.equal(result.myRows.length, 1);
+  assert.equal(result.myRows[0].isSelf, true);
+  assert.equal(result.myRows[0].personalSlots.length, 3, "all three of the viewer's slots survive");
+  // Ordered chronologically by startTime.
+  assert.deepEqual(
+    result.myRows[0].personalSlots.map((s) => [s.role, s.startTime, s.endTime]),
+    [
+      ["EXAMINEE", "16:00", "16:15"],
+      ["INSTRUCTED_TRAINEE", "16:15", "16:30"],
+      ["INSTRUCTED_TRAINEE", "16:30", "16:45"],
+    ],
+  );
+});
+
+test("6c. two or more INSTRUCTED_TRAINEE slots alone (no EXAMINEE slot) are legal", () => {
+  const row = stored({
+    sessionId: "A",
+    examineeStudentIds: ["stu-examinee-1", "stu-examinee-2"],
+    instructedTraineeStudentIds: [VIEWER, VIEWER],
+  });
+  const details = lookup(
+    detail("A", [
+      { assignmentId: "a1", studentId: "stu-examinee-1", role: "EXAMINEE", startTime: "16:00", endTime: "16:15" },
+      { assignmentId: "a2", studentId: "stu-examinee-2", role: "EXAMINEE", startTime: "16:15", endTime: "16:30" },
+      { assignmentId: "a3", studentId: VIEWER, role: "INSTRUCTED_TRAINEE", startTime: "16:00", endTime: "16:15" },
+      { assignmentId: "a4", studentId: VIEWER, role: "INSTRUCTED_TRAINEE", startTime: "16:15", endTime: "16:30" },
+    ]),
+  );
+
+  const result = projectTraineeExamDay([row], details, DATE, VIEWER);
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.allRows.length, 1);
+  assert.equal(result.myRows[0].personalSlots.length, 2);
+  assert.ok(result.myRows[0].personalSlots.every((s) => s.role === "INSTRUCTED_TRAINEE"));
+});
+
+test("6d. two distinct sessions sharing the same date and start time stay distinct, and only the truly-assigned one carries the viewer's slots", () => {
+  const sessionA = stored({
+    sessionId: "A",
+    startTime: "16:00",
+    orderIndex: 0,
+    examineeStudentIds: [VIEWER],
+  });
+  const sessionB = stored({
+    sessionId: "B",
+    startTime: "16:00",
+    orderIndex: 1,
+    examineeStudentIds: ["stu-other"],
+  });
+  const details = lookup(
+    detail("A", [
+      { assignmentId: "a1", studentId: VIEWER, role: "EXAMINEE", startTime: "16:00", endTime: "16:15" },
+    ]),
+    detail("B", [
+      { assignmentId: "b1", studentId: "stu-other", role: "EXAMINEE", startTime: "16:00", endTime: "16:15" },
+    ]),
+  );
+
+  const result = projectTraineeExamDay([sessionA, sessionB], details, DATE, VIEWER);
+  assert.deepEqual(result.allRows.map((r) => r.session.sessionId), ["A", "B"]);
+  const rowA = result.allRows.find((r) => r.session.sessionId === "A");
+  const rowB = result.allRows.find((r) => r.session.sessionId === "B");
+  assert.ok(rowA !== undefined && rowB !== undefined);
+  assert.equal(rowA.isSelf, true);
+  assert.equal(rowA.personalSlots.length, 1);
+  assert.equal(rowB.isSelf, false, "the viewer must not inherit the other same-time session's self state");
+  assert.deepEqual(rowB.personalSlots, []);
+  assert.deepEqual(result.myRows.map((r) => r.session.sessionId), ["A"]);
 });
 
 test("7. a beginner participant receives the REAL lesson interval", () => {
@@ -234,9 +328,10 @@ test("7. a beginner participant receives the REAL lesson interval", () => {
 
   const { myRows } = projectTraineeExamDay([row], lookup(), DATE, VIEWER);
   assert.equal(myRows.length, 1);
-  assert.equal(myRows[0].selfRole, "EXAMINEE");
-  assert.equal(myRows[0].selfStartTime, "16:00");
-  assert.equal(myRows[0].selfEndTime, "16:30");
+  assert.equal(myRows[0].personalSlots.length, 1);
+  assert.equal(myRows[0].personalSlots[0].role, "EXAMINEE");
+  assert.equal(myRows[0].personalSlots[0].startTime, "16:00");
+  assert.equal(myRows[0].personalSlots[0].endTime, "16:30");
 });
 
 // ===========================================================================
@@ -249,9 +344,7 @@ test("8. a beginner non-participant is not marked", () => {
   const { allRows, myRows } = projectTraineeExamDay([row], lookup(), DATE, VIEWER);
   assert.equal(allRows.length, 1);
   assert.equal(allRows[0].isSelf, false);
-  assert.equal(allRows[0].selfRole, null);
-  assert.equal(allRows[0].selfStartTime, null);
-  assert.equal(allRows[0].selfEndTime, null);
+  assert.deepEqual(allRows[0].personalSlots, []);
   assert.deepEqual(myRows, []);
 });
 
@@ -547,8 +640,7 @@ test("19. a missing viewer slot NEVER falls back to the block interval", () => {
   const plain = projectTraineeExamDay([undeclared], withoutSlot, DATE, VIEWER);
   assert.equal(plain.allRows.length, 1);
   assert.equal(plain.allRows[0].isSelf, false);
-  assert.equal(plain.allRows[0].selfStartTime, null);
-  assert.equal(plain.allRows[0].selfEndTime, null);
+  assert.deepEqual(plain.allRows[0].personalSlots, []);
   assert.deepEqual(plain.myRows, []);
 });
 
@@ -569,8 +661,9 @@ test("20. a beginner row neither requires nor consumes stored detail", () => {
     const result = projectTraineeExamDay([row], details, DATE, VIEWER);
     assert.equal(result.allRows.length, 1);
     assert.equal(result.myRows.length, 1);
-    assert.equal(result.myRows[0].selfStartTime, "16:00");
-    assert.equal(result.myRows[0].selfEndTime, "16:30");
+    assert.equal(result.myRows[0].personalSlots.length, 1);
+    assert.equal(result.myRows[0].personalSlots[0].startTime, "16:00");
+    assert.equal(result.myRows[0].personalSlots[0].endTime, "16:30");
     assert.deepEqual(result.issues, []);
   }
 
@@ -641,8 +734,9 @@ test("21b. a beginner row must declare timetableStatus NOT_APPLICABLE explicitly
   );
   assert.equal(valid.allRows.length, 1);
   assert.equal(valid.myRows.length, 1);
-  assert.equal(valid.myRows[0].selfStartTime, "16:00");
-  assert.equal(valid.myRows[0].selfEndTime, "16:30");
+  assert.equal(valid.myRows[0].personalSlots.length, 1);
+  assert.equal(valid.myRows[0].personalSlots[0].startTime, "16:00");
+  assert.equal(valid.myRows[0].personalSlots[0].endTime, "16:30");
   assert.deepEqual(valid.issues, []);
 
   // Everything else — absent, null, a stored status, or a token that could only
@@ -901,13 +995,7 @@ test("27. no client identity, display-name or UI payload is accepted or emitted"
     DATE,
     VIEWER,
   );
-  assert.deepEqual(Object.keys(allRows[0]).sort(), [
-    "isSelf",
-    "selfEndTime",
-    "selfRole",
-    "selfStartTime",
-    "session",
-  ]);
+  assert.deepEqual(Object.keys(allRows[0]).sort(), ["isSelf", "personalSlots", "session"]);
 });
 
 test("28. ProjectionSession was NOT widened with slots / isSelf / detail fields", () => {
@@ -936,7 +1024,7 @@ test("28. ProjectionSession was NOT widened with slots / isSelf / detail fields"
     "startTime",
     "timetableStatus",
   ]);
-  for (const banned of ["slots", "slot", "isSelf", "detail", "selfRole", "selfStartTime"]) {
+  for (const banned of ["slots", "slot", "isSelf", "detail", "personalSlots", "selfRole", "selfStartTime"]) {
     assert.equal(fields.includes(banned), false, `ProjectionSession must not carry ${banned}`);
   }
 });

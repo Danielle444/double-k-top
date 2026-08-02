@@ -204,8 +204,7 @@ test("12. the advanced exam row's rendered fields and renderer are unchanged", (
     "row.displayEndTime",
     "row.arena ?? row.location",
     "row.selfLabel",
-    "row.selfStartTime",
-    "row.selfEndTime",
+    "row.personalSlots",
     "<ExamPersonalAssignmentDetail assignments={row.assignments} />",
   ]) {
     assert.ok(CODE.includes(fragment), `the advanced row dropped ${fragment}`);

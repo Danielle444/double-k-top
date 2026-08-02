@@ -1147,11 +1147,12 @@ test("the detail lookup is exactly what the trainee view core consumes", () => {
     "the unresolved block is hidden with no issue",
   );
   assert.equal(trainee.myRows.length, 1);
-  assert.equal(trainee.myRows[0].selfRole, "EXAMINEE");
+  assert.equal(trainee.myRows[0].personalSlots.length, 1);
+  assert.equal(trainee.myRows[0].personalSlots[0].role, "EXAMINEE");
   // stu-3 is the third examinee at capacity 1 ⇒ 09:40-10:00, never the block's.
-  assert.equal(trainee.myRows[0].selfStartTime, "09:40");
-  assert.equal(trainee.myRows[0].selfEndTime, "10:00");
-  assert.notEqual(trainee.myRows[0].selfStartTime, "09:00");
+  assert.equal(trainee.myRows[0].personalSlots[0].startTime, "09:40");
+  assert.equal(trainee.myRows[0].personalSlots[0].endTime, "10:00");
+  assert.notEqual(trainee.myRows[0].personalSlots[0].startTime, "09:00");
 });
 
 test("the adapter is total over adversarial input", () => {

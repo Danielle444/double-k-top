@@ -397,7 +397,8 @@ export interface TraineeExamAssignmentRowView extends ExamAssignmentRowView {
 }
 
 /**
- * The ONE assignment row the SERVER marked as the viewer's, or `null`.
+ * EVERY assignment row the SERVER marked as the viewer's, in the order they
+ * arrived.
  *
  * ===========================================================================
  * IT DECIDES NOTHING — IT READS ONE BOOLEAN
@@ -412,29 +413,36 @@ export interface TraineeExamAssignmentRowView extends ExamAssignmentRowView {
  * `isSelf`, and nothing else in the row may be consulted to identify the viewer:
  * not the display name, not the role, not the personal times, not the horse, the
  * topic, the discipline, the pairing, or the position in the array. Every one of
- * those is something this function READS OUT of the row it was given — never
- * something it uses to choose that row.
+ * those is something this function READS OUT of the rows it was given — never
+ * something it uses to choose them.
  *
  * ===========================================================================
- * FAIL CLOSED AT BOTH ENDS
+ * ZERO, ONE OR SEVERAL — ALL LEGITIMATE
  * ===========================================================================
- * - NO row marked `isSelf` → `null`. The viewer is not in this block, or the
- *   read layer could not prove they are; either way there is nothing to show.
- * - MORE THAN ONE row marked `isSelf` → `null`. That is a contradiction the
- *   client cannot resolve and must not paper over: showing the first would show
- *   a rider a horse that might be someone else's. A missing detail is a gap;
- *   a guessed one is a wrong schedule.
+ * A trainee may legitimately hold several assignments in one block — an
+ * EXAMINEE row plus one or more INSTRUCTED_TRAINEE rows for different
+ * examinees, or several INSTRUCTED_TRAINEE rows alone — since instructed-trainee
+ * multiplicity became legal (EX-ASG-MULTIPLICITY). Returning EVERY `isSelf` row
+ * rather than failing closed at more than one is what makes that visible: a
+ * missing detail is a gap; picking just one of several REAL rows would be a
+ * guessed schedule, so none is silently dropped instead.
+ *
+ * NO row marked `isSelf` returns an EMPTY array — the viewer is not in this
+ * block, or the read layer could not prove they are; either way there is
+ * nothing to show.
  *
  * NO NAME IS COMPARED, and no viewer identity is an input: the viewer's name and
  * id are not parameters and are not representable in this signature.
  */
-export function selectSelfAssignmentRow(
+export function selectSelfAssignmentRows(
   rows: readonly TraineeExamAssignmentRowView[] | null | undefined,
-): TraineeExamAssignmentRowView | null {
-  const matches = asArray(rows).filter(
-    (row) => row !== null && row !== undefined && row.isSelf === true,
+): readonly TraineeExamAssignmentRowView[] {
+  return Object.freeze(
+    asArray(rows).filter(
+      (row): row is TraineeExamAssignmentRowView =>
+        row !== null && row !== undefined && row.isSelf === true,
+    ),
   );
-  return matches.length === 1 ? matches[0] : null;
 }
 
 // ===========================================================================

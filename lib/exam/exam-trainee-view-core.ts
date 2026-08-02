@@ -139,7 +139,14 @@ export type StoredExamBlockDetailLookup = ReadonlyMap<string, StoredExamBlockDet
 export type TraineeExamViewIssueCode =
   /** A stored row arrived without usable slot detail. */
   | "EX-TRN-STORED-DETAIL-REQUIRED"
-  /** Two or more slots in one block claim the same student. */
+  /**
+   * Two or more EXAMINEE slots in one block claim the same student — the one
+   * relationship EX-ASG-MULTIPLICITY never legalized (still DB-enforced by a
+   * partial unique index on `(sessionId, studentId) WHERE role = 'EXAMINEE'`).
+   * A student legitimately holding one EXAMINEE slot plus one or more
+   * INSTRUCTED_TRAINEE slots — or several INSTRUCTED_TRAINEE slots alone — is
+   * NOT this case and must never raise it.
+   */
   | "EX-TRN-DUPLICATE-STUDENT-SLOT"
   /** The viewer's personal interval is not a legal `HH:MM` range. */
   | "EX-TRN-INVALID-PERSONAL-TIME"
@@ -161,7 +168,7 @@ export const TRAINEE_EXAM_VIEW_MESSAGES: Readonly<
   "EX-TRN-STORED-DETAIL-REQUIRED":
     "לא נמצאו פרטי שיבוץ למפגש הבחינה — לא ניתן להציג שעה אישית ולכן המפגש אינו מוצג",
   "EX-TRN-DUPLICATE-STUDENT-SLOT":
-    "אותו חניך משובץ יותר מפעם אחת באותו מפגש בחינה — לא ניתן לקבוע את השעה האישית",
+    "אותו חניך משובץ כנבחן/ת יותר מפעם אחת באותו מפגש בחינה — לא ניתן לקבוע את השעה האישית",
   "EX-TRN-INVALID-PERSONAL-TIME": "השעה האישית במפגש הבחינה אינה תקינה",
   "EX-TRN-INVALID-PERSONAL-ROLE": "התפקיד האישי במפגש הבחינה אינו תקין",
   "EX-TRN-SELF-ASSIGNMENT-CONFLICT":
@@ -186,25 +193,41 @@ export interface TraineeExamViewIssue {
 // ===========================================================================
 
 /**
+ * ONE of the viewer's own assignments inside a row. A trainee may legitimately
+ * hold several — an EXAMINEE slot plus one or more INSTRUCTED_TRAINEE slots for
+ * different examinees, or several INSTRUCTED_TRAINEE slots alone — since
+ * instructed-trainee multiplicity became legal (EX-ASG-MULTIPLICITY). Each slot
+ * carries its own EXACT role and interval; nothing here is ever a block-level
+ * fallback.
+ */
+export interface TraineeExamPersonalSlot {
+  readonly role: TraineeExamRole;
+  /** The viewer's EXACT personal start for THIS slot, `HH:MM`. Never the block start. */
+  readonly startTime: string;
+  /** The viewer's EXACT personal end for THIS slot, `HH:MM`. Never the block end. */
+  readonly endTime: string;
+}
+
+/**
  * One visible exam row for the trainee.
  *
  * `session` is the ORIGINAL `ProjectionSession` object, carried through by
- * reference — never copied, spread, re-shaped or enriched. The four remaining
- * fields are the viewer's personal reading of that row and are the ONLY thing
- * this core adds.
+ * reference — never copied, spread, re-shaped or enriched. `personalSlots` is
+ * the viewer's personal reading of that row and is the ONLY thing this core
+ * adds.
  *
- * When `isSelf` is `false`, `selfRole`/`selfStartTime`/`selfEndTime` are all
- * `null`. There is no partially-populated row.
+ * `personalSlots` is EMPTY when `isSelf` is `false`. It holds exactly ONE entry
+ * for the common case and TWO OR MORE when the viewer legitimately holds
+ * several assignments in this one row. There is no partially-populated row: a
+ * row either carries a personal slot for every one of the viewer's valid
+ * assignments here, or it is excluded entirely (see `projectTraineeExamDay`).
+ * Slots are in chronological order by `startTime`.
  */
 export interface TraineeExamDayRow {
   readonly session: ProjectionSession;
   /** True iff the authoritative viewer id is assigned to this row. */
   readonly isSelf: boolean;
-  readonly selfRole: TraineeExamRole | null;
-  /** The viewer's EXACT personal start, `HH:MM`. Never the block start. */
-  readonly selfStartTime: string | null;
-  /** The viewer's EXACT personal end, `HH:MM`. Never the block end. */
-  readonly selfEndTime: string | null;
+  readonly personalSlots: readonly TraineeExamPersonalSlot[];
 }
 
 /**
@@ -335,20 +358,20 @@ function makeIssue(
   });
 }
 
+/** Chronological order by `startTime`, `role` as the deterministic tiebreak. */
+function comparePersonalSlots(a: TraineeExamPersonalSlot, b: TraineeExamPersonalSlot): number {
+  return cmp(a.startTime, b.startTime) || cmp(a.role, b.role);
+}
+
 function makeRow(
   session: ProjectionSession,
-  self: {
-    readonly role: TraineeExamRole;
-    readonly startTime: string;
-    readonly endTime: string;
-  } | null,
+  personalSlots: readonly TraineeExamPersonalSlot[],
 ): TraineeExamDayRow {
+  const sorted = Object.freeze([...personalSlots].sort(comparePersonalSlots));
   return Object.freeze({
     session,
-    isSelf: self !== null,
-    selfRole: self === null ? null : self.role,
-    selfStartTime: self === null ? null : self.startTime,
-    selfEndTime: self === null ? null : self.endTime,
+    isSelf: sorted.length > 0,
+    personalSlots: sorted,
   });
 }
 
@@ -493,16 +516,18 @@ export function projectTraineeExamDay(
           continue;
         }
         rows.push(
-          makeRow(session, {
-            role: "EXAMINEE",
-            startTime: session.startTime,
-            endTime: session.endTime,
-          }),
+          makeRow(session, [
+            {
+              role: "EXAMINEE",
+              startTime: session.startTime,
+              endTime: session.endTime,
+            },
+          ]),
         );
         continue;
       }
 
-      rows.push(makeRow(session, null));
+      rows.push(makeRow(session, []));
       continue;
     }
 
@@ -522,7 +547,7 @@ export function projectTraineeExamDay(
     }
 
     if (viewer === null) {
-      rows.push(makeRow(session, null));
+      rows.push(makeRow(session, []));
       continue;
     }
 
@@ -535,16 +560,20 @@ export function projectTraineeExamDay(
         slot !== null && typeof slot === "object" && normalizedId(slot.studentId) === viewer,
     );
 
-    // Two slots for one student identify no single personal time, and picking
-    // either one arbitrarily would be a coin flip rendered as fact.
-    if (matches.length > 1) {
+    // Two EXAMINEE slots for one student identify no single personal EXAMINEE
+    // time, and picking either one arbitrarily would be a coin flip rendered as
+    // fact. This is the one relationship EX-ASG-MULTIPLICITY never legalized —
+    // still DB-enforced by a partial unique index scoped to `role = 'EXAMINEE'`.
+    // A student legitimately holding one EXAMINEE slot alongside one or more
+    // INSTRUCTED_TRAINEE slots, or several INSTRUCTED_TRAINEE slots alone, is a
+    // different, LEGAL shape and must not raise this issue or drop the row.
+    const examineeMatches = matches.filter((m) => m.role === "EXAMINEE");
+    if (examineeMatches.length > 1) {
       issues.push(makeIssue("EX-TRN-DUPLICATE-STUDENT-SLOT", sessionId));
       continue;
     }
 
-    const slot = matches.length === 1 ? matches[0] : null;
-
-    if (slot === null) {
+    if (matches.length === 0) {
       // The row says the viewer is assigned but the detail holds no slot for
       // them. There is no personal time to show and the block interval is NOT a
       // fallback, so the row is excluded rather than quietly shown as somebody
@@ -553,7 +582,7 @@ export function projectTraineeExamDay(
         issues.push(makeIssue("EX-TRN-SELF-ASSIGNMENT-CONFLICT", sessionId));
         continue;
       }
-      rows.push(makeRow(session, null));
+      rows.push(makeRow(session, []));
       continue;
     }
 
@@ -565,25 +594,43 @@ export function projectTraineeExamDay(
       continue;
     }
 
-    if (!isTraineeExamRole(slot.role)) {
+    // Every one of the viewer's slots must be exactly valid — a row whose
+    // personal reading cannot be trusted for ANY one of the viewer's own
+    // assignments is excluded whole, never partially shown.
+    let invalidRole = false;
+    let invalidTime = false;
+    for (const match of matches) {
+      if (!isTraineeExamRole(match.role)) {
+        invalidRole = true;
+        break;
+      }
+      if (!isValidInterval(match.startTime, match.endTime)) {
+        invalidTime = true;
+        break;
+      }
+    }
+    if (invalidRole) {
       issues.push(makeIssue("EX-TRN-INVALID-PERSONAL-ROLE", sessionId));
       continue;
     }
-
-    if (!isValidInterval(slot.startTime, slot.endTime)) {
+    if (invalidTime) {
       issues.push(makeIssue("EX-TRN-INVALID-PERSONAL-TIME", sessionId));
       continue;
     }
 
-    // The role and the exact personal interval come from the slot and ONLY from
-    // the slot — an INSTRUCTED_TRAINEE inherits the paired examinee's interval
-    // upstream, and that inherited interval arrives here already resolved.
+    // The role and the exact personal interval come from each slot and ONLY
+    // from that slot — an INSTRUCTED_TRAINEE inherits the paired examinee's
+    // interval upstream, and that inherited interval arrives here already
+    // resolved.
     rows.push(
-      makeRow(session, {
-        role: slot.role,
-        startTime: slot.startTime,
-        endTime: slot.endTime,
-      }),
+      makeRow(
+        session,
+        matches.map((match) => ({
+          role: match.role,
+          startTime: match.startTime,
+          endTime: match.endTime,
+        })),
+      ),
     );
   }
 

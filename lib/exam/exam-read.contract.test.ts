@@ -947,9 +947,10 @@ test("A3. a positional break shifts every derived slot after it", async () => {
   // The viewer is the SECOND examinee, so the 10-minute break after wave 0 moves
   // their personal slot from 09:15 to 09:25. A block-time fallback would have
   // produced 09:00 — the block start — and that is exactly what must not happen.
-  assert.equal(riding.selfStartTime, "09:25");
-  assert.equal(riding.selfEndTime, "09:40");
-  assert.notEqual(riding.selfStartTime, riding.startTime);
+  assert.equal(riding.personalSlots.length, 1);
+  assert.equal(riding.personalSlots[0].startTime, "09:25");
+  assert.equal(riding.personalSlots[0].endTime, "09:40");
+  assert.notEqual(riding.personalSlots[0].startTime, riding.startTime);
   assert.equal(riding.startTime, "09:00");
   assert.equal(riding.displayEndTime, "09:55");
 });
@@ -958,10 +959,11 @@ test("A4. an instructed trainee inherits the PAIRED examinee's exact interval", 
   const dto = await readTrainee();
   const advanced = traineeRow(dto.allRows, "sess-advanced");
   assert.ok(advanced !== undefined);
-  assert.equal(advanced.selfRole, "INSTRUCTED_TRAINEE");
+  assert.equal(advanced.personalSlots.length, 1);
+  assert.equal(advanced.personalSlots[0].role, "INSTRUCTED_TRAINEE");
   // Paired to the SECOND examinee (pairingIndex 2), whose wave is 11:30–12:00.
-  assert.equal(advanced.selfStartTime, "11:30");
-  assert.equal(advanced.selfEndTime, "12:00");
+  assert.equal(advanced.personalSlots[0].startTime, "11:30");
+  assert.equal(advanced.personalSlots[0].endTime, "12:00");
   // Neither the block start nor a substituted default.
   assert.equal(advanced.startTime, "11:00");
 });
@@ -1476,8 +1478,8 @@ test("E8. the DAY is the trainee's whole scope, and the committed projection own
     dto.allRows.map((row) => row.isSelf),
   );
   assert.deepEqual(
-    projection.allRows.map((row) => row.selfStartTime),
-    dto.allRows.map((row) => row.selfStartTime),
+    projection.allRows.map((row) => row.personalSlots.map((s) => s.startTime)),
+    dto.allRows.map((row) => row.personalSlots.map((s) => s.startTime)),
   );
 });
 
@@ -1499,17 +1501,19 @@ test("E9. myRows is LITERALLY allRows.filter(row => row.isSelf), by reference", 
     ["sess-riding", "tp:lesson-lunge", "sess-advanced"],
   );
   // Every personal value is preserved exactly as the committed core computed
-  // it — EXCEPT the middle row's `selfRole`. That row is `tp:lesson-lunge`, a
+  // it — EXCEPT the middle row's `role`. That row is `tp:lesson-lunge`, a
   // LIVE beginner lesson: it has no exam assignment and no exam role, so
   // carrying "EXAMINEE" onto it would be a role the DTO builder invented. The
   // personal WINDOW is untouched (it is the lesson's own time, not a role), and
   // relevance is untouched too — it is still in `myRows`.
   assert.deepEqual(
-    dto.myRows.map((row) => [row.selfRole, row.selfStartTime, row.selfEndTime]),
+    dto.myRows.map((row) =>
+      row.personalSlots.map((slot) => [slot.role, slot.startTime, slot.endTime]),
+    ),
     [
-      ["EXAMINEE", "09:25", "09:40"],
-      [null, "10:00", "11:00"],
-      ["INSTRUCTED_TRAINEE", "11:30", "12:00"],
+      [["EXAMINEE", "09:25", "09:40"]],
+      [[null, "10:00", "11:00"]],
+      [["INSTRUCTED_TRAINEE", "11:30", "12:00"]],
     ],
   );
   for (const row of dto.myRows) assert.equal(row.selfLabel, "השיבוץ שלי");
@@ -1521,9 +1525,7 @@ test("E10. another trainee's row is visible in allRows and absent from myRows", 
   assert.ok(iface !== undefined, "the other trainee's row must be visible in לו״ז כולל");
   assert.equal(iface.isSelf, false);
   assert.equal(iface.selfLabel, null);
-  assert.equal(iface.selfRole, null);
-  assert.equal(iface.selfStartTime, null);
-  assert.equal(iface.selfEndTime, null);
+  assert.deepEqual(iface.personalSlots, []);
   assert.equal(
     traineeRow(dto.myRows, "sess-interface") !== undefined,
     false,
@@ -1648,9 +1650,7 @@ test("F2. no forbidden CHANNEL exists in the trainee contract", async () => {
     "location",
     "isSelf",
     "selfLabel",
-    "selfRole",
-    "selfStartTime",
-    "selfEndTime",
+    "personalSlots",
     "examineeNames",
     "examineeCount",
     "instructedTraineeNames",
@@ -3356,9 +3356,20 @@ test("K14. no instructor or trainee UI file was touched", () => {
   // slip through this exception.
   const APPROVED_TRAINEE_GUARD = "app/student/trainee-teaching-practice-home-shortcut.contract.test.ts";
   assert.match(APPROVED_TRAINEE_GUARD, /\.contract\.test\.ts$/);
+  // EX-TRN-MULTI-SLOT — this slice's trainee-tree entries, named EXACTLY. Unlike
+  // the guard above, the trainee screen itself is legitimately touched here: the
+  // reader stops dropping a whole session for legal assignment multiplicity, and
+  // the screen's personal-time rendering changes from a single slot to a list
+  // alongside it. The other two are that change's own two contract suites.
+  const APPROVED_TRAINEE_SLICE = [
+    "app/student/StudentExamsSection.tsx",
+    "app/student/trainee-exam-self-view-core.test.ts",
+    "app/student/trainee-exam-teaching-practice-cards.contract.test.ts",
+  ];
   const offenders = touchedPaths().filter(
     (path) =>
       path !== APPROVED_TRAINEE_GUARD &&
+      !APPROVED_TRAINEE_SLICE.includes(path) &&
       forbidden.some((dir) => path === dir || path.startsWith(`${dir}/`)),
   );
   assert.deepEqual(offenders, [], `a UI file was modified: ${offenders.join(", ")}`);
@@ -3514,6 +3525,20 @@ test("K16. the slice's footprint is exactly its approved read-pipeline paths", (
     "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/migration.sql",
     "prisma/schema.prisma",
     "prisma/migrations/20260802120000_scope_exam_assignment_unique_to_examinee/",
+
+    // EX-TRN-MULTI-SLOT — the trainee reader stops dropping a whole session when
+    // the authenticated trainee legitimately resolves to more than one
+    // assignment in it. The DTO's new `personalSlots` list replaces the
+    // single-slot `selfRole`/`selfStartTime`/`selfEndTime` fields, so its ONE
+    // production consumer (the trainee screen) and the ONE shared component that
+    // renders each of the viewer's own assignments (previously fail-closed at
+    // more than one match) both change alongside it. `exam-trainee-view-core.ts`
+    // and its own suite, and `exam-read-dto.ts`/`.test.ts` and
+    // `exam-stored-adapter-core.test.ts`, are already approved above.
+    "app/student/StudentExamsSection.tsx",
+    "lib/components/exam-schedule-view-core.ts",
+    "lib/components/ExamPersonalAssignmentDetail.tsx",
+    "lib/components/ExamPersonalAssignmentDetail.test.tsx",
 ];
   // EX-ADMIN-WORKSPACE-UX — the admin exams WORKSPACE rebuild, which shares this
   // working tree. It touches the route's own files and the exam guard suites, and
