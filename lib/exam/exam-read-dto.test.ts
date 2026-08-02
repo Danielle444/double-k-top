@@ -1791,22 +1791,32 @@ test("a stored row carries the complete assignment rows for every role", () => {
     ],
   );
   // The trainee and the operational readings are the SAME contract, apart from
-  // the ONE trainee-only marker: the admin row set is unchanged, and the trainee
-  // rows differ by exactly `isSelf` - a BOOLEAN, never an identifier.
+  // the TWO trainee-only markers: the admin row set is unchanged, and the
+  // trainee rows differ by exactly `isSelf` (a BOOLEAN) and `assignmentKey` (a
+  // SYNTHETIC, non-database token) - never a real identifier.
+  const TRAINEE_ONLY_KEYS = ["isSelf", "assignmentKey"];
   assert.deepEqual(
     admin.assignments.map((row) => Object.keys(row)),
-    trainee.assignments.map((row) => Object.keys(row).filter((key) => key !== "isSelf")),
+    trainee.assignments.map((row) =>
+      Object.keys(row).filter((key) => !TRAINEE_ONLY_KEYS.includes(key)),
+    ),
   );
   assert.deepEqual(
     admin.assignments,
     trainee.assignments.map((row) => {
-      const { isSelf: _isSelf, ...rest } = row;
+      const { isSelf: _isSelf, assignmentKey: _assignmentKey, ...rest } = row;
       void _isSelf;
+      void _assignmentKey;
       return rest;
     }),
   );
   for (const row of admin.assignments) {
     assert.equal("isSelf" in row, false, "an admin assignment row must not carry isSelf");
+    assert.equal(
+      "assignmentKey" in row,
+      false,
+      "an admin assignment row must not carry assignmentKey",
+    );
   }
   // ...and the unresolved student id itself is never emitted as a name.
   assert.equal(JSON.stringify(trainee.assignments).includes(UNKNOWN_ID), false);

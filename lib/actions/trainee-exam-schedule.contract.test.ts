@@ -916,12 +916,15 @@ test("12. unpublished data cannot be displayed by this UI", () => {
 });
 
 test("13. no personal time is invented when the contract does not carry one", () => {
-  // EX-TRN-MULTI-SLOT RE-POINT — a personal-time line is now rendered by
-  // mapping over `row.personalSlots`, not by a single nullable field behind an
-  // explicit-null guard: an empty array renders nothing, and the array itself
-  // (built entirely server-side by the committed trainee core) is the
-  // fail-closed gate. Neither the start nor the end is ever defaulted from the
-  // block times or from a duration.
+  // EX-TRN-MULTI-SLOT-DETAIL RE-POINT — the personal-time rendering for a
+  // STORED (advanced) row moved entirely into the shared, separately-tested
+  // <ExamPersonalAssignmentDetail>, which pairs each of `row.personalSlots`
+  // with its own detail through the server-derived `assignmentKey` — see that
+  // component's own suite for its fail-closed guarantees. This screen no
+  // longer renders a stored row's personal time itself at all. The ONE flat
+  // "השעה שלך" line still written here is the LIVE BEGINNER fallback (see test
+  // 14m), which has no assignment to pair against and simply prints the
+  // lesson's own real interval, exactly as before.
   for (const fallback of [
     "personalSlots ??",
     "personalSlots ||",
@@ -932,21 +935,27 @@ test("13. no personal time is invented when the contract does not carry one", ()
   ]) {
     assert.equal(SECTION_CODE.includes(fallback), false, `the UI invents a personal time: ${fallback}`);
   }
-  // The block start/end are shown as the ROW's times, never relabelled as the
-  // viewer's own.
-  //
-  // EX-ROLE-SCHEDULE-REDESIGN RE-POINT — this count was ONE, when both trainee
-  // views shared a single card. "לו״ז שלי" is now a different, much shorter card
-  // of its own, so the personal-time line's rendering site exists once per view.
-  // The claim is replaced by the property it was standing in for: EVERY
-  // personal-time rendering site is driven by `row.personalSlots.map(`, and
-  // there are exactly as many map sites as `.map(` call sites.
-  const personalLines = (SECTION_CODE.match(/השעה שלך/g) ?? []).length;
-  assert.equal(personalLines, 2, "a personal-time line was added or dropped");
+  // The ONE remaining flat personal-time line is the beginner fallback alone.
+  assert.equal(
+    (SECTION_CODE.match(/השעה שלך/g) ?? []).length,
+    1,
+    "a flat personal-time line was added or dropped outside the beginner fallback",
+  );
   assert.equal(
     (SECTION_CODE.match(/row\.personalSlots\.map\(/g) ?? []).length,
-    personalLines,
-    "a personal-time line is not driven by row.personalSlots",
+    1,
+    "the beginner fallback is not the only place row.personalSlots is mapped directly",
+  );
+  // Every STORED row's personal time is delegated to the shared component,
+  // once per view, and handed `row.personalSlots` verbatim — never recomputed.
+  assert.equal(
+    (
+      SECTION_CODE.match(
+        /<ExamPersonalAssignmentDetail\s+personalSlots=\{row\.personalSlots\}/g,
+      ) ?? []
+    ).length,
+    2,
+    "a view stopped delegating the stored row's personal time to the shared component",
   );
 });
 
@@ -1138,7 +1147,6 @@ test("14b. the approved trainee display fields are the ones rendered", () => {
     "row.isSelf",
     "row.selfLabel",
     "row.personalSlots",
-    "slot.role",
     "slot.startTime",
     "slot.endTime",
     "row.examineeNames",
@@ -1204,8 +1212,13 @@ test('14c. "לו״ז כולם" renders the COMPLETE operational schedule, throug
   // What REPLACES it is the property that actually mattered, and it is checked
   // in full by test 14e below: the personal view still shows only rows the
   // SERVER marked as the viewer's, and it can show no operational value that the
-  // server did not tie to the viewer. `row.assignments` is read exactly three
-  // times, each an EXACT approved use:
+  // server did not tie to the viewer.
+  //
+  // EX-TRN-MULTI-SLOT-DETAIL RE-POINT — the count was 3. "לפי תאריך" now ALSO
+  // delegates a STORED row's own personal-time rendering to the same shared,
+  // nested-card component "לו״ז שלי" uses (see test 13), which needs
+  // `row.assignments` to pair each personal slot to its own detail. `row.
+  // assignments` is read exactly FOUR times now, each an EXACT approved use:
   const APPROVED_ASSIGNMENT_USES = [
     // "לו״ז כולם": the whole array, verbatim, to the shared renderer.
     "<ExamAssignmentRows assignments={row.assignments} />",
@@ -1213,7 +1226,7 @@ test('14c. "לו״ז כולם" renders the COMPLETE operational schedule, throug
     // reprint the very same names.
     "{row.assignments.length === 0 && (",
     // "לו״ז שלי": the whole array to the personal-detail renderer, which reaches
-    // it ONLY through the pure core's fail-closed self-selector.
+    // it ONLY through the pure core's fail-closed per-slot selector.
     "assignments={row.assignments}",
   ];
   for (const fragment of APPROVED_ASSIGNMENT_USES) {
@@ -1221,8 +1234,8 @@ test('14c. "לו״ז כולם" renders the COMPLETE operational schedule, throug
   }
   assert.equal(
     (SECTION_CODE.match(/row\.assignments/g) ?? []).length,
-    3,
-    "the assignment rows are read somewhere beyond the three approved uses",
+    4,
+    "the assignment rows are read somewhere beyond the four approved uses",
   );
   // None of the three reaches INTO the array: the screen indexes, filters,
   // slices, sorts and re-maps nothing.
@@ -1308,9 +1321,11 @@ test('14e. "לו״ז שלי" is COMPACT: only the viewer\'s rows, and only their
   }
 
   // What it DOES carry is exactly the approved short list: the exam name, the
-  // date, the block time, the place, the viewer's own label, role and personal
-  // window — and the viewer's own operational detail through the shared
-  // fail-closed renderer.
+  // date, the block time, the place, the viewer's own label and personal
+  // slots — and the viewer's own role, time, horse, topic, discipline and
+  // counterpart through the shared nested-card renderer, which OWNS that
+  // rendering now (see its own suite) and is why role/time fragments are no
+  // longer named in THIS file's slice at all.
   for (const fragment of [
     "row.definitionName",
     "row.date",
@@ -1319,24 +1334,35 @@ test('14e. "לו״ז שלי" is COMPACT: only the viewer\'s rows, and only their
     "row.arena ?? row.location",
     "row.selfLabel",
     "row.personalSlots",
-    "slot.role",
-    "slot.startTime",
-    "slot.endTime",
   ]) {
     assert.ok(personal.includes(fragment), `the personal view dropped ${fragment}`);
   }
+  // EX-TRN-MULTI-SLOT-DETAIL RE-POINT — the personal view no longer computes a
+  // role label or reads `slot.role`/`slot.startTime`/`slot.endTime` itself at
+  // all: it hands `row.personalSlots` straight to the shared component.
+  for (const token of ["slot.role", "slot.startTime", "slot.endTime"]) {
+    assert.equal(
+      personal.includes(token),
+      false,
+      `the personal view still computes its own personal-time line: ${token}`,
+    );
+  }
   assert.ok(
     personal.includes("<ExamPersonalAssignmentDetail"),
-    "the personal view shows no horse, topic, discipline or counterpart",
+    "the personal view shows no role, time, horse, topic, discipline or counterpart",
   );
   assert.ok(
     SECTION_CODE.includes('from "@/lib/components/ExamPersonalAssignmentDetail"'),
     "the personal detail is not the shared renderer",
   );
+  // EX-TRN-MULTI-SLOT-DETAIL RE-POINT — the count was 1, when only "לו״ז שלי"
+  // used the shared renderer. "לפי תאריך" now ALSO delegates a STORED row's
+  // personal detail to it (see test 13 and 14c), so a THIRD renderer being
+  // added is still caught, but a second legitimate use is not.
   assert.equal(
     (SECTION_CODE.match(/<ExamPersonalAssignmentDetail/g) ?? []).length,
-    1,
-    "a second personal-detail renderer was added",
+    2,
+    "the approved number of personal-detail renderer uses changed",
   );
 });
 
@@ -1347,25 +1373,40 @@ test('14f. "לו״ז שלי" finds the viewer through the SERVER-DERIVED assignm
   // screen therefore hands over the rows and NOTHING else: the previous `role` /
   // `startTime` / `endTime` selection props are gone, because there is no longer
   // anything for the browser to select with.
-  assert.ok(
-    SECTION_CODE.includes("<ExamPersonalAssignmentDetail assignments={row.assignments} />"),
+  // EX-TRN-MULTI-SLOT-DETAIL RE-POINT — the fixed single-fragment string used
+  // to be the whole call: `assignments` was the ONLY prop. It is now the
+  // second of two, `personalSlots` and `assignments`, both handed over
+  // verbatim — checked as a regex so the exact whitespace docs/prettier choose
+  // does not pin this test to a specific line wrap.
+  assert.match(
+    SECTION_CODE.replace(/\s+/g, " "),
+    /<ExamPersonalAssignmentDetail personalSlots=\{row\.personalSlots\} assignments=\{row\.assignments\} \/>/,
     "the personal detail is not handed the rows verbatim",
   );
-  const props = SECTION_CODE.slice(
-    SECTION_CODE.indexOf("<ExamPersonalAssignmentDetail"),
-    SECTION_CODE.indexOf("<ExamPersonalAssignmentDetail") + 400,
-  );
-  for (const forbidden of [
-    "role={",
-    "startTime={",
-    "endTime={",
-    "participantName=",
-    "viewerName=",
-    "studentId=",
-    "selfName=",
-    "isSelf={",
+  for (const [start, end] of [
+    [
+      SECTION_CODE.indexOf("<ExamPersonalAssignmentDetail"),
+      SECTION_CODE.indexOf("<ExamPersonalAssignmentDetail") + 400,
+    ],
+    [
+      SECTION_CODE.lastIndexOf("<ExamPersonalAssignmentDetail"),
+      SECTION_CODE.lastIndexOf("<ExamPersonalAssignmentDetail") + 400,
+    ],
   ]) {
-    assert.equal(props.includes(forbidden), false, `the personal detail is given ${forbidden}`);
+    const props = SECTION_CODE.slice(start, end);
+    for (const forbidden of [
+      "role={",
+      "startTime={",
+      "endTime={",
+      "participantName=",
+      "viewerName=",
+      "studentId=",
+      "selfName=",
+      "isSelf={",
+      "assignmentKey={",
+    ]) {
+      assert.equal(props.includes(forbidden), false, `the personal detail is given ${forbidden}`);
+    }
   }
 
   // THE REMOVED HEURISTIC. The screen used to hand over `selfRole` plus the
@@ -1533,7 +1574,12 @@ test('14d. "לו״ז שלי" still identifies "mine" by the server-computed mark
   assert.ok(SECTION_CODE.includes("row.isSelf ?"), "the viewer's own row is no longer highlighted");
   assert.ok(SECTION_CODE.includes("row.selfLabel !== null &&"), "the self label was dropped");
   assert.ok(SECTION_CODE.includes("row.personalSlots"), "the viewer's own personal slots were dropped");
-  assert.ok(SECTION_CODE.includes("slot.role"), "the viewer's own role was dropped");
+  // The viewer's own role is rendered — inside the shared nested-card
+  // component this screen delegates to, not recomputed here (see test 14e).
+  assert.ok(
+    SECTION_CODE.includes("<ExamPersonalAssignmentDetail"),
+    "the viewer's own role was dropped",
+  );
 
   // NO NAME IS EVER COMPARED to decide what is "mine". A display name is not an
   // identity: two trainees may share one, and the screen holds no name of the
@@ -1671,35 +1717,40 @@ test("14l. ONE date is shown at a time, ordered by start time", () => {
 });
 
 test("14m. live beginner rows are ROUTED away from the advanced renderer, in BOTH views", () => {
-  // EX-EXAM-TP-CARDS RE-POINT — ONE routing conditional survives, not two.
-  // "לו״ז שלי" no longer routes a beginner row to `ExamBeginnerRows` at all:
-  // `myAdvancedRows` (see 14n below) excludes every beginner row before
-  // `selfViewEntries` exists, so there is no `isBeginnerExamRow(row) ? (...)`
-  // branch left to write there - a beginner row reaches that view as a REAL
-  // Teaching-Practice card instead (see test 14 above). ONLY "לפי תאריך" still
-  // carries this conditional, on the CONTRACT's own `source`, so a beginner
-  // row cannot reach the wave/examinee renderer there even by accident.
+  // EX-EXAM-TP-CARDS RE-POINT — ONE routing conditional survived, not two, at
+  // the time this test was first written. "לו״ז שלי" does not route a beginner
+  // row to `ExamBeginnerRows` at all: `myAdvancedRows` (see 14n below) excludes
+  // every beginner row before `selfViewEntries` exists, so there is no such
+  // branch to write there - a beginner row reaches that view as a REAL
+  // Teaching-Practice card instead (see test 14 above).
+  //
+  // EX-TRN-MULTI-SLOT-DETAIL RE-POINT — the count is now 2, both inside "לפי
+  // תאריך" alone: the ORIGINAL routing conditional (beginner detail vs. the
+  // stored wave/examinee renderer, unchanged) PLUS a second one this slice
+  // added — a beginner row's personal time keeps its own simple flat line
+  // (unchanged), while a stored row's now goes through the shared nested-card
+  // renderer. Both read the SAME contract-derived predicate; neither
+  // re-implements it.
   assert.equal(
     (SECTION_CODE.match(/\{isBeginnerExamRow\(row\) \? \(/g) ?? []).length,
-    1,
-    "a view still routes beginner rows to their own renderer, or the one remaining route was lost",
+    2,
+    "a view routes beginner rows to their own renderer a different number of times than approved",
   );
   // The ORIGIN is the shared pure predicate, never a guess from emptiness.
   for (const token of ['=== "BEGINNER"', '=== "STORED"', "row.source ===", "row.kind ==="]) {
     assert.equal(SECTION_CODE.includes(token), false, `the screen re-implements the origin test: ${token}`);
   }
-  // NO INVENTED ROLE. EX-TRN-MULTI-SLOT RE-POINT — the guard moved from this
-  // screen into the contract itself: `TraineeExamPersonalSlotDto.role` is now
-  // `null` for EVERY personal slot of a `BEGINNER` source row (see
-  // `buildTraineeExamDayDto` in `lib/exam/exam-read-dto.ts`), so both views can
-  // share the SAME per-slot rule — `slot.role === null` — without naming
-  // `isBeginnerExamRow` at the label site at all. The property is unchanged: a
-  // beginner row is never labelled with an invented exam role.
+  // NO INVENTED ROLE. EX-TRN-MULTI-SLOT-DETAIL RE-POINT — the guard moved from
+  // this screen into the contract itself, THEN into the shared component: this
+  // screen's own beginner fallback line no longer even reads `slot.role` (a
+  // beginner lesson simply has no role line at all here), and a STORED row's
+  // role rendering — including its own `slot.role === null` guard for a live
+  // beginner participant reached indirectly — is entirely the shared, fail-
+  // closed component's job (see that component's own suite).
   assert.equal(
-    (SECTION_CODE.match(/slot\.role === null \? null : SELF_ROLE_LABELS\[slot\.role\]/g) ?? [])
-      .length,
-    2,
-    "a personal-slot role label is not guarded against a null (beginner) role",
+    SECTION_CODE.includes("slot.role"),
+    false,
+    "this screen still computes a role label of its own",
   );
   assert.ok(
     SECTION_CODE.includes("{isBeginnerExamRow(row) ? (\n                    <ExamBeginnerRows") ||

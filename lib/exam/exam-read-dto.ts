@@ -301,29 +301,45 @@ export interface ExamAssignmentOperationalRowDto {
 /**
  * ONE participant of ONE stored exam block, as the TRAINEE screen displays them.
  *
- * It is the shared operational contract PLUS exactly one field: `isSelf`. The
- * trainee's "לו״ז שלי" needs to mark the viewer's own assignment row inside a
- * block that legitimately holds several people, and the row-level `isSelf` on
- * {@link TraineeExamDayRowDto} cannot express which of those rows is theirs.
+ * It is the shared operational contract PLUS two fields: `isSelf` and
+ * `assignmentKey`. The trainee's "לו״ז שלי" needs to mark the viewer's own
+ * assignment row inside a block that legitimately holds several people, and the
+ * row-level `isSelf` on {@link TraineeExamDayRowDto} cannot express which of
+ * those rows is theirs.
  *
  * WHY IT IS A SEPARATE TYPE RATHER THAN A FIELD ON THE SHARED CONTRACT. An
- * instructor and an admin have no "self" among examinees, so the field would be
- * meaningless there and permanently `false` — a value a UI could still read and
- * act on. Keeping it off the shared contract means the ADMIN AND INSTRUCTOR KEY
- * SETS ARE BYTE-FOR-BYTE UNCHANGED by this addition, which the contract suite
- * asserts on the serialized DTO of all three roles.
+ * instructor and an admin have no "self" among examinees, so the fields would be
+ * meaningless there — `isSelf` permanently `false`, `assignmentKey` permanently
+ * `null` — values a UI could still read and act on. Keeping them off the shared
+ * contract means the ADMIN AND INSTRUCTOR KEY SETS ARE BYTE-FOR-BYTE UNCHANGED by
+ * this addition, which the contract suite asserts on the serialized DTO of all
+ * three roles.
  *
  * `isSelf` IS DECIDED SERVER-SIDE BY EXACT STUDENT-ID EQUALITY, against the
  * `viewerStudentId` the committed trainee core resolved from the signed session
  * and already normalized. It is NEVER decided by comparing `participantName`:
  * two trainees may share a display name, a name may fail to resolve, and a name
- * is not identity. NO ID IS ADDED TO THIS CONTRACT — the comparison happens
- * before narrowing and only the BOOLEAN survives it.
+ * is not identity.
+ *
+ * `assignmentKey` IS A SYNTHETIC, NON-DATABASE TOKEN — see
+ * {@link TraineeExamPersonalSlotDto.assignmentKey} — present here ONLY when
+ * `isSelf` is `true`, `null` otherwise. NO REAL ID IS ADDED TO THIS CONTRACT: the
+ * internal `assignmentId` is consulted server-side to mint this token and is
+ * never itself projected.
  */
 export interface TraineeExamAssignmentOperationalRowDto
   extends ExamAssignmentOperationalRowDto {
   /** True iff this assignment belongs to the VIEWING trainee. */
   readonly isSelf: boolean;
+  /**
+   * The SAME synthetic key {@link TraineeExamPersonalSlotDto.assignmentKey}
+   * carries for this exact assignment, or `null` when `isSelf` is `false`.
+   * Matches EXACTLY one `personalSlots` entry (or none, if the two sibling
+   * lookups could not agree — see the narrowing function's own doc) — never by
+   * role, by time, by name or by array position, any of which two legitimate
+   * assignments may share.
+   */
+  readonly assignmentKey: string | null;
 }
 
 // ===========================================================================
@@ -541,13 +557,41 @@ export interface OperationalExamBeginnerDetailDto {
  * row. A trainee may legitimately hold several in one row — an EXAMINEE slot
  * plus one or more INSTRUCTED_TRAINEE slots for different examinees, or several
  * INSTRUCTED_TRAINEE slots alone — since instructed-trainee multiplicity became
- * legal. This is a straight passthrough of the committed trainee core's own
- * fail-closed `TraineeExamPersonalSlot`, never recomputed here.
+ * legal. `role`, `startTime` and `endTime` are a straight passthrough of the
+ * committed trainee core's own fail-closed `TraineeExamPersonalSlot`, never
+ * recomputed here.
  *
  * `role` is `null` for a live beginner row's own slot — see the "NO INVENTED
  * EXAM ROLE ON A LIVE BEGINNER ROW" note on {@link buildTraineeExamDayDto}.
+ *
+ * ===========================================================================
+ * `assignmentKey` — WHY IT EXISTS, AND WHAT IT IS NOT
+ * ===========================================================================
+ * A trainee card renders the horse, topic, discipline and counterpart of EACH
+ * personal slot — but that operational detail is resolved by a COMPLETELY
+ * separate pipeline (`assignments`, from its own sibling lookup) from the one
+ * that resolves `role`/`startTime`/`endTime` here (the committed trainee core,
+ * from ITS OWN sibling lookup). Two assignments may legitimately share a role,
+ * or a start/end time, or both — EX-TRN-MULTI-SLOT-DETAIL's exact reported
+ * confusion — so pairing a slot to its own `assignments` entry by any of those,
+ * or by array position, can pair it to the WRONG one.
+ *
+ * `assignmentKey` is the fix: a token, unique within this ONE row, that this
+ * SAME narrowing function stamps onto BOTH a personal slot and its one true
+ * `assignments` entry, from the ONE internal `assignmentId` both sibling
+ * lookups agree is the same underlying assignment. It is NEVER the real
+ * database id — that id is read here ONLY as a lookup key and is not itself
+ * returned — and it is NEVER rendered as text; a client may use it ONLY to
+ * find the one `assignments` entry with the same key (exact equality) and, if
+ * it needs one, as a React list key.
+ *
+ * `null` when the two sibling lookups could not agree on this slot at all
+ * (e.g. a caller passed `assignmentDetails` that does not describe the same
+ * assignments `storedDetails` does) — a client sees a slot with a time and a
+ * role but no further detail, never a guessed pairing.
  */
 export interface TraineeExamPersonalSlotDto {
+  readonly assignmentKey: string | null;
   readonly role: TraineeExamRole | null;
   /** The viewer's EXACT personal start for THIS slot. Never the block start. */
   readonly startTime: string;
@@ -1108,13 +1152,56 @@ function isViewerAssignment(
 }
 
 /**
+ * REAL internal `assignmentId` → SYNTHETIC per-row `assignmentKey`, for EVERY
+ * assignment that is the VIEWER's own in this row's assignment-level
+ * operational detail.
+ *
+ * This is the ONE mechanism that lets `personalSlots` (resolved from the
+ * committed trainee core's OWN sibling lookup, `storedDetails`) and
+ * `assignments` (resolved from THIS builder's OWN sibling lookup,
+ * `assignmentDetails`) — two independently-narrowed views of the SAME
+ * underlying assignment rows — agree on which entry is which, WITHOUT a real
+ * database id ever reaching a client. The real `assignmentId` is read here
+ * ONLY as a Map key; the key returned (`"<rowKey>#a<n>"`) carries no database
+ * identity, cannot be used to query anything, and is meaningful only for the
+ * lifetime of this one response — exactly the same discipline `rowKey` already
+ * applies to a row's own position.
+ *
+ * Enumeration order is `detail.assignments`' own order — arbitrary, but
+ * deterministic for one input — because ALL correctness this key provides
+ * comes from exact-match lookup by the shared real id, never from position.
+ */
+function buildSelfAssignmentKeyMap(
+  lookup: ExamAssignmentOperationalDetailLookup | null | undefined,
+  source: ExamRowSource,
+  sessionId: string,
+  rowKey: string,
+  viewerStudentId: string | null,
+): ReadonlyMap<string, string> {
+  const map = new Map<string, string>();
+  if (source !== "STORED") return map;
+  const detail = readAssignmentDetail(lookup, sessionId);
+  if (detail === null) return map;
+  let index = 0;
+  for (const row of detail.assignments) {
+    if (row === null || typeof row !== "object") continue;
+    if (!isViewerAssignment(row, viewerStudentId)) continue;
+    if (!isPresent(row.assignmentId)) continue;
+    map.set(row.assignmentId.trim(), `${rowKey}#a${index}`);
+    index += 1;
+  }
+  return map;
+}
+
+/**
  * The TRAINEE assignment rows of ONE row: the shared operational rows, each
- * carrying the extra `isSelf` boolean.
+ * carrying the extra `isSelf` boolean and `assignmentKey`.
  *
  * Identical to {@link buildAssignmentRowDtos} in every other respect — same
- * order, same fields, same fail-closed empty array for a live beginner row and
- * for a row with no usable sibling detail — so the two views cannot drift. The
- * id used to decide `isSelf` is consumed HERE and never enters the result.
+ * order, same shared fields, same fail-closed empty array for a live beginner
+ * row and for a row with no usable sibling detail — so the two views cannot
+ * drift. The real id used to decide `isSelf` and to look up `assignmentKey` is
+ * consumed HERE and never itself enters the result.
  */
 function buildTraineeAssignmentRowDtos(
   lookup: ExamAssignmentOperationalDetailLookup | null | undefined,
@@ -1122,6 +1209,7 @@ function buildTraineeAssignmentRowDtos(
   sessionId: string,
   studentNames: ReadonlyMap<string, string> | null | undefined,
   viewerStudentId: string | null,
+  selfAssignmentKeys: ReadonlyMap<string, string>,
 ): readonly TraineeExamAssignmentOperationalRowDto[] {
   if (source !== "STORED") {
     return Object.freeze([] as TraineeExamAssignmentOperationalRowDto[]);
@@ -1131,12 +1219,18 @@ function buildTraineeAssignmentRowDtos(
   return Object.freeze(
     detail.assignments
       .filter((row) => row !== null && typeof row === "object")
-      .map((row) =>
-        Object.freeze({
+      .map((row) => {
+        const isSelf = isViewerAssignment(row, viewerStudentId);
+        const assignmentKey =
+          isSelf && isPresent(row.assignmentId)
+            ? (selfAssignmentKeys.get(row.assignmentId.trim()) ?? null)
+            : null;
+        return Object.freeze({
           ...buildAssignmentRowDto(row, studentNames),
-          isSelf: isViewerAssignment(row, viewerStudentId),
-        }),
-      ),
+          isSelf,
+          assignmentKey,
+        });
+      }),
   );
 }
 
@@ -1373,6 +1467,18 @@ export function buildTraineeExamDayDto(
     // carries no database identity of any kind.
     const rowKey = `${text(session.date)}#${allRows.length}`;
 
+    // The ONE correlation the two independently-narrowed views below share:
+    // built once per row, from the real internal `assignmentId` both sibling
+    // lookups agree on, and consumed by both `personalSlots` and `assignments`
+    // so they can never pair a slot to the WRONG assignment's detail.
+    const selfAssignmentKeys = buildSelfAssignmentKeyMap(
+      assignmentDetails,
+      source,
+      sessionId,
+      rowKey,
+      viewerStudentId,
+    );
+
     allRows.push(
       Object.freeze({
         rowKey,
@@ -1405,6 +1511,10 @@ export function buildTraineeExamDayDto(
         personalSlots: Object.freeze(
           row.personalSlots.map((slot: TraineeExamPersonalSlot) =>
             Object.freeze({
+              assignmentKey:
+                slot.assignmentId !== null
+                  ? (selfAssignmentKeys.get(slot.assignmentId) ?? null)
+                  : null,
               role: source === "BEGINNER" ? null : slot.role,
               startTime: slot.startTime,
               endTime: slot.endTime,
@@ -1425,6 +1535,7 @@ export function buildTraineeExamDayDto(
           // on, reused verbatim so the row-level and assignment-level `isSelf`
           // can never disagree about who the viewer is.
           viewerStudentId,
+          selfAssignmentKeys,
         ),
         beginner:
           detail === null || participants === null

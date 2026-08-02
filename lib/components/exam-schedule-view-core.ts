@@ -383,66 +383,92 @@ export function filterExamRows<T extends ExamNavigableRow>(
 
 /**
  * ONE participant of a stored block as the TRAINEE contract carries them: the
- * shared operational row PLUS the server's own answer to "is this me".
+ * shared operational row PLUS the server's own answer to "is this me", PLUS the
+ * server's own correlation token.
  *
  * `isSelf` is decided server-side by EXACT STUDENT-ID EQUALITY, against the
  * identity proven from the signed session, and the id itself never leaves the
  * server. It is present on the trainee contract ONLY — the instructor and admin
  * contracts do not carry it, which is why this is a separate type rather than a
  * widening of {@link ExamAssignmentRowView}.
+ *
+ * `assignmentKey` is a SYNTHETIC, non-database token — see
+ * {@link TraineeExamPersonalSlotView.assignmentKey} — present ONLY when
+ * `isSelf` is `true`, `null` otherwise.
  */
 export interface TraineeExamAssignmentRowView extends ExamAssignmentRowView {
   /** The SERVER's answer, never the browser's guess. */
   readonly isSelf: boolean;
+  /** The SAME key {@link TraineeExamPersonalSlotView.assignmentKey} carries for
+   * this exact assignment, or `null` when `isSelf` is `false`. */
+  readonly assignmentKey: string | null;
 }
 
 /**
- * EVERY assignment row the SERVER marked as the viewer's, in the order they
- * arrived.
- *
- * ===========================================================================
- * IT DECIDES NOTHING — IT READS ONE BOOLEAN
- * ===========================================================================
- * This replaces an earlier browser-side heuristic that matched the viewer's row
- * by `selfRole` + the exact personal start and end. That heuristic was safe but
- * INCOMPLETE: two examinees riding in parallel share a personal window, so it
- * could not tell them apart and gave up, and "לו״ז שלי" lost the horse, topic
- * and discipline for exactly the trainees most likely to be confused about them.
- *
- * The read layer now answers the question itself. So the ONLY input here is
- * `isSelf`, and nothing else in the row may be consulted to identify the viewer:
- * not the display name, not the role, not the personal times, not the horse, the
- * topic, the discipline, the pairing, or the position in the array. Every one of
- * those is something this function READS OUT of the rows it was given — never
- * something it uses to choose them.
- *
- * ===========================================================================
- * ZERO, ONE OR SEVERAL — ALL LEGITIMATE
- * ===========================================================================
- * A trainee may legitimately hold several assignments in one block — an
- * EXAMINEE row plus one or more INSTRUCTED_TRAINEE rows for different
- * examinees, or several INSTRUCTED_TRAINEE rows alone — since instructed-trainee
- * multiplicity became legal (EX-ASG-MULTIPLICITY). Returning EVERY `isSelf` row
- * rather than failing closed at more than one is what makes that visible: a
- * missing detail is a gap; picking just one of several REAL rows would be a
- * guessed schedule, so none is silently dropped instead.
- *
- * NO row marked `isSelf` returns an EMPTY array — the viewer is not in this
- * block, or the read layer could not prove they are; either way there is
- * nothing to show.
- *
- * NO NAME IS COMPARED, and no viewer identity is an input: the viewer's name and
- * id are not parameters and are not representable in this signature.
+ * ONE of the viewer's own personal slots — a time and a role, with the token
+ * that pairs it to its own operational detail. Structurally identical to the
+ * read layer's `TraineeExamPersonalSlotDto`, declared here for the same reason
+ * {@link ExamAssignmentRowView} is: no client component reaches into the exam
+ * read pipeline's modules, and a rename or a type change upstream fails the
+ * build rather than silently blanking the screen.
  */
-export function selectSelfAssignmentRows(
+export interface TraineeExamPersonalSlotView {
+  /**
+   * A token, unique within this ONE row, minted server-side from the real
+   * internal `assignmentId` both the trainee core's own sibling lookup and this
+   * DTO's own sibling lookup agree is the same underlying assignment. NEVER the
+   * real database id — that id is never itself returned — and NEVER rendered as
+   * text: its only legitimate uses are an exact-equality lookup against
+   * {@link TraineeExamAssignmentRowView.assignmentKey} and, if one is needed, a
+   * React list key. `null` when the two sibling lookups could not agree on this
+   * slot at all — a slot with a time and a role but no further detail, never a
+   * guessed pairing.
+   */
+  readonly assignmentKey: string | null;
+  readonly role: "EXAMINEE" | "INSTRUCTED_TRAINEE" | null;
+  readonly startTime: string;
+  readonly endTime: string;
+}
+
+/**
+ * The ONE assignment row matching a personal slot's `assignmentKey`, or `null`.
+ *
+ * ===========================================================================
+ * IT DECIDES NOTHING — IT READS ONE TOKEN
+ * ===========================================================================
+ * This replaces an earlier heuristic (`selectSelfAssignmentRow`, and before it
+ * matching by `selfRole` plus the exact personal start and end) that picked
+ * a whole ROW of self-assignments rather than pairing each personal SLOT with
+ * its own one detail row. Both were safe but INCOMPLETE the moment a trainee
+ * legitimately held more than one assignment in a block (EX-ASG-MULTIPLICITY):
+ * two assignments may share a role, or a start/end time, or both, so nothing
+ * about a slot's OWN fields can tell its detail row apart from a sibling's —
+ * only the server-minted `assignmentKey` can.
+ *
+ * So the ONLY input here is `assignmentKey`, compared for EXACT equality, and
+ * nothing else in either the slot or the row may be consulted: not the display
+ * name, not the role, not the personal times, not the horse, the topic, the
+ * discipline, the pairing, or the position in either array. Every one of those
+ * is something a caller READS OUT of the row this function returns — never
+ * something this function uses to choose it.
+ *
+ * FAIL CLOSED: a `null` `assignmentKey` (the DTO narrowing could not correlate
+ * this slot — see `exam-read-dto.ts`) and a key present on no row both yield
+ * `null`, never a guessed row.
+ *
+ * NO NAME IS COMPARED, and no viewer identity is an input: the viewer's name
+ * and id are not parameters and are not representable in this signature.
+ */
+export function selectAssignmentRowForSlot(
   rows: readonly TraineeExamAssignmentRowView[] | null | undefined,
-): readonly TraineeExamAssignmentRowView[] {
-  return Object.freeze(
-    asArray(rows).filter(
-      (row): row is TraineeExamAssignmentRowView =>
-        row !== null && row !== undefined && row.isSelf === true,
-    ),
+  assignmentKey: string | null,
+): TraineeExamAssignmentRowView | null {
+  if (assignmentKey === null) return null;
+  const match = asArray(rows).find(
+    (row) =>
+      row !== null && row !== undefined && row.assignmentKey === assignmentKey,
   );
+  return match ?? null;
 }
 
 // ===========================================================================

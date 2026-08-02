@@ -1,63 +1,72 @@
 "use client";
 
 /**
- * EX-ROLE-SCHEDULE-REDESIGN — the viewer's OWN operational detail, for the
- * compact personal exam view ("לו״ז שלי").
+ * EX-TRN-MULTI-SLOT-DETAIL — one NESTED CARD per personal assignment, for the
+ * compact personal exam view ("לו״ז שלי") and for "לפי תאריך"'s own personal
+ * lines.
  *
  * ===========================================================================
- * WHY IT IS NOT THE FULL SCHEDULE
+ * WHY EACH ASSIGNMENT GETS ITS OWN CARD
  * ===========================================================================
- * "לו״ז כולם" is the complete operational schedule of a block: every wave, every
- * examinee, every nested trainee. A trainee looking at their OWN schedule needs
- * one line about themselves, not the whole block reprinted under a different
- * heading. So this component renders exactly what the viewer must act on — their
- * horse, their topic, their discipline, and the ONE person on the other side of
- * their lesson — and nothing else. Everyone else's rows stay in "לו״ז כולם".
+ * A trainee may legitimately hold several assignments in one session
+ * (EX-ASG-MULTIPLICITY): an EXAMINEE slot plus one or more INSTRUCTED_TRAINEE
+ * slots for different examinees, or several INSTRUCTED_TRAINEE slots alone. An
+ * earlier version rendered every slot's time on its own line and then ALL of
+ * the viewer's horses, topics, disciplines and counterparts together in one
+ * shared block below them — readable for one assignment, but for two or more
+ * there was no way to tell which detail belonged to which time. This component
+ * exists to fix exactly that: ONE bordered card per personal slot, each
+ * carrying only that slot's own time, role and detail — never a shared block
+ * for several.
  *
  * ===========================================================================
- * THE SERVER SAYS WHICH ROWS ARE THE VIEWER'S
+ * THE SERVER SAYS WHICH DETAIL ROW IS WHICH SLOT'S
  * ===========================================================================
- * The trainee contract marks the viewer's own assignments with `isSelf`, decided
- * server-side by EXACT STUDENT-ID EQUALITY against the identity proven from the
- * signed session. The id itself never leaves the server. This component hands
- * the block's rows to the pure core, which returns EVERY row carrying that
- * boolean.
+ * `personalSlots` and `assignments` are resolved by two INDEPENDENT pipelines
+ * over the SAME underlying assignment rows (see `exam-read-dto.ts`), so a slot
+ * cannot be paired to its detail by role, by time, by name or by position —
+ * two legitimate assignments may share any of those. The server-derived
+ * `assignmentKey` is the ONLY input `selectAssignmentRowForSlot` (the pure
+ * core) reads to pair them, by EXACT equality. It is a SYNTHETIC,
+ * non-database token, never rendered as text — used ONLY for that lookup and,
+ * where one is needed, as a React list key.
  *
- * IT REPLACED A HEURISTIC. An earlier version matched the viewer by `selfRole`
- * plus the exact personal start and end. That was safe but INCOMPLETE: two
- * examinees riding in parallel share a personal window, so it could not tell
- * them apart and gave up — and "לו״ז שלי" lost the horse, topic and discipline
- * for exactly the trainees most likely to be unsure of them. Nothing of that
- * heuristic remains: no role, no time, no horse, no topic, no discipline, no
- * pairing and no array position is consulted to CHOOSE a row. They are only ever
- * read out of the rows the server already chose.
- *
- * ZERO, ONE OR SEVERAL ROWS — ALL LEGITIMATE. A trainee may legitimately hold
- * several assignments in one block (EX-ASG-MULTIPLICITY): an EXAMINEE row plus
- * one or more INSTRUCTED_TRAINEE rows for different examinees, or several
- * INSTRUCTED_TRAINEE rows alone. Every marked row renders its own detail block;
- * none is dropped, and none is picked arbitrarily over the others.
+ * ZERO, ONE OR SEVERAL SLOTS — ALL LEGITIMATE, and each renders its own card
+ * regardless of count: a trainee with one assignment sees the identical
+ * one-card layout a trainee with three does, never a separate "simple" layout.
  *
  * NO DISPLAY NAME IS EVER COMPARED to decide what is "mine": the viewer's name
- * is not a prop, is not representable in the props at all, and is nowhere in the
- * pure core either.
+ * is not a prop, is not representable in the props at all, and is nowhere in
+ * the pure core either.
  *
  * ===========================================================================
  * PRIVACY: ONLY APPROVED DISPLAY VALUES ARE RENDERED
  * ===========================================================================
- * Rendered here: the horse name, the instruction topic, the discipline and the
- * RESOLVED display names of the counterpart participants. NOT rendered, and not
- * representable in the props: any id, `pairingIndex`, any national id, e-mail,
- * phone number, parent or contact detail, note, grade, rating or feedback. There
- * is no `JSON.stringify` and no generic object renderer.
+ * Rendered here: the role, the exact personal time, the horse name, the
+ * instruction topic, the discipline and the RESOLVED display names of the
+ * counterpart participants. NOT rendered, and not representable in the props:
+ * any id (including `assignmentKey` itself), `pairingIndex`, any national id,
+ * e-mail, phone number, parent or contact detail, note, grade, rating or
+ * feedback. There is no `JSON.stringify` and no generic object renderer.
  *
  * READ-ONLY BY CONSTRUCTION: no state, no effect, no handler, no form, no input,
  * no button, no Server Action and no publication concept.
  */
 import {
-  selectSelfAssignmentRows,
+  selectAssignmentRowForSlot,
   type TraineeExamAssignmentRowView,
+  type TraineeExamPersonalSlotView,
 } from "./exam-schedule-view-core";
+
+/**
+ * The viewer's own role, as a card TITLE. Gender-neutral, matching this
+ * screen's established wording for "the person themselves" (as opposed to
+ * {@link COUNTERPART_LABELS}, which describes the OTHER side of the lesson).
+ */
+const ROLE_TITLES: Record<"EXAMINEE" | "INSTRUCTED_TRAINEE", string> = {
+  EXAMINEE: "נבחן/ת",
+  INSTRUCTED_TRAINEE: "חניך/ה מודרך/ת",
+};
 
 /**
  * The counterpart label, by the viewer's own role.
@@ -88,53 +97,88 @@ function DetailChip({ label, value }: { label: string; value: string | null }) {
 }
 
 /**
- * The viewer's own horse, topic, discipline and counterpart, for EVERY
- * assignment that is theirs — or nothing.
+ * ONE nested card: the viewer's role, exact personal time, and — ONLY when the
+ * server could pair this slot to its own assignment row — the horse, topic,
+ * discipline and counterpart belonging to THIS assignment and no other.
  *
- * `assignments` is the block's whole trainee contract array, handed over
- * verbatim, and it is the ONLY prop: no viewer identity, no marker and no
- * selection hint is passed in, because the array already carries the server's
- * answer. The component reads it only through the pure core's selector, so a
- * row that is not provably the viewer's can never reach the markup.
+ * `detail` is `null` exactly when `exam-read-dto.ts` could not correlate this
+ * slot (see `TraineeExamPersonalSlotView.assignmentKey`): the card still shows
+ * the role and the exact time — never a guessed pairing — and simply carries
+ * no further chips.
+ */
+function PersonalSlotCard({
+  slot,
+  detail,
+}: {
+  readonly slot: TraineeExamPersonalSlotView;
+  readonly detail: TraineeExamAssignmentRowView | null;
+}) {
+  const roleTitle = slot.role === null ? null : ROLE_TITLES[slot.role];
+  const counterpartLabel = detail === null ? null : COUNTERPART_LABELS[detail.role];
+  return (
+    <div className="flex flex-col gap-1 rounded-xl border border-border bg-muted/40 p-2">
+      {roleTitle !== null && (
+        <p className="text-sm font-bold text-card-foreground">{roleTitle}</p>
+      )}
+      <p className="text-xs font-semibold text-primary">
+        השעה שלך: {slot.startTime} - {slot.endTime}
+      </p>
+
+      {detail !== null && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1">
+          <DetailChip label={HORSE_LABEL} value={detail.horseName} />
+          <DetailChip label={TOPIC_LABEL} value={detail.instructionTopic} />
+          <DetailChip label={DISCIPLINE_LABEL} value={detail.discipline} />
+        </div>
+      )}
+
+      {/* The other side of the lesson. An empty list renders NOTHING: a bare
+          label with no name behind it would suggest a partner the contract
+          does not have. The names are separate elements, never one joined
+          string. */}
+      {detail !== null && detail.pairedParticipantNames.length > 0 && (
+        <p className="text-xs text-card-foreground">
+          <span className="font-semibold">{counterpartLabel}: </span>
+          {detail.pairedParticipantNames.map((name, nameIndex) => (
+            <span key={`${nameIndex}-${name}`}>
+              {nameIndex > 0 && ", "}
+              {name}
+            </span>
+          ))}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * ONE nested card per personal slot — or nothing, when the viewer has none.
+ *
+ * `personalSlots` and `assignments` are the block's whole trainee contract
+ * arrays, handed over verbatim: no viewer identity, no marker and no selection
+ * hint is passed in, because the arrays already carry the server's answer.
+ * Each slot is paired to its own detail row ONLY through the pure core's
+ * `selectAssignmentRowForSlot`, by `assignmentKey`, so a detail that is not
+ * provably THIS slot's own can never reach that slot's card.
  */
 export function ExamPersonalAssignmentDetail({
+  personalSlots,
   assignments,
 }: {
+  readonly personalSlots: readonly TraineeExamPersonalSlotView[];
   readonly assignments: readonly TraineeExamAssignmentRowView[];
 }) {
-  const details = selectSelfAssignmentRows(assignments);
-  if (details.length === 0) return null;
+  if (personalSlots.length === 0) return null;
 
   return (
     <div className="mt-1 flex flex-col gap-2">
-      {details.map((detail, index) => {
-        const counterpartLabel = COUNTERPART_LABELS[detail.role];
-        return (
-          <div key={`${index}-${detail.role}`} className="flex flex-col gap-1">
-            <div className="flex flex-wrap gap-x-3 gap-y-1">
-              <DetailChip label={HORSE_LABEL} value={detail.horseName} />
-              <DetailChip label={TOPIC_LABEL} value={detail.instructionTopic} />
-              <DetailChip label={DISCIPLINE_LABEL} value={detail.discipline} />
-            </div>
-
-            {/* The other side of the lesson. An empty list renders NOTHING: a
-                bare label with no name behind it would suggest a partner the
-                contract does not have. The names are separate elements, never
-                one joined string. */}
-            {detail.pairedParticipantNames.length > 0 && (
-              <p className="text-xs text-card-foreground">
-                <span className="font-semibold">{counterpartLabel}: </span>
-                {detail.pairedParticipantNames.map((name, nameIndex) => (
-                  <span key={`${nameIndex}-${name}`}>
-                    {nameIndex > 0 && ", "}
-                    {name}
-                  </span>
-                ))}
-              </p>
-            )}
-          </div>
-        );
-      })}
+      {personalSlots.map((slot, index) => (
+        <PersonalSlotCard
+          key={slot.assignmentKey ?? `slot-${index}`}
+          slot={slot}
+          detail={selectAssignmentRowForSlot(assignments, slot.assignmentKey)}
+        />
+      ))}
     </div>
   );
 }

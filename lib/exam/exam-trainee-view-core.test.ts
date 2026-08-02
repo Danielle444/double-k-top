@@ -318,6 +318,48 @@ test("6d. two distinct sessions sharing the same date and start time stay distin
   assert.deepEqual(result.myRows.map((r) => r.session.sessionId), ["A"]);
 });
 
+test("6e. each personal slot carries its OWN stable assignmentId, even when role and time are identical", () => {
+  // Two INSTRUCTED_TRAINEE slots that happen to share both role and interval —
+  // the exact shape that makes matching by role or by time ambiguous. Only the
+  // internal assignmentId tells them apart.
+  const row = stored({
+    sessionId: "A",
+    examineeStudentIds: ["stu-examinee-1", "stu-examinee-2"],
+    instructedTraineeStudentIds: [VIEWER, VIEWER],
+  });
+  const details = lookup(
+    detail("A", [
+      { assignmentId: "a1", studentId: "stu-examinee-1", role: "EXAMINEE", startTime: "16:00", endTime: "16:15" },
+      { assignmentId: "a2", studentId: "stu-examinee-2", role: "EXAMINEE", startTime: "16:00", endTime: "16:15" },
+      { assignmentId: "a3", studentId: VIEWER, role: "INSTRUCTED_TRAINEE", startTime: "16:00", endTime: "16:15" },
+      { assignmentId: "a4", studentId: VIEWER, role: "INSTRUCTED_TRAINEE", startTime: "16:00", endTime: "16:15" },
+    ]),
+  );
+
+  const result = projectTraineeExamDay([row], details, DATE, VIEWER);
+  const slots = result.myRows[0].personalSlots;
+  assert.equal(slots.length, 2);
+  assert.deepEqual(
+    slots.map((s) => [s.role, s.startTime, s.endTime]),
+    [
+      ["INSTRUCTED_TRAINEE", "16:00", "16:15"],
+      ["INSTRUCTED_TRAINEE", "16:00", "16:15"],
+    ],
+    "role and time alone cannot distinguish the two slots",
+  );
+  assert.deepEqual(
+    slots.map((s) => s.assignmentId).sort(),
+    ["a3", "a4"],
+    "assignmentId is what actually distinguishes them",
+  );
+});
+
+test("6f. a beginner participant's personal slot carries no assignmentId — it has no stored assignment", () => {
+  const row = beginner({ sessionId: "tp:1", examineeStudentIds: [VIEWER] });
+  const result = projectTraineeExamDay([row], lookup(), DATE, VIEWER);
+  assert.equal(result.myRows[0].personalSlots[0].assignmentId, null);
+});
+
 test("7. a beginner participant receives the REAL lesson interval", () => {
   const row = beginner({
     sessionId: "tp:1",
