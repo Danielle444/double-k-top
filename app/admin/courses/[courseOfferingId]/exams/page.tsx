@@ -1665,17 +1665,15 @@ export default async function CourseExamsPage({
   // once in this file: one binding site is one place to check that the id came
   // from `context`, and never from the raw route param. The offering id therefore
   // travels inside the encrypted Server Action payload and is never a form field.
-  const boundCreateInstructedTraineeAssignmentAction =
-    createExamInstructedTraineeAssignmentAction.bind(null, context.id);
   const boundSetExamPlanPublicationAction =
     setExamPlanPublicationAction.bind(null, context.id);
   const boundReplaceExamSourceDatesAction = replaceExamSourceDatesAction.bind(null, context.id);
   // boundCreateAssignmentAction, boundDeleteAssignmentAction,
-  // boundUpdateExamAssignmentDetailsAction and boundMoveExamAssignmentAction are
-  // all bound further below, once `groupQuery` — the current tab/view/sub-tab —
-  // is known, so every assignment mutation can redirect back to the exact
-  // arrangement the manager was looking at instead of always landing on the
-  // general view.
+  // boundUpdateExamAssignmentDetailsAction, boundMoveExamAssignmentAction and
+  // boundCreateInstructedTraineeAssignmentAction are all bound further below,
+  // once `groupQuery` — the current tab/view/sub-tab — is known, so every
+  // assignment mutation can redirect back to the exact arrangement the manager
+  // was looking at instead of always landing on the general view.
 
   /**
    * The three arrangements of the stored schedule, built ONCE from the committed
@@ -1966,6 +1964,19 @@ export default async function CourseExamsPage({
   const boundUpdateExamAssignmentDetailsAction =
     updateExamAssignmentDetailsAction.bind(null, context.id, groupQuery);
   const boundMoveExamAssignmentAction = moveExamAssignmentAction.bind(null, context.id, groupQuery);
+  // The INSTRUCTED-TRAINEE create endpoint mirrors `boundCreateAssignmentAction`
+  // exactly: it lives behind the SAME shared `addAssignmentOpen` disclosure as
+  // the examinee create form (both render inside the one `{addAssignmentOpen &&
+  // mayConfigure ? (...) : null}` block below), so it is bound with the same
+  // three arguments so a save returns the manager to the exact arrangement —
+  // and, if it was open, the still-open add form — they submitted from.
+  const boundCreateInstructedTraineeAssignmentAction =
+    createExamInstructedTraineeAssignmentAction.bind(
+      null,
+      context.id,
+      groupQuery,
+      addAssignmentOpen,
+    );
 
   /**
    * The view switcher. Plain links carrying ONE closed token and never an id.

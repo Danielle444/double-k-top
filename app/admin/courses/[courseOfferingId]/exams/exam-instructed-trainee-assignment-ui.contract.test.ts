@@ -484,13 +484,22 @@ test("5. the module exports EXACTLY nine actions, IT2's appended EIGHTH", () => 
 });
 
 test("6. the action has the EXACT locked signature, and returns void", () => {
+  // RE-POINTED — the navigation-state fix. The action gained TWO bound
+  // parameters between the offering id and the submission: `groupQuery` — the
+  // same closed tab/view/ordinal tail every in-view link already carries — and
+  // `addAssignmentOpen` — the same closed disclosure the page renders this form
+  // (and its examinee sibling) from. This is the SAME two-parameter shape
+  // `createExamAssignmentAction` already carries, for the SAME reason: a create
+  // must return the manager to the exact arrangement they opened it from, and
+  // reopen the add form only if it already was open. A third or fourth
+  // unapproved parameter still fails here.
   assert.ok(
     new RegExp(
-      `export async function ${ACTION_NAME}\\(\\s*courseOfferingId: string,\\s*formData: FormData,\\s*\\): Promise<void> \\{`,
+      `export async function ${ACTION_NAME}\\(\\s*courseOfferingId: string,\\s*groupQuery: string,\\s*addAssignmentOpen: boolean,\\s*formData: FormData,\\s*\\): Promise<void> \\{`,
     ).test(ACTIONS_SOURCE),
     "the signature is not the locked one",
   );
-  // No `prevState`, no options bag, no third parameter and no non-void return:
+  // No `prevState`, no options bag, no fifth parameter and no non-void return:
   // every outcome is a navigation, so the action cannot grow client-visible state.
   assert.equal(ACTION.includes("prevState"), false, "the action takes prevState");
   assert.equal(/return\s+[^;]/.test(ACTION), false, "the action returns a value");
@@ -593,12 +602,21 @@ test("10. the offering is the BOUND leading argument and is NEVER read from Form
   ]) {
     assert.equal(ACTION.includes(forbidden), false, `the action reads ${forbidden}`);
   }
-  // The page binds the VERIFIED context id, never the raw route param — and binds
-  // the action EXACTLY ONCE, hoisted, so there is one place to check the id's
-  // provenance no matter how many per-session controls React renders from it.
+  // The page binds the VERIFIED context id, the current view and the shared
+  // add-form disclosure — never the raw route param — and binds the action
+  // EXACTLY ONCE, hoisted, so there is one place to check the id's provenance no
+  // matter how many per-session controls React renders from it.
+  //
+  // RE-POINTED — the navigation-state fix. The binding gained the SAME two
+  // extra arguments the action's signature gained: `groupQuery` and
+  // `addAssignmentOpen`, bound in ONLY once both are known — the same reason
+  // `createExamAssignmentAction`'s own binding is deferred to that point rather
+  // than hoisted with the id alone.
   assert.ok(
-    PAGE.includes(`${ACTION_NAME}.bind(null, context.id)`),
-    "the page must bind the verified context id into the action",
+    squash(PAGE).includes(
+      `${ACTION_NAME}.bind( null, context.id, groupQuery, addAssignmentOpen, )`,
+    ),
+    "the page must bind the verified context id, the current view and the add-form disclosure into the action",
   );
   assert.equal(
     (PAGE.match(new RegExp(`${ACTION_NAME}\\.bind\\(`, "g")) ?? []).length,
@@ -609,6 +627,11 @@ test("10. the offering is the BOUND leading argument and is NEVER read from Form
     PAGE.includes(`${ACTION_NAME}.bind(null, courseOfferingId)`),
     false,
     "the raw route param must never be bound into the action",
+  );
+  assert.equal(
+    PAGE.includes(`${ACTION_NAME}.bind(null, context.id)`),
+    false,
+    "the action must not be bound WITHOUT the current view and the add-form disclosure — that is the bug this fix corrects",
   );
 });
 
@@ -661,14 +684,23 @@ test("13. the action maps its closed refusal union and invents no code", () => {
   // Field diagnostics travel as the writer's own CODES, joined — never a message,
   // never a submitted value.
   assert.ok(ACTION.includes('const codes = result.issues.map((issue) => issue.code).join(",")'));
+  // RE-POINTED — the navigation-state fix. Every refusal now returns to
+  // `backPath` (the exams path plus the bound `groupQuery`) rather than always
+  // to the bare exams path, exactly as `createExamAssignmentAction`'s own
+  // refusal branches do.
   assert.ok(
     ACTION.includes(
-      "`${examsPath}?instructedTraineeError=invalid_input&instructedTraineeIssues=${encodeURIComponent(codes)}`",
+      "`${backPath}&instructedTraineeError=invalid_input&instructedTraineeIssues=${encodeURIComponent(codes)}`",
     ),
   );
   // Every other refusal is fully described by its code alone.
   assert.ok(
-    ACTION.includes("`${examsPath}?instructedTraineeError=${encodeURIComponent(result.code)}`"),
+    ACTION.includes("`${backPath}&instructedTraineeError=${encodeURIComponent(result.code)}`"),
+  );
+  assert.equal(
+    ACTION.includes("?instructedTraineeError="),
+    false,
+    "a refusal must never redirect to the bare exams path — that drops the arrangement",
   );
   // The success arm is checked FIRST, so `result.code` is only ever read on a
   // refusal — the success arm of the committed union carries no `code` at all.
@@ -678,23 +710,39 @@ test("13. the action maps its closed refusal union and invents no code", () => {
   );
 });
 
-test("14. the action revalidates EXACTLY this exams path, BEFORE its redirect", () => {
+test("14. the action revalidates EXACTLY this exams path, BEFORE its redirect, and returns to the arrangement it was opened from", () => {
   assert.ok(
     ACTION.includes(
       "const examsPath = `/admin/courses/${encodeURIComponent(courseOfferingId)}/exams`",
     ),
     "the action must build the path from the BOUND offering id",
   );
+  // RE-POINTED — the navigation-state fix. `backPath` is the same
+  // `${examsPath}?${groupQuery}` construction `deleteExamAssignmentAction`,
+  // `updateExamAssignmentDetailsAction` and `moveExamAssignmentAction` already
+  // build from their own bound `groupQuery`.
+  assert.ok(
+    ACTION.includes("const backPath = `${examsPath}?${groupQuery}`;"),
+    "the action must build the return path from the BOUND groupQuery",
+  );
   assert.equal((ACTION.match(/revalidatePath\(/g) ?? []).length, 1, "it revalidates more than once");
   assert.ok(ACTION.includes("revalidatePath(examsPath)"), "it revalidates some other path");
   // Ordering: the cache is invalidated BEFORE the navigation, so the page the
   // manager lands on is re-read rather than served stale.
   assert.ok(
-    ACTION.indexOf("revalidatePath(examsPath)") < ACTION.indexOf("createdInstructedTrainee=1`"),
+    ACTION.indexOf("revalidatePath(examsPath)") < ACTION.indexOf("redirect("),
     "the action redirects before it revalidates",
   );
-  // The fixed success token, and no other.
-  assert.ok(ACTION.includes("`${examsPath}?createdInstructedTrainee=1`"));
+  // The success redirect stays open ONLY if the add form already was —
+  // `addAssignmentOpen` is never forced on for a manager who submitted from a
+  // closed one, mirroring `createExamAssignmentAction`'s own success branch
+  // exactly, since both create forms share the one disclosure.
+  assert.ok(
+    squash(ACTION).includes(
+      "redirect( addAssignmentOpen ? `${backPath}&createdInstructedTrainee=1&add=1` : `${backPath}&createdInstructedTrainee=1`, );",
+    ),
+    "the success redirect must conditionally reopen the shared add form",
+  );
   // No other route, layout or tag is refreshed.
   for (const forbidden of ['revalidatePath("/', "revalidateTag", '"layout"', '"page"']) {
     assert.equal(ACTION.includes(forbidden), false, `the action uses ${forbidden}`);
@@ -715,13 +763,19 @@ test("15. NO id, submitted value or raw error ever reaches the query string", ()
     assert.equal(ACTION.includes(forbidden), false, `the action leaks ${forbidden}`);
   }
   // The ONLY dynamic values in any redirect target are `result.code` — a
-  // compile-time-known literal from a closed set — and the joined issue codes.
+  // compile-time-known literal from a closed set — the joined issue codes, and
+  // now `backPath`/`groupQuery`: the same closed tab/view/ordinal tail every
+  // in-view link already carries, bound in from the page and never read from
+  // the submission. RE-POINTED to ADD `backPath` and `groupQuery` — never to
+  // relax the check into a pattern or a prefix match.
   const interpolations = [...ACTION.matchAll(/\$\{([^}]+)\}/g)].map(([, expr]) => expr.trim());
   for (const expr of interpolations) {
     assert.ok(
       [
         "encodeURIComponent(courseOfferingId)",
         "examsPath",
+        "groupQuery",
+        "backPath",
         "encodeURIComponent(result.code)",
         "encodeURIComponent(codes)",
       ].includes(expr),
@@ -1225,50 +1279,47 @@ test("28. the three new tokens select constants and are never interpolated", () 
 });
 
 test("29. the page binds EXACTLY eight actions, all to the verified context id", () => {
-  // RE-POINTED from 8 to 9 by EX-PUB-UI-MVP, which binds ONE more reviewed
-  // action — still to `context.id`, the DB-VERIFIED offering, and never to the
-  // raw route param. `action=` counts TWO more, because the publication card's
-  // two mutually exclusive forms are written out separately so each can carry a
-  // LITERAL hidden operation value rather than a computed one.
-  // RE-POINTED from ten to ELEVEN by EX-ADMIN-WORKSPACE-UX: it binds TWO more
-  // reviewed actions and REMOVES one — the standalone pairing action, whose
-  // control was absorbed into the examinee's card.
-  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
-  // replacement, which is the only way a plan can gain a Teaching-Practice day
-  // and therefore the only way a beginner exam can appear anywhere at all.
-  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 12);
-  // RE-POINTED from ten to ELEVEN by EX-ADMIN-WORKSPACE-UX: it binds TWO more
-  // reviewed actions and REMOVES one — the standalone pairing action, whose
-  // control was absorbed into the examinee's card.
-  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
-  // replacement, which is the only way a plan can gain a Teaching-Practice day
-  // and therefore the only way a beginner exam can appear anywhere at all.
-  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 12);
-  // RE-POINTED from 10 to 11 by EX-PAIR-UI-MVP: ONE more inline form, bound to
-  // the SAME verified context id, which the two `.bind` counts above pin.
-  // RE-POINTED from eleven to FOURTEEN by EX-ADMIN-WORKSPACE-UX: the pairing form
-  // left the page (-1); the two move forms arrived (+2); the examinee edit card
-  // arrived (+1); and the role-blind removal control is rendered from two places
-  // now (+1). Every one is still bound to the SAME verified context id, which the
-  // two `.bind` counts above pin.
-  // RE-POINTED by EX-ADMIN-SRCDATE's ONE appended endpoint — the source-date
-  // replacement, which is the only way a plan can gain a Teaching-Practice day
-  // and therefore the only way a beginner exam can appear anywhere at all.
+  // RE-POINTED — the navigation-state fix. The instructed-trainee create
+  // binding moved from the single-line `.bind(null, context.id)` shape to the
+  // SAME multi-line, three-argument shape `createExamAssignmentAction`,
+  // `deleteExamAssignmentAction`, `updateExamAssignmentDetailsAction` and
+  // `moveExamAssignmentAction` already use once `groupQuery` is known, so it no
+  // longer matches the single-line `.bind(null, ` / `.bind(null, context.id)`
+  // patterns below — exactly like those four already did not. The counts drop
+  // by exactly one each, from the twelve a prior slice recorded, and the exact
+  // three-argument shape is pinned directly further down.
+  assert.equal((PAGE.match(/\.bind\(null, /g) ?? []).length, 10);
+  assert.equal((PAGE.match(/\.bind\(null, context\.id\)/g) ?? []).length, 7);
+  // `action=` is unaffected: it counts JSX props, not `.bind(` call shapes, and
+  // this fix adds no new form and removes none.
   assert.equal((PAGE.match(/action=/g) ?? []).length, 15);
-  // The new binding is HOISTED, not created inside the session loop.
+  // The binding is HOISTED, once `groupQuery` and `addAssignmentOpen` are both
+  // known — alongside `boundCreateAssignmentAction`, `boundDeleteAssignmentAction`,
+  // `boundUpdateExamAssignmentDetailsAction` and `boundMoveExamAssignmentAction`
+  // — and NOT created inside the session loop.
   assert.ok(
     squash(PAGE).includes(
-      `const boundCreateInstructedTraineeAssignmentAction = ${ACTION_NAME}.bind( null, context.id, );`,
-    ) ||
-      squash(PAGE).includes(
-        `const boundCreateInstructedTraineeAssignmentAction = ${ACTION_NAME}.bind(null, context.id);`,
-      ),
-    "the new action must be bound once, hoisted, to context.id",
+      `const boundCreateInstructedTraineeAssignmentAction = ${ACTION_NAME}.bind( null, context.id, groupQuery, addAssignmentOpen, );`,
+    ),
+    "the action must be bound once, hoisted, to context.id, groupQuery and addAssignmentOpen",
+  );
+  assert.equal(
+    (PAGE.match(/const boundCreateInstructedTraineeAssignmentAction/g) ?? []).length,
+    1,
+    "the binding must be declared exactly once",
   );
   assert.ok(
     PAGE.indexOf("const boundCreateInstructedTraineeAssignmentAction") <
       PAGE.indexOf("day.sessions.map"),
     "the binding must be hoisted above the session loop",
+  );
+  // ...and it is hoisted alongside its groupQuery-dependent neighbours, AFTER
+  // `groupQuery` itself is computed — never before, which is the bug this fix
+  // corrects.
+  assert.ok(
+    PAGE.indexOf("const groupQuery =") <
+      PAGE.indexOf("const boundCreateInstructedTraineeAssignmentAction"),
+    "the binding must be declared after groupQuery is known",
   );
   // The page imports EXACTLY the twenty-one approved specifiers, and reaches no
   // write binding directly: all eight actions arrive through the one `./actions`.
@@ -1664,5 +1715,225 @@ test("38. this suite opens no database and reads no environment", () => {
   assert.deepEqual(
     [...new Set(specifiers)].sort(),
     ["node:assert/strict", "node:child_process", "node:fs", "node:path", "node:test"],
+  );
+});
+
+// ===========================================================================
+// 39–44. NAVIGATION-STATE PRESERVATION — the fix this suite exists to prove
+//
+// Before this fix, `createExamInstructedTraineeAssignmentAction` was bound with
+// ONLY `context.id` and redirected EVERY branch — success and every refusal
+// alike — to the bare exams path, dropping the manager's open tab, their
+// "לפי סוג"/"לפי תאריך" arrangement, the selected sub-tab and the open
+// add-form disclosure. The examinee sibling `createExamAssignmentAction` never
+// had this bug; these six tests prove the instructed-trainee action now shares
+// its exact fix, mirroring the assertions the sibling assignment suite makes
+// about its own create/removal pair.
+//
+// This suite is DB-free and renders nothing (see test 38 and the header), so
+// "preserves the arrangement" is proven the same way every other claim in this
+// file is proven: structurally, against the source the server actually runs —
+// that the redirect target is BUILT FROM the one page-resolved `groupQuery`
+// and `addAssignmentOpen`, never from a re-derived copy, a hardcoded default or
+// the bare exams path. What the committed `groupQuery` computation itself
+// encodes for each arrangement is the workspace-view module's own contract, not
+// this route's; nothing here re-proves it, and nothing here opens a page.
+// ===========================================================================
+
+test("39. CREATE preserves the TYPE arrangement (\"לפי סוג\") and its selected sub-tab", () => {
+  // `groupQuery` is the ONE computation every arrangement — "general", "type"
+  // and "date" — flows through: the active tab and the current view always,
+  // and the selected sub-tab ordinal for every non-general view, "type"
+  // included. It is computed EXACTLY ONCE on the page.
+  assert.ok(
+    PAGE.includes('const viewQuery = `tab=${activeTab}&view=${scheduleView}`;'),
+    "groupQuery must be built from the active tab and the CURRENT view, whatever it is",
+  );
+  assert.ok(
+    squash(PAGE).includes(
+      'const groupQuery = scheduleView === "general" ? viewQuery : `${viewQuery}&group=${activeSubTabIndex}`;',
+    ),
+    "a TYPE (or DATE) arrangement must carry the selected sub-tab ordinal in groupQuery",
+  );
+  assert.equal(
+    (PAGE.match(/const groupQuery = /g) ?? []).length,
+    1,
+    "groupQuery must be computed exactly once, so a TYPE-view create cannot silently return to a different arrangement",
+  );
+  assert.ok(PAGE.includes('scheduleView === "type"'), "the TYPE arrangement must still exist");
+  // The CREATE action is bound to that SAME variable — not a second, parallel
+  // computation that could drift from it or ignore the TYPE arrangement.
+  assert.ok(
+    squash(PAGE).includes(
+      `${ACTION_NAME}.bind( null, context.id, groupQuery, addAssignmentOpen, )`,
+    ),
+    "the create action must be bound to the one shared groupQuery, covering every arrangement including TYPE",
+  );
+});
+
+test("40. CREATE preserves the DATE arrangement (\"לפי תאריך\") and its selected day sub-tab", () => {
+  // The DATE arrangement feeds the exact SAME `groupQuery` the TYPE arrangement
+  // does (proven above) — there is no second, date-only construction and no
+  // date-specific carve-out anywhere in the create action's own body.
+  assert.ok(PAGE.includes('scheduleView === "date"'), "the DATE arrangement must still exist");
+  assert.equal(
+    ACTION.includes('"type"') || ACTION.includes('"date"'),
+    false,
+    "the action itself must never branch on which arrangement it was opened from — groupQuery is opaque, closed content bound in from the page",
+  );
+  // The instructed-trainee create redirects through the SAME `backPath` family
+  // every groupQuery-aware action on this route builds — proven directly in the
+  // action's own body by test 14 — so a DATE-arrangement create is preserved by
+  // construction rather than by a second, easily-missed code path.
+  assert.ok(
+    ACTION.includes("const backPath = `${examsPath}?${groupQuery}`;"),
+    "the create action must build its return path from the bound groupQuery, whatever arrangement it encodes",
+  );
+});
+
+test("41. REPLACE (swapping the instructed trainee an examinee teaches) preserves navigation state", () => {
+  // The "replace" this route offers is the examinee card's teaching-link swap:
+  // ONE coherent save that calls the committed detail writer and, when the
+  // picker actually changed, the committed atomic replacement — both reached
+  // through `updateExamAssignmentDetailsAction`, proven above (background) to
+  // already carry `groupQuery`. This test pins that it still does, so the fix
+  // to the CREATE endpoint above never regresses its already-fixed neighbour.
+  const replaceAction = actionBody(ACTIONS, "updateExamAssignmentDetailsAction");
+  assert.ok(
+    new RegExp(
+      "export async function updateExamAssignmentDetailsAction\\(\\s*courseOfferingId: string,\\s*groupQuery: string,\\s*formData: FormData,\\s*\\): Promise<void> \\{",
+    ).test(ACTIONS_SOURCE),
+    "the replace action's signature must still carry groupQuery",
+  );
+  assert.ok(
+    replaceAction.includes("const backPath = `${examsPath}?${groupQuery}`;"),
+    "the replace action must still build its return path from groupQuery",
+  );
+  // Every one of its outcome branches — the detail refusal, the pairing
+  // refusal and the final honest summary — returns through that SAME backPath,
+  // never the bare exams path.
+  assert.equal(replaceAction.includes("?assignmentEdit="), false);
+  assert.ok(replaceAction.includes("${backPath}&assignmentEdit="));
+  assert.ok(
+    squash(PAGE).includes(
+      "const boundUpdateExamAssignmentDetailsAction = updateExamAssignmentDetailsAction.bind( null, context.id, groupQuery, );",
+    ) ||
+      PAGE.includes(
+        "updateExamAssignmentDetailsAction.bind(null, context.id, groupQuery)",
+      ),
+    "the page must bind the replace action to the verified context id and the current arrangement",
+  );
+});
+
+test("42. REMOVE (deleting an instructed-trainee assignment row) preserves navigation state", () => {
+  // There is no role-specific instructed-trainee delete endpoint (test 26 pins
+  // that directly): removal reaches the SAME role-blind `deleteExamAssignmentAction`
+  // the examinee removal uses, for BOTH the unlinked instructed-trainee roster
+  // and any other stored row. This test pins that shared action still carries
+  // groupQuery, so an instructed-trainee removal is preserved by construction.
+  const removeAction = actionBody(ACTIONS, "deleteExamAssignmentAction");
+  assert.ok(
+    new RegExp(
+      "export async function deleteExamAssignmentAction\\(\\s*courseOfferingId: string,\\s*groupQuery: string,\\s*formData: FormData,\\s*\\): Promise<void> \\{",
+    ).test(ACTIONS_SOURCE),
+    "the removal action's signature must still carry groupQuery",
+  );
+  assert.ok(
+    removeAction.includes("const backPath = `${examsPath}?${groupQuery}`;"),
+    "the removal action must still build its return path from groupQuery",
+  );
+  assert.ok(removeAction.includes("${backPath}&deletedAssignment=1"));
+  assert.equal(removeAction.includes("?deletedAssignment="), false);
+  // The instructed-trainee roster's own removal button is wired to that SAME
+  // hoisted binding — never a second one.
+  assert.ok(
+    PAGE.includes(
+      "deleteExamAssignmentAction.bind(null, context.id, groupQuery)",
+    ),
+  );
+  assert.equal(
+    (PAGE.match(/deleteExamAssignmentAction\.bind\(/g) ?? []).length,
+    1,
+    "a second, un-fixed delete binding must not exist",
+  );
+});
+
+test("43. the reopened add-form disclosure stays USABLE — the instructed-trainee form renders inside it too", () => {
+  // `addAssignmentOpen` is the ONE shared disclosure both create forms render
+  // behind (test 25 pins the examinee half of this); a manager who just
+  // assigned an instructed trainee and lands back with the form reopened must
+  // see a form that still WORKS, not a stale or half-hidden one — which is what
+  // "reopened but unusable" would look like.
+  assert.ok(PAGE.includes("{addAssignmentOpen && mayConfigure ? ("));
+  assert.ok(PAGE.includes("{showInstructedTraineeForm ? ("));
+  assert.ok(PAGE.includes("<CreateExamInstructedTraineeAssignmentForm"));
+  // The instructed-trainee form sits INSIDE the disclosure block that
+  // `addAssignmentOpen` gates — never outside it and never behind a second,
+  // independent disclosure that this fix could leave closed.
+  const disclosureBlock = PAGE.slice(
+    PAGE.indexOf("{addAssignmentOpen && mayConfigure ? ("),
+    PAGE.indexOf("{addAssignmentOpen && mayConfigure ? (") +
+      PAGE.slice(PAGE.indexOf("{addAssignmentOpen && mayConfigure ? (")).indexOf(
+        "<CreateExamInstructedTraineeAssignmentForm",
+      ) +
+      "<CreateExamInstructedTraineeAssignmentForm".length,
+  );
+  assert.ok(
+    disclosureBlock.includes("<CreateExamInstructedTraineeAssignmentForm"),
+    "the instructed-trainee form must be reachable from inside the addAssignmentOpen block",
+  );
+  // The form itself is rendered with a live, working eligible-trainee list and
+  // the freshly bound action — never a stale prop the redirect could not have
+  // refreshed, since the page always re-reads from the database after a
+  // revalidated redirect (test 14; test 22's single-read-per-reader guard).
+  assert.ok(
+    squash(PAGE).includes(
+      "<CreateExamInstructedTraineeAssignmentForm action={boundCreateInstructedTraineeAssignmentAction} courseOfferingId={context.id} sessionId={session.sessionId} eligibleTrainees={eligibleView.trainees} />",
+    ),
+  );
+});
+
+test("44. the redirect target itself carries tab, view, sub-tab ordinal and disclosure — the same property that lets the sibling create avoid a scroll", () => {
+  // This app restores no pixel scroll position anywhere (there is no scroll
+  // library, no ref and no `scrollIntoView` on this route or its siblings).
+  // The examinee create achieves "effective" scroll preservation by returning
+  // the manager to the exact tab/view/sub-tab arrangement — so the block they
+  // were working in renders at the top of that arrangement instead of at the
+  // top of a full, unfiltered exam day — and by reopening the add form in
+  // place. This test proves the instructed-trainee create now has that SAME
+  // property, by proving its redirect targets are built from the same closed
+  // ingredients: `groupQuery` (which itself is `tab=...&view=...` and,
+  // non-generally, `&group=...`) and, on success, `add=1`.
+  for (const scrollLibrary of ["scrollIntoView", "useRef", "scrollTo(", "IntersectionObserver"]) {
+    assert.equal(ACTION.includes(scrollLibrary), false, `a pixel-scroll mechanism was introduced: ${scrollLibrary}`);
+  }
+  assert.equal(
+    ACTIONS.includes("scrollIntoView") ||
+      ACTIONS.includes("IntersectionObserver") ||
+      /\buseRef\b/.test(ACTIONS),
+    false,
+    "no pixel-scroll mechanism exists anywhere in this Server Action module",
+  );
+  // Every redirect target this action can produce is built from `backPath`
+  // (`${examsPath}?${groupQuery}`) or, for the one refusal that is not about
+  // this page, the safe course list — never the bare exams path. `groupQuery`
+  // itself supplies `tab=`, `view=` and, for a TYPE or DATE arrangement,
+  // `group=`; the success branch additionally supplies `add=1` whenever the
+  // form the manager is using was already open.
+  assert.equal(
+    /`\$\{examsPath\}\?instructedTraineeError/.test(ACTION),
+    false,
+    "a refusal must never drop the arrangement by targeting the bare exams path",
+  );
+  assert.equal(
+    /`\$\{examsPath\}\?createdInstructedTrainee/.test(ACTION),
+    false,
+    "a success must never drop the arrangement by targeting the bare exams path",
+  );
+  assert.ok(
+    squash(ACTION).includes(
+      "redirect( addAssignmentOpen ? `${backPath}&createdInstructedTrainee=1&add=1` : `${backPath}&createdInstructedTrainee=1`, );",
+    ),
+    "a success from an OPEN add form must carry add=1 forward, so the reopened form needs no re-scroll to find",
   );
 });
