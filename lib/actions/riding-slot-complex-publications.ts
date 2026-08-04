@@ -15,6 +15,10 @@ import type { ActionResult } from "@/lib/actions/students";
 // into the frozen publication snapshot at publish time. The generated fallback
 // ("תרגול הדרכה") is a READER concern and is never resolved or persisted here.
 import { validateComplexSessionTitle } from "@/lib/riding-complex/complex-session-title-core";
+// RIDING-COMPLEX-PUBLICATION-TIMEOUT-FIX - pure flatten of the live block ->
+// station -> pair tree into batched write inputs, replacing the previous
+// per-row create loop (see publishComplexRidingPlanInternal below).
+import { flattenComplexPlanForPublication } from "@/lib/riding-complex/complex-plan-publication-tree";
 
 const NOT_FOUND_COMPLEX_PLAN = "תכנון הרכיבה המורכבת לא נמצא. ייתכן שטרם נוצר - נסי לרענן את העמוד.";
 const NO_BLOCKS = "לא ניתן לפרסם תכנון ללא טווחי שעות - יש להוסיף לפחות טווח שעות אחד לפני הפרסום.";
@@ -185,135 +189,167 @@ async function publishComplexRidingPlanInternal(
 
   const actorData = publicationActorWriteFields(actor);
 
-  const txResult = await prisma.$transaction(async (tx) => {
-    // The one consistent transactional read this whole publish is built
-    // from - plan.version and every block/station/pair below are never
-    // re-read or mixed with a value obtained outside this call.
-    const plan = await tx.ridingSlotComplexPlan.findUnique({
-      where: { ridingSlotId: trimmedId },
-      include: {
-        blocks: {
-          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-          include: {
-            stations: {
-              orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-              include: {
-                instructor: { select: { fullName: true } },
-                pairs: {
-                  orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-                  include: {
-                    trainee1: { select: { fullName: true } },
-                    trainee2: { select: { fullName: true } },
+  // RIDING-COMPLEX-PUBLICATION-TIMEOUT-FIX - explicit, narrowly scoped timeout
+  // (Prisma's default is 5000ms/2000ms maxWait). This is defense-in-depth ONLY:
+  // the actual fix is the batched write below (was O(blocks + 2*stations)
+  // sequential round trips, now a constant ~6 regardless of plan size) - see
+  // the P2028 audit that diagnosed a Production plan (8 blocks/22 stations/39
+  // pairs) exceeding the 5000ms default purely from sequential per-row
+  // `create()` calls, not from any single slow query. maxWait/isolationLevel
+  // are intentionally left at their defaults - nothing observed motivates
+  // changing either.
+  const txResult = await prisma.$transaction(
+    async (tx) => {
+      // The one consistent transactional read this whole publish is built
+      // from - plan.version and every block/station/pair below are never
+      // re-read or mixed with a value obtained outside this call.
+      const plan = await tx.ridingSlotComplexPlan.findUnique({
+        where: { ridingSlotId: trimmedId },
+        include: {
+          blocks: {
+            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+            include: {
+              stations: {
+                orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+                include: {
+                  instructor: { select: { fullName: true } },
+                  pairs: {
+                    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+                    include: {
+                      trainee1: { select: { fullName: true } },
+                      trainee2: { select: { fullName: true } },
+                    },
                   },
                 },
               },
             },
           },
         },
-      },
-    });
+      });
 
-    if (!plan) {
-      return { ok: false as const, error: NOT_FOUND_COMPLEX_PLAN };
-    }
-    // The one hard blocker beyond "plan exists" - directly mirrors
-    // publishRidingHorseListToInstructorsInternal's NOT_FOUND_HORSE_LIST
-    // precedent (must have something to publish). Every other
-    // incompleteness (station without coach/arena, pair without trainee2/
-    // horse, empty station, block with no stations) stays a warning only,
-    // exactly as it already is at station-save time - never invented here.
-    if (plan.blocks.length === 0) {
-      return { ok: false as const, error: NO_BLOCKS };
-    }
+      if (!plan) {
+        return { ok: false as const, error: NOT_FOUND_COMPLEX_PLAN };
+      }
+      // The one hard blocker beyond "plan exists" - directly mirrors
+      // publishRidingHorseListToInstructorsInternal's NOT_FOUND_HORSE_LIST
+      // precedent (must have something to publish). Every other
+      // incompleteness (station without coach/arena, pair without trainee2/
+      // horse, empty station, block with no stations) stays a warning only,
+      // exactly as it already is at station-save time - never invented here.
+      if (plan.blocks.length === 0) {
+        return { ok: false as const, error: NO_BLOCKS };
+      }
 
-    // RC-A2 - freeze the CURRENT normalized live title into the snapshot at
-    // publish/republish time. plan.title is already read above (findUnique with
-    // `include` returns every scalar), re-normalized through the RC-A0 core as
-    // defence-in-depth: a null (or legacy-malformed) live title becomes a null
-    // snapshot, and the fallback string is NEVER stored. This is the ONLY place
-    // titleSnapshot is written, so a later live-title edit (which bumps
-    // plan.version and makes the publication STALE) never mutates it until an
-    // explicit republish writes the then-current title here.
-    const titleValidation = validateComplexSessionTitle(plan.title);
-    const titleSnapshot = titleValidation.ok ? titleValidation.value : null;
+      // RC-A2 - freeze the CURRENT normalized live title into the snapshot at
+      // publish/republish time. plan.title is already read above (findUnique with
+      // `include` returns every scalar), re-normalized through the RC-A0 core as
+      // defence-in-depth: a null (or legacy-malformed) live title becomes a null
+      // snapshot, and the fallback string is NEVER stored. This is the ONLY place
+      // titleSnapshot is written, so a later live-title edit (which bumps
+      // plan.version and makes the publication STALE) never mutates it until an
+      // explicit republish writes the then-current title here.
+      const titleValidation = validateComplexSessionTitle(plan.title);
+      const titleSnapshot = titleValidation.ok ? titleValidation.value : null;
 
-    const publication = await tx.ridingSlotComplexPublication.upsert({
-      where: { planId: plan.id },
-      create: {
-        planId: plan.id,
-        sourceVersion: plan.version,
-        titleSnapshot,
-        ...actorData,
-        // firstPublishedAt intentionally omitted - uses the schema default
-        // (now()) on create, and is never listed in `update` below, so an
-        // existing value is always left untouched on every republish.
-      },
-      update: {
-        sourceVersion: plan.version,
-        titleSnapshot,
-        ...actorData,
-      },
-    });
-
-    // Wholesale delete+recreate of every snapshot child row - same
-    // convention as saveComplexStationInternal's pair replace and
-    // publishRidingHorseListToInstructorsInternal's item replace. Deleting
-    // this publication's blocks is enough: the schema's onDelete: Cascade
-    // (publication -> blocks -> stations -> pairs) removes every station/
-    // pair snapshot underneath them in the same statement.
-    await tx.ridingSlotComplexPublicationBlock.deleteMany({ where: { publicationId: publication.id } });
-
-    // Pair/station/block counts per plan are small (a handful of time
-    // blocks, a handful of coach stations each, a handful of pairs each) -
-    // sequential per-block/per-station creates (needed so each child's
-    // generated id is available for its own children) stay comfortably
-    // within the default Prisma interactive-transaction timeout, same
-    // "no custom timeout without justification" convention already used by
-    // every other transaction in this feature.
-    for (const block of plan.blocks) {
-      const pubBlock = await tx.ridingSlotComplexPublicationBlock.create({
-        data: {
-          publicationId: publication.id,
-          sourceBlockId: block.id,
-          startTime: block.startTime,
-          endTime: block.endTime,
-          sortOrder: block.sortOrder,
+      const publication = await tx.ridingSlotComplexPublication.upsert({
+        where: { planId: plan.id },
+        create: {
+          planId: plan.id,
+          sourceVersion: plan.version,
+          titleSnapshot,
+          ...actorData,
+          // firstPublishedAt intentionally omitted - uses the schema default
+          // (now()) on create, and is never listed in `update` below, so an
+          // existing value is always left untouched on every republish.
+        },
+        update: {
+          sourceVersion: plan.version,
+          titleSnapshot,
+          ...actorData,
         },
       });
 
-      for (const station of block.stations) {
-        const pubStation = await tx.ridingSlotComplexPublicationStation.create({
-          data: {
-            publicationBlockId: pubBlock.id,
-            sourceStationId: station.id,
-            instructorId: station.instructorId,
-            instructorNameSnapshot: station.instructor?.fullName ?? null,
-            arena: station.arena,
-            sortOrder: station.sortOrder,
-          },
-        });
+      // Wholesale delete+recreate of every snapshot child row - same
+      // convention as saveComplexStationInternal's pair replace and
+      // publishRidingHorseListToInstructorsInternal's item replace. Deleting
+      // this publication's blocks is enough: the schema's onDelete: Cascade
+      // (publication -> blocks -> stations -> pairs) removes every station/
+      // pair snapshot underneath them in the same statement.
+      await tx.ridingSlotComplexPublicationBlock.deleteMany({ where: { publicationId: publication.id } });
 
-        if (station.pairs.length > 0) {
+      // RIDING-COMPLEX-PUBLICATION-TIMEOUT-FIX - BATCHED create, replacing the
+      // previous per-block/per-station sequential create loop (that pattern's
+      // O(blocks + 2*stations) round trips is exactly what exceeded Prisma's
+      // 5000ms default transaction timeout against a real Production plan of
+      // 8 blocks/22 stations/39 pairs - P2028). Every publication row's id is
+      // `@default(cuid())`, a Prisma CLIENT-side default, so nothing here
+      // depends on the DB to hand back an id the app couldn't otherwise know;
+      // `createManyAndReturn` is used only so each level's generated id can be
+      // correlated (via the stable sourceBlockId/sourceStationId columns this
+      // schema already carries) to build the next level's foreign keys - not
+      // because the id itself needs the DB. This reduces the write shape to a
+      // constant ~3 batched round trips (blocks, stations, pairs) regardless of
+      // plan size, instead of one round trip per block and per station.
+      const tree = flattenComplexPlanForPublication(plan.blocks);
+
+      const createdBlocks = await tx.ridingSlotComplexPublicationBlock.createManyAndReturn({
+        data: tree.blocks.map((b) => ({
+          publicationId: publication.id,
+          sourceBlockId: b.sourceBlockId,
+          startTime: b.startTime,
+          endTime: b.endTime,
+          sortOrder: b.sortOrder,
+        })),
+        select: { id: true, sourceBlockId: true },
+      });
+      const publicationBlockIdBySourceBlockId = new Map(
+        createdBlocks.map((b) => [b.sourceBlockId as string, b.id] as const)
+      );
+
+      // A block with zero stations is legal (see the NO_BLOCKS comment above) -
+      // tree.stations may legitimately be empty, and an empty createMany/
+      // createManyAndReturn `data: []` is skipped, same convention the
+      // previous code already used for the (per-station) pairs createMany.
+      if (tree.stations.length > 0) {
+        const createdStations = await tx.ridingSlotComplexPublicationStation.createManyAndReturn({
+          data: tree.stations.map((s) => ({
+            publicationBlockId: publicationBlockIdBySourceBlockId.get(s.sourceBlockId)!,
+            sourceStationId: s.sourceStationId,
+            instructorId: s.instructorId,
+            instructorNameSnapshot: s.instructorNameSnapshot,
+            arena: s.arena,
+            sortOrder: s.sortOrder,
+          })),
+          select: { id: true, sourceStationId: true },
+        });
+        const publicationStationIdBySourceStationId = new Map(
+          createdStations.map((s) => [s.sourceStationId as string, s.id] as const)
+        );
+
+        // A station with zero pairs is legal (same "warning, never a publish
+        // blocker" rule) - tree.pairs may legitimately be empty.
+        if (tree.pairs.length > 0) {
           // note is deliberately never included here - see
           // RidingSlotComplexPublicationPair's own schema comment.
           await tx.ridingSlotComplexPublicationPair.createMany({
-            data: station.pairs.map((pair) => ({
-              publicationStationId: pubStation.id,
-              sourcePairId: pair.id,
-              trainee1Id: pair.trainee1Id,
-              trainee1NameSnapshot: pair.trainee1?.fullName ?? null,
-              trainee2Id: pair.trainee2Id,
-              trainee2NameSnapshot: pair.trainee2?.fullName ?? null,
-              horseName: pair.horseName,
-              sortOrder: pair.sortOrder,
+            data: tree.pairs.map((p) => ({
+              publicationStationId: publicationStationIdBySourceStationId.get(p.sourceStationId)!,
+              sourcePairId: p.sourcePairId,
+              trainee1Id: p.trainee1Id,
+              trainee1NameSnapshot: p.trainee1NameSnapshot,
+              trainee2Id: p.trainee2Id,
+              trainee2NameSnapshot: p.trainee2NameSnapshot,
+              horseName: p.horseName,
+              sortOrder: p.sortOrder,
             })),
           });
         }
       }
-    }
 
-    return { ok: true as const, publication };
-  });
+      return { ok: true as const, publication };
+    },
+    { timeout: 15_000 }
+  );
 
   if (!txResult.ok) {
     return { success: false, error: txResult.error };
