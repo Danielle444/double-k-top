@@ -189,3 +189,72 @@ test("the dialog has clear close behaviour via the shared Modal's onClose contra
   const branch = realItemBranch();
   assert.ok(branch.includes("onClose={() => setShowDetails(false)}"), "expected the dialog to wire a close handler back to local state");
 });
+
+// ---------------------------------------------------------------------------
+// MOBILE VIEWPORT OVERFLOW FIX - the dialog body (location/note/riding-info,
+// and, when expanded, the full block->station->pair complex-riding plan) can
+// grow taller than a phone viewport. It must scroll INSIDE the dialog rather
+// than push the dialog itself past the screen edge.
+// ---------------------------------------------------------------------------
+
+function detailsDialogBodyMarkup(): string {
+  const branch = realItemBranch();
+  const modalStart = branch.indexOf("<Modal");
+  assert.notEqual(modalStart, -1, "expected the details dialog's <Modal> element");
+  const modalEnd = branch.indexOf("</Modal>", modalStart);
+  assert.ok(modalEnd > modalStart);
+  return branch.slice(modalStart, modalEnd);
+}
+
+test("the dialog body wrapper has a viewport-relative max-height (not a hardcoded pixel height)", () => {
+  const body = detailsDialogBodyMarkup();
+  assert.match(
+    body,
+    /max-h-\[\d+(?:dv|v)h\]/,
+    "expected a dvh/vh-relative max-height on the dialog body wrapper, not a fixed px height",
+  );
+  assert.ok(!/max-h-\[\d+px\]/.test(body), "must not use a hardcoded pixel max-height");
+});
+
+test("the dialog body wrapper scrolls internally instead of letting content overflow the dialog", () => {
+  const body = detailsDialogBodyMarkup();
+  assert.ok(body.includes("overflow-y-auto"), "expected overflow-y-auto on the height-constrained body wrapper");
+  assert.match(body, /className="[^"]*max-h-\[\d+(?:dv|v)h\][^"]*overflow-y-auto[^"]*"/, "expected the max-height and overflow-y-auto on the SAME element, so the constraint and the scroll region are the same box");
+});
+
+test("the close control (rendered by the shared Modal's header) sits outside the scrollable body - only {detailsContent} is wrapped for scrolling", () => {
+  const branch = realItemBranch();
+  const modalStart = branch.indexOf("<Modal");
+  const childrenStart = branch.indexOf(">", branch.indexOf("title={", modalStart)) + 1;
+  const childrenMarkup = branch.slice(childrenStart, branch.indexOf("</Modal>", modalStart));
+  assert.ok(
+    /^\s*<div className="[^"]*overflow-y-auto[^"]*">\{detailsContent\}<\/div>\s*$/.test(childrenMarkup),
+    "expected the Modal's children to be exactly the scrollable wrapper around detailsContent - the close button lives in Modal's own header, outside children entirely",
+  );
+});
+
+test("no content is hidden or truncated by the overflow fix - the body wrapper adds no truncate/line-clamp/hidden classes", () => {
+  const body = detailsDialogBodyMarkup();
+  assert.ok(!/\btruncate\b/.test(body), "the scroll wrapper must not truncate text");
+  assert.ok(!/\bline-clamp-/.test(body), "the scroll wrapper must not clamp lines");
+  assert.ok(!/\bhidden\b/.test(body), "the scroll wrapper must not hide content");
+});
+
+test("the overflow fix applies unconditionally (no breakpoint prefix), so mobile and desktop share the same safe, scrollable dialog - nothing desktop-only was removed", () => {
+  const body = detailsDialogBodyMarkup();
+  assert.ok(
+    !/\b(?:sm|md|lg|xl|2xl):(?:max-h-|overflow-)/.test(body),
+    "expected the max-height/overflow-y-auto to apply at every breakpoint, not gated behind a responsive prefix",
+  );
+});
+
+test("only this dialog's call site changed - the shared Modal component's size variants are untouched", () => {
+  const modalSource = readSource("../../lib/components/Modal.tsx");
+  assert.ok(modalSource.includes('size?: "md" | "large" | "wide" | "xl";'), "expected Modal's size union to be exactly as before");
+  assert.ok(
+    modalSource.includes(
+      '"w-full max-w-md rounded-xl bg-card p-6 shadow-xl print:w-auto print:max-w-none print:rounded-none print:p-0 print:shadow-none"',
+    ),
+    "expected the default 'md' panel classes to be byte-identical - this fix must not touch the shared component",
+  );
+});

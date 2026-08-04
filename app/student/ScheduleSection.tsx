@@ -374,7 +374,7 @@ export function ScheduleCard({
           onClose={() => setShowDetails(false)}
           title={`${item.startTime}-${item.endTime} · ${ridingPresentation.title}`}
         >
-          <div className="flex flex-col gap-1.5">{detailsContent}</div>
+          <div className="flex max-h-[70dvh] flex-col gap-1.5 overflow-y-auto">{detailsContent}</div>
         </Modal>
       )}
     </div>
