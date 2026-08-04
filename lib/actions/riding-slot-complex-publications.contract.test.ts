@@ -56,6 +56,22 @@ const internalRegion = () =>
     "async function unpublishComplexRidingPlanInternal",
     "export async function unpublishComplexRidingPlanAsAdmin"
   );
+
+// RIDING-COMPLEX-PUBLICATION-TIMEOUT-FIX - the publish (not unpublish) shared
+// internal, whose per-block/per-station sequential create loop was replaced
+// with a batched write. Region ends at the admin publish wrapper.
+const publishInternalRegion = () =>
+  region(
+    actionSrc,
+    "async function publishComplexRidingPlanInternal",
+    "export async function publishComplexRidingPlanAsAdmin"
+  );
+const publishAdminRegion = () =>
+  region(
+    actionSrc,
+    "export async function publishComplexRidingPlanAsAdmin",
+    "export async function publishComplexRidingPlanAsInstructor"
+  );
 const adminRegion = () =>
   region(
     actionSrc,
@@ -239,4 +255,172 @@ test("UI preserves the dirty/pending disable on the Unpublish control", () => {
     panel.includes("onClick={onOpenUnpublish}") && panel.includes("disabled={blockedByEdit}"),
     "the Unpublish control must be disabled while a draft/pending action is active"
   );
+});
+
+// ---- RIDING-COMPLEX-PUBLICATION-TIMEOUT-FIX - batched publish write --------
+//
+// P2028 audit: publishComplexRidingPlanInternal's per-block/per-station
+// sequential create loop (one round trip per block, one per station) was the
+// root cause of a Production transaction timeout (Prisma's 5000ms default) on
+// an 8-block/22-station/39-pair plan. The tests below prove, from source only
+// (no Prisma, no DB), that: the loop is gone; the batched replacement stays
+// inside the same interactive transaction; an explicit narrow timeout was
+// added without touching maxWait/isolationLevel; and publish's authorization/
+// lifecycle gates are byte-for-byte unchanged.
+
+test("no per-block or per-station create loop remains in the publish internal", () => {
+  const body = publishInternalRegion();
+  assert.ok(
+    !/for\s*\(\s*const\s+block\s+of\s+plan\.blocks\s*\)/.test(body),
+    "the per-block sequential create loop must be removed"
+  );
+  assert.ok(
+    !/for\s*\(\s*const\s+station\s+of\s+block\.stations\s*\)/.test(body),
+    "the per-station sequential create loop must be removed"
+  );
+  // No `for (` at all remains in the publish write path - the only loops this
+  // function ever had were exactly the two removed above.
+  assert.ok(!/\bfor\s*\(/.test(body), "no loop-based create should remain in the publish internal");
+});
+
+test("blocks, stations, and pairs are each created via exactly one batched call, not a per-row create", () => {
+  const body = publishInternalRegion();
+  assert.equal(
+    (body.match(/ridingSlotComplexPublicationBlock\.createManyAndReturn\(/g) ?? []).length,
+    1,
+    "exactly one batched block create"
+  );
+  assert.equal(
+    (body.match(/ridingSlotComplexPublicationStation\.createManyAndReturn\(/g) ?? []).length,
+    1,
+    "exactly one batched station create"
+  );
+  assert.equal(
+    (body.match(/ridingSlotComplexPublicationPair\.createMany\(/g) ?? []).length,
+    1,
+    "exactly one batched pair create (no longer once per station)"
+  );
+  // No single-row .create( survives for any of the three snapshot child models.
+  assert.ok(
+    !/ridingSlotComplexPublicationBlock\.create\(/.test(body),
+    "no per-row Block.create should remain"
+  );
+  assert.ok(
+    !/ridingSlotComplexPublicationStation\.create\(/.test(body),
+    "no per-row Station.create should remain"
+  );
+});
+
+test("the batched writes use the pure flatten helper and stay inside the one interactive transaction", () => {
+  assert.ok(
+    actionSrc.includes(
+      'import { flattenComplexPlanForPublication } from "@/lib/riding-complex/complex-plan-publication-tree";'
+    ),
+    "must import the pure flatten helper"
+  );
+  const body = publishInternalRegion();
+  assert.ok(body.includes("flattenComplexPlanForPublication(plan.blocks)"), "must flatten the in-tx plan read");
+  // Exactly one $transaction call for this whole publish (reads, upsert,
+  // deleteMany, and all three batched creates share the same tx).
+  assert.equal(
+    (body.match(/prisma\.\$transaction\(/g) ?? []).length,
+    1,
+    "publish must still run inside exactly one interactive transaction"
+  );
+  assert.equal((body.match(/\btx\./g) ?? []).length >= 6, true, "reads/upsert/deleteMany/3 batched creates all use tx");
+});
+
+test("publish transaction has an explicit narrow timeout; maxWait/isolationLevel are untouched", () => {
+  const body = publishInternalRegion();
+  assert.ok(/\{\s*timeout:\s*15_000\s*\}/.test(body), "an explicit timeout must be passed to prisma.$transaction");
+  assert.ok(!actionSrc.includes("maxWait"), "maxWait must not be introduced anywhere in this module by this fix");
+  assert.ok(!actionSrc.includes("isolationLevel"), "isolationLevel must not be introduced anywhere in this module by this fix");
+  // This module has exactly one $transaction call (publish's) and exactly one
+  // explicit `timeout:` option - the fix is scoped to this one transaction,
+  // nothing else in the module (e.g. unpublish, which has no transaction at
+  // all) gained a timeout.
+  assert.equal((actionSrc.match(/prisma\.\$transaction\(/g) ?? []).length, 1, "exactly one $transaction call in this module");
+  assert.equal((actionSrc.match(/\btimeout:\s*15_000\b/g) ?? []).length, 1, "exactly one explicit timeout option in this module");
+});
+
+test("publish authorization/lifecycle gates are unchanged: admin requireAdmin(), instructor DB re-read", () => {
+  const admin = publishAdminRegion();
+  assert.ok(admin.includes("await requireAdmin()"), "admin publish wrapper must still call requireAdmin()");
+  assert.ok(
+    admin.includes("return publishComplexRidingPlanInternal("),
+    "admin publish wrapper must still delegate to the shared internal"
+  );
+  const requireIdx = admin.indexOf("await requireAdmin()");
+  const delegateIdx = admin.indexOf("publishComplexRidingPlanInternal(");
+  assert.ok(requireIdx > -1 && delegateIdx > -1 && requireIdx < delegateIdx, "requireAdmin() must still run before delegation");
+
+  const instructorPublish = region(
+    actionSrc,
+    "export async function publishComplexRidingPlanAsInstructor",
+    "export interface UnpublishComplexRidingPlanResult"
+  );
+  const guard = "!instructor || !instructor.isActive || !instructor.canEditRidingNotes";
+  assert.ok(
+    instructorPublish.includes(guard),
+    "instructor publish wrapper must still deny unless active + canEditRidingNotes, unchanged"
+  );
+  assert.ok(
+    /prisma\.instructor\.findUnique\(\{\s*where:\s*\{\s*id:\s*instructorId\s*\}\s*\}\)/.test(instructorPublish),
+    "instructor publish wrapper must still re-read Instructor from the DB by id"
+  );
+});
+
+test("empty station/pair batches are guarded (no invalid empty createManyAndReturn/createMany)", () => {
+  const body = publishInternalRegion();
+  assert.ok(
+    body.includes("if (tree.stations.length > 0) {"),
+    "station batch must be skipped when a plan's blocks have zero stations total (empty block is legal)"
+  );
+  assert.ok(
+    body.includes("if (tree.pairs.length > 0) {"),
+    "pair batch must be skipped when a plan's stations have zero pairs total (empty station is legal)"
+  );
+  // The station guard must wrap the pair guard (pairs can only be created once
+  // publicationStationIdBySourceStationId exists), not run as two independent
+  // top-level ifs.
+  const stationGuardIdx = body.indexOf("if (tree.stations.length > 0) {");
+  const pairGuardIdx = body.indexOf("if (tree.pairs.length > 0) {");
+  const stationGuardCloseSearchArea = body.slice(stationGuardIdx, pairGuardIdx);
+  assert.ok(
+    stationGuardCloseSearchArea.includes("createdStations"),
+    "pair guard must be nested inside the station guard, after stations are created"
+  );
+});
+
+test("every batched row's foreign key is sourced from the same publication/parent-map, not a per-row literal", () => {
+  const body = publishInternalRegion();
+  assert.ok(
+    body.includes("publicationId: publication.id,"),
+    "every created block must reference the single publication.id from this transaction's own upsert"
+  );
+  assert.ok(
+    body.includes("publicationBlockId: publicationBlockIdBySourceBlockId.get(s.sourceBlockId)!,"),
+    "every created station must resolve its parent block id via the source-id correlation map"
+  );
+  assert.ok(
+    body.includes("publicationStationId: publicationStationIdBySourceStationId.get(p.sourceStationId)!,"),
+    "every created pair must resolve its parent station id via the source-id correlation map"
+  );
+});
+
+test("NO_BLOCKS / NOT_FOUND_COMPLEX_PLAN early-return contract is unchanged", () => {
+  const body = publishInternalRegion();
+  assert.ok(body.includes("return { ok: false as const, error: NOT_FOUND_COMPLEX_PLAN };"), "missing-plan contract preserved");
+  assert.ok(body.includes("return { ok: false as const, error: NO_BLOCKS };"), "empty-plan (no blocks) contract preserved");
+});
+
+test("revalidatePath calls are unchanged and remain after (not inside) the transaction", () => {
+  const body = publishInternalRegion();
+  const txCloseIdx = body.indexOf("{ timeout: 15_000 }");
+  const revalidateIdx = body.indexOf('revalidatePath("/admin/weekly-schedule");');
+  assert.ok(txCloseIdx > -1, "transaction close with timeout option must be present");
+  assert.ok(revalidateIdx > txCloseIdx, "revalidatePath calls must run after the transaction resolves, not inside it");
+  assert.ok(body.includes('revalidatePath("/admin/weekly-schedule");'));
+  assert.ok(body.includes('revalidatePath("/instructor");'));
+  assert.ok(body.includes('revalidatePath("/student");'));
 });
