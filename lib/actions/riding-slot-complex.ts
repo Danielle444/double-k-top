@@ -653,8 +653,26 @@ async function createComplexPlanInternal(ridingSlotId: string, actor: ComplexPla
   // any other unexpected DB error (only a real P2028 lock timeout is mapped to
   // LOCK_TIMEOUT, below), and since the transaction has not opened, no plan is
   // created. The roster is never broadened to all active students.
+  // ADMIN-WRITE-AUDIENCE fix - actor.instructorId is server-constructed only
+  // (null iff the actor came from requireAdmin()/adminActor(), never
+  // client-suppliable): a pure admin session has no signed instructor cookie,
+  // so the instructor-gated buildHorseCandidates (-> getRidingSlotStudentNotes
+  // -> getCurrentInstructor()) fails closed to [] for it, which empties
+  // rosterTraineeIds below and silently drops every trainee pair when copying
+  // a template (resolveTrainees returns null for every pair). The
+  // admin-audience buildHorseCandidatesForAdmin (self-gated via
+  // requireAdmin()-backed getRidingSlotStudentNotesForAdmin, already used by
+  // buildComplexPlanForEditingForAdmin above) is used instead for that case
+  // only; the instructor path is completely unchanged. This read stays here,
+  // BEFORE the transaction opens (see the comment above), for both branches.
   const candidateStudentIds = Array.from(
-    new Set((await buildHorseCandidates(ridingSlotId)).map((candidate) => candidate.studentId))
+    new Set(
+      (
+        actor.instructorId === null
+          ? await buildHorseCandidatesForAdmin(ridingSlotId)
+          : await buildHorseCandidates(ridingSlotId)
+      ).map((candidate) => candidate.studentId)
+    )
   );
 
   // Waiting on the advisory lock below counts against this transaction's

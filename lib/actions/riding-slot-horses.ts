@@ -328,7 +328,21 @@ async function saveRidingSlotHorseListInternal(
   // Authoritative roster for this slot right now - never trust the client's
   // own group/subgroup pairing for a student row. Only the studentId is
   // trusted; its group/subgroup is always overwritten from this roster.
-  const candidates = await buildHorseCandidates(data.ridingSlotId);
+  //
+  // ADMIN-WRITE-AUDIENCE fix - actor.instructorId is server-constructed only
+  // (null iff the actor came from requireAdmin()/adminActor(), never
+  // client-suppliable): a pure admin session has no signed instructor cookie,
+  // so the instructor-gated buildHorseCandidates (-> getRidingSlotStudentNotes
+  // -> getCurrentInstructor()) would fail closed to [] for it, wrongly
+  // rejecting every real roster trainee below as STUDENT_NOT_IN_ROSTER. The
+  // admin-audience buildHorseCandidatesForAdmin (self-gated via
+  // requireAdmin()-backed getRidingSlotStudentNotesForAdmin, already used by
+  // the admin read path above) is used instead for that case only; the
+  // instructor path is completely unchanged.
+  const candidates =
+    actor.instructorId === null
+      ? await buildHorseCandidatesForAdmin(data.ridingSlotId)
+      : await buildHorseCandidates(data.ridingSlotId);
   const rosterByStudentId = new Map(candidates.map((c) => [c.studentId, c]));
 
   const normalized: NormalizedHorseListItem[] = [];
