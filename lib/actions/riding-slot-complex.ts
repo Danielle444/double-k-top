@@ -24,7 +24,11 @@ import { getKnownRidingHorseNames } from "@/lib/actions/riding-slots";
 // resolution the simple horse list already uses, instead of a separate,
 // reduced candidate shape. One-way dependency only (riding-slot-horses.ts
 // imports nothing from this file) - see buildHorseCandidates's own comment.
-import { buildHorseCandidates, type RidingHorseCandidate } from "@/lib/actions/riding-slot-horses";
+import {
+  buildHorseCandidates,
+  buildHorseCandidatesForAdmin,
+  type RidingHorseCandidate,
+} from "@/lib/actions/riding-slot-horses";
 // Fix 3, Stage 2 - transaction-scoped template lookup/sanitize (READ side).
 // The WRITE side (creating the fresh destination blocks/stations/pairs) stays
 // here because it needs the just-created plan id. resolveTemplateForNewPlan
@@ -539,6 +543,45 @@ async function buildComplexPlanForEditing(
   };
 }
 
+// RS-SEC-1ADMIN-CAND - admin-audience twin of buildComplexPlanForEditing
+// above. Identical in every respect EXCEPT it sources candidates from
+// buildHorseCandidatesForAdmin (requireAdmin()-gated, no instructor cookie
+// required - see riding-slot-horses.ts) instead of the INSTRUCTOR-gated
+// buildHorseCandidates. Used ONLY by getRidingSlotComplexPlanForAdmin below,
+// which has already called requireAdmin() before this runs. Every
+// AsAdmin/AsInstructor write action in this file keeps calling the original
+// buildComplexPlanForEditing unchanged (their ActionResult never surfaces
+// .candidates, so no write caller needed this admin-audience variant); the
+// instructor read path (getRidingSlotComplexPlanForInstructor below) is also
+// completely unchanged and still requires getCurrentInstructor.
+async function buildComplexPlanForEditingForAdmin(
+  ridingSlotId: string,
+  opts: { canEdit: boolean }
+): Promise<RidingSlotComplexPlanForEditing | null> {
+  const plan = await prisma.ridingSlotComplexPlan.findUnique({
+    where: { ridingSlotId },
+    include: COMPLEX_PLAN_INCLUDE,
+  });
+  if (!plan) return null;
+
+  const [scheduleMeta, candidates, knownHorseNames, simpleList] = await Promise.all([
+    resolveComplexScheduleMeta(ridingSlotId),
+    buildHorseCandidatesForAdmin(ridingSlotId),
+    getKnownRidingHorseNames(),
+    prisma.ridingSlotHorseList.findUnique({ where: { ridingSlotId }, select: { id: true } }),
+  ]);
+
+  return {
+    ridingSlotId,
+    plan: toPlanRow(plan),
+    scheduleMeta,
+    candidates,
+    knownHorseNames,
+    hasSimpleHorseList: Boolean(simpleList),
+    canEdit: opts.canEdit,
+  };
+}
+
 // ---------- Get (read-only, no mutation) ----------
 
 // Returns null both when the RidingSlot doesn't exist AND when it exists but
@@ -550,7 +593,7 @@ export async function getRidingSlotComplexPlanForAdmin(
   ridingSlotId: string
 ): Promise<RidingSlotComplexPlanForEditing | null> {
   await requireAdmin();
-  return buildComplexPlanForEditing(ridingSlotId, { canEdit: true });
+  return buildComplexPlanForEditingForAdmin(ridingSlotId, { canEdit: true });
 }
 
 // RS-SEC-1I-CP-RD - identity comes ONLY from the signed session
