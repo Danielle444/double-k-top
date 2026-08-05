@@ -475,7 +475,11 @@ test("18. no trainee/student reader was changed by this fix", () => {
   );
 });
 
-test("18b. the exported Server Action surface of riding-slots.ts is unchanged", () => {
+test("18b. the exported Server Action surface of riding-slots.ts is unchanged plus RS-SEC-1ADMIN-CAND's new admin-audience reader", () => {
+  // RS-SEC-1ADMIN-CAND added exactly one new export: getRidingSlotStudentNotesForAdmin,
+  // the requireAdmin()-gated admin-audience twin of getRidingSlotStudentNotes
+  // (fixes the admin/instructor candidate-audience mismatch - see that
+  // function's own comment in riding-slots.ts).
   const exported = Array.from(
     readCode(RIDING_SLOTS).matchAll(/export async function (\w+)/g),
     (m) => m[1],
@@ -490,6 +494,7 @@ test("18b. the exported Server Action surface of riding-slots.ts is unchanged", 
     "getKnownRidingLessonTopics",
     "getRidingSlotForScheduleItem",
     "getRidingSlotStudentNotes",
+    "getRidingSlotStudentNotesForAdmin",
     "getStudentRidingHistoryForAdmin",
     "getStudentRidingHistoryForInstructor",
     "getStudentRidingHistoryForInstructorTraineeProgress",

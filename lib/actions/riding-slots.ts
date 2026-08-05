@@ -1274,6 +1274,33 @@ export async function getRidingSlotStudentNotes(
   );
 }
 
+// RS-SEC-1ADMIN-CAND (admin/instructor candidate-audience split) - the
+// admin-facing candidate paths (getRidingSlotComplexPlanForAdmin in
+// riding-slot-complex.ts, getRidingSlotHorseListForAdmin in
+// riding-slot-horses.ts, both via buildHorseCandidatesForAdmin) were
+// previously misrouted through getRidingSlotStudentNotes above, whose gate is
+// INSTRUCTOR-only (getCurrentInstructor). Admin and instructor authentication
+// are separate, non-overlapping flows: a pure admin browser session passes
+// requireAdmin() but has no signed instructor cookie, so it silently received
+// candidates: [] even though it was already correctly authorized. This is the
+// admin-audience twin - same convention as the self-gated admin readers in
+// riding-slot-horses.ts/riding-slot-complex.ts (await requireAdmin() first,
+// inline). It calls the exact same internal, un-exported core reader
+// (buildRidingSlotStudentNotes) as getRidingSlotStudentNotes above - no
+// query/exclusion/L1-L2-roster-scoping logic is duplicated or changed, only
+// which audience gate runs first. requireAdmin() is called INSIDE this
+// function (not merely assumed of the caller), so this path stays safe even
+// if ever invoked directly - it can never become a new unauthenticated
+// reader, and it never calls getCurrentInstructor or requires an instructor
+// cookie. getRidingSlotStudentNotes above is completely unchanged: it still
+// requires getCurrentInstructor with identical fail-closed behavior.
+export async function getRidingSlotStudentNotesForAdmin(
+  ridingSlotId: string
+): Promise<RidingSlotStudentRow[]> {
+  await requireAdmin();
+  return buildRidingSlotStudentNotes(ridingSlotId);
+}
+
 export interface RidingLessonNoteInput {
   note?: string;
   ratingHalfPoints?: number | null;

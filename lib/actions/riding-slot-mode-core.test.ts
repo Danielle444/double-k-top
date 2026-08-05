@@ -405,7 +405,11 @@ test("no new Server Action was created", () => {
   assert.ok(!core.includes('"use server"'), "the mode core mints no endpoint");
   assert.ok(!/export\s+async\s+function/.test(core), "the mode core exports nothing async");
 
-  // riding-slots.ts's exported async surface is unchanged - same 16 actions.
+  // riding-slots.ts's exported async surface: the pre-existing 16 actions plus
+  // RS-SEC-1ADMIN-CAND's new getRidingSlotStudentNotesForAdmin (the
+  // requireAdmin()-gated admin-audience twin of getRidingSlotStudentNotes,
+  // added to fix the admin/instructor candidate-audience mismatch - see
+  // riding-slots.ts's own comment on that function).
   const exported = Array.from(
     readCode(RIDING_SLOTS).matchAll(/export async function (\w+)/g),
     (m) => m[1],
@@ -420,6 +424,7 @@ test("no new Server Action was created", () => {
     "getKnownRidingLessonTopics",
     "getRidingSlotForScheduleItem",
     "getRidingSlotStudentNotes",
+    "getRidingSlotStudentNotesForAdmin",
     "getStudentRidingHistoryForAdmin",
     "getStudentRidingHistoryForInstructor",
     "getStudentRidingHistoryForInstructorTraineeProgress",

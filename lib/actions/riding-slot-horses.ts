@@ -8,7 +8,7 @@ import { getCurrentInstructor } from "@/lib/auth/actor";
 import { loadHorseListForInstructorWithDeps } from "@/lib/actions/riding-slot-horses-read-auth";
 import type { ActionResult } from "@/lib/actions/students";
 import { getHorseDisplayInfo } from "@/lib/horse-info";
-import { getRidingSlotStudentNotes } from "@/lib/actions/riding-slots";
+import { getRidingSlotStudentNotes, getRidingSlotStudentNotesForAdmin } from "@/lib/actions/riding-slots";
 import {
   findAssignmentForStudent,
   getAssignmentInstructorNames,
@@ -85,15 +85,49 @@ export interface RidingSlotHorseListForEditing extends RidingSlotHorseListStatus
 export async function buildHorseCandidates(ridingSlotId: string): Promise<RidingHorseCandidate[]> {
   const [studentRows, assignments] = await Promise.all([
     getRidingSlotStudentNotes(ridingSlotId),
-    prisma.ridingSlotAssignment.findMany({
-      where: { ridingSlotId },
-      include: {
-        instructor: true,
-        instructors: { include: { instructor: true }, orderBy: { createdAt: "asc" } },
-      },
-    }),
+    readRidingSlotAssignmentsForCandidates(ridingSlotId),
   ]);
+  return mapStudentRowsToHorseCandidates(studentRows, assignments);
+}
 
+// RS-SEC-1ADMIN-CAND - admin-audience twin of buildHorseCandidates above.
+// Sources student rows from getRidingSlotStudentNotesForAdmin
+// (self-gated on requireAdmin(), lib/actions/riding-slots.ts) instead of the
+// INSTRUCTOR-gated getRidingSlotStudentNotes, so a pure admin session (no
+// signed instructor cookie) receives the real roster instead of the empty
+// fail-closed [] the instructor-only gate produced for it. Otherwise
+// identical: same assignment read, same horse/responsible-instructor
+// mapping (mapStudentRowsToHorseCandidates) - no candidate-selection /
+// exclusion / group-scoping logic is duplicated or changed, only which
+// audience-gated notes source feeds it. Used by getRidingSlotHorseListForAdmin
+// (below) and by riding-slot-complex.ts's admin complex-plan reader
+// (buildComplexPlanForEditingForAdmin).
+export async function buildHorseCandidatesForAdmin(ridingSlotId: string): Promise<RidingHorseCandidate[]> {
+  const [studentRows, assignments] = await Promise.all([
+    getRidingSlotStudentNotesForAdmin(ridingSlotId),
+    readRidingSlotAssignmentsForCandidates(ridingSlotId),
+  ]);
+  return mapStudentRowsToHorseCandidates(studentRows, assignments);
+}
+
+// Shared, audience-agnostic assignment read used by both candidate builders
+// above - unchanged from the query previously inlined in buildHorseCandidates.
+function readRidingSlotAssignmentsForCandidates(ridingSlotId: string) {
+  return prisma.ridingSlotAssignment.findMany({
+    where: { ridingSlotId },
+    include: {
+      instructor: true,
+      instructors: { include: { instructor: true }, orderBy: { createdAt: "asc" } },
+    },
+  });
+}
+
+// Shared, audience-agnostic combine step used by both candidate builders
+// above - unchanged mapping logic previously inlined in buildHorseCandidates.
+function mapStudentRowsToHorseCandidates(
+  studentRows: Awaited<ReturnType<typeof getRidingSlotStudentNotes>>,
+  assignments: Awaited<ReturnType<typeof readRidingSlotAssignmentsForCandidates>>
+): RidingHorseCandidate[] {
   return studentRows.map((row) => {
     const assignment = findAssignmentForStudent(assignments, row.groupName, row.subgroupNumber);
     const responsibleInstructorNames = assignment
@@ -172,7 +206,10 @@ export async function getRidingSlotHorseListForAdmin(
 
   const [statusResult, candidates] = await Promise.all([
     buildHorseListStatus(ridingSlotId),
-    buildHorseCandidates(ridingSlotId),
+    // RS-SEC-1ADMIN-CAND - admin-audience builder (requireAdmin() already run
+    // above; no instructor cookie required), not the instructor-gated
+    // buildHorseCandidates.
+    buildHorseCandidatesForAdmin(ridingSlotId),
   ]);
   return { ...statusResult, candidates };
 }
