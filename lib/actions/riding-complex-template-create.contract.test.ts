@@ -123,15 +123,26 @@ test("the lookup helper issues no global-prisma query (tx-only, no @/lib/prisma 
 test("no global-prisma helper is invoked from inside the tx callback", () => {
   const region = createRegion();
   const tail = txCallbackTail(region);
-  // The roster read via the global-prisma helper must happen BEFORE the tx.
+  // ADMIN-WRITE-AUDIENCE fix - the pre-tx roster read now branches on
+  // actor.instructorId (null iff the actor came from requireAdmin(), never
+  // client-suppliable) between buildHorseCandidates (instructor-gated) and
+  // buildHorseCandidatesForAdmin (admin-gated, self-gated via requireAdmin()-
+  // backed getRidingSlotStudentNotesForAdmin) - EITHER is acceptable here, so
+  // long as whichever is used is read BEFORE the transaction opens. The real
+  // invariant this test defends - the roster read never happens inside the tx
+  // callback, for either builder - is unchanged and still asserted below.
   const buildCall = region.indexOf("buildHorseCandidates(");
+  const buildAdminCall = region.indexOf("buildHorseCandidatesForAdmin(");
   const txOpen = region.indexOf("prisma.$transaction");
   assert.ok(buildCall > -1, "buildHorseCandidates pre-read not found");
+  assert.ok(buildAdminCall > -1, "buildHorseCandidatesForAdmin pre-read not found");
   assert.ok(txOpen > -1, "prisma.$transaction not found");
   assert.ok(buildCall < txOpen, "buildHorseCandidates must be read before the transaction opens");
+  assert.ok(buildAdminCall < txOpen, "buildHorseCandidatesForAdmin must be read before the transaction opens");
   // Inside/after the callback: no global prisma client and no global-prisma helper.
   assert.ok(!/\bprisma\./.test(tail), "no global prisma client may be used inside the tx callback");
   assert.ok(!tail.includes("buildHorseCandidates"), "buildHorseCandidates must never be called inside the tx callback");
+  assert.ok(!tail.includes("buildHorseCandidatesForAdmin"), "buildHorseCandidatesForAdmin must never be called inside the tx callback");
 });
 
 // ---------------------------------------------------------------------------
